@@ -51,6 +51,9 @@ void ClipProcessingJobs::processClip(Clip& clip, std::string json){
     if(processingType == "Object Detector"){
         t = std::thread(&ClipProcessingJobs::detectObjectsClip, this, std::ref(clip), std::ref(this->processingController));
     }
+    if(processingType == "Frame Interpolation"){
+        t = std::thread(&ClipProcessingJobs::interpolateClip, this, std::ref(clip), std::ref(this->processingController));
+    }
 }
 
 // Apply object tracking to clip
@@ -92,6 +95,25 @@ void ClipProcessingJobs::detectObjectsClip(Clip& clip, ProcessingController& con
     else{
         // Save object detection data
         objDetector.SaveObjDetectedData();
+        // tells to UI that the processing finished
+        controller.SetFinished(true);
+    }
+}
+
+// Interpolate Clip frames
+void ClipProcessingJobs::interpolateClip(Clip& clip, ProcessingController& controller){
+	// create CVFrameInterpolation object
+	CVFrameInterpolation interpolation(processInfoJson, controller);
+    // Start object detection process
+    interpolation.interpolateClip(clip);
+
+    // Thread controller. If effect processing is done, save data
+    // Else, kill thread
+    if(controller.ShouldStop()){
+        controller.SetFinished(true);
+        return;
+    }
+    else{
         // tells to UI that the processing finished
         controller.SetFinished(true);
     }

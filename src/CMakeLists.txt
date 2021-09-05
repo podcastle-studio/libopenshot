@@ -106,6 +106,7 @@ set(OPENSHOT_CV_SOURCES
   CVStabilization.cpp
   ClipProcessingJobs.cpp
   CVObjectDetection.cpp
+  CVFrameInterpolation.cpp
   TrackedObjectBBox.cpp
   effects/Stabilizer.cpp
   effects/Tracker.cpp
@@ -493,6 +494,13 @@ See https://github.com/opencv/opencv/issues/19260]])
   endif()
 endif()  # ENABLE_OPENCV
 add_feature_info("OpenCV algorithms" ENABLE_OPENCV "Use OpenCV algorithms")
+
+#################### TORCH #####################
+# if(ENABLE_TORCH AND ENABLE_OPENCV)
+find_package(Torch)
+target_link_libraries(openshot PUBLIC "${TORCH_LIBRARIES}")
+set(CMAKE_CXX_FLAGS "${TORCH_CXX_FLAGS}")
+# endif() 
 
 ###############  LINK LIBRARY  #################
 # Link remaining dependency libraries

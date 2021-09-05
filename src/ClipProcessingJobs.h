@@ -41,6 +41,7 @@
 	#include "CVStabilization.h"
     #include "CVTracker.h"
 	#include "CVObjectDetection.h"
+	#include "CVFrameInterpolation.h"
 #endif
 
 #include <thread>
@@ -70,6 +71,8 @@ class ClipProcessingJobs{
 		void stabilizeClip(Clip& clip, ProcessingController& controller);
 		// Apply object detection to clip
 		void detectObjectsClip(Clip& clip, ProcessingController& controller);
+		// Interpolate clip
+		void interpolateClip(Clip& clip, ProcessingController& controller);
 
 
 	public:
