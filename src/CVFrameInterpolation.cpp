@@ -74,6 +74,7 @@ void CVFrameInterpolation::interpolateClip(openshot::Clip &video, size_t _start,
     try {
         // Deserialize the ScriptModule from a file using torch::jit::load().
         model = torch::jit::load(modelWeights);
+
         if(processingDevice == "GPU")
             model.to(at::kCUDA);
     }
@@ -86,6 +87,7 @@ void CVFrameInterpolation::interpolateClip(openshot::Clip &video, size_t _start,
 		"#000000", 0, 0);
 
     size_t frame_number;
+
     if(!process_interval || end <= 1 || end-start == 0){
         // Get total number of frames in video
         start = (int)(video.Start() * video.Reader()->info.fps.ToFloat());
@@ -94,8 +96,8 @@ void CVFrameInterpolation::interpolateClip(openshot::Clip &video, size_t _start,
 
     // Get the first and second frames
     if (end > 2) {
-        cv::Mat first_frame = video.GetFrame(new_frame, 1)->GetImageCV();
-        cv::Mat second_frame = video.GetFrame(new_frame, 2)->GetImageCV();
+        cv::Mat first_frame = video.Reader()->GetFrame(1)->GetImageCV();
+        cv::Mat second_frame = video.Reader()->GetFrame(2)->GetImageCV();
 
         // cv::cvtColor(first_frame, first_frame, cv::COLOR_RGB2BGR);
         // cv::cvtColor(second_frame, second_frame, cv::COLOR_RGB2BGR);
@@ -104,40 +106,40 @@ void CVFrameInterpolation::interpolateClip(openshot::Clip &video, size_t _start,
         outputs.push_back(second_frame);
     }
 
-
     for (frame_number = start+4; frame_number <= end; frame_number++)
     {
          // Stop the feature tracker process
-        if(processingController->ShouldStop()){
+        if (processingController->ShouldStop()){
             return;
         }
 
-        std::shared_ptr<openshot::Frame> f1 = video.GetFrame(new_frame, frame_number-3);
-        std::shared_ptr<openshot::Frame> f2 = video.GetFrame(new_frame, frame_number-2);
-        std::shared_ptr<openshot::Frame> f3 = video.GetFrame(new_frame, frame_number-1);
-        std::shared_ptr<openshot::Frame> f4 = video.GetFrame(new_frame, frame_number);
+        std::shared_ptr<openshot::Frame> f1 = video.Reader()->GetFrame(frame_number-3);
+        std::shared_ptr<openshot::Frame> f2 = video.Reader()->GetFrame(frame_number-2);
+        std::shared_ptr<openshot::Frame> f3 = video.Reader()->GetFrame(frame_number-1);
+        std::shared_ptr<openshot::Frame> f4 = video.Reader()->GetFrame(frame_number);
+        cv::Mat middle_frame = f3->GetImageCV();
 
-        // Grab OpenCV Mat image
-        cv::Mat frame1 = f1->GetImageCV();
-        cv::Mat frame2 = f2->GetImageCV();
-        cv::Mat frame3 = f3->GetImageCV();
-        cv::Mat frame4 = f4->GetImageCV();
+        // Create input frames array
+        std::vector<cv::Mat> input_frames{
+            f1->GetImageCV(), 
+            f2->GetImageCV(), 
+            f3->GetImageCV(), 
+            f4->GetImageCV()
+        };
 
         // Interpolate Frames
-        std::vector<cv::Mat> output_frames = interpolateFrames(frame1, frame2, frame3, frame4);
+        std::vector<cv::Mat> output_frames = interpolateFrames(input_frames);
         
         // Append all interpolated frames into the outputs
         for (cv::Mat frame : output_frames) {
             outputs.push_back(frame);
-            // std::cout << "OUTPUT SIZE: " << frame.size() << std::endl;
         }
 
         // Append the third input
-        cv::cvtColor(frame3, frame3, cv::COLOR_RGB2BGR);
-        outputs.push_back(frame3);
+        // cv::cvtColor(middle_frame, middle_frame, cv::COLOR_RGB2BGR);
+        outputs.push_back(middle_frame);
 
-
-        // Update progress
+        // Update progress  
         processingController->SetProgress(uint(100*(frame_number-start)/(end-start)));
     }
 
@@ -159,7 +161,9 @@ std::vector<cv::Mat> CVFrameInterpolation::interpolateFrames(std::vector<cv::Mat
     for (uint i = 0;  i <  frames.size(); i++) {
         cv::Mat f = frames[i];
         cv::cvtColor(f, f, cv::COLOR_BGR2RGB);
-        cv::resize(f, f, cv::Size(256, 256), cv::INTER_CUBIC);
+
+        // Resize to don't run out of memory
+        cv::resize(f, f, cv::Size(128, 128), cv::INTER_CUBIC);
 
         // Convert cv::Mat to at::Tensor
         at::Tensor t = torch::from_blob(f.data, {f.rows, f.cols, 3}, at::kByte);
@@ -168,7 +172,10 @@ std::vector<cv::Mat> CVFrameInterpolation::interpolateFrames(std::vector<cv::Mat
         t = t.index({torch::indexing::None, torch::indexing::Slice(0)});
 
         // Convert Tensor to Float and Normalize it
-        t = t.to(at::kFloat) / 255.0;
+        if(processingDevice == "GPU")
+            t = t.to(at::kHalf).to(at::kCUDA) / 255.0;
+        else
+            t = t.to(at::kFloat) / 255.0;
 
         if (i == 0)
             input_tensor = t;
