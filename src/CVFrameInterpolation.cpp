@@ -150,87 +150,61 @@ void CVFrameInterpolation::interpolateClip(openshot::Clip &video, size_t _start,
 }
 
 
-std::vector<cv::Mat> CVFrameInterpolation::interpolateFrames(cv::Mat frame1, cv::Mat frame2, 
-                                          cv::Mat frame3, cv::Mat frame4)
+std::vector<cv::Mat> CVFrameInterpolation::interpolateFrames(std::vector<cv::Mat> frames)
 {
+    const int frame_width = frames[0].size().width;
+    const int frame_height = frames[0].size().height;
+    at::Tensor input_tensor;
 
-  const int frame_width = frame1.size().width;
-  const int frame_height = frame1.size().height;
-  std::cout << "HEIGHT: " << frame_height << " WIDTH: " << frame_width << std::endl; 
+    for (uint i = 0;  i <  frames.size(); i++) {
+        cv::Mat f = frames[i];
+        cv::cvtColor(f, f, cv::COLOR_BGR2RGB);
+        cv::resize(f, f, cv::Size(256, 256), cv::INTER_CUBIC);
 
+        // Convert cv::Mat to at::Tensor
+        at::Tensor t = torch::from_blob(f.data, {f.rows, f.cols, 3}, at::kByte);
+        
+        // Add axis, shape is (1,3,x,y) now
+        t = t.index({torch::indexing::None, torch::indexing::Slice(0)});
 
-  cv::cvtColor(frame1, frame1, cv::COLOR_BGR2RGB);
-  cv::cvtColor(frame2, frame2, cv::COLOR_BGR2RGB);
-  cv::cvtColor(frame3, frame3, cv::COLOR_BGR2RGB);
-  cv::cvtColor(frame4, frame4, cv::COLOR_BGR2RGB);
+        // Convert Tensor to Float and Normalize it
+        t = t.to(at::kFloat) / 255.0;
 
-  cv::resize(frame1, frame1, cv::Size(1280, 720), cv::INTER_LINEAR);
-  cv::resize(frame2, frame2, cv::Size(1280, 720), cv::INTER_LINEAR);
-  cv::resize(frame3, frame3, cv::Size(1280, 720), cv::INTER_LINEAR);
-  cv::resize(frame4, frame4, cv::Size(1280, 720), cv::INTER_LINEAR);
+        if (i == 0)
+            input_tensor = t;
+        else 
+            input_tensor = torch::cat({input_tensor, t}, 0);
+    }
+    
+    input_tensor = input_tensor.permute({3, 0, 1, 2});
 
-  // Convert cv::Mat to at::Tensor
-  at::Tensor t_frame1 = torch::from_blob(frame1.data, {frame1.rows, frame1.cols, 3}, at::kByte);
-  at::Tensor t_frame2 = torch::from_blob(frame2.data, {frame2.rows, frame2.cols, 3}, at::kByte);
-  at::Tensor t_frame3 = torch::from_blob(frame3.data, {frame3.rows, frame3.cols, 3}, at::kByte);
-  at::Tensor t_frame4 = torch::from_blob(frame4.data, {frame4.rows, frame4.cols, 3}, at::kByte);
-  
-  // Add axis, shape is (1,3,x,y) now
-  t_frame1 = t_frame1.index({torch::indexing::None, torch::indexing::Slice(0)});
-  t_frame2 = t_frame2.index({torch::indexing::None, torch::indexing::Slice(0)});
-  t_frame3 = t_frame3.index({torch::indexing::None, torch::indexing::Slice(0)});
-  t_frame4 = t_frame4.index({torch::indexing::None, torch::indexing::Slice(0)});
+    // Add batch axis, shape is (1,3,4,x,y) now
+    input_tensor = input_tensor.index({torch::indexing::None, torch::indexing::Slice(0)});
+    
+    auto output = model.forward({input_tensor}).toTensor();
+    output = output.index({-1, torch::indexing::Slice(0)});
+    output = output.index({-1, torch::indexing::Slice(0)});
+    output = output.permute({1, 2, 0});
+    output = output.mul(255.0).clamp(0,255).round();
+    
+    // Convert Tensor to uint8
+    output = output.to(at::kByte); 
 
-  // Convert Tensor to Float
-  t_frame1 = t_frame1.to(at::kHalf) / 255.0;
-  t_frame2 = t_frame2.to(at::kHalf) / 255.0;
-  t_frame3 = t_frame3.to(at::kHalf) / 255.0;
-  t_frame4 = t_frame4.to(at::kHalf) / 255.0;
-  
-  auto in = torch::cat({t_frame1, t_frame2, t_frame3, t_frame4}, 0);
-  if(processingDevice == "GPU")
-    in = in.to(at::kCUDA);
+    const int width = output.sizes()[1];
+    const int height = output.sizes()[0];
 
-  in = in.permute({3, 0, 1, 2});
-  
-  // Add batch axis, shape is (1,3,4,x,y) now
-  in = in.index({
-    torch::indexing::None, torch::indexing::Slice(0)});
+    // Convert tensor to cv image and save
+    output = output.reshape({width * height * 3});
+    cv::Mat img_out(cv::Size(width, height), CV_8UC3, output.data_ptr());
+    cv::cvtColor(img_out, img_out, cv::COLOR_RGB2BGR);
+    
+    // Resize to original size
+    cv::resize(img_out, img_out, cv::Size(frame_width, frame_height), cv::INTER_CUBIC);
 
+    std::vector<cv::Mat> result;
+    result.push_back(img_out);
 
-  auto out = model.forward({in}).toTensor();
-  out = out.index({-1, torch::indexing::Slice(0)});
-  out = out.index({-1, torch::indexing::Slice(0)});
-  out = out.permute({1, 2, 0});
-
-  const int width = out.sizes()[1];
-  const int height = out.sizes()[0];
-
-  // out.mul(255.0)
-  out = out.mul(255.0).clamp(0,255).round();
-  
-//   std::cout << out << std::endl;
-
-  // Convert Tensor to uint8
-  out = out.to(at::kByte); 
-
-  if(processingDevice == "GPU")
-    out = out.to(at::kCPU);
-
-  // Convert tensor to cv image and save
-  out = out.reshape({width * height * 3});
-  cv::Mat img_out(cv::Size(width, height), CV_8UC3, out.data_ptr());
-
-  cv::cvtColor(img_out, img_out, cv::COLOR_RGB2BGR);
-  cv::resize(img_out, img_out, cv::Size(frame_width, frame_height), cv::INTER_LINEAR);
-
-  // std::cout << "HEIGHT: " << frame_height << " WIDTH: " << frame_width << std::endl; 
-  // cv::imwrite("./out.png", img_out);
-
-  std::vector<cv::Mat> result;
-  result.push_back(img_out);
-
-  return result;
+    return result;
 }
 
 // Load JSON string into this object

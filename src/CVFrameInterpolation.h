@@ -96,8 +96,7 @@ namespace openshot
 
         void setProcessingDevice();
 
-      
-        std::vector<cv::Mat> interpolateFrames(cv::Mat frame1, cv::Mat frame2, cv::Mat frame3, cv::Mat frame4);
+        std::vector<cv::Mat> interpolateFrames(std::vector<cv::Mat> frames);
 
         public:
 
