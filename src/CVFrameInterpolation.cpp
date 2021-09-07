@@ -158,12 +158,16 @@ std::vector<cv::Mat> CVFrameInterpolation::interpolateFrames(std::vector<cv::Mat
         
         // Add axis, shape is (1,3,x,y) now
         t = t.index({torch::indexing::None, torch::indexing::Slice(0)});
-
-        // Convert Tensor to Float and Normalize it
+        
         if(processingDevice == "GPU")
-            t = t.to(at::kHalf).to(at::kCUDA) / 255.0;
-        else
-            t = t.to(at::kFloat) / 255.0;
+        {
+            // Convert Tensor to Float and Normalize it
+            t = t.to(at::kHalf) / 255.0;  
+        }
+        else{
+            // Convert Tensor to Float and Normalize it
+            t = t.to(at::kFloat) / 255.0;  
+        }
 
         if (i == 0)
             input_tensor = t;
@@ -171,6 +175,11 @@ std::vector<cv::Mat> CVFrameInterpolation::interpolateFrames(std::vector<cv::Mat
             input_tensor = torch::cat({input_tensor, t}, 0);
     }
     
+    if(processingDevice == "GPU")
+    {
+        input_tensor = input_tensor.to(at::kCUDA);
+    } 
+
     input_tensor = input_tensor.permute({3, 0, 1, 2});
 
     // Add batch axis, shape is (1,3,4,x,y) now
@@ -184,6 +193,9 @@ std::vector<cv::Mat> CVFrameInterpolation::interpolateFrames(std::vector<cv::Mat
     
     // Convert Tensor to uint8
     output = output.to(at::kByte); 
+
+    if(processingDevice == "GPU")
+        output = output.to(at::kCPU);
 
     const int width = output.sizes()[1];
     const int height = output.sizes()[0];
