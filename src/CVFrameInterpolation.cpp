@@ -44,20 +44,8 @@ using google::protobuf::util::TimeUtil;
 CVFrameInterpolation::CVFrameInterpolation(std::string processInfoJson, ProcessingController &processingController)
 : processingController(&processingController), processingDevice("CPU"){
     SetJson(processInfoJson);
-    confThreshold = 0.5;
-    nmsThreshold = 0.1;
 }
 
-void CVFrameInterpolation::setProcessingDevice(){
-    if(processingDevice == "GPU"){
-        net.setPreferableBackend(cv::dnn::DNN_BACKEND_CUDA);
-        net.setPreferableTarget(cv::dnn::DNN_TARGET_CUDA);
-    }
-    else if(processingDevice == "CPU"){
-        net.setPreferableBackend(cv::dnn::DNN_BACKEND_OPENCV);
-        net.setPreferableTarget(cv::dnn::DNN_TARGET_CPU);
-    }
-}
 
 void CVFrameInterpolation::interpolateClip(openshot::Clip &video, size_t _start, size_t _end, bool process_interval)
 {
@@ -70,7 +58,7 @@ void CVFrameInterpolation::interpolateClip(openshot::Clip &video, size_t _start,
     }
 
     processingController->SetError(false, "");
-
+    
     try {
         // Deserialize the ScriptModule from a file using torch::jit::load().
         model = torch::jit::load(modelWeights);
@@ -143,7 +131,7 @@ void CVFrameInterpolation::interpolateClip(openshot::Clip &video, size_t _start,
         processingController->SetProgress(uint(100*(frame_number-start)/(end-start)));
     }
 
-    cv::VideoWriter v1("./interpolate.avi", cv::VideoWriter::fourcc('M','J','P','G'), 30, 
+    cv::VideoWriter v1(savePath, cv::VideoWriter::fourcc('M','J','P','G'), 30, 
                 cv::Size(outputs[0].size().width, outputs[0].size().height), true);
 
     for (cv::Mat f : outputs) {
@@ -154,16 +142,16 @@ void CVFrameInterpolation::interpolateClip(openshot::Clip &video, size_t _start,
 
 std::vector<cv::Mat> CVFrameInterpolation::interpolateFrames(std::vector<cv::Mat> frames)
 {
-    const int frame_width = frames[0].size().width;
-    const int frame_height = frames[0].size().height;
+    const uint original_frame_width = frames[0].size().width;
+    const uint original_frame_height = frames[0].size().height;
     at::Tensor input_tensor;
 
     for (uint i = 0;  i <  frames.size(); i++) {
         cv::Mat f = frames[i];
         cv::cvtColor(f, f, cv::COLOR_BGR2RGB);
 
-        // Resize to don't run out of memory
-        cv::resize(f, f, cv::Size(128, 128), cv::INTER_CUBIC);
+        // Resize to don't run out of memory and match the input tensor required size 
+        cv::resize(f, f, cv::Size(processingWidth, processingHeight), cv::INTER_LINEAR);
 
         // Convert cv::Mat to at::Tensor
         at::Tensor t = torch::from_blob(f.data, {f.rows, f.cols, 3}, at::kByte);
@@ -206,7 +194,7 @@ std::vector<cv::Mat> CVFrameInterpolation::interpolateFrames(std::vector<cv::Mat
     cv::cvtColor(img_out, img_out, cv::COLOR_RGB2BGR);
     
     // Resize to original size
-    cv::resize(img_out, img_out, cv::Size(frame_width, frame_height), cv::INTER_CUBIC);
+    cv::resize(img_out, img_out, cv::Size(original_frame_width, original_frame_height), cv::INTER_LINEAR);
 
     std::vector<cv::Mat> result;
     result.push_back(img_out);
@@ -239,16 +227,51 @@ void CVFrameInterpolation::SetJsonValue(const Json::Value root) {
 	if (!root["protobuf_data_path"].isNull()){
 		protobuf_data_path = (root["protobuf_data_path"].asString());
 	}
+    if (!root["save-path"].isNull()){
+		savePath = (root["save-path"].asString());
+	}
     if (!root["processing-device"].isNull()){
 		processingDevice = (root["processing-device"].asString());
 	}
     if (!root["model-weights"].isNull()){
-		modelWeights= (root["model-weights"].asString());
+		modelWeights = (root["model-weights"].asString());
         std::ifstream infile(modelWeights);
         if(!infile.good()){
             processingController->SetError(true, "Incorrect path to model weight file");
             error = true;
         }
 
+	}
+    if (!root["processing-size"].isNull()){
+        
+        switch (root["processing-size"].asUInt())
+        {
+            case 1:
+                processingWidth = 1920;
+                processingHeight = 1080;
+                break;
+            
+            case 2:
+                processingWidth = 1280;
+                processingHeight = 720;
+                break;
+
+            case 3:
+                processingWidth = 800;
+                processingHeight = 600;
+                break;
+
+            case 4:
+                processingWidth = 640;
+                processingHeight = 480;
+                break;
+
+            case 5:
+            default:
+                processingWidth = 320;
+                processingHeight = 240;
+                break;
+        }
+		
 	}
 }

@@ -74,10 +74,13 @@ namespace openshot
         float confThreshold, nmsThreshold;
 
         std::string classesFile;
+        std::string savePath;
         std::string modelConfiguration;
         std::string modelWeights;
         std::string processingDevice;
         std::string protobuf_data_path;
+        uint processingWidth;
+        uint processingHeight;
 
         SortTracker sort;
 
@@ -93,8 +96,6 @@ namespace openshot
 
         /// Will handle a Thread safely comutication between ClipProcessingJobs and the processing effect classes
         ProcessingController *processingController;
-
-        void setProcessingDevice();
 
         std::vector<cv::Mat> interpolateFrames(std::vector<cv::Mat> frames);
 
