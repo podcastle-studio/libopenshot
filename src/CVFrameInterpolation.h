@@ -42,7 +42,13 @@
 #undef int64
 #include "Json.h"
 #include "ProcessingController.h"
+#include "Frame.h"
 #include "Clip.h"
+#include "FFmpegReader.h"
+#include "FFmpegWriter.h"
+#include "FrameMapper.h"
+#include "Fraction.h"
+#include "AudioResampler.h"
 #include "protobuf_messages/objdetectdata.pb.h"
 
 // including torch and opencv 
@@ -52,6 +58,11 @@
 #undef slots // workaround to run torch with QT 
 #include <torch/torch.h>
 #include <torch/script.h> 
+
+// #ifdef THC_DEVICE_ALLOCATOR_INC
+#include <c10/cuda/CUDACachingAllocator.h>
+// #endif
+
 #define slots Q_SLOTS
 
 #include "sort_filter/sort.hpp"
@@ -65,8 +76,8 @@ namespace openshot
      * The implementation is based on the model FLAVR: Flow-Agnostic Video Representations for Fast Frame Interpolation
      * https://github.com/tarun005/FLAVR
      */
-    class CVFrameInterpolation{
-
+    class CVFrameInterpolation 
+    {
         private:
 
         cv::dnn::Net net;
@@ -109,7 +120,7 @@ namespace openshot
         // Get and Set JSON methods
         void SetJson(const std::string value); ///< Load JSON string into this object
         void SetJsonValue(const Json::Value root); ///< Load Json::Value into this object
-
+        
     };
 
 }

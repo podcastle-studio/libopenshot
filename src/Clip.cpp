@@ -166,8 +166,10 @@ Clip::Clip(ReaderBase* new_reader) : resampler(NULL), reader(new_reader), alloca
 }
 
 // Constructor with filepath
-Clip::Clip(std::string path) : resampler(NULL), reader(NULL), allocated_reader(NULL), is_open(false)
+Clip::Clip(std::string new_path) : resampler(NULL), reader(NULL), allocated_reader(NULL), is_open(false)
 {
+	path = new_path;
+
 	// Init all default settings
 	init_settings();
 

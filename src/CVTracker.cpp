@@ -79,13 +79,13 @@ void CVTracker::trackClip(openshot::Clip& video, size_t _start, size_t _end, boo
 
         if(!process_interval || end <= 1 || end-start == 0){
             // Get total number of frames in video
-            start = (int)(video.Start() * video.Reader()->info.fps.ToFloat()) + 1;
-            end = (int)(video.End() * video.Reader()->info.fps.ToFloat()) + 1;
+            start = (size_t)(video.Start() * video.Reader()->info.fps.ToFloat()) + 1;
+            end = (size_t)(video.End() * video.Reader()->info.fps.ToFloat()) + 1;
         }
     }
     else{
-        start = (int)(start + video.Start() * video.Reader()->info.fps.ToFloat()) + 1;
-        end = (int)(video.End() * video.Reader()->info.fps.ToFloat()) + 1;
+        start = (size_t)(start + video.Start() * video.Reader()->info.fps.ToFloat()) + 1;
+        end = (size_t)(video.End() * video.Reader()->info.fps.ToFloat()) + 1;
     }
 
     if(error){

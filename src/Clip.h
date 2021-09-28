@@ -176,6 +176,7 @@ namespace openshot {
 		openshot::AnchorType anchor;     ///< The anchor determines what parent a clip should snap to
 		openshot::FrameDisplayType display; ///< The format to display the frame number (if any)
 		openshot::VolumeMixType mixing;  ///< What strategy should be followed when mixing audio with other clips
+		std::string path;
 
 		#ifdef USE_OPENCV
 			bool COMPILED_WITH_CV = true;
@@ -188,7 +189,7 @@ namespace openshot {
 
 		/// @brief Constructor with filepath (reader is automatically created... by guessing file extensions)
 		/// @param path The path of a reader (video file, image file, etc...). The correct reader will be used automatically.
-		Clip(std::string path);
+		Clip(std::string new_path);
 
 		/// @brief Constructor with reader
 		/// @param new_reader The reader to be used by this clip
