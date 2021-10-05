@@ -106,7 +106,6 @@ set(OPENSHOT_CV_SOURCES
   CVStabilization.cpp
   ClipProcessingJobs.cpp
   CVObjectDetection.cpp
-  CVFrameInterpolation.cpp
   TrackedObjectBBox.cpp
   effects/Stabilizer.cpp
   effects/Tracker.cpp
@@ -114,6 +113,10 @@ set(OPENSHOT_CV_SOURCES
   ./sort_filter/sort.cpp
   ./sort_filter/Hungarian.cpp
   ./sort_filter/KalmanTracker.cpp)
+
+# Torch related classes
+set(OPENSHOT_TORCH_SOURCES
+    CVFrameInterpolation.cpp)
 
 # Video effects
 set(EFFECTS_SOURCES
@@ -496,11 +499,18 @@ endif()  # ENABLE_OPENCV
 add_feature_info("OpenCV algorithms" ENABLE_OPENCV "Use OpenCV algorithms")
 
 #################### TORCH #####################
-# if(ENABLE_TORCH AND ENABLE_OPENCV)
-find_package(Torch)
-target_link_libraries(openshot PUBLIC "${TORCH_LIBRARIES}")
-set(CMAKE_CXX_FLAGS "${TORCH_CXX_FLAGS}")
-# endif() 
+if(ENABLE_TORCH AND ENABLE_OPENCV)
+  find_package(Torch)
+  target_link_libraries(openshot PRIVATE "${TORCH_LIBRARIES}")
+  set(CMAKE_CXX_FLAGS "${TORCH_CXX_FLAGS}")
+  target_compile_definitions(openshot PUBLIC USE_TORCH=1)
+  
+  # Add OpenCV source files
+  target_sources(openshot PRIVATE
+    ${OPENSHOT_TORCH_SOURCES}
+  )
+  
+endif() 
 
 ###############  LINK LIBRARY  #################
 # Link remaining dependency libraries

@@ -59,7 +59,7 @@
 #include <torch/torch.h>
 #include <torch/script.h> 
 
-#ifdef USE_CUDA
+#ifdef C10_CUDA_BUILD_SHARED_LIBS
 #include <c10/cuda/CUDACachingAllocator.h>
 #endif
 

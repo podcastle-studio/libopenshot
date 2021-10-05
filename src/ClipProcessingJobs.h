@@ -41,7 +41,11 @@
 	#include "CVStabilization.h"
     #include "CVTracker.h"
 	#include "CVObjectDetection.h"
+
+#ifdef USE_TORCH
 	#include "CVFrameInterpolation.h"
+#endif
+
 #endif
 
 #include <thread>
@@ -65,15 +69,19 @@ class ClipProcessingJobs{
 		/// Will handle a Thread safely comutication between ClipProcessingJobs and the processing effect classes
 		ProcessingController processingController;
 
+		#ifdef USE_OPENCV
 		// Apply object tracking to clip
 		void trackClip(Clip& clip, ProcessingController& controller);
 		// Apply stabilization to clip
 		void stabilizeClip(Clip& clip, ProcessingController& controller);
 		// Apply object detection to clip
 		void detectObjectsClip(Clip& clip, ProcessingController& controller);
-		// Interpolate clip
-		void interpolateClip(Clip& clip, ProcessingController& controller);
 
+		// Interpolate clip
+		#ifdef USE_TORCH
+		void interpolateClip(Clip& clip, ProcessingController& controller);
+		#endif
+		#endif
 
 	public:
 		// Constructor

@@ -51,9 +51,12 @@ void ClipProcessingJobs::processClip(Clip& clip, std::string json){
     if(processingType == "Object Detector"){
         t = std::thread(&ClipProcessingJobs::detectObjectsClip, this, std::ref(clip), std::ref(this->processingController));
     }
+
+    #ifdef USE_TORCH
     if(processingType == "Frame Interpolation"){
         t = std::thread(&ClipProcessingJobs::interpolateClip, this, std::ref(clip), std::ref(this->processingController));
     }
+    #endif
 }
 
 // Apply object tracking to clip
@@ -100,6 +103,7 @@ void ClipProcessingJobs::detectObjectsClip(Clip& clip, ProcessingController& con
     }
 }
 
+#ifdef USE_TORCH
 // Interpolate Clip frames
 void ClipProcessingJobs::interpolateClip(Clip& clip, ProcessingController& controller){
 	// create CVFrameInterpolation object
@@ -118,6 +122,8 @@ void ClipProcessingJobs::interpolateClip(Clip& clip, ProcessingController& contr
         controller.SetFinished(true);
     }
 }
+#endif
+
 
 void ClipProcessingJobs::stabilizeClip(Clip& clip, ProcessingController& controller){
     // create CVStabilization object

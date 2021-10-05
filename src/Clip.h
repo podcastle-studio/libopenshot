@@ -184,6 +184,12 @@ namespace openshot {
 			bool COMPILED_WITH_CV = false;
 		#endif
 
+		#ifdef USE_TORCH
+			bool COMPILED_WITH_TORCH = true;
+		#else
+			bool COMPILED_WITH_TORCH = false;
+		#endif
+
 		/// Default Constructor
 		Clip();
 
