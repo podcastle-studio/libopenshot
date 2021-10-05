@@ -58,9 +58,9 @@
 #undef slots // workaround to run torch with QT 
 #include <torch/torch.h>
 #include <torch/script.h> 
-#include <torch/csrc/utils/cuda_enabled.h>
+#include <caffe2/core/macros.h>
 
-#ifdef USE_CUDA
+#ifdef CAFFE2_USE_CUDNN
 #include <c10/cuda/CUDACachingAllocator.h>
 #endif
 

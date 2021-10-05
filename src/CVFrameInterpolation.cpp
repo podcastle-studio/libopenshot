@@ -78,7 +78,7 @@ void CVFrameInterpolation::interpolateClip(openshot::Clip &video, size_t _start,
         error = true;
         // clean GPU memory allocation
 
-        #ifdef USE_CUDA
+        #ifdef CAFFE2_USE_CUDNN
         if(processingDevice == "GPU" && torch::cuda::is_available())
         {
             c10::cuda::CUDACachingAllocator::emptyCache();
@@ -148,7 +148,7 @@ void CVFrameInterpolation::interpolateClip(openshot::Clip &video, size_t _start,
         // Stop the feature tracker process
         if (processingController->ShouldStop() || error) 
         {
-            #ifdef USE_CUDA
+            #ifdef CAFFE2_USE_CUDNN
             if(processingDevice == "GPU" && torch::cuda::is_available())
             {
                 c10::cuda::CUDACachingAllocator::emptyCache();
@@ -208,9 +208,9 @@ void CVFrameInterpolation::interpolateClip(openshot::Clip &video, size_t _start,
     map.Reader(nullptr);
 
     // clean GPU memory allocation
-    #ifdef USE_CUDA
+    #ifdef CAFFE2_USE_CUDNN
     if(processingDevice == "GPU" && torch::cuda::is_available())
-    {
+    {   
         c10::cuda::CUDACachingAllocator::emptyCache();
     }
     #endif
