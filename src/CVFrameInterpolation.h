@@ -59,9 +59,9 @@
 #include <torch/torch.h>
 #include <torch/script.h> 
 
-// #ifdef THC_DEVICE_ALLOCATOR_INC
+#ifdef USE_CUDA
 #include <c10/cuda/CUDACachingAllocator.h>
-// #endif
+#endif
 
 #define slots Q_SLOTS
 

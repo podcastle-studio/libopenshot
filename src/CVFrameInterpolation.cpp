@@ -77,10 +77,14 @@ void CVFrameInterpolation::interpolateClip(openshot::Clip &video, size_t _start,
         processingController->SetError(true, "Error: error loading the model.");
         error = true;
         // clean GPU memory allocation
+
+        #ifdef USE_CUDA
         if(processingDevice == "GPU" && torch::cuda::is_available())
         {
             c10::cuda::CUDACachingAllocator::emptyCache();
         }
+        #endif
+
         return;
     } 
 
@@ -144,10 +148,13 @@ void CVFrameInterpolation::interpolateClip(openshot::Clip &video, size_t _start,
         // Stop the feature tracker process
         if (processingController->ShouldStop() || error) 
         {
+            #ifdef USE_CUDA
             if(processingDevice == "GPU" && torch::cuda::is_available())
             {
                 c10::cuda::CUDACachingAllocator::emptyCache();
             }
+            #endif
+
             video_writer.Close();
             map.Close();
             map.Reader(nullptr);
@@ -201,11 +208,12 @@ void CVFrameInterpolation::interpolateClip(openshot::Clip &video, size_t _start,
     map.Reader(nullptr);
 
     // clean GPU memory allocation
+    #ifdef USE_CUDA
     if(processingDevice == "GPU" && torch::cuda::is_available())
     {
         c10::cuda::CUDACachingAllocator::emptyCache();
     }
-    // #endif
+    #endif
 
     // Complete progress after video generation
     processingController->SetProgress(uint(100));
