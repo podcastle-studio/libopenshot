@@ -42,9 +42,9 @@
     #include "CVTracker.h"
 	#include "CVObjectDetection.h"
 
-#ifdef USE_TORCH
-	#include "CVFrameInterpolation.h"
-#endif
+	#ifdef USE_TORCH
+		#include "CVFrameInterpolation.h"
+	#endif
 
 #endif
 

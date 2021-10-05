@@ -65,11 +65,11 @@ if (BLACKMAGIC_FOUND)
 endif()
 
 #################### TORCH #####################
-# if(ENABLE_TORCH AND ENABLE_OPENCV)
-find_package(Torch)
-target_link_libraries(openshot PUBLIC "${TORCH_LIBRARIES}")
-set(CMAKE_CXX_FLAGS "${TORCH_CXX_FLAGS}")
-# endif() 
+if(ENABLE_TORCH AND ENABLE_OPENCV)
+	find_package(Torch)
+	target_link_libraries(openshot PUBLIC "${TORCH_LIBRARIES}")
+	set(CMAKE_CXX_FLAGS "${TORCH_CXX_FLAGS}")
+endif() 
 
 ############### OPENCV EXAMPLE ################
 #if (DEFINED CACHE{HAVE_OPENCV})

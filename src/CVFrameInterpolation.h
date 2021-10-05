@@ -58,8 +58,9 @@
 #undef slots // workaround to run torch with QT 
 #include <torch/torch.h>
 #include <torch/script.h> 
+#include <torch/csrc/utils/cuda_enabled.h>
 
-#ifdef C10_CUDA_BUILD_SHARED_LIBS
+#ifdef USE_CUDA
 #include <c10/cuda/CUDACachingAllocator.h>
 #endif
 
