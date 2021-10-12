@@ -486,6 +486,19 @@ void Timeline::apply_mapper_to_clip(Clip* clip)
     // Get lock (prevent getting frames while this happens)
     const GenericScopedLock<CriticalSection> lock(getFrameCriticalSection);
 
+	Fraction new_fps = info.fps;
+	float X = clip->time.GetLastPoint().co.X;
+	float Y = clip->time.GetLastPoint().co.Y;
+	float factor = 1.0;
+
+	std::cout << "X: " << X << std::endl;
+	std::cout << "Y: " << Y << std::endl;
+
+	if (X != 0 && Y != 0)
+		factor = X/Y;
+	
+	new_fps.num *= factor;
+
 	// Determine type of reader
 	ReaderBase* clip_reader = NULL;
 	if (clip->Reader()->Name() == "FrameMapper")
@@ -496,14 +509,14 @@ void Timeline::apply_mapper_to_clip(Clip* clip)
 	} else {
 
 		// Create a new FrameMapper to wrap the current reader
-		FrameMapper* mapper = new FrameMapper(clip->Reader(), info.fps, PULLDOWN_NONE, info.sample_rate, info.channels, info.channel_layout);
+		FrameMapper* mapper = new FrameMapper(clip->Reader(), new_fps, PULLDOWN_NONE, info.sample_rate*factor, info.channels, info.channel_layout);
 		allocated_frame_mappers.insert(mapper);
 		clip_reader = (ReaderBase*) mapper;
 	}
 
 	// Update the mapping
 	FrameMapper* clip_mapped_reader = (FrameMapper*) clip_reader;
-	clip_mapped_reader->ChangeMapping(info.fps, PULLDOWN_NONE, info.sample_rate, info.channels, info.channel_layout);
+	clip_mapped_reader->ChangeMapping(new_fps, PULLDOWN_NONE, info.sample_rate*factor, info.channels, info.channel_layout);
 
 	// Update clip reader
 	clip->Reader(clip_reader);

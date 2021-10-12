@@ -137,6 +137,9 @@ namespace openshot {
 		/// Get the number of points (i.e. # of points)
 		int64_t GetCount() const;
 
+		/// Returns the last point
+		Point GetLastPoint() const;
+
 		/// Get the direction of the curve at a specific index (increasing or decreasing)
 		bool IsIncreasing(int index) const;
 

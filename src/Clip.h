@@ -53,6 +53,7 @@
 #include "Effects.h"
 #include "EffectInfo.h"
 #include "Frame.h"
+#include "FrameMapper.h"
 #include "KeyFrame.h"
 #include "TrackedObjectBase.h"
 #include "ReaderBase.h"
@@ -127,7 +128,7 @@ namespace openshot {
 		std::string parentObjectId; ///< Id of the bounding box that this clip is attached to
 		std::shared_ptr<openshot::TrackedObjectBase> parentTrackedObject; ///< Tracked object this clip is attached to
 		openshot::Clip* parentClipObject; ///< Clip object this clip is attached to
-
+		std::shared_ptr<FrameMapper> mapper;
 
 		// Audio resampler (if time mapping)
 		openshot::AudioResampler *resampler;

@@ -518,6 +518,10 @@ int64_t Keyframe::GetCount() const {
 	return Points.size();
 }
 
+Point Keyframe::GetLastPoint() const {
+	return Points.back();
+}
+
 // Remove a point by matching a coordinate
 void Keyframe::RemovePoint(Point p) {
 	// loop through points, and find a matching coordinate
