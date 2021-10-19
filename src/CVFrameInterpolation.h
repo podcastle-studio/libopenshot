@@ -94,8 +94,6 @@ namespace openshot
         uint processingWidth;
         uint processingHeight;
 
-        SortTracker sort;
-
         uint progress;
 
         size_t start;
