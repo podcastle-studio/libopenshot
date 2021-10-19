@@ -140,6 +140,9 @@ namespace openshot {
 		/// Returns the last point
 		Point GetLastPoint() const;
 
+		/// Returns the middle point
+		std::vector<Point> GetPoints() const;
+
 		/// Get the direction of the curve at a specific index (increasing or decreasing)
 		bool IsIncreasing(int index) const;
 

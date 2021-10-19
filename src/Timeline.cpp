@@ -487,27 +487,41 @@ void Timeline::apply_mapper_to_clip(Clip* clip)
     const GenericScopedLock<CriticalSection> lock(getFrameCriticalSection);
 
 	Fraction new_fps = info.fps;
-	float X = clip->time.GetLastPoint().co.X;
-	float Y = clip->time.GetLastPoint().co.Y;
-	float factor = 1.0;
 
-	std::cout << "X: " << X << std::endl;
-	std::cout << "Y: " << Y << std::endl;
+	std::vector<Point> points = clip->time.GetPoints();
+	bool not_reversed = clip->time.IsIncreasing(clip->time.GetCount());
+	float factor = 1.0;
+	float X = 1.0;
+	float Y = 1.0;
+	Point u;
+	Point v;
+
+	// If the time transformation is in normal mode
+	if (not_reversed) {
+		u = points[(int)points.size()-1];
+		X = u.co.X;
+		Y = u.co.Y;
+	} else {
+		u = points[(int)points.size()-1];
+		v = points[0];
+		X = u.co.X;
+		Y = v.co.Y;	
+	}
 
 	if (X != 0 && Y != 0)
 		factor = X/Y;
-	
+
 	new_fps.num *= factor;
 
 	// Determine type of reader
 	ReaderBase* clip_reader = NULL;
+
 	if (clip->Reader()->Name() == "FrameMapper")
 	{
 		// Get the existing reader
 		clip_reader = (ReaderBase*) clip->Reader();
 
 	} else {
-
 		// Create a new FrameMapper to wrap the current reader
 		FrameMapper* mapper = new FrameMapper(clip->Reader(), new_fps, PULLDOWN_NONE, info.sample_rate*factor, info.channels, info.channel_layout);
 		allocated_frame_mappers.insert(mapper);

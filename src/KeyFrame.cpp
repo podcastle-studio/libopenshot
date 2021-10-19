@@ -514,12 +514,15 @@ int64_t Keyframe::GetLength() const {
 
 // Get the number of points (i.e. # of points)
 int64_t Keyframe::GetCount() const {
-
 	return Points.size();
 }
 
 Point Keyframe::GetLastPoint() const {
 	return Points.back();
+}
+
+std::vector<Point> Keyframe::GetPoints() const {
+	return Points;
 }
 
 // Remove a point by matching a coordinate

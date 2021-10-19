@@ -325,6 +325,7 @@ void Clip::Open()
 void Clip::Close()
 {
 	is_open = false;
+
 	if (reader) {
 		ZmqLogger::Instance()->AppendDebugMethod("Clip::Close");
 
@@ -427,9 +428,17 @@ std::shared_ptr<Frame> Clip::GetFrame(std::shared_ptr<openshot::Frame> backgroun
 		get_time_mapped_frame(original_frame, new_frame_number);
 		*/
 
+		// Reverse the samples (if needed)
+		if (!time.IsIncreasing(frame_number))
+			frame_number = time.GetLength() - frame_number;
+
 		// ------------------------------------------------------------------------
 		std::shared_ptr<openshot::Frame> original_frame = reader->GetFrame(frame_number);
 		// ------------------------------------------------------------------------
+
+		// Reverse the samples (if needed)
+		if (!time.IsIncreasing(frame_number))
+			reverse_buffer(original_frame->audio.get());
 
 		// Apply local effects to the frame (if any)
 		apply_effects(original_frame);

@@ -170,7 +170,6 @@ namespace openshot {
 		/// Reverse an audio buffer
 		void reverse_buffer(juce::AudioSampleBuffer* buffer);
 
-
 	public:
 		openshot::GravityType gravity;   ///< The gravity of a clip determines where it snaps to its parent
 		openshot::ScaleType scale;		 ///< The scale determines how a clip should be resized to fit its parent
