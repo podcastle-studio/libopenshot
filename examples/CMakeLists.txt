@@ -64,6 +64,11 @@ if (BLACKMAGIC_FOUND)
 	target_link_libraries(openshot-blackmagic openshot)
 endif()
 
+#################### TORCH #####################
+if(ENABLE_TORCH AND ENABLE_OPENCV)
+	find_package(Torch)
+endif() 
+
 ############### OPENCV EXAMPLE ################
 #if (DEFINED CACHE{HAVE_OPENCV})
 #	# Create test executable
