@@ -30,6 +30,11 @@ include(GNUInstallDirs)
 # Dependencies
 find_package(Qt5 COMPONENTS Gui REQUIRED)
 
+#################### TORCH #####################
+# if(ENABLE_TORCH AND ENABLE_OPENCV)
+# 	find_package(Torch)
+# endif() 
+
 ############### CLI EXECUTABLES ################
 # Create test executable
 add_executable(openshot-example Example.cpp)
@@ -63,11 +68,6 @@ if (BLACKMAGIC_FOUND)
 	# Link test executable to the new library
 	target_link_libraries(openshot-blackmagic openshot)
 endif()
-
-#################### TORCH #####################
-if(ENABLE_TORCH AND ENABLE_OPENCV)
-	find_package(Torch)
-endif() 
 
 ############### OPENCV EXAMPLE ################
 #if (DEFINED CACHE{HAVE_OPENCV})

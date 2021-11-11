@@ -505,7 +505,7 @@ if(ENABLE_TORCH AND ENABLE_OPENCV)
     set(ENABLE_TORCH FALSE CACHE BOOL
       "Torch requires Opencv and Protobuf" FORCE)
   else()
-    target_link_libraries(openshot PRIVATE "${TORCH_LIBRARIES}")
+    target_link_libraries(openshot PUBLIC "${TORCH_LIBRARIES}")
     set(CMAKE_CXX_FLAGS "${TORCH_CXX_FLAGS}")
     target_compile_definitions(openshot PUBLIC USE_TORCH=1)
     # Add Torch source files

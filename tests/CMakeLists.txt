@@ -44,9 +44,9 @@ if(ENABLE_BLACKMAGIC)
 endif()
 
 #################### TORCH #####################
-if(ENABLE_TORCH AND ENABLE_OPENCV)
-	find_package(Torch)
-endif() 
+# if(ENABLE_TORCH AND ENABLE_OPENCV)
+# 	find_package(Torch)
+# endif() 
 
 ###
 ###  TEST SOURCE FILES
