@@ -16,7 +16,6 @@ linux-builder:
     - if [ ! -f artifacts.zip ]; then
     -    "curl -O -J -L --header PRIVATE-TOKEN:$ACCESS_TOKEN http://gitlab.openshot.org/OpenShot/libopenshot-audio/-/jobs/artifacts/develop/download?job=linux-builder"
     - fi
-    - export Torch_DIR=/home/ubuntu/apps/libtorch
     - unzip artifacts.zip
     - export LIBOPENSHOT_AUDIO_DIR=$CI_PROJECT_DIR/build/install-x64
     - mkdir -p build; cd build;
