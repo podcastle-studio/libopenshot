@@ -31,9 +31,9 @@ include(GNUInstallDirs)
 find_package(Qt5 COMPONENTS Gui REQUIRED)
 
 #################### TORCH #####################
-# if(ENABLE_TORCH AND ENABLE_OPENCV)
-# 	find_package(Torch)
-# endif() 
+if(ENABLE_TORCH AND ENABLE_OPENCV)
+	find_package(Torch)
+endif() 
 
 ############### CLI EXECUTABLES ################
 # Create test executable
