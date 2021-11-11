@@ -500,7 +500,7 @@ add_feature_info("OpenCV algorithms" ENABLE_OPENCV "Use OpenCV algorithms")
 
 #################### TORCH #####################
 if(ENABLE_TORCH AND ENABLE_OPENCV)
-  find_package(Torch)
+  find_package(Torch REQUIRED)
   if(NOT Torch_FOUND)
     set(ENABLE_TORCH FALSE CACHE BOOL
       "Torch requires Opencv and Protobuf" FORCE)
