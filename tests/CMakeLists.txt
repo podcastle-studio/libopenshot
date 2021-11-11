@@ -43,13 +43,6 @@ if(ENABLE_BLACKMAGIC)
 	endif()
 endif()
 
-#################### TORCH #####################
-if(ENABLE_TORCH AND ENABLE_OPENCV)
-	find_package(Torch)
-	target_link_libraries(openshot PRIVATE "${TORCH_LIBRARIES}")
-	set(CMAKE_CXX_FLAGS "${TORCH_CXX_FLAGS}")
-endif() 
-
 ###
 ###  TEST SOURCE FILES
 ###

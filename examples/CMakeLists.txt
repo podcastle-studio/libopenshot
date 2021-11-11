@@ -64,13 +64,6 @@ if (BLACKMAGIC_FOUND)
 	target_link_libraries(openshot-blackmagic openshot)
 endif()
 
-#################### TORCH #####################
-if(ENABLE_TORCH AND ENABLE_OPENCV)
-	find_package(Torch)
-	target_link_libraries(openshot PRIVATE "${TORCH_LIBRARIES}")
-	set(CMAKE_CXX_FLAGS "${TORCH_CXX_FLAGS}")
-endif() 
-
 ############### OPENCV EXAMPLE ################
 #if (DEFINED CACHE{HAVE_OPENCV})
 #	# Create test executable
