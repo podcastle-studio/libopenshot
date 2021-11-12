@@ -156,7 +156,7 @@ install(FILES ${CMAKE_CURRENT_BINARY_DIR}/src/OpenShotVersion.h
 
 
 ################### DOCUMENTATION ###################
-Find Doxygen (used for documentation)
+#Find Doxygen (used for documentation)
 set(DOCS_ENABLED FALSE) # Only set true if Doxygen is found and configured
 if (ENABLE_DOCS)
   include(cmake/Modules/UseDoxygen.cmake)
