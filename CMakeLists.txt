@@ -88,7 +88,7 @@ option(USE_SYSTEM_JSONCPP "Use system installed JsonCpp, if found" ON)
 option(DISABLE_BUNDLED_JSONCPP "Don't fall back to bundled JsonCpp" OFF)
 option(ENABLE_MAGICK "Use ImageMagick, if available" ON)
 option(ENABLE_OPENCV "Build with OpenCV algorithms (requires Boost, Protobuf 3)" ON)
-option(ENABLE_TORCH "Build with Torch algorithms (requires Opencv Boost, Protobuf 3)" ON)
+option(ENABLE_TORCH "Build with Torch algorithms (requires Opencv, Boost, Protobuf 3)" ON)
 option(USE_HW_ACCEL "Enable hardware-accelerated encoding-decoding with FFmpeg 3.4+" ON)
 
 # Legacy commandline override
@@ -141,7 +141,7 @@ endif()
 ### Process subdirectories
 ###
 add_subdirectory(src)
-add_subdirectory(examples)
+#add_subdirectory(examples)
 add_subdirectory(bindings)
 
 ###
@@ -210,7 +210,6 @@ add_feature_info("Unit tests" ${BUILD_TESTING} "Compile unit tests for library f
 if (ENABLE_COVERAGE AND DEFINED UNIT_TEST_TARGETS)
   set(COVERAGE_EXCLUDES
     "bindings/*"
-    "examples/*"
     "${CMAKE_CURRENT_BINARY_DIR}/bindings/*"
     "${CMAKE_CURRENT_BINARY_DIR}/src/*_autogen/*"
   )
