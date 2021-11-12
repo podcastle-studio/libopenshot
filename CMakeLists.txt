@@ -156,26 +156,26 @@ install(FILES ${CMAKE_CURRENT_BINARY_DIR}/src/OpenShotVersion.h
 
 
 ################### DOCUMENTATION ###################
-# Find Doxygen (used for documentation)
-# set(DOCS_ENABLED FALSE) # Only set true if Doxygen is found and configured
-# if (ENABLE_DOCS)
-#   include(cmake/Modules/UseDoxygen.cmake)
+Find Doxygen (used for documentation)
+set(DOCS_ENABLED FALSE) # Only set true if Doxygen is found and configured
+if (ENABLE_DOCS)
+  include(cmake/Modules/UseDoxygen.cmake)
 
-#   # Doxygen was found
-#   if (TARGET doc)
-#   	message(STATUS "Doxygen found, documentation target enabled")
-#   	set(DOCS_ENABLED TRUE)
+  # Doxygen was found
+  if (TARGET doc)
+  	message(STATUS "Doxygen found, documentation target enabled")
+  	set(DOCS_ENABLED TRUE)
 
-#     # Install docs, if the user builds them with `make doc`
-#     install(CODE "MESSAGE(\"Checking for documentation files to install...\")")
-#     install(CODE "MESSAGE(\"(Compile with 'make doc' command, requires Doxygen)\")")
+    # Install docs, if the user builds them with `make doc`
+    install(CODE "MESSAGE(\"Checking for documentation files to install...\")")
+    install(CODE "MESSAGE(\"(Compile with 'make doc' command, requires Doxygen)\")")
 
-#     install(DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/doc/html/
-#             DESTINATION ${CMAKE_INSTALL_DOCDIR}/API
-#             MESSAGE_NEVER # Don't spew about file copies
-#             OPTIONAL )    # No error if the docs aren't found
-#   endif()
-# endif()
+    install(DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/doc/html/
+            DESTINATION ${CMAKE_INSTALL_DOCDIR}/API
+            MESSAGE_NEVER # Don't spew about file copies
+            OPTIONAL )    # No error if the docs aren't found
+  endif()
+endif()
 
 # ############# PROCESS tests/ DIRECTORY ##############
 # find_package(Catch2 QUIET)
