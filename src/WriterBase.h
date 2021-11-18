@@ -14,6 +14,7 @@
 #define OPENSHOT_WRITER_BASE_H
 
 #include <iostream>
+#include <memory>
 
 #include "ChannelLayouts.h"
 #include "Fraction.h"

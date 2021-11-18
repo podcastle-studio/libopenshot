@@ -49,7 +49,6 @@
 #include "FrameMapper.h"
 #include "Fraction.h"
 #include "AudioResampler.h"
-#include "protobuf_messages/objdetectdata.pb.h"
 
 // including torch and opencv 
 #include <opencv2/highgui/highgui.hpp>

@@ -13,11 +13,11 @@ find_package(SWIG 3.0 REQUIRED)
 include(${SWIG_USE_FILE})
 
 #################### TORCH #####################
-# if(ENABLE_TORCH AND ENABLE_OPENCV)
-find_package(Torch)
-target_link_libraries(openshot PUBLIC "${TORCH_LIBRARIES}")
-set(CMAKE_CXX_FLAGS "${TORCH_CXX_FLAGS}")
-# endif() 
+if(ENABLE_TORCH AND ENABLE_OPENCV)
+  find_package(Torch)
+  target_link_libraries(openshot PUBLIC "${TORCH_LIBRARIES}")
+  set(CMAKE_CXX_FLAGS "${TORCH_CXX_FLAGS}")
+endif() 
 
 ### Enable some legacy SWIG behaviors, in newer CMAKEs
 if (POLICY CMP0078)
