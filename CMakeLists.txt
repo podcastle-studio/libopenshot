@@ -76,13 +76,13 @@ option(ENABLE_TORCH "Build with Torch algorithms (requires Opencv, Boost, Protob
 option(USE_HW_ACCEL "Enable hardware-accelerated encoding-decoding with FFmpeg 3.4+" ON)
 
 # Legacy commandline override
-# if (DISABLE_TESTS)
-#   set(BUILD_TESTING OFF)
-# endif()
+if (DISABLE_TESTS)
+  set(BUILD_TESTING OFF)
+endif()
 
-# if(ENABLE_TESTS)
-#   set(BUILD_TESTING ${ENABLE_TESTS})
-# endif()
+if(ENABLE_TESTS)
+  set(BUILD_TESTING ${ENABLE_TESTS})
+endif()
 
 ### JUCE requires one of -DDEBUG or -DNDEBUG set on the
 ### compile command line. CMake automatically sets -DNDEBUG
