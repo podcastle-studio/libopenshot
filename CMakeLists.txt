@@ -217,63 +217,63 @@ if (TARGET ${PROJECT_NAME}-doc)
 endif()
 
 ############# PROCESS tests/ DIRECTORY ##############
-find_package(Catch2 QUIET)
-if(NOT Catch2_FOUND)
-  set(BUILD_TESTING FALSE)
-endif()
-if(BUILD_TESTING)
-  include(Catch)
-  # Parallel tests seem to hang randomly on Windows
-  if(ENABLE_PARALLEL_CTEST)
-    if(WIN32)
-      message(WARNING "Win32 detected, disabling parallel unit tests")
-    else()
-      # Figure out the amount of parallelism for CTest
-      include(ProcessorCount)
-      ProcessorCount(CPU_COUNT)
-      if(CPU_COUNT GREATER 1)
-        add_feature_info("Parallel tests" TRUE "Unit tests can use ${CPU_COUNT} processors")
-        list(APPEND CTEST_OPTIONS "-j${CPU_COUNT}")
-      endif()
-    endif()
-  endif()
-  if(VERBOSE_TESTS)
-    list(APPEND CTEST_OPTIONS "-VV")
-  endif()
-  list(APPEND CTEST_OPTIONS "--output-on-failure")
-  add_subdirectory(tests)
-endif()
-add_feature_info("Unit tests" ${BUILD_TESTING} "Compile unit tests for library functions")
+# find_package(Catch2 QUIET)
+# if(NOT Catch2_FOUND)
+#   set(BUILD_TESTING FALSE)
+# endif()
+# if(BUILD_TESTING)
+#   include(Catch)
+#   # Parallel tests seem to hang randomly on Windows
+#   if(ENABLE_PARALLEL_CTEST)
+#     if(WIN32)
+#       message(WARNING "Win32 detected, disabling parallel unit tests")
+#     else()
+#       # Figure out the amount of parallelism for CTest
+#       include(ProcessorCount)
+#       ProcessorCount(CPU_COUNT)
+#       if(CPU_COUNT GREATER 1)
+#         add_feature_info("Parallel tests" TRUE "Unit tests can use ${CPU_COUNT} processors")
+#         list(APPEND CTEST_OPTIONS "-j${CPU_COUNT}")
+#       endif()
+#     endif()
+#   endif()
+#   if(VERBOSE_TESTS)
+#     list(APPEND CTEST_OPTIONS "-VV")
+#   endif()
+#   list(APPEND CTEST_OPTIONS "--output-on-failure")
+#   add_subdirectory(tests)
+# endif()
+# add_feature_info("Unit tests" ${BUILD_TESTING} "Compile unit tests for library functions")
 
 ############## COVERAGE REPORTING #################
-if (ENABLE_COVERAGE AND DEFINED UNIT_TEST_TARGETS)
-  set(COVERAGE_EXCLUDES
-    "bindings/*"
-    "examples/*"
-    "${CMAKE_CURRENT_BINARY_DIR}/bindings/*"
-    "${CMAKE_CURRENT_BINARY_DIR}/src/*_autogen/*"
-    "${CMAKE_CURRENT_BINARY_DIR}/src/protobuf_messages/*"
-    "audio/*"
-  )
-  setup_target_for_coverage_lcov(
-    NAME coverage
-    LCOV_ARGS "--no-external"
-    EXECUTABLE ctest
-    EXECUTABLE_ARGS ${CTEST_OPTIONS}
-    DEPENDENCIES openshot ${UNIT_TEST_TARGETS}
-    EXCLUDE ${COVERAGE_EXCLUDES}
-  )
-  foreach(_t IN LISTS UNIT_TEST_NAMES)
-    setup_target_for_coverage_lcov(
-      NAME "${_t}_coverage"
-      LCOV_ARGS "--no-external"
-      EXECUTABLE ctest
-      EXECUTABLE_ARGS ${CTEST_OPTIONS} -L "^${_t}$"
-      DEPENDENCIES openshot openshot-${_t}-test
-      EXCLUDE ${COVERAGE_EXCLUDES}
-    )
-  endforeach()
-endif()
+# if (ENABLE_COVERAGE AND DEFINED UNIT_TEST_TARGETS)
+#   set(COVERAGE_EXCLUDES
+#     "bindings/*"
+#     "examples/*"
+#     "${CMAKE_CURRENT_BINARY_DIR}/bindings/*"
+#     "${CMAKE_CURRENT_BINARY_DIR}/src/*_autogen/*"
+#     "${CMAKE_CURRENT_BINARY_DIR}/src/protobuf_messages/*"
+#     "audio/*"
+#   )
+#   setup_target_for_coverage_lcov(
+#     NAME coverage
+#     LCOV_ARGS "--no-external"
+#     EXECUTABLE ctest
+#     EXECUTABLE_ARGS ${CTEST_OPTIONS}
+#     DEPENDENCIES openshot ${UNIT_TEST_TARGETS}
+#     EXCLUDE ${COVERAGE_EXCLUDES}
+#   )
+#   foreach(_t IN LISTS UNIT_TEST_NAMES)
+#     setup_target_for_coverage_lcov(
+#       NAME "${_t}_coverage"
+#       LCOV_ARGS "--no-external"
+#       EXECUTABLE ctest
+#       EXECUTABLE_ARGS ${CTEST_OPTIONS} -L "^${_t}$"
+#       DEPENDENCIES openshot openshot-${_t}-test
+#       EXCLUDE ${COVERAGE_EXCLUDES}
+#     )
+#   endforeach()
+# endif()
 
 # if(DEFINED UNIT_TEST_TARGETS AND NOT TARGET coverage)
 #   add_custom_target(coverage

@@ -565,32 +565,32 @@ install(DIRECTORY .
 
 # On Windows, we copy project output DLLs into the tests dir
 # so that the unit test executables can find them
-if(CMAKE_VERSION VERSION_GREATER 3.13 AND WIN32 AND BUILD_TESTING)
-  # Copy the DLLs immediately after they're built
-  add_custom_command(TARGET openshot POST_BUILD
-    COMMAND
-      ${CMAKE_COMMAND} -E copy_if_different
-      "$<TARGET_FILE:openshot>"
-      "${PROJECT_BINARY_DIR}/tests/"
-    BYPRODUCTS
-      "${PROJECT_BINARY_DIR}/tests/libopenshot.dll"
-    COMMENT
-      "Copying libopenshot DLL to unit test directory"
-  )
+# if(CMAKE_VERSION VERSION_GREATER 3.13 AND WIN32 AND BUILD_TESTING)
+#   # Copy the DLLs immediately after they're built
+#   add_custom_command(TARGET openshot POST_BUILD
+#     COMMAND
+#       ${CMAKE_COMMAND} -E copy_if_different
+#       "$<TARGET_FILE:openshot>"
+#       "${PROJECT_BINARY_DIR}/tests/"
+#     BYPRODUCTS
+#       "${PROJECT_BINARY_DIR}/tests/libopenshot.dll"
+#     COMMENT
+#       "Copying libopenshot DLL to unit test directory"
+#   )
 
-  # Also copy libopenshot-audio DLL
-  get_target_property(AUDIO_LIB_PATH OpenShot::Audio LOCATION)
-  add_custom_target(test-install-audio-dll ALL
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-      "${AUDIO_LIB_PATH}"
-      "${PROJECT_BINARY_DIR}/tests/"
-    BYPRODUCTS
-      "${PROJECT_BINARY_DIR}/tests/libopenshot-audio.dll"
-    COMMENT
-      "Copying OpenShotAudio library DLL to unit test directory"
-  )
-  add_dependencies(test-install-audio-dll OpenShot::Audio)
-endif()
+#   # Also copy libopenshot-audio DLL
+#   get_target_property(AUDIO_LIB_PATH OpenShot::Audio LOCATION)
+#   add_custom_target(test-install-audio-dll ALL
+#     COMMAND ${CMAKE_COMMAND} -E copy_if_different
+#       "${AUDIO_LIB_PATH}"
+#       "${PROJECT_BINARY_DIR}/tests/"
+#     BYPRODUCTS
+#       "${PROJECT_BINARY_DIR}/tests/libopenshot-audio.dll"
+#     COMMENT
+#       "Copying OpenShotAudio library DLL to unit test directory"
+#   )
+#   add_dependencies(test-install-audio-dll OpenShot::Audio)
+# endif()
 
 
 ############### CPACK PACKAGING ##############
