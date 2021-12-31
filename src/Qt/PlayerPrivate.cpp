@@ -21,7 +21,9 @@
 
 namespace openshot
 {
+    int count = 0;
     const auto max_sleep = std::chrono::seconds(1);
+    const int correction_frequency = 15;
     // Constructor
     PlayerPrivate::PlayerPrivate(openshot::RendererBase *rb)
     : renderer(rb), Thread("player"), video_position(1), audio_position(0)
@@ -61,6 +63,8 @@ namespace openshot
         using micro_sec = std::chrono::microseconds;
         using double_micro_sec = std::chrono::duration<double, micro_sec::period>;
 
+        auto sleep_time = micro_sec(0);
+
         while (!threadShouldExit()) {
             const auto time1 = std::chrono::high_resolution_clock::now();
             const auto frame_duration = double_micro_sec(1000000.0 / reader->info.fps.ToDouble());
@@ -72,6 +76,7 @@ namespace openshot
                 std::this_thread::sleep_for(frame_duration);
                 continue;
             }
+
             //Display the frame
             videoPlayback->frame = frame;
             videoPlayback->render.signal();
@@ -92,12 +97,20 @@ namespace openshot
             // how far ahead or behind (negative) the video is
             // relative to the audio
             // (Cubed so that the higher the error, the more extreme the correction
-            auto correction = micro_sec((long)frame_duration.count() * (long)powf(video_frame_diff,3));
+                // Not updating every frame, because doing so drastically hurt performance.
+            auto correction = (count % correction_frequency == 0) ?
+//                    micro_sec((long)frame_duration.count() * (long)(powf(video_frame_diff,3) )) : micro_sec(0);
+                      micro_sec((long)frame_duration.count() * (long)(video_frame_diff * frame_duration.count())) : micro_sec(0);
 
             // If we're more than a whole frame behind, skip frames
             int frames_behind = correction.count() / frame_duration.count();
-            if (frames_behind > 0) {
+            count++;
+            if (frames_behind > 0 && ++count % correction_frequency == 0 ) {
+//            if (frames_behind > 0 ) {
                 videoPlayback->frame->number += frames_behind;
+            }
+            if (count % 15 == 0) {
+                std::cout << "error " << video_frame_diff << std::endl;
             }
 
             /* SLEEP CALCULATIONS */
@@ -110,6 +123,7 @@ namespace openshot
 
             if (sleep_time.count() > 0) {
                 if (sleep_time > max_sleep ) {
+                    std::cout << "max sleep" << std::endl;
                     std::this_thread::sleep_for(max_sleep);
                 } else {
                     std::this_thread::sleep_for(sleep_time);

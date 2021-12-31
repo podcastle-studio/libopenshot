@@ -77,7 +77,8 @@ namespace openshot
         using ms = std::chrono::milliseconds;
         using double_ms = std::chrono::duration<double, ms::period>;
 
-		while (!threadShouldExit() && is_playing) {
+        auto start_time = std::chrono::high_resolution_clock::now();
+        while (!threadShouldExit() && is_playing) {
             // Calculate on-screen time for a single frame in milliseconds
             const auto frame_duration = double_ms(1000.0 / reader->info.fps.ToDouble());
 
@@ -85,8 +86,9 @@ namespace openshot
 			// Cache frames up to the max frames. Reset to current position
 			// if cache gets too far away from display frame. Cache frames
 			// even when player is paused (i.e. speed 0).
-			while (((position - current_display_frame) < max_concurrent_frames) && is_playing)
+            while (((position - current_display_frame) < max_concurrent_frames) && is_playing)
 			{
+                start_time = std::chrono::high_resolution_clock::now();
 				// Only cache up till the max_concurrent_frames amount... then sleep
 				try
 				{
@@ -114,7 +116,8 @@ namespace openshot
 			}
 
 			// Sleep for 1 frame length
-			std::this_thread::sleep_for(frame_duration);
+			auto time_to_cache = std::chrono::high_resolution_clock::now() - start_time;
+			std::this_thread::sleep_for(frame_duration - time_to_cache);
 		}
 
 	return;
