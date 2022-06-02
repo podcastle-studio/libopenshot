@@ -129,6 +129,8 @@ namespace openshot {
         /// Apply keyframes to an openshot::Frame and use an existing QImage as a background image (if any)
         void apply_keyframes(std::shared_ptr<Frame> frame, std::shared_ptr<QImage> background_canvas);
 
+        void apply_scale_options(std::shared_ptr<Frame> frame, std::shared_ptr<openshot::Frame> background_frame);
+
         /// Get QTransform from keyframes
         QTransform get_transform(std::shared_ptr<Frame> frame, int width, int height);
 

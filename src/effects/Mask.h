@@ -44,6 +44,15 @@ namespace openshot
 		void init_effect_details();
 
 	public:
+
+        enum MaskType
+        {
+            INVALID = -1,
+            ROUNDED_CORNERS = 0,
+            CUSTOM = 1
+        };
+
+        MaskType maskType;
 		bool replace_image;		///< Replace the frame image with a grayscale image representing the mask. Great for debugging a mask.
 		Keyframe brightness;	///< Brightness keyframe to control the wipe / mask effect. A constant value here will prevent animation.
 		Keyframe contrast;		///< Contrast keyframe to control the hardness of the wipe effect / mask.
@@ -60,7 +69,9 @@ namespace openshot
 		/// @param mask_contrast The curve to adjust the contrast of the wipe's mask (3 is typical, 20 is a lot, 0 is invalid)
 		Mask(ReaderBase *mask_reader, Keyframe mask_brightness, Keyframe mask_contrast);
 
-		/// @brief This method is required for all derived classes of ClipBase, and returns a
+        Mask(MaskType _maskType, Keyframe mask_brightness, Keyframe mask_contrast);
+
+        /// @brief This method is required for all derived classes of ClipBase, and returns a
 		/// new openshot::Frame object. All Clip keyframes and effects are resolved into
 		/// pixels.
 		///

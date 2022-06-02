@@ -18,6 +18,8 @@
 #include "ChunkReader.h"
 #include "FFmpegReader.h"
 #include "QtImageReader.h"
+#include "QPainter"
+#include "QPainterPath"
 
 #ifdef USE_IMAGEMAGICK
 	#include "ImageReader.h"
@@ -26,14 +28,21 @@
 using namespace openshot;
 
 /// Blank constructor, useful when using Json to load the effect properties
-Mask::Mask() : reader(NULL), replace_image(false), needs_refresh(true) {
+Mask::Mask() : maskType(MaskType::INVALID), reader(NULL), replace_image(false), needs_refresh(true) {
 	// Init effect properties
 	init_effect_details();
 }
 
 // Default constructor
 Mask::Mask(ReaderBase *mask_reader, Keyframe mask_brightness, Keyframe mask_contrast) :
-		reader(mask_reader), brightness(mask_brightness), contrast(mask_contrast), replace_image(false), needs_refresh(true)
+		maskType(MaskType::CUSTOM), reader(mask_reader), brightness(mask_brightness), contrast(mask_contrast), replace_image(false), needs_refresh(true)
+{
+	// Init effect properties
+	init_effect_details();
+}
+
+Mask::Mask(MaskType _maskType, Keyframe mask_brightness, Keyframe mask_contrast) :
+		maskType(_maskType), reader(NULL), brightness(mask_brightness), contrast(mask_contrast), replace_image(false), needs_refresh(true)
 {
 	// Init effect properties
 	init_effect_details();
@@ -59,33 +68,54 @@ std::shared_ptr<openshot::Frame> Mask::GetFrame(std::shared_ptr<openshot::Frame>
 	// Get the mask image (from the mask reader)
 	std::shared_ptr<QImage> frame_image = frame->GetImage();
 
-	// Check if mask reader is open
-	#pragma omp critical (open_mask_reader)
+	if (maskType == MaskType::CUSTOM)
 	{
-		if (reader && !reader->IsOpen())
-			reader->Open();
-	}
-
-	// No reader (bail on applying the mask)
-	if (!reader)
-		return frame;
-
-	// Get mask image (if missing or different size than frame image)
-	#pragma omp critical (open_mask_reader)
-	{
-		if (!original_mask || !reader->info.has_single_image || needs_refresh ||
-			(original_mask && original_mask->size() != frame_image->size())) {
-
-			// Only get mask if needed
-			auto mask_without_sizing = std::make_shared<QImage>(
-				*reader->GetFrame(frame_number)->GetImage());
-
-			// Resize mask image to match frame size
-			original_mask = std::make_shared<QImage>(
-				mask_without_sizing->scaled(
-					frame_image->width(), frame_image->height(),
-					Qt::IgnoreAspectRatio, Qt::SmoothTransformation));
+		// Check if mask reader is open
+		#pragma omp critical (open_mask_reader)
+		{
+			if (reader && !reader->IsOpen())
+				reader->Open();
 		}
+
+		// No reader (bail on applying the mask)
+		if (!reader)
+			return frame;
+
+
+		// Get mask image (if missing or different size than frame image)
+		#pragma omp critical (open_mask_reader)
+		{
+			if (!original_mask || !reader->info.has_single_image || needs_refresh ||
+				(original_mask && original_mask->size() != frame_image->size())) {
+
+				// Only get mask if needed
+				auto mask_without_sizing = std::make_shared<QImage>(
+						*reader->GetFrame(frame_number)->GetImage());
+
+				const auto a = frame_image->width();
+				const auto b = frame_image->height();
+				// Resize mask image to match frame size
+				original_mask = std::make_shared<QImage>(
+						mask_without_sizing->scaled(
+								frame_image->width(), frame_image->height(),
+								Qt::IgnoreAspectRatio, Qt::SmoothTransformation));
+			}
+		}
+	}
+	else if (maskType == MaskType::ROUNDED_CORNERS)
+	{
+		QImage mask(frame_image->width(),frame_image->height(),QImage::Format_RGBA8888_Premultiplied);
+		mask.fill(Qt::white);
+		QPainter p(&mask);
+		p.setRenderHint(QPainter::Antialiasing);
+		QPainterPath path;
+		path.addRoundedRect(QRectF(0, 0, frame_image->width(), frame_image->height()), 25, 25);
+		QPen pen(Qt::black, 0);
+		p.setPen(pen);
+		p.fillPath(path, Qt::black);
+		p.drawPath(path);
+		p.end();
+		original_mask = std::make_shared<QImage>(mask);
 	}
 
 	// Refresh no longer needed

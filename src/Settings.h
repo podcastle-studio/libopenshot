@@ -92,6 +92,9 @@ namespace openshot {
 		/// paths depend on the location of OpenShot transitions and files)
 		std::string PATH_OPENSHOT_INSTALL = "";
 
+        ///
+        bool ENABLE_LEGACY_MODE = false;
+
  		/// Whether to dump ZeroMQ debug messages to stderr
 		bool DEBUG_TO_STDERR = false;
 

@@ -13,6 +13,7 @@
 #include "Crop.h"
 #include "Exceptions.h"
 #include "KeyFrame.h"
+#include "Settings.h"
 
 #include <QImage>
 #include <QPainter>
@@ -106,8 +107,14 @@ std::shared_ptr<openshot::Frame> Crop::GetFrame(std::shared_ptr<openshot::Frame>
     p.end();
 
 	// Set frame image
-	frame->AddImage(std::make_shared<QImage>(cropped.copy()));
-
+    if (openshot::Settings::Instance()->ENABLE_LEGACY_MODE)
+    {
+         frame->AddImage(std::make_shared<QImage>(cropped.copy()));
+    }
+    else
+    {
+        frame->AddImage(std::make_shared<QImage>(cropped.copy(copy_r.x(), copy_r.y(), copy_r.width(), copy_r.height())));
+    }
 	// return the modified frame
 	return frame;
 }

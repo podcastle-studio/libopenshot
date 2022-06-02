@@ -414,6 +414,11 @@ std::shared_ptr<Frame> Clip::GetFrame(std::shared_ptr<openshot::Frame> backgroun
 		// Return the frame's number so the correct keyframes are applied.
 		original_frame->number = frame_number;
 
+        if (!openshot::Settings::Instance()->ENABLE_LEGACY_MODE)
+        {
+            apply_scale_options(original_frame, background_frame);
+        }
+
 		// Apply local effects to the frame (if any)
 		apply_effects(original_frame);
 
@@ -1324,6 +1329,44 @@ void Clip::apply_keyframes(std::shared_ptr<Frame> frame, std::shared_ptr<QImage>
     frame->AddImage(background_canvas);
 }
 
+void Clip::apply_scale_options(std::shared_ptr<Frame> frame, std::shared_ptr<openshot::Frame> background_frame)
+{
+    std::shared_ptr<QImage> source_image = frame->GetImage();
+    QSize source_size = source_image->size();
+
+    switch (scale)
+    {
+        case (SCALE_FIT): {
+            source_size.scale(background_frame->GetWidth(), background_frame->GetHeight(), Qt::KeepAspectRatio);
+            break;
+        }
+        case (SCALE_STRETCH): {
+            source_size.scale(background_frame->GetWidth(), background_frame->GetHeight(), Qt::IgnoreAspectRatio);
+            break;
+        }
+        case (SCALE_CROP): {
+            source_size.scale(background_frame->GetWidth(), background_frame->GetHeight(), Qt::KeepAspectRatioByExpanding);
+        }
+        case (SCALE_NONE): {
+            break;
+        }
+    }
+
+    // Adjust size for scale x and scale y
+    float sx = scale_x.GetValue(frame->number); // percentage X scale
+    float sy = scale_y.GetValue(frame->number); // percentage Y scale
+
+    float scaled_source_width = source_size.width() * sx;
+    float scaled_source_height = source_size.height() * sy;
+
+    float source_width_scale = (float(source_size.width()) / float(source_image->width())) * sx;
+    float source_height_scale = (float(source_size.height()) / float(source_image->height())) * sy;
+
+    QImage scaledImg = source_image->scaled(scaled_source_width, scaled_source_height, Qt::KeepAspectRatioByExpanding);
+    frame->AddImage(std::make_shared<QImage>(scaledImg));
+}
+
+
 // Apply keyframes to the source frame (if any)
 QTransform Clip::get_transform(std::shared_ptr<Frame> frame, int width, int height)
 {
@@ -1359,59 +1402,62 @@ QTransform Clip::get_transform(std::shared_ptr<Frame> frame, int width, int heig
 	/* RESIZE SOURCE IMAGE - based on scale type */
 	QSize source_size = source_image->size();
 
-    // Apply stretch scale to correctly fit the bounding-box
-	if (parentTrackedObject){
-		scale = SCALE_STRETCH;
-	}
+    if (openshot::Settings::Instance()->ENABLE_LEGACY_MODE)
+    {
+        // Apply stretch scale to correctly fit the bounding-box
+        if (parentTrackedObject){
+            scale = SCALE_STRETCH;
+        }
 
-	switch (scale)
-	{
-		case (SCALE_FIT): {
-			source_size.scale(width, height, Qt::KeepAspectRatio);
+        switch (scale)
+        {
+            case (SCALE_FIT): {
+                source_size.scale(width, height, Qt::KeepAspectRatio);
 
-			// Debug output
-			ZmqLogger::Instance()->AppendDebugMethod(
-				"Clip::get_transform (Scale: SCALE_FIT)",
-				"frame->number", frame->number,
-				"source_width", source_size.width(),
-				"source_height", source_size.height());
-			break;
-		}
-		case (SCALE_STRETCH): {
-			source_size.scale(width, height, Qt::IgnoreAspectRatio);
+                // Debug output
+                ZmqLogger::Instance()->AppendDebugMethod(
+                        "Clip::get_transform (Scale: SCALE_FIT)",
+                        "frame->number", frame->number,
+                        "source_width", source_size.width(),
+                        "source_height", source_size.height());
+                break;
+            }
+            case (SCALE_STRETCH): {
+                source_size.scale(width, height, Qt::IgnoreAspectRatio);
 
-			// Debug output
-			ZmqLogger::Instance()->AppendDebugMethod(
-				"Clip::get_transform (Scale: SCALE_STRETCH)",
-				"frame->number", frame->number,
-				"source_width", source_size.width(),
-				"source_height", source_size.height());
-			break;
-		}
-		case (SCALE_CROP): {
-			source_size.scale(width, height, Qt::KeepAspectRatioByExpanding);
+                // Debug output
+                ZmqLogger::Instance()->AppendDebugMethod(
+                        "Clip::get_transform (Scale: SCALE_STRETCH)",
+                        "frame->number", frame->number,
+                        "source_width", source_size.width(),
+                        "source_height", source_size.height());
+                break;
+            }
+            case (SCALE_CROP): {
+                source_size.scale(width, height, Qt::KeepAspectRatioByExpanding);
 
-			// Debug output
-			ZmqLogger::Instance()->AppendDebugMethod(
-				"Clip::get_transform (Scale: SCALE_CROP)",
-				"frame->number", frame->number,
-				"source_width", source_size.width(),
-				"source_height", source_size.height());
-			break;
-		}
-		case (SCALE_NONE): {
-			// Image is already the original size (i.e. no scaling mode) relative
-			// to the preview window size (i.e. timeline / preview ratio). No further
-			// scaling is needed here.
-			// Debug output
-			ZmqLogger::Instance()->AppendDebugMethod(
-				"Clip::get_transform (Scale: SCALE_NONE)",
-				"frame->number", frame->number,
-				"source_width", source_size.width(),
-				"source_height", source_size.height());
-			break;
-		}
-	}
+                // Debug output
+                ZmqLogger::Instance()->AppendDebugMethod(
+                        "Clip::get_transform (Scale: SCALE_CROP)",
+                        "frame->number", frame->number,
+                        "source_width", source_size.width(),
+                        "source_height", source_size.height());
+                break;
+            }
+            case (SCALE_NONE): {
+                // Image is already the original size (i.e. no scaling mode) relative
+                // to the preview window size (i.e. timeline / preview ratio). No further
+                // scaling is needed here.
+                // Debug output
+                ZmqLogger::Instance()->AppendDebugMethod(
+                        "Clip::get_transform (Scale: SCALE_NONE)",
+                        "frame->number", frame->number,
+                        "source_width", source_size.width(),
+                        "source_height", source_size.height());
+                break;
+            }
+        }
+    }
 
 	// Initialize parent object's properties (Clip or Tracked Object)
 	float parentObject_location_x = 0.0;
@@ -1441,7 +1487,7 @@ QTransform Clip::get_transform(std::shared_ptr<Frame> frame, int width, int heig
 	}
 
 	// Get the parentTrackedObject properties
-	if (parentTrackedObject){
+	if (parentTrackedObject) {
 
 		// Convert Clip's frame position to Timeline's frame position
 		long clip_start_position = round(Position() * info.fps.ToDouble()) + 1;
@@ -1573,12 +1619,17 @@ QTransform Clip::get_transform(std::shared_ptr<Frame> frame, int width, int heig
 		transform.shear(shear_x_value, shear_y_value);
 		transform.translate(-origin_x_offset,-origin_y_offset);
 	}
-	// SCALE CLIP (if needed)
-	float source_width_scale = (float(source_size.width()) / float(source_image->width())) * sx;
-	float source_height_scale = (float(source_size.height()) / float(source_image->height())) * sy;
-	if (!isEqual(source_width_scale, 1.0) || !isEqual(source_height_scale, 1.0)) {
-		transform.scale(source_width_scale, source_height_scale);
-	}
+
+    if (openshot::Settings::Instance()->ENABLE_LEGACY_MODE)
+    {
+        // SCALE CLIP (if needed)
+        float source_width_scale = (float(source_size.width()) / float(source_image->width())) * sx;
+        float source_height_scale = (float(source_size.height()) / float(source_image->height())) * sy;
+        if (!isEqual(source_width_scale, 1.0) || !isEqual(source_height_scale, 1.0)) {
+            transform.scale(source_width_scale, source_height_scale);
+        }
+    }
+
 
     return transform;
 }
