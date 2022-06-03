@@ -42,10 +42,15 @@ Mask::Mask(ReaderBase *mask_reader, Keyframe mask_brightness, Keyframe mask_cont
 }
 
 Mask::Mask(MaskType _maskType, Keyframe mask_brightness, Keyframe mask_contrast) :
-		maskType(_maskType), reader(NULL), brightness(mask_brightness), contrast(mask_contrast), replace_image(false), needs_refresh(true)
+		maskType(_maskType), reader(NULL), brightness(mask_brightness), contrast(mask_contrast), replace_image(false), needs_refresh(true),
+        roundedRadiusX(0), roundedRadiusY(0)
 {
 	// Init effect properties
 	init_effect_details();
+    if (maskType == MaskType::ROUNDED_CORNERS)
+    {
+        SetRoundedCornersMaskRadius(15, 15);
+    }
 }
 
 // Init effect settings
@@ -109,7 +114,7 @@ std::shared_ptr<openshot::Frame> Mask::GetFrame(std::shared_ptr<openshot::Frame>
 		QPainter p(&mask);
 		p.setRenderHint(QPainter::Antialiasing);
 		QPainterPath path;
-		path.addRoundedRect(QRectF(0, 0, frame_image->width(), frame_image->height()), 25, 25);
+		path.addRoundedRect(QRectF(0, 0, frame_image->width(), frame_image->height()), roundedRadiusX, roundedRadiusY);
 		QPen pen(Qt::black, 0);
 		p.setPen(pen);
 		p.fillPath(path, Qt::black);
@@ -283,6 +288,13 @@ void Mask::SetJsonValue(const Json::Value root) {
 	}
 
 }
+
+void Mask::SetRoundedCornersMaskRadius(int x, int y)
+{
+    roundedRadiusX = x;
+    roundedRadiusY = y;
+}
+
 
 // Get all properties for a specific frame
 std::string Mask::PropertiesJSON(int64_t requested_frame) const {

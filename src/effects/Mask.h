@@ -39,7 +39,8 @@ namespace openshot
 		ReaderBase *reader;
 		std::shared_ptr<QImage> original_mask;
 		bool needs_refresh;
-
+        int roundedRadiusX;
+        int roundedRadiusY;
 		/// Init effect settings
 		void init_effect_details();
 
@@ -95,6 +96,8 @@ namespace openshot
 		void SetJson(const std::string value) override; ///< Load JSON string into this object
 		Json::Value JsonValue() const override; ///< Generate Json::Value for this object
 		void SetJsonValue(const Json::Value root) override; ///< Load Json::Value into this object
+
+        void SetRoundedCornersMaskRadius(int x, int y);
 
 		/// Get all properties for a specific frame (perfect for a UI to display the current state
 		/// of all properties at any time)

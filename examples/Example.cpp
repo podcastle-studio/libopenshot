@@ -196,7 +196,7 @@ int main(int argc, char* argv[])
 
         auto* cropEffect = new openshot::Crop(cropLeftKeyframe, cropTopKeyframe, cropRightKeyframe, cropBottomKeyframe);
         auto* mask = new openshot::Mask(openshot::Mask::MaskType::ROUNDED_CORNERS, 0, 3);
-
+        mask->SetRoundedCornersMaskRadius(8, 8);
         clip->AddEffect(cropEffect);
         clip->AddEffect(mask);
         timeLine.AddClip(clip);
