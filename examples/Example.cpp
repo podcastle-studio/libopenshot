@@ -17,39 +17,42 @@ namespace
 }
 
 nlohmann::json payload = nlohmann::json::parse("{\n"
-                                               "   \"width\":1280,\n"
-                                               "   \"height\":720,\n"
-                                               "   \"fps\":30,\n"
-                                               "   \"background\":\"videos/background.jpg\",\n"
-                                               "   \"clips\":[\n"
-                                               "      {\n"
-                                               "         \"name\":\"videos/h1.mp4\",\n"
-                                               "         \"position\":0,\n"
-                                               "         \"keyFrames\":[\n"
-                                               "            {\n"
-                                               "               \"start\":0,\n"
-                                               "               \"width\":600,\n"
-                                               "               \"height\":462,\n"
-                                               "               \"left\":24,\n"
-                                               "               \"top\":92\n"
-                                               "            }\n"
-                                               "         ]\n"
-                                               "      },\n"
-                                               "      {\n"
-                                               "         \"name\":\"videos/h2.mp4\",\n"
-                                               "         \"position\":0,\n"
-                                               "         \"keyFrames\":[\n"
-                                               "            {\n"
-                                               "               \"start\":0,\n"
-                                               "               \"width\":600,\n"
-                                               "               \"height\":462,\n"
-                                               "               \"left\":656,\n"
-                                               "               \"top\":92\n"
-                                               "            }\n"
-                                               "         ]\n"
-                                               "      }\n"
-                                               "   ]\n"
-                                               "}");
+                                         "   \"duration\": 100,\n"
+                                         "   \"hardwareDecoder\": 2,\n"
+                                         "   \"encoder\": \"h264_nvenc\",\n"
+                                         "   \"width\":1280,\n"
+                                         "   \"height\":1024,\n"
+                                         "   \"fps\":30,\n"
+                                         "   \"background\":\"videos/background.jpg\",\n"
+                                         "   \"clips\":[\n"
+                                         "      {\n"
+                                         "         \"name\":\"videos/1.mp4\",\n"
+                                         "         \"position\":0,\n"
+                                         "         \"keyFrames\":[\n"
+                                         "            {\n"
+                                         "               \"start\":0,\n"
+                                         "               \"width\":600,\n"
+                                         "               \"height\":462,\n"
+                                         "               \"left\":24,\n"
+                                         "               \"top\":92\n"
+                                         "            }\n"
+                                         "         ]\n"
+                                         "      },\n"
+                                         "      {\n"
+                                       "           \"name\":\"videos/2.mp4\",\n"
+                                         "         \"position\":0,\n"
+                                         "         \"keyFrames\":[\n"
+                                         "            {\n"
+                                         "               \"start\":0,\n"
+                                         "               \"width\":600,\n"
+                                         "               \"height\":462,\n"
+                                         "               \"left\":656,\n"
+                                         "               \"top\":92\n"
+                                         "            }\n"
+                                         "         ]\n"
+                                         "      }\n"
+                                         "   ]\n"
+                                         "}");
 
 void calculateClipFitFrameSizes(openshot::Clip& clip, int outVideoWidth, int outVideoHeight, float& newWidth, float& newHeight)
 {
@@ -162,6 +165,8 @@ void applyBackgroundParams(openshot::Clip& backgroundClip)
 
 int main(int argc, char* argv[])
 {
+    openshot::Settings::Instance()->HW_EN_DEVICE_SET = 1;
+    openshot::Settings::Instance()->HW_EN_DEVICE_SET = 1;
     const int videoWidth = payload["width"];
     const int videoHeight = payload["height"];
     const int videoFps = payload["fps"];
@@ -205,10 +210,10 @@ int main(int argc, char* argv[])
     /// Create a writer
     openshot::FFmpegWriter w("videos/output.mp4");
     w.SetAudioOptions(true, "libvorbis", kSampleRate, kNumChannels, openshot::ChannelLayout::LAYOUT_STEREO, 128000);
-    w.SetVideoOptions(true, "libx264" , openshot::Fraction(videoFps, 1),  videoWidth, videoHeight, openshot::Fraction(1,1), false, false, 1600000);
+    w.SetVideoOptions(true, "h264_nvenc" , openshot::Fraction(videoFps, 1),  videoWidth, videoHeight, openshot::Fraction(1,1), false, false, 1600000);
 
     w.Open();
-    w.WriteFrame(&timeLine, 0, 5 * videoFps);
+    w.WriteFrame(&timeLine, 0, 6000 * videoFps);
 
     // Close the reader & writer
     timeLine.Close();
