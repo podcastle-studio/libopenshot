@@ -1,3 +1,79 @@
+/**
+ * @file
+ * @brief Source file for Example Executable (example app for libopenshot)
+ * @author Jonathan Thomas <jonathan@openshot.org>
+ *
+ * @ref License
+ */
+
+// Copyright (c) 2008-2019 OpenShot Studios, LLC
+//
+// SPDX-License-Identifier: LGPL-3.0-or-later
+
+#include <fstream>
+#include <iostream>
+#include <memory>
+#include "Clip.h"
+#include "Frame.h"
+#include "FFmpegReader.h"
+#include "Timeline.h"
+
+using namespace openshot;
+
+
+int main(int argc, char* argv[]) {
+
+    // Types for storing time durations in whole and fractional milliseconds
+    using ms = std::chrono::milliseconds;
+    using s = std::chrono::seconds;
+    using double_ms = std::chrono::duration<double, ms::period>;
+
+    // FFmpeg Reader performance test
+    const auto total_1 = std::chrono::high_resolution_clock::now();
+    FFmpegReader r9("videos/1.mp4");
+    r9.Open();
+    for (long int frame = 1; frame <= 1000; frame++)
+    {
+        const auto time1 = std::chrono::high_resolution_clock::now();
+        std::shared_ptr<Frame> f = r9.GetFrame(frame);
+        const auto time2 = std::chrono::high_resolution_clock::now();
+        std::cout << "FFmpegReader: " << frame
+                  << " (" << double_ms(time2 - time1).count() << " ms)\n";
+    }
+    const auto total_2 = std::chrono::high_resolution_clock::now();
+    auto total_sec = std::chrono::duration_cast<ms>(total_2 - total_1);
+    std::cout << "FFmpegReader TOTAL: " << total_sec.count() << " ms\n";
+    r9.Close();
+
+
+    // Timeline Reader performance test
+    Timeline tm(r9.info);
+    Clip *c = new Clip(&r9);
+    tm.AddClip(c);
+    tm.Open();
+
+    const auto total_3 = std::chrono::high_resolution_clock::now();
+    for (long int frame = 1; frame <= 1000; frame++)
+    {
+        const auto time1 = std::chrono::high_resolution_clock::now();
+        std::shared_ptr<Frame> f = tm.GetFrame(frame);
+        const auto time2 = std::chrono::high_resolution_clock::now();
+        std::cout << "Timeline: " << frame
+                  << " (" << double_ms(time2 - time1).count() << " ms)\n";
+    }
+    const auto total_4 = std::chrono::high_resolution_clock::now();
+    total_sec = std::chrono::duration_cast<ms>(total_4 - total_3);
+    std::cout << "Timeline TOTAL: " << total_sec.count() << " ms\n";
+    tm.Close();
+
+    std::cout << "Completed successfully!\n";
+
+    while(true);
+    return 0;
+}
+
+
+/*
 #include <string>
 #include <Json.h>
 #include <Clip.h>
@@ -10,6 +86,7 @@
 #include <cmath>
 #include <Json/Json.h>
 
+#include "CacheMemory.h"
 namespace
 {
     const int kNumChannels = 2;
@@ -165,8 +242,11 @@ void applyBackgroundParams(openshot::Clip& backgroundClip)
 
 int main(int argc, char* argv[])
 {
-    openshot::Settings::Instance()->HW_EN_DEVICE_SET = 1;
-    openshot::Settings::Instance()->HW_EN_DEVICE_SET = 1;
+
+//    openshot::Settings::Instance()->HARDWARE_DECODER = 0;
+//    openshot::Settings::Instance()->HW_EN_DEVICE_SET = 0;
+//    openshot::Settings::Instance()->HW_EN_DEVICE_SET = 0;
+//    openshot::Settings::Instance()->HW_EN_DEVICE_SET = 1;
     const int videoWidth = payload["width"];
     const int videoHeight = payload["height"];
     const int videoFps = payload["fps"];
@@ -209,6 +289,7 @@ int main(int argc, char* argv[])
 
     /// Create a writer
     openshot::FFmpegWriter w("videos/output.mp4");
+    w.SetCacheSize(30);
     w.SetAudioOptions(true, "libvorbis", kSampleRate, kNumChannels, openshot::ChannelLayout::LAYOUT_STEREO, 128000);
     w.SetVideoOptions(true, "h264_nvenc" , openshot::Fraction(videoFps, 1),  videoWidth, videoHeight, openshot::Fraction(1,1), false, false, 1600000);
 
@@ -220,3 +301,4 @@ int main(int argc, char* argv[])
     w.Close();
     return 0;
 }
+ */
