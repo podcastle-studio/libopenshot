@@ -97,6 +97,8 @@ namespace openshot
 		/// @param reader The initial reader to base this chunk file's meta data on (such as fps, height, width, etc...)
 		ChunkWriter(std::string path, openshot::ReaderBase *reader);
 
+        ~ChunkWriter();
+        
 		/// Close the writer
 		void Close();
 

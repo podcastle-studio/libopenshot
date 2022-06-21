@@ -139,6 +139,7 @@ CacheDisk::~CacheDisk()
 
 	// remove mutex
 	delete cacheMutex;
+    cacheMutex = nullptr;
 }
 
 // Add a Frame to the cache
@@ -267,6 +268,7 @@ std::shared_ptr<Frame> CacheDisk::GetFrame(int64_t frame_number)
 						}
 
 					}
+                    delete [] channel_samples;
 				}
 			}
 

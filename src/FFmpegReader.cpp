@@ -96,6 +96,12 @@ FFmpegReader::~FFmpegReader() {
 	if (is_open)
 		// Auto close reader if not already done
 		Close();
+
+    if (pFrame)
+    {
+        av_freep(&(pFrame->data[0]));
+        AV_FREE_FRAME(&pFrame);
+    }
 }
 
 // This struct holds the associated video frame and starting sample # for an audio packet.
@@ -599,7 +605,6 @@ void FFmpegReader::Close() {
 		// Close the video file
 		avformat_close_input(&pFormatCtx);
 		av_freep(&pFormatCtx);
-
 		// Reset some variables
 		last_frame = 0;
 		largest_frame_processed = 0;
@@ -1137,6 +1142,7 @@ bool FFmpegReader::GetAVFrame() {
 			}
 	#if USE_HW_ACCEL
 			if (hw_de_on && hw_de_supported) {
+                av_freep(&(next_frame->data[0]));
 				AV_FREE_FRAME(&next_frame2);
 			}
 	#endif // USE_HW_ACCEL
@@ -1158,6 +1164,7 @@ bool FFmpegReader::GetAVFrame() {
 #endif // IS_FFMPEG_3_2
 
 	// deallocate the frame
+    av_freep(&(next_frame->data[0]));
 	AV_FREE_FRAME(&next_frame);
 
 	// Did we get a video frame?
@@ -1362,6 +1369,7 @@ void FFmpegReader::ProcessVideoPacket(int64_t requested_frame) {
 
 	// Free the RGB image
 	AV_FREE_FRAME(&pFrameRGB);
+
 
 	// Remove frame and packet
 	RemoveAVFrame(my_frame);
@@ -1667,6 +1675,7 @@ void FFmpegReader::ProcessAudioPacket(int64_t requested_frame, int64_t target_fr
 	}
 
 	// Free audio frame
+    // av_freep(&(audio_frame->data[0]));
 	AV_FREE_FRAME(&audio_frame);
 
 	// Debug output
@@ -2351,7 +2360,9 @@ void FFmpegReader::CheckFPS() {
 
 				// Increment counters
 				frames_detected++;
-			}
+			} else {
+                std::cout << " " << std::endl;
+            }
 		}
 	}
 
@@ -2409,6 +2420,7 @@ void FFmpegReader::RemoveAVFrame(AVFrame *remove_frame) {
 
 // Remove AVPacket from cache (and deallocate its memory)
 void FFmpegReader::RemoveAVPacket(AVPacket *remove_packet) {
+    // av_packet_free_side_data(remove_packet);
 	// deallocate memory for packet
 	AV_FREE_PACKET(remove_packet);
 

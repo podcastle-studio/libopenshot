@@ -113,7 +113,8 @@ Frame::~Frame() {
 	audio.reset();
 	#ifdef USE_OPENCV
 	imagecv.release();
-	#endif
+    #endif
+	previewApp.reset();
 }
 
 // Display the frame image to the screen (primarily used for debugging reasons)

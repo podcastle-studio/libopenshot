@@ -209,7 +209,7 @@ Timeline::~Timeline() {
 		Close();
 
 	// Free all allocated frame mappers
-	std::set<FrameMapper *>::iterator it;
+	std::set<FrameMapper*>::iterator it;
 	for (it = allocated_frame_mappers.begin(); it != allocated_frame_mappers.end(); ) {
 		// Dereference and clean up FrameMapper object
 		FrameMapper *mapper = (*it);

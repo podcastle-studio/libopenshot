@@ -106,6 +106,8 @@ namespace openshot
 		/// @param chunk_version	Choose the video version / quality (THUMBNAIL, PREVIEW, or FINAL)
 		ChunkReader(std::string path, ChunkVersion chunk_version);
 
+        virtual ~ChunkReader();
+
 		/// Close the reader
 		void Close() override;
 
@@ -139,6 +141,8 @@ namespace openshot
 
 		/// Open the reader. This is required before you can access frames or data from the reader.
 		void Open() override;
+
+
 	};
 
 }

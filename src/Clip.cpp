@@ -261,7 +261,6 @@ void Clip::SetAttachedObject(std::shared_ptr<openshot::TrackedObjectBase> tracke
 // Set the pointer to the clip this clip is attached to
 void Clip::SetAttachedClip(Clip* clipObject){
 	parentClipObject = clipObject;
-	return;
 }
 
 /// Set the current reader

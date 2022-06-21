@@ -300,3 +300,14 @@ void ChunkReader::SetJsonValue(const Json::Value root) {
 		Open();
 	}
 }
+
+
+ChunkReader::~ChunkReader()
+{
+    if (local_reader)
+    {
+        // Close and delete old reader
+        local_reader->Close();
+        delete local_reader;
+    }
+}
