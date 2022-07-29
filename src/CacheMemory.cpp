@@ -40,7 +40,6 @@ CacheMemory::~CacheMemory()
 
     // remove mutex
 	delete cacheMutex;
-    cacheMutex = nullptr;
 }
 
 

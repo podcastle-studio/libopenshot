@@ -54,11 +54,3 @@ void CacheBase::SetJsonValue(const Json::Value root) {
 	if (!root["max_bytes"].isNull())
 		max_bytes = std::stoll(root["max_bytes"].asString());
 }
-
-CacheBase::~CacheBase()
-{
-    if (cacheMutex)
-    {
-        delete cacheMutex;
-    }
-}

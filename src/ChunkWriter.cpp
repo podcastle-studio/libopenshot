@@ -281,27 +281,3 @@ void ChunkWriter::Open()
 {
 	is_open = true;
 }
-
-ChunkWriter::~ChunkWriter()
-{
-    if (local_reader)
-    {
-        local_reader->Close();
-        delete local_reader;
-    }
-    if (writer_thumb)
-    {
-        writer_thumb->Close();
-        delete writer_thumb;
-    }
-    if (writer_preview)
-    {
-        writer_preview->Close();
-        delete writer_preview;
-    }
-    if (writer_final)
-    {
-        writer_final->Close();
-        delete writer_final;
-    }
-}

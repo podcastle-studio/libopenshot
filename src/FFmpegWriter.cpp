@@ -267,7 +267,6 @@ void FFmpegWriter::SetVideoOptions(bool has_video, std::string codec, Fraction f
 		"width", width, "height", height,
 		"size.num", size.num, "size.den", size.den,
 		"fps.num", fps.num, "fps.den", fps.den);
-    AV_FREE_CONTEXT(video_codec_ctx);
 
 	// Enable / Disable video
 	info.has_video = has_video;
@@ -979,9 +978,7 @@ void FFmpegWriter::flush_encoders() {
             audio_timestamp += pkt->duration;
 
             // deallocate memory for packet
-            av_packet_free_side_data(pkt);
             AV_FREE_PACKET(pkt);
-            delete pkt;
         }
     }
 
@@ -1033,18 +1030,12 @@ void FFmpegWriter::Close() {
 
 	// Close each codec
 	if (video_st)
-    {
-        close_video(oc, video_st);
-//        delete video_st;
-    }
+		close_video(oc, video_st);
 	if (audio_st)
-    {
-        close_audio(oc, audio_st);
-//        delete audio_st;
-    }
+		close_audio(oc, audio_st);
 
 	// Deallocate image scalers
-	if (!image_rescalers.empty())
+	if (image_rescalers.size() > 0)
 		RemoveScalers();
 
 	if (!(oc->oformat->flags & AVFMT_NOFILE)) {
@@ -1067,52 +1058,6 @@ void FFmpegWriter::Close() {
 	write_trailer = false;
 
 	ZmqLogger::Instance()->AppendDebugMethod("FFmpegWriter::Close");
-
-    ///////////////////////////////////////////////////////////////////////////////////////
-    ///////////////////////////////////////////////////////////////////////////////////////
-    // be sure to free any allocated AVFrames
-    for (const auto& pair : av_frames) {
-        AVFrame *frame = pair.second;
-        av_freep(&(frame->data[0]));
-        AV_FREE_FRAME(&frame);
-    }
-
-    spooled_audio_frames.clear();
-    spooled_video_frames.clear();
-    queued_audio_frames.clear();
-    queued_video_frames.clear();
-    processed_frames.clear();
-    deallocate_frames.clear();
-    av_frames.clear();
-
-#if (LIBAVFORMAT_VERSION_MAJOR >= 58)
-    if (video_codec_ctx) {
-        AV_FREE_CONTEXT(video_codec_ctx);
-        video_codec_ctx = NULL;
-    }
-    if (audio_codec_ctx) {
-        AV_FREE_CONTEXT(audio_codec_ctx);
-        audio_codec_ctx = NULL;
-    }
-
-#elif (LIBAVFORMAT_VERSION_MAJOR <= 55)
-    if (video_codec) {
-		AV_FREE_CONTEXT(video_codec);
-		video_codec = NULL;
-	}
-	if (audio_codec) {
-		AV_FREE_CONTEXT(audio_codec);
-		audio_codec = NULL;
-	}
-#endif
-
-    if (oc) {
-        avformat_free_context(oc);
-        delete oc;
-        oc = NULL;
-    }
-    /////////////////////////////////////////////////////////////////////////////////
-    /////////////////////////////////////////////////////////////////////////////////
 }
 
 // Add an AVFrame to the cache
@@ -1123,7 +1068,6 @@ void FFmpegWriter::add_avframe(std::shared_ptr<Frame> frame, AVFrame *av_frame) 
 		av_frames[frame] = av_frame;
 	} else {
 		// Do not add, and deallocate this AVFrame
-        av_freep(&(av_frame->data[0]));
 		AV_FREE_FRAME(&av_frame);
 	}
 }
@@ -2065,9 +2009,7 @@ void FFmpegWriter::write_audio_packets(bool is_final) {
         AV_FREE_FRAME(&frame_final);
 
         // deallocate memory for packet
-        av_packet_free_side_data(pkt);
         AV_FREE_PACKET(pkt);
-//        delete pkt;
 
         // Reset position
         audio_input_position = 0;
@@ -2124,7 +2066,7 @@ void FFmpegWriter::process_video_packet(std::shared_ptr<Frame> frame) {
         return;
 
     // Init rescalers (if not initialized yet)
-    if (image_rescalers.empty())
+    if (image_rescalers.size() == 0)
         InitScalers(source_image_width, source_image_height);
 
     // Get a unique rescaler (for this thread)
@@ -2154,7 +2096,7 @@ void FFmpegWriter::process_video_packet(std::shared_ptr<Frame> frame) {
     {
         frame_final = allocate_avframe(
             (AVPixelFormat)(video_st->codecpar->format),
-            info.width, info.height, &bytes_final, nullptr
+            info.width, info.height, &bytes_final, NULL
         );
     }
 #else
@@ -2177,7 +2119,6 @@ void FFmpegWriter::process_video_packet(std::shared_ptr<Frame> frame) {
     add_avframe(frame, frame_final);
 
     // Deallocate memory
-    // av_freep(&(frame_source->data[0]));
     AV_FREE_FRAME(&frame_source);
 }
 
@@ -2231,9 +2172,7 @@ bool FFmpegWriter::write_video_packet(std::shared_ptr<Frame> frame, AVFrame *fra
 		}
 
 		// Deallocate packet
-        av_packet_free_side_data(pkt);
 		AV_FREE_PACKET(pkt);
-		// delete pkt;
 
 	} else
 	{
