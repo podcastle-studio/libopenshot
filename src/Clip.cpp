@@ -1359,8 +1359,8 @@ void Clip::apply_scale_options(std::shared_ptr<Frame> frame, std::shared_ptr<ope
     float scaled_source_width = source_size.width() * sx;
     float scaled_source_height = source_size.height() * sy;
 
-    float source_width_scale = (float(source_size.width()) / float(source_image->width())) * sx;
-    float source_height_scale = (float(source_size.height()) / float(source_image->height())) * sy;
+//    float source_width_scale = (float(source_size.width()) / float(source_image->width())) * sx;
+//    float source_height_scale = (float(source_size.height()) / float(source_image->height())) * sy;
 
     QImage scaledImg = source_image->scaled(scaled_source_width, scaled_source_height, Qt::KeepAspectRatioByExpanding);
     frame->AddImage(std::make_shared<QImage>(scaledImg));
@@ -1541,8 +1541,8 @@ QTransform Clip::get_transform(std::shared_ptr<Frame> frame, int width, int heig
 		sy*= parentObject_scale_y;
 	}
 
-    float scaled_source_width = source_size.width() * sx;
-	float scaled_source_height = source_size.height() * sy;
+    float scaled_source_width = openshot::Settings::Instance()->ENABLE_LEGACY_MODE ? source_size.width() * sx : source_size.width();
+	float scaled_source_height = openshot::Settings::Instance()->ENABLE_LEGACY_MODE ? source_size.height() * sy : source_size.height();
 
 	switch (gravity)
 	{
