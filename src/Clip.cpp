@@ -1362,7 +1362,7 @@ void Clip::apply_scale_options(std::shared_ptr<Frame> frame, std::shared_ptr<ope
 //    float source_width_scale = (float(source_size.width()) / float(source_image->width())) * sx;
 //    float source_height_scale = (float(source_size.height()) / float(source_image->height())) * sy;
 
-    QImage scaledImg = source_image->scaled(scaled_source_width, scaled_source_height, Qt::KeepAspectRatioByExpanding);
+    QImage scaledImg = source_image->scaled(scaled_source_width, scaled_source_height, Qt::KeepAspectRatioByExpanding, Qt::SmoothTransformation);
     frame->AddImage(std::make_shared<QImage>(scaledImg));
 }
 
