@@ -13,10 +13,6 @@
 #ifndef OPENSHOT_CACHE_DISK_H
 #define OPENSHOT_CACHE_DISK_H
 
-#include <map>
-#include <deque>
-#include <memory>
-
 #include "CacheBase.h"
 
 #include <QDir>
@@ -39,22 +35,13 @@ namespace openshot {
 		std::string image_format;
 		float image_quality;
 		float image_scale;
-
 		int64_t frame_size_bytes; ///< The size of the cached frame in bytes
-		bool needs_range_processing; ///< Something has changed, and the range data needs to be re-calculated
-		std::string json_ranges; ///< JSON ranges of frame numbers
-		std::vector<int64_t> ordered_frame_numbers; ///< Ordered list of frame numbers used by cache
-		std::map<int64_t, int64_t> frame_ranges;	///< This map holds the ranges of frames, useful for quickly displaying the contents of the cache
-		int64_t range_version; ///< The version of the JSON range data (incremented with each change)
 
 		/// Clean up cached frames that exceed the max number of bytes
 		void CleanUp();
 
 		/// Init path directory
 		void InitPath(std::string cache_path);
-
-		/// Calculate ranges of frames
-		void CalculateRanges();
 
 	public:
 		/// @brief Default constructor, no max bytes
@@ -82,9 +69,9 @@ namespace openshot {
 		/// Clear the cache of all frames
 		void Clear();
 
-        /// @brief Check if frame is already contained in cache
-        /// @param frame_number The frame number to be checked
-        bool Contains(int64_t frame_number);
+		/// @brief Check if frame is already contained in cache
+		/// @param frame_number The frame number to be checked
+		bool Contains(int64_t frame_number);
 
 		/// Count the frames in the queue
 		int64_t Count();
@@ -92,6 +79,9 @@ namespace openshot {
 		/// @brief Get a frame from the cache
 		/// @param frame_number The frame number of the cached frame
 		std::shared_ptr<openshot::Frame> GetFrame(int64_t frame_number);
+
+		/// @brief Get an array of all Frames
+		std::vector<std::shared_ptr<openshot::Frame>> GetFrames();
 
 		/// Gets the maximum bytes value
 		int64_t GetBytes();

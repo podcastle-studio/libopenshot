@@ -30,19 +30,12 @@ int main(int argc, char* argv[]) {
 
     // FFmpeg Reader performance test
     const auto total_1 = std::chrono::high_resolution_clock::now();
-    FFmpegReader r9("videos/1.mp4");
-    r9.Open();
-    for (long int frame = 1; frame <= 1000; frame++)
+    FFmpegReader r9("videos/1.mp4");    r9.Open();
+    for (long int frame = 1; frame <= r9.info.video_length; frame++)
     {
-        const auto time1 = std::chrono::high_resolution_clock::now();
+        std::cout << "Requesting Frame: #: " << frame << std::endl;
         std::shared_ptr<Frame> f = r9.GetFrame(frame);
-        const auto time2 = std::chrono::high_resolution_clock::now();
-        std::cout << "FFmpegReader: " << frame
-                  << " (" << double_ms(time2 - time1).count() << " ms)\n";
     }
-    const auto total_2 = std::chrono::high_resolution_clock::now();
-    auto total_sec = std::chrono::duration_cast<ms>(total_2 - total_1);
-    std::cout << "FFmpegReader TOTAL: " << total_sec.count() << " ms\n";
     r9.Close();
 
 

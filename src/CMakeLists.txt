@@ -19,6 +19,8 @@ if (POLICY CMP0057)
 endif()
 
 ###############  PROFILING  #################
+#set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fno-omit-frame-pointer -fsanitize=address")
+#set (CMAKE_LINKER_FLAGS "${CMAKE_LINKER_FLAGS} -fno-omit-frame-pointer -fsanitize=address")
 #set(PROFILER "/usr/lib/x86_64-linux-gnu/libprofiler.so.0")
 #set(PROFILER "/usr/lib/x86_64-linux-gnu/libtcmalloc.so.4")
 
@@ -48,6 +50,7 @@ set(OPENSHOT_SOURCES
   AudioDevices.cpp
   AudioReaderSource.cpp
   AudioResampler.cpp
+  AudioWaveformer.cpp
   CacheBase.cpp
   CacheDisk.cpp
   CacheMemory.cpp
@@ -173,7 +176,7 @@ target_include_directories(openshot
 # Find JUCE-based openshot Audio libraries
 if(NOT TARGET OpenShot::Audio)
   # Only load if necessary (not for integrated builds)
-  find_package(OpenShotAudio 0.2.0 REQUIRED)
+  find_package(OpenShotAudio 0.3.0 REQUIRED)
 endif()
 target_link_libraries(openshot PUBLIC OpenShot::Audio)
 

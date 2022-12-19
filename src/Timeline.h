@@ -154,12 +154,15 @@ namespace openshot {
 		std::list<openshot::Clip*> clips; ///<List of clips on this timeline
 		std::list<openshot::Clip*> closing_clips; ///<List of clips that need to be closed
 		std::map<openshot::Clip*, openshot::Clip*> open_clips; ///<List of 'opened' clips on this timeline
+		std::set<openshot::Clip*> allocated_clips; ///<List of clips that were allocated by this timeline
 		std::list<openshot::EffectBase*> effects; ///<List of clips on this timeline
+		std::set<openshot::EffectBase*> allocated_effects; ///<List of effects that were allocated by this timeline
 		openshot::CacheBase *final_cache; ///<Final cache of timeline frames
 		std::set<openshot::FrameMapper*> allocated_frame_mappers; ///< all the frame mappers we allocated and must free
 		bool managed_cache; ///< Does this timeline instance manage the cache object
 		std::string path; ///< Optional path of loaded UTF-8 OpenShot JSON project file
 		int max_concurrent_frames; ///< Max concurrent frames to process at one time
+		double max_time; ///> The max duration (in seconds) of the timeline, based on all the clips
 
 		std::map<std::string, std::shared_ptr<openshot::TrackedObjectBase>> tracked_objects; ///< map of TrackedObjectBBoxes and their IDs
 
@@ -174,6 +177,9 @@ namespace openshot {
 		void apply_json_to_effects(Json::Value change); ///< Apply JSON diff to effects
 		void apply_json_to_effects(Json::Value change, openshot::EffectBase* existing_effect); ///<Apply JSON diff to a specific effect
 		void apply_json_to_timeline(Json::Value change); ///<Apply JSON diff to timeline properties
+
+		/// Calculate the max duration (in seconds) of the timeline, based on all the clips, and cache the value
+		void calculate_max_duration();
 
 		/// Calculate time of a frame number, based on a framerate
 		double calculate_time(int64_t number, openshot::Fraction rate);
@@ -258,8 +264,12 @@ namespace openshot {
 		/// @brief Automatically map all clips to the timeline's framerate and samplerate
 		void AutoMapClips(bool auto_map) { auto_map_clips = auto_map; };
 
-        /// Clear all cache for this timeline instance, and all clips, mappers, and readers under it
-        void ClearAllCache();
+		/// Clear all clips, effects, and frame mappers from timeline (and free memory)
+		void Clear();
+        
+		/// Clear all cache for this timeline instance, including all clips' cache
+		/// @param deep If True, clear all FrameMappers and nested Readers (QtImageReader, FFmpegReader, etc...)
+		void ClearAllCache(bool deep=false);
 
 		/// Return a list of clips on the timeline
 		std::list<openshot::Clip*> Clips() override { return clips; };
@@ -340,6 +350,10 @@ namespace openshot {
 		/// @brief Remove an effect from the timeline
 		/// @param effect Remove an effect from the timeline.
 		void RemoveEffect(openshot::EffectBase* effect);
+
+		/// @brief Sort all clips and effects on timeline - which affects the internal order of clips and effects arrays
+		/// This is called automatically when Clips or Effects modify the Layer(), Position(), Start(), or End().
+		void SortTimeline() { sort_clips(); sort_effects(); }
 	};
 
 }

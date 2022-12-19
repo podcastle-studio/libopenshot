@@ -75,67 +75,10 @@ void CacheDisk::InitPath(std::string cache_path) {
 		path.mkpath(qpath);
 }
 
-// Calculate ranges of frames
-void CacheDisk::CalculateRanges() {
-	// Only calculate when something has changed
-	if (needs_range_processing) {
-
-		// Create a scoped lock, to protect the cache from multiple threads
-                const std::lock_guard<std::recursive_mutex> lock(*cacheMutex);
-
-		// Sort ordered frame #s, and calculate JSON ranges
-		std::sort(ordered_frame_numbers.begin(), ordered_frame_numbers.end());
-
-		// Clear existing JSON variable
-		Json::Value ranges = Json::Value(Json::arrayValue);
-
-		// Increment range version
-		range_version++;
-
-		int64_t starting_frame = *ordered_frame_numbers.begin();
-		int64_t ending_frame = starting_frame;
-
-		// Loop through all known frames (in sequential order)
-		for (const auto frame_number : ordered_frame_numbers) {
-			if (frame_number - ending_frame > 1) {
-				// End of range detected
-				Json::Value range;
-
-				// Add JSON object with start/end attributes
-				// Use strings, since int64_ts are supported in JSON
-				range["start"] = std::to_string(starting_frame);
-				range["end"] = std::to_string(ending_frame);
-				ranges.append(range);
-
-				// Set new starting range
-				starting_frame = frame_number;
-			}
-
-			// Set current frame as end of range, and keep looping
-			ending_frame = frame_number;
-		}
-
-		// APPEND FINAL VALUE
-		Json::Value range;
-
-		// Add JSON object with start/end attributes
-		// Use strings, since int64_ts are supported in JSON
-		range["start"] = std::to_string(starting_frame);
-		range["end"] = std::to_string(ending_frame);
-		ranges.append(range);
-
-		// Cache range JSON as string
-		json_ranges = ranges.toStyledString();
-
-		// Reset needs_range_processing
-		needs_range_processing = false;
-	}
-}
-
 // Default destructor
 CacheDisk::~CacheDisk()
 {
-    Clear();
+	Clear();
 
 	// remove mutex
 	delete cacheMutex;
@@ -202,11 +145,11 @@ void CacheDisk::Add(std::shared_ptr<Frame> frame)
 
 // Check if frame is already contained in cache
 bool CacheDisk::Contains(int64_t frame_number) {
-    if (frames.count(frame_number) > 0) {
-        return true;
-    } else {
-        return false;
-    }
+	if (frames.count(frame_number) > 0) {
+		return true;
+	} else {
+		return false;
+	}
 }
 
 // Get a frame from the cache (or NULL shared_ptr if no frame is found)
@@ -279,6 +222,23 @@ std::shared_ptr<Frame> CacheDisk::GetFrame(int64_t frame_number)
 	return std::shared_ptr<Frame>();
 }
 
+// @brief Get an array of all Frames
+std::vector<std::shared_ptr<openshot::Frame>> CacheDisk::GetFrames()
+{
+	// Create a scoped lock, to protect the cache from multiple threads
+	const std::lock_guard<std::recursive_mutex> lock(*cacheMutex);
+
+	std::vector<std::shared_ptr<openshot::Frame>> all_frames;
+	std::vector<int64_t>::iterator itr_ordered;
+	for(itr_ordered = ordered_frame_numbers.begin(); itr_ordered != ordered_frame_numbers.end(); ++itr_ordered)
+	{
+		int64_t frame_number = *itr_ordered;
+		all_frames.push_back(GetFrame(frame_number));
+	}
+
+	return all_frames;
+}
+
 // Get the smallest frame number (or NULL shared_ptr if no frame is found)
 std::shared_ptr<Frame> CacheDisk::GetSmallestFrame()
 {
@@ -294,12 +254,12 @@ std::shared_ptr<Frame> CacheDisk::GetSmallestFrame()
 			smallest_frame = *itr;
 	}
 
-    // Return frame (if any)
-    if (smallest_frame != -1) {
-        return GetFrame(smallest_frame);
-    } else {
-        return NULL;
-    }
+	// Return frame (if any)
+	if (smallest_frame != -1) {
+		return GetFrame(smallest_frame);
+	} else {
+		return NULL;
+	}
 }
 
 // Gets the maximum bytes value
@@ -406,11 +366,11 @@ void CacheDisk::Clear()
 	const std::lock_guard<std::recursive_mutex> lock(*cacheMutex);
 
 	// Clear all containers
-    frames.clear();
-    frame_numbers.clear();
-    frame_numbers.shrink_to_fit();
-    ordered_frame_numbers.clear();
-    ordered_frame_numbers.shrink_to_fit();
+	frames.clear();
+	frame_numbers.clear();
+	frame_numbers.shrink_to_fit();
+	ordered_frame_numbers.clear();
+	ordered_frame_numbers.shrink_to_fit();
 	needs_range_processing = true;
 	frame_size_bytes = 0;
 

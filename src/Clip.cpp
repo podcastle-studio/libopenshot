@@ -39,7 +39,7 @@ void Clip::init_settings()
 	Position(0.0);
 	Layer(0);
 	Start(0.0);
-	End(0.0);
+	ClipBase::End(0.0);
 	gravity = GRAVITY_CENTER;
 	scale = SCALE_FIT;
 	anchor = ANCHOR_CANVAS;
@@ -147,7 +147,7 @@ Clip::Clip(ReaderBase* new_reader) : resampler(NULL), reader(new_reader), alloca
 
 	// Update duration and set parent
 	if (reader) {
-		End(reader->info.duration);
+		ClipBase::End(reader->info.duration);
 		reader->ParentClip(this);
 		// Init reader info struct
 		init_reader_settings();
@@ -206,7 +206,7 @@ Clip::Clip(std::string path) : resampler(NULL), reader(NULL), allocated_reader(N
 
 	// Update duration and set parent
 	if (reader) {
-		End(reader->info.duration);
+		ClipBase::End(reader->info.duration);
 		reader->ParentClip(this);
 		allocated_reader = reader;
 		// Init reader info struct
@@ -221,6 +221,7 @@ Clip::~Clip()
 	if (allocated_reader) {
 		delete allocated_reader;
 		allocated_reader = NULL;
+		reader = NULL;
 	}
 
 	// Close the resampler
@@ -267,14 +268,37 @@ void Clip::SetAttachedClip(Clip* clipObject){
 /// Set the current reader
 void Clip::Reader(ReaderBase* new_reader)
 {
+    // Delete previously allocated reader (if not related to new reader)
+    // FrameMappers that point to the same allocated reader are ignored
+    bool is_same_reader = false;
+    if (new_reader && allocated_reader) {
+        if (new_reader->Name() == "FrameMapper") {
+            // Determine if FrameMapper is pointing at the same allocated ready
+            FrameMapper* clip_mapped_reader = (FrameMapper*) new_reader;
+            if (allocated_reader == clip_mapped_reader->Reader()) {
+                is_same_reader = true;
+            }
+        }
+    }
+    // Clear existing allocated reader (if different)
+    if (allocated_reader && !is_same_reader) {
+        reader->Close();
+        allocated_reader->Close();
+        delete allocated_reader;
+        reader = NULL;
+        allocated_reader = NULL;
+    }
+
 	// set reader pointer
 	reader = new_reader;
 
 	// set parent
-	reader->ParentClip(this);
+	if (reader) {
+        reader->ParentClip(this);
 
-	// Init reader info struct
-	init_reader_settings();
+        // Init reader info struct
+        init_reader_settings();
+    }
 }
 
 /// Get the current reader
@@ -301,7 +325,7 @@ void Clip::Open()
 
 		// Set some clip properties from the file reader
 		if (end == 0.0)
-			End(reader->info.duration);
+			ClipBase::End(reader->info.duration);
 	}
 	else
 		// Throw error if reader not initialized
@@ -343,6 +367,11 @@ float Clip::End() const
 	else
 		// just use the duration (as detected by the reader)
 		return end;
+}
+
+// Override End() position
+void Clip::End(float value) {
+	ClipBase::End(value);
 }
 
 // Create an openshot::Frame object for a specific frame number of this reader.
@@ -1097,10 +1126,8 @@ void Clip::SetJsonValue(const Json::Value root) {
 				// Track if reader was open
 				already_open = reader->IsOpen();
 
-				// Close and delete existing reader (if any)
-				reader->Close();
-				delete reader;
-				reader = NULL;
+				// Close and delete existing allocated reader (if any)
+                Reader(NULL);
 			}
 
 			// Create new reader (and load properties)
@@ -1310,11 +1337,11 @@ void Clip::apply_keyframes(std::shared_ptr<Frame> frame, std::shared_ptr<QImage>
                     break;
 
                 case (FRAME_DISPLAY_TIMELINE):
-                    frame_number_str << (position * t->info.fps.ToFloat()) + frame->number;
+                    frame_number_str << round((Position() - Start()) * t->info.fps.ToFloat()) + frame->number;
                     break;
 
                 case (FRAME_DISPLAY_BOTH):
-                    frame_number_str << (position * t->info.fps.ToFloat()) + frame->number << " (" << frame->number << ")";
+                    frame_number_str << round((Position() - Start()) * t->info.fps.ToFloat()) + frame->number << " (" << frame->number << ")";
                     break;
             }
 

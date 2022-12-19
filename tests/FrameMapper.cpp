@@ -10,7 +10,7 @@
 //
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
-#include <catch2/catch.hpp>
+#include "openshot_catch.h"
 
 #include "CacheMemory.h"
 #include "Clip.h"
@@ -188,6 +188,7 @@ TEST_CASE( "resample_audio_48000_to_41000", "[libopenshot][framemapper]" )
 	CHECK(map.GetFrame(1)->GetAudioSamplesCount() == 1470);
 	CHECK(map.GetFrame(2)->GetAudioSamplesCount() == 1470);
 	CHECK(map.GetFrame(50)->GetAudioSamplesCount() == 1470);
+	CHECK(map.info.video_length == 1558);
 
 	// Change mapping data
 	map.ChangeMapping(Fraction(25,1), PULLDOWN_NONE, 22050, 1, LAYOUT_MONO);
@@ -197,6 +198,7 @@ TEST_CASE( "resample_audio_48000_to_41000", "[libopenshot][framemapper]" )
 	CHECK(map.GetFrame(1)->GetAudioSamplesCount() == Approx(882).margin(10.0));
 	CHECK(map.GetFrame(2)->GetAudioSamplesCount() == Approx(882).margin(10.0));
 	CHECK(map.GetFrame(50)->GetAudioSamplesCount() == Approx(882).margin(10.0));
+	CHECK(map.info.video_length == 1299);
 
 	// Close mapper
 	map.Close();

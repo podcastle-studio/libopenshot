@@ -13,7 +13,6 @@ jobs:
         sys:
           - { os: ubuntu-18.04, shell: bash }
           - { os: ubuntu-latest, shell: bash }
-          - { os: macos-latest, shell: bash }
           - { os: windows-2022, shell: 'msys2 {0}' }
         compiler:
           - { cc: gcc, cxx: g++ }
@@ -124,14 +123,14 @@ jobs:
               mingw-w64-x86_64-python3
               mingw-w64-x86_64-swig
 
-      - uses: actions/cache@v2
+      - uses: actions/cache@v3.0.1
         name: Import OpenShotAudio cache
         id: cache-audio
         with:
           path: audio/build
           key: audio-${{ matrix.sys.os }}-${{ matrix.compiler.cxx }}-${{ hashFiles('audio/CMakeLists.txt') }}
 
-      - uses: actions/cache@v2
+      - uses: actions/cache@v3.0.1
         name: Import Resvg cache
         if: ${{ steps.use-resvg.outputs.value }}
         id: cache-resvg
