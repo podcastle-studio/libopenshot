@@ -20,9 +20,11 @@ file(TO_NATIVE_PATH "${PROJECT_SOURCE_DIR}/examples/" TEST_MEDIA_PATH)
 ###  TEST SOURCE FILES
 ###
 set(OPENSHOT_TESTS
+  AudioDeviceManager
   AudioWaveformer
   CacheDisk
   CacheMemory
+  Caption
   Clip
   Color
   Coordinate
@@ -34,6 +36,7 @@ set(OPENSHOT_TESTS
   FrameMapper
   KeyFrame
   Point
+  Profiles
   QtImageReader
   ReaderBase
   Settings
