@@ -513,13 +513,13 @@ std::shared_ptr<Frame> FrameMapper::GetFrame(int64_t requested_frame)
 		// Copy the image from the odd field
 		std::shared_ptr<Frame> odd_frame = mapped_frame;
 
-		if (odd_frame)
+		if (odd_frame && odd_frame->has_image_data)
 			frame->AddImage(std::make_shared<QImage>(*odd_frame->GetImage()), true);
 		if (mapped.Odd.Frame != mapped.Even.Frame) {
 			// Add even lines (if different than the previous image)
 			std::shared_ptr<Frame> even_frame;
 			even_frame = GetOrCreateFrame(mapped.Even.Frame);
-			if (even_frame)
+			if (even_frame && even_frame->has_image_data)
 				frame->AddImage(std::make_shared<QImage>(*even_frame->GetImage()), false);
 		}
 
@@ -552,7 +552,7 @@ std::shared_ptr<Frame> FrameMapper::GetFrame(int64_t requested_frame)
 
 			// Resampling needed, modify copy of SampleRange object that includes some additional input samples on
 			// first iteration, and continues the offset to ensure that the resampler is not input limited.
-			const int EXTRA_INPUT_SAMPLES = 48;
+			const int EXTRA_INPUT_SAMPLES = 64;
 
 			if (!avr) {
 				// This is the first iteration, and we need to extend # of samples for this frame

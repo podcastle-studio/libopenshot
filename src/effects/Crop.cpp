@@ -27,10 +27,10 @@ using namespace openshot;
 Crop::Crop() : Crop::Crop(0.0, 0.0, 0.0, 0.0, 0.0, 0.0) {}
 
 Crop::Crop(
-    Keyframe left, Keyframe top,
-    Keyframe right, Keyframe bottom,
-    Keyframe x, Keyframe y) :
-		left(left), top(top), right(right), bottom(bottom), x(x), y(y)
+	Keyframe left, Keyframe top,
+	Keyframe right, Keyframe bottom,
+	Keyframe x, Keyframe y) :
+		left(left), top(top), right(right), bottom(bottom), x(x), y(y), resize(false)
 {
 	// Init effect properties
 	init_effect_details();
@@ -63,9 +63,9 @@ std::shared_ptr<openshot::Frame> Crop::GetFrame(std::shared_ptr<openshot::Frame>
 	double right_value = right.GetValue(frame_number);
 	double bottom_value = bottom.GetValue(frame_number);
 
-    // Get the current shift amount
-    double x_shift = x.GetValue(frame_number);
-    double y_shift = y.GetValue(frame_number);
+	// Get the current shift amount
+	double x_shift = x.GetValue(frame_number);
+	double y_shift = y.GetValue(frame_number);
 
 	QSize sz = frame_image->size();
 
@@ -103,13 +103,18 @@ std::shared_ptr<openshot::Frame> Crop::GetFrame(std::shared_ptr<openshot::Frame>
     const QImage src(*frame_image);
 
     QPainter p(&cropped);
-    p.drawImage(paint_r, src, copy_r);
-    p.end();
 
 	// Set frame image
     if (openshot::Settings::Instance()->ENABLE_LEGACY_MODE)
     {
-         frame->AddImage(std::make_shared<QImage>(cropped.copy()));
+        if (resize)
+        {
+            // Resize image to match cropped QRect (reduce frame size)
+            frame->AddImage(std::make_shared<QImage>(cropped.copy(paint_r.toRect())));
+        } else {
+            // Copy cropped image into transparent frame image (maintain frame size)
+            frame->AddImage(std::make_shared<QImage>(cropped.copy()));
+        }
     }
     else
     {
@@ -136,8 +141,9 @@ Json::Value Crop::JsonValue() const {
 	root["top"] = top.JsonValue();
 	root["right"] = right.JsonValue();
 	root["bottom"] = bottom.JsonValue();
-    root["x"] = x.JsonValue();
-    root["y"] = y.JsonValue();
+	root["x"] = x.JsonValue();
+	root["y"] = y.JsonValue();
+	root["resize"] = resize;
 
 	// return JsonValue
 	return root;
@@ -175,34 +181,32 @@ void Crop::SetJsonValue(const Json::Value root) {
 		right.SetJsonValue(root["right"]);
 	if (!root["bottom"].isNull())
 		bottom.SetJsonValue(root["bottom"]);
-    if (!root["x"].isNull())
-        x.SetJsonValue(root["x"]);
-    if (!root["y"].isNull())
-        y.SetJsonValue(root["y"]);
+	if (!root["x"].isNull())
+		x.SetJsonValue(root["x"]);
+	if (!root["y"].isNull())
+		y.SetJsonValue(root["y"]);
+	if (!root["resize"].isNull())
+		resize = root["resize"].asBool();
 }
 
 // Get all properties for a specific frame
 std::string Crop::PropertiesJSON(int64_t requested_frame) const {
 
 	// Generate JSON properties list
-	Json::Value root;
-	root["id"] = add_property_json("ID", 0.0, "string", Id(), NULL, -1, -1, true, requested_frame);
-	root["position"] = add_property_json("Position", Position(), "float", "", NULL, 0, 1000 * 60 * 30, false, requested_frame);
-	root["layer"] = add_property_json("Track", Layer(), "int", "", NULL, 0, 20, false, requested_frame);
-	root["start"] = add_property_json("Start", Start(), "float", "", NULL, 0, 1000 * 60 * 30, false, requested_frame);
-	root["end"] = add_property_json("End", End(), "float", "", NULL, 0, 1000 * 60 * 30, false, requested_frame);
-	root["duration"] = add_property_json("Duration", Duration(), "float", "", NULL, 0, 1000 * 60 * 30, true, requested_frame);
+	Json::Value root = BasePropertiesJSON(requested_frame);
 
 	// Keyframes
 	root["left"] = add_property_json("Left Size", left.GetValue(requested_frame), "float", "", &left, 0.0, 1.0, false, requested_frame);
 	root["top"] = add_property_json("Top Size", top.GetValue(requested_frame), "float", "", &top, 0.0, 1.0, false, requested_frame);
 	root["right"] = add_property_json("Right Size", right.GetValue(requested_frame), "float", "", &right, 0.0, 1.0, false, requested_frame);
 	root["bottom"] = add_property_json("Bottom Size", bottom.GetValue(requested_frame), "float", "", &bottom, 0.0, 1.0, false, requested_frame);
-    root["x"] = add_property_json("X Offset", x.GetValue(requested_frame), "float", "", &x, -1.0, 1.0, false, requested_frame);
-    root["y"] = add_property_json("Y Offset", y.GetValue(requested_frame), "float", "", &y, -1.0, 1.0, false, requested_frame);
+	root["x"] = add_property_json("X Offset", x.GetValue(requested_frame), "float", "", &x, -1.0, 1.0, false, requested_frame);
+	root["y"] = add_property_json("Y Offset", y.GetValue(requested_frame), "float", "", &y, -1.0, 1.0, false, requested_frame);
 
-	// Set the parent effect which properties this effect will inherit
-	root["parent_effect_id"] = add_property_json("Parent", 0.0, "string", info.parent_effect_id, NULL, -1, -1, false, requested_frame);
+	// Add replace_image choices (dropdown style)
+	root["resize"] = add_property_json("Resize Image", resize, "int", "", NULL, 0, 1, false, requested_frame);
+	root["resize"]["choices"].append(add_property_choice_json("Yes", true, resize));
+	root["resize"]["choices"].append(add_property_choice_json("No", false, resize));
 
 	// Return formatted string
 	return root.toStyledString();
