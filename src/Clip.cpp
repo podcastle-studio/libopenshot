@@ -1045,6 +1045,11 @@ void Clip::SetJsonValue(const Json::Value root) {
 
 		// loop through effects
 		for (const auto existing_effect : root["effects"]) {
+			// Skip NULL nodes
+			if (existing_effect.isNull()) {
+				continue;
+			}
+
 			// Create Effect
 			EffectBase *e = NULL;
 			if (!existing_effect["type"].isNull()) {
