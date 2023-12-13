@@ -30,7 +30,7 @@ Crop::Crop(
 	Keyframe left, Keyframe top,
 	Keyframe right, Keyframe bottom,
 	Keyframe x, Keyframe y) :
-		left(left), top(top), right(right), bottom(bottom), x(x), y(y), resize(false)
+		left(left), top(top), right(right), bottom(bottom), x(x), y(y), resize(true)
 {
 	// Init effect properties
 	init_effect_details();
@@ -100,25 +100,16 @@ std::shared_ptr<openshot::Frame> Crop::GetFrame(std::shared_ptr<openshot::Frame>
     QImage cropped(sz, QImage::Format_RGBA8888_Premultiplied);
     cropped.fill(Qt::transparent);
 
-    const QImage src(*frame_image);
-
     QPainter p(&cropped);
+    p.drawImage(paint_r, *frame_image, copy_r);
+    p.end();
 
-	// Set frame image
-    if (openshot::Settings::Instance()->ENABLE_LEGACY_MODE)
-    {
-        if (resize)
-        {
-            // Resize image to match cropped QRect (reduce frame size)
-            frame->AddImage(std::make_shared<QImage>(cropped.copy(paint_r.toRect())));
-        } else {
-            // Copy cropped image into transparent frame image (maintain frame size)
-            frame->AddImage(std::make_shared<QImage>(cropped.copy()));
-        }
-    }
-    else
-    {
-        frame->AddImage(std::make_shared<QImage>(cropped.copy(copy_r.x(), copy_r.y(), copy_r.width(), copy_r.height())));
+    if (resize) {
+        // Resize image to match cropped QRect (reduce frame size)
+        frame->AddImage(std::make_shared<QImage>(cropped.copy(paint_r.toRect())));
+    } else {
+        // Copy cropped image into transparent frame image (maintain frame size)
+        frame->AddImage(std::make_shared<QImage>(cropped.copy()));
     }
 	// return the modified frame
 	return frame;
