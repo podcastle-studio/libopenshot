@@ -106,9 +106,7 @@ std::shared_ptr<openshot::Frame> Mask::GetFrame(std::shared_ptr<openshot::Frame>
 								Qt::IgnoreAspectRatio, Qt::SmoothTransformation));
 			}
 		}
-	}
-	else if (maskType == MaskType::ROUNDED_CORNERS)
-	{
+	} else if (maskType == MaskType::ROUNDED_CORNERS) {
 		QImage mask(frame_image->width(),frame_image->height(),QImage::Format_RGBA8888_Premultiplied);
 		mask.fill(Qt::white);
 		QPainter p(&mask);
@@ -121,9 +119,58 @@ std::shared_ptr<openshot::Frame> Mask::GetFrame(std::shared_ptr<openshot::Frame>
 		p.drawPath(path);
 		p.end();
 		original_mask = std::make_shared<QImage>(mask);
-	}
+	} else if (maskType == MaskType::CIRCLE_OUT) {
+        float radiusValue = circleRadius.GetValue(frame_number);
 
-	// Refresh no longer needed
+        if (!radiusValue) {
+            return frame;
+        }
+        int centerX = frame_image->width() / 2;
+        int centerY = frame_image->height() / 2;
+
+        QImage mask(frame_image->width(), frame_image->height(), QImage::Format_RGBA8888_Premultiplied);
+        mask.fill(Qt::white);
+        QPainter p(&mask);
+        p.setRenderHint(QPainter::Antialiasing);
+
+        QPainterPath path;
+        path.addEllipse(QPointF(centerX, centerY), radiusValue, radiusValue);
+        QPen pen(Qt::black, 0);
+        p.setPen(pen);
+        p.fillPath(path, Qt::black);
+        p.drawPath(path);
+        p.end();
+        original_mask = std::make_shared<QImage>(mask);
+    } else if (maskType == MaskType::CIRCLE_IN) {
+        float radiusValue = circleRadius.GetValue(frame_number);
+
+        int width = frame_image->width();
+        int height = frame_image->height();
+        float radiusMax = sqrt(width * width + height * height) / 2;
+        float radiusMin= 0;
+
+        if (radiusValue == radiusMin || radiusValue > radiusMax) {
+            return frame;
+        }
+        int centerX = frame_image->width() / 2;
+        int centerY = frame_image->height() / 2;
+
+        QImage mask(frame_image->width(), frame_image->height(), QImage::Format_RGBA8888_Premultiplied);
+        mask.fill(Qt::white);
+        QPainter p(&mask);
+        p.setRenderHint(QPainter::Antialiasing);
+        QPainterPath path;
+        path.addEllipse(QPointF(centerX, centerY), radiusValue, radiusValue);
+        QPen pen(Qt::black, 0);
+        p.setPen(pen);
+        p.fillPath(path, Qt::black);
+        p.drawPath(path);
+        p.end();
+        original_mask = std::make_shared<QImage>(mask);
+    }
+
+
+    // Refresh no longer needed
 	needs_refresh = false;
 
 	// Get pixel arrays

@@ -35,20 +35,18 @@ namespace openshot
 	 */
 	class Blur : public EffectBase
 	{
-	private:
-		/// Init effect settings
-		void init_effect_details();
-
-		// Internal blur methods (inspired and credited to http://blog.ivank.net/fastest-gaussian-blur.html)
-		void boxBlurH(unsigned char *scl, unsigned char *tcl, int w, int h, int r);
-		void boxBlurT(unsigned char *scl, unsigned char *tcl, int w, int h, int r);
-
-
 	public:
 		Keyframe horizontal_radius;	///< Horizontal blur radius keyframe. The size of the horizontal blur operation in pixels.
 		Keyframe vertical_radius;	///< Vertical blur radius keyframe. The size of the vertical blur operation in pixels.
-		Keyframe sigma;				///< Sigma keyframe. The amount of spread in the blur operation. Should be larger than radius.
+		Keyframe diagonal_radius;   ///< Diagonal blur radius keyframe. The size of the diagonal blur operation in pixels.
+		Keyframe radial_blur_angle;   ///< Radial blur angle keyframe. The size of the radial blur operation in pixels.
+        Keyframe zoom_blur_radius;   ///< Zoom blur radius keyframe. The size of the zoom blur operation in pixels.
+
+        Keyframe sigma;				///< Sigma keyframe. The amount of spread in the blur operation. Should be larger than radius.
 		Keyframe iterations;		///< Iterations keyframe. The # of blur iterations per pixel. 3 iterations = Gaussian.
+
+        Keyframe zoomBlurCenterX;   ///< Zoom blur center X keyframe. The X coordinate of the zoom blur center.
+        Keyframe zoomBlurCenterY;   ///< Zoom blur center Y keyframe. The Y coordinate of the zoom blur center.
 
 		/// Blank constructor, useful when using Json to load the effect properties
 		Blur();
@@ -58,9 +56,13 @@ namespace openshot
 		///
 		/// @param new_horizontal_radius The curve to adjust the horizontal blur radius (between 0 and 100, rounded to int)
 		/// @param new_vertical_radius The curve to adjust the vertical blur radius (between 0 and 100, rounded to int)
+		/// @param new_diagonal_radius The curve to adjust the diagonal blur radius (between 0 and 100, rounded to int)
+		/// @param new_diagonal_direction
 		/// @param new_sigma The curve to adjust the sigma amount (the size of the blur brush (between 0 and 100), float values accepted)
 		/// @param new_iterations The curve to adjust the # of iterations (between 1 and 100)
-		Blur(Keyframe new_horizontal_radius, Keyframe new_vertical_radius, Keyframe new_sigma, Keyframe new_iterations);
+		explicit Blur(const Keyframe& new_horizontal_radius, const Keyframe& new_vertical_radius = 0, const Keyframe& new_diagonal_radius = 0, const Keyframe& new_radial_blur_angle = 0,
+             const Keyframe& new_zoom_blur_radius = 0, const Keyframe& new_zoomBlurCenterX = 0, const Keyframe& new_zoomBlurCenterY = 0,
+             const Keyframe& new_sigma = 1, const Keyframe& new_iterations = 2);
 
 		/// @brief This method is required for all derived classes of ClipBase, and returns a
 		/// new openshot::Frame object. All Clip keyframes and effects are resolved into
@@ -90,6 +92,9 @@ namespace openshot
 		/// Get all properties for a specific frame (perfect for a UI to display the current state
 		/// of all properties at any time)
 		std::string PropertiesJSON(int64_t requested_frame) const override;
+    private:
+        /// Init effect settings
+        void init_effect_details();
 	};
 
 }

@@ -107,6 +107,10 @@ set(OPENSHOT_CV_SOURCES
 set(EFFECTS_SOURCES
   effects/Bars.cpp
   effects/Blur.cpp
+  effects/BorderReflectedRotation.cpp
+  effects/BorderReflectedMove.cpp
+  effects/Zoom.cpp
+  effects/VerticalSplitShift.cpp
   effects/Brightness.cpp
   effects/Caption.cpp
   effects/ChromaKey.cpp

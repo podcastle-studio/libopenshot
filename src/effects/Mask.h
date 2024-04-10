@@ -49,14 +49,18 @@ namespace openshot
         enum MaskType
         {
             INVALID = -1,
-            ROUNDED_CORNERS = 0,
-            CUSTOM = 1
+            ROUNDED_CORNERS,
+            CIRCLE_IN,
+            CIRCLE_OUT,
+            CUSTOM
         };
 
         MaskType maskType;
 		bool replace_image;		///< Replace the frame image with a grayscale image representing the mask. Great for debugging a mask.
 		Keyframe brightness;	///< Brightness keyframe to control the wipe / mask effect. A constant value here will prevent animation.
 		Keyframe contrast;		///< Contrast keyframe to control the hardness of the wipe effect / mask.
+
+        Keyframe circleRadius;
 
 		/// Blank constructor, useful when using Json to load the effect properties
 		Mask();

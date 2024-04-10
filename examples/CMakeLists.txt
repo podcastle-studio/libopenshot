@@ -16,7 +16,7 @@ find_package(Qt5 COMPONENTS Gui REQUIRED)
 
 ############### CLI EXECUTABLES ################
 # Create test executable
-add_executable(openshot-example Example.cpp)
+add_executable(openshot-example Transitions.cpp Example.cpp)
 
 # Define path to test input files
 file(TO_NATIVE_PATH "${PROJECT_SOURCE_DIR}/examples/" TEST_MEDIA_PATH)
