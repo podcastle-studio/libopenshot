@@ -101,10 +101,7 @@ void diagonalBlur(cv::Mat& src, int blurAmount, int iterations = 1) {
 }
 
 cv::Mat zoomBlur(cv::Mat& src, int blurStrength, const std::pair<float, float>& center) {
-    // Adjust center coordinates to the new definition
-    // Map center from [-1, 1] range to [0, src.cols] for x, and [0, src.rows] for y
-//    const cv::Point2f customCenter((center.first + 1) * 0.5 * src.cols, (center.second + 1) * 0.5 * src.rows);
-    const cv::Point2f customCenter(center.first * src.cols, center.second * 0.5 * src.rows);
+    const cv::Point2f customCenter(center.first * src.cols, center.second * src.rows);
 
     // Ensure blur strength is odd to use it as kernel size
     if (blurStrength % 2 == 0) {
@@ -142,7 +139,7 @@ cv::Mat zoomBlur(cv::Mat& src, int blurStrength, const std::pair<float, float>& 
     if (gaussBlurStrength % 2 == 0) {
         gaussBlurStrength += 1;
     }
-    cv::GaussianBlur(result, result, cv::Size(19,19), 0);
+    cv::GaussianBlur(result, result, cv::Size(gaussBlurStrength, gaussBlurStrength), 0);
     return result;
 }
 
@@ -194,8 +191,7 @@ void Blur::init_effect_details()
 // modified openshot::Frame object
 std::shared_ptr<openshot::Frame> Blur::GetFrame(std::shared_ptr<openshot::Frame> frame, int64_t frame_number)
 {
-	// Get the frame's image
-	std::shared_ptr<QImage> frame_image = frame->GetImage();
+
 
 	// Get the current blur radius
 	int horizontal_radius_value = horizontal_radius.GetValue(frame_number);
@@ -205,34 +201,8 @@ std::shared_ptr<openshot::Frame> Blur::GetFrame(std::shared_ptr<openshot::Frame>
 	int radial_blur_angle_value = radial_blur_angle.GetValue(frame_number);
 	int iteration_value = iterations.GetInt(frame_number);
 
-	int w = frame_image->width();
-	int h = frame_image->height();
-
-	// Loop through each iteration
-	for (int iteration = 0; iteration < iteration_value; ++iteration)
-	{
-		// horizontal blur (if any)
-		if (horizontal_radius_value > 0.0) {
-            std::shared_ptr<QImage> frame_image_2 = std::make_shared<QImage>(*frame_image);
-
-			// Apply horizontal blur to target RGBA channels
-			boxBlurH(frame_image->bits(), frame_image_2->bits(), w, h, horizontal_radius_value);
-
-			// Swap output image back to input
-			frame_image.swap(frame_image_2);
-		}
-
-		// vertical blur (if any)
-		if (vertical_radius_value > 0.0) {
-            std::shared_ptr<QImage> frame_image_2 = std::make_shared<QImage>(*frame_image);
-
-            // Apply vertical blur to target RGBA channels
-			boxBlurT(frame_image->bits(), frame_image_2->bits(), w, h, vertical_radius_value);
-
-			// Swap output image back to input
-			frame_image.swap(frame_image_2);
-		}
-	}
+    // Get the frame's image
+    std::shared_ptr<QImage> frame_image = frame->GetImage();
 
     // diagonal blur (if any)
     if (diagonal_radius_value > 0.0) {
@@ -252,6 +222,38 @@ std::shared_ptr<openshot::Frame> Blur::GetFrame(std::shared_ptr<openshot::Frame>
         auto src = frame->GetImageCV();
         frame->SetImageCV(zoomBlur(src, zoom_blur_radius_value, centerPoint));
     }
+
+    // Loop through each iteration
+    for (int iteration = 0; iteration < iteration_value; ++iteration)
+    {
+        int w = frame_image->width();
+        int h = frame_image->height();
+
+        // horizontal blur (if any)
+        if (horizontal_radius_value > 0.0) {
+            std::shared_ptr<QImage> frame_image_2 = std::make_shared<QImage>(*frame_image);
+
+            // Apply horizontal blur to target RGBA channels
+            boxBlurH(frame_image->bits(), frame_image_2->bits(), w, h, horizontal_radius_value);
+
+            // Swap output image back to input
+            frame_image.swap(frame_image_2);
+        }
+
+        // vertical blur (if any)
+        if (vertical_radius_value > 0.0) {
+            std::shared_ptr<QImage> frame_image_2 = std::make_shared<QImage>(*frame_image);
+
+            // Apply vertical blur to target RGBA channels
+            boxBlurT(frame_image->bits(), frame_image_2->bits(), w, h, vertical_radius_value);
+
+            // Swap output image back to input
+            frame_image.swap(frame_image_2);
+        }
+    }
+
+    if (horizontal_radius_value > 0.0 || vertical_radius_value > 0.0)
+        frame->AddImage(frame_image);
 
 	// return the modified frame
 	return frame;

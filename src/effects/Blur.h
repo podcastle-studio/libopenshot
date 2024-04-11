@@ -62,7 +62,7 @@ namespace openshot
 		/// @param new_iterations The curve to adjust the # of iterations (between 1 and 100)
 		explicit Blur(const Keyframe& new_horizontal_radius, const Keyframe& new_vertical_radius = 0, const Keyframe& new_diagonal_radius = 0, const Keyframe& new_radial_blur_angle = 0,
              const Keyframe& new_zoom_blur_radius = 0, const Keyframe& new_zoomBlurCenterX = 0, const Keyframe& new_zoomBlurCenterY = 0,
-             const Keyframe& new_sigma = 1, const Keyframe& new_iterations = 2);
+             const Keyframe& new_sigma = 1, const Keyframe& new_iterations = 1);
 
 		/// @brief This method is required for all derived classes of ClipBase, and returns a
 		/// new openshot::Frame object. All Clip keyframes and effects are resolved into

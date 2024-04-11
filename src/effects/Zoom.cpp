@@ -46,9 +46,8 @@ std::shared_ptr<openshot::Frame> Zoom::GetFrame(std::shared_ptr<openshot::Frame>
     int width = frame_image.cols;
     int height = frame_image.rows;
 
-    // Map anchor_x and anchor_y from [-1, 1] range to [0, width] or [0, height] respectively
-    int anchor_point_x = static_cast<int>((anchorValX + 1) * 0.5 * width);
-    int anchor_point_y = static_cast<int>((anchorValY + 1) * 0.5 * height);
+    int anchor_point_x = anchorValX * width;
+    int anchor_point_y = anchorValY * height;
 
     if (zoomPercentVal > 100) { // Zoom In
         int newWidth = width * 100 / zoomPercentVal;
