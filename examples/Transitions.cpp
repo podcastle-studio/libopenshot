@@ -214,7 +214,7 @@ void panBottomRightTransition(const std::string& file1, const std::string& file2
         transitionClips.second->AddEffect(blur);
     }
 
-    createTimelineAndWriteClips({transitionClips.first, transitionClips.second, mainClips.first, mainClips.second}, output);
+    createTimelineAndWriteClips({ mainClips.first, transitionClips.first, transitionClips.second, mainClips.second }, output);
 }
 
 void panLeftTransition(const std::string& file1, const std::string& file2, float transitionDuration, const std::string& output)
@@ -268,7 +268,7 @@ void panLeftTransition(const std::string& file1, const std::string& file2, float
         transitionClips.second->AddEffect(blurEffect);
     }
 
-    createTimelineAndWriteClips({ mainClips.first, transitionClips.first, transitionClips.second, mainClips.second}, output);
+    createTimelineAndWriteClips({ mainClips.first, transitionClips.first, transitionClips.second, mainClips.second }, output);
 }
 
 void blurTransition(const std::string& file1, const std::string& file2, float transitionDuration, const std::string& output) {
@@ -303,7 +303,7 @@ void blurTransition(const std::string& file1, const std::string& file2, float tr
         transitionClips.second->AddEffect(blurEffect);
     }
 
-    createTimelineAndWriteClips({transitionClips.first, transitionClips.second, mainClips.first, mainClips.second}, output);
+    createTimelineAndWriteClips({ mainClips.first, transitionClips.first, transitionClips.second, mainClips.second }, output);
 }
 
 void verticalBlurTransition(const std::string& file1, const std::string& file2, float transitionDuration, const std::string& output) {
@@ -339,7 +339,7 @@ void verticalBlurTransition(const std::string& file1, const std::string& file2, 
         transitionClips.second->AddEffect(blurEffect);
     }
 
-    createTimelineAndWriteClips({transitionClips.first, transitionClips.second, mainClips.first, mainClips.second}, output);
+    createTimelineAndWriteClips({ mainClips.first, transitionClips.first, transitionClips.second, mainClips.second }, output);
 }
 
 void rotationalBlurTransition(const std::string& file1, const std::string& file2, float transitionDuration, const std::string& output) {
@@ -393,7 +393,7 @@ void rotationalBlurTransition(const std::string& file1, const std::string& file2
         transitionClips.second->AddEffect(blurEffect);
     }
 
-    createTimelineAndWriteClips({transitionClips.first, transitionClips.second, mainClips.first, mainClips.second}, output);
+    createTimelineAndWriteClips({ mainClips.first, transitionClips.first, transitionClips.second, mainClips.second }, output);
 }
 
 void wooshTransition(const std::string& file1, const std::string& file2, float transitionDuration, const std::string& output) {
@@ -492,7 +492,7 @@ void wooshTransition(const std::string& file1, const std::string& file2, float t
         transitionClips.second->AddEffect(blurEffect);
     }
 
-    createTimelineAndWriteClips({ mainClips.first, transitionClips.first , transitionClips.second, mainClips.second}, output);
+    createTimelineAndWriteClips({ mainClips.first, transitionClips.first, transitionClips.second, mainClips.second }, output);
 }
 
 void dissolveTransition(const std::string& file1, const std::string& file2, float transitionDuration, const std::string& output) {
@@ -508,7 +508,7 @@ void dissolveTransition(const std::string& file1, const std::string& file2, floa
         transitionClips.first->alpha = createKeyframe(pointsData, transitionDuration, openshot::LINEAR);
     }
 
-    createTimelineAndWriteClips({transitionClips.first, transitionClips.second, mainClips.first, mainClips.second}, output);
+    createTimelineAndWriteClips({ mainClips.first, transitionClips.first, transitionClips.second, mainClips.second }, output);
 }
 
 void dissolveBlurTransition(const std::string& file1, const std::string& file2, float transitionDuration, const std::string& output) {
@@ -541,7 +541,7 @@ void dissolveBlurTransition(const std::string& file1, const std::string& file2, 
         auto blurEffect = new openshot::Blur(keyframe, keyframe, 0, 0, 0, 0, 0, 0, 1);
         transitionClips.second->AddEffect(blurEffect);
     }
-    createTimelineAndWriteClips({transitionClips.first, transitionClips.second, mainClips.first, mainClips.second}, output);
+    createTimelineAndWriteClips({ mainClips.first, transitionClips.first, transitionClips.second, mainClips.second }, output);
 }
 
 void circleOutTransition(const std::string& file1, float transitionDuration, const std::string& output) {
@@ -716,7 +716,7 @@ void verticalSplitTransition(const std::string& file1, const std::string& file2,
         transitionClips.second->AddEffect(verticalSplitShiftEffect);
     }
 
-    createTimelineAndWriteClips({transitionClips.first, transitionClips.second, mainClips.first, mainClips.second}, output);
+    createTimelineAndWriteClips({ mainClips.first, transitionClips.first, transitionClips.second, mainClips.second }, output);
 }
 
 void zoomInTransition(const std::string& file1, const std::string& file2, float transitionDuration, const std::string& output) {
@@ -751,7 +751,7 @@ void zoomInTransition(const std::string& file1, const std::string& file2, float 
         transitionClips.second->AddEffect(zoomEffect);
     }
 
-    createTimelineAndWriteClips({transitionClips.first, transitionClips.second, mainClips.first, mainClips.second}, output);
+    createTimelineAndWriteClips({ mainClips.first, transitionClips.first, transitionClips.second, mainClips.second }, output);
 }
 
 void contrastTransition(const std::string& file1, const std::string& file2, float transitionDuration, const std::string& output) {
@@ -770,5 +770,5 @@ void contrastTransition(const std::string& file1, const std::string& file2, floa
         transitionClips.first->AddEffect(wipeEffect);
     }
 
-    createTimelineAndWriteClips({transitionClips.first, transitionClips.second, mainClips.first, mainClips.second}, output);
+    createTimelineAndWriteClips({ mainClips.first, transitionClips.first, transitionClips.second, mainClips.second }, output);
 }
