@@ -101,45 +101,61 @@ void diagonalBlur(cv::Mat& src, int blurAmount, int iterations = 1) {
 }
 
 cv::Mat zoomBlur(cv::Mat& src, int blurStrength, const std::pair<float, float>& center) {
-    const cv::Point2f customCenter(center.first * src.cols, center.second * src.rows);
+    int width = src.cols;
+    int height = src.rows;
+    const cv::Point2f customCenter(center.first * width, center.second * height);
 
     // Ensure blur strength is odd to use it as kernel size
     if (blurStrength % 2 == 0) {
         blurStrength += 1;
     }
 
+    // Calculate padding size based on blur strength to ensure no black borders
+    int paddingSize = blurStrength;
+
+    // Add mirrored padding around the image
+    cv::Mat paddedSrc;
+    cv::copyMakeBorder(src, paddedSrc, paddingSize, paddingSize, paddingSize, paddingSize, cv::BORDER_REFLECT);
+
+    // Adjust center for the padded image
+    const cv::Point2f paddedCenter(customCenter.x + paddingSize, customCenter.y + paddingSize);
+
     // Calculate the maximum radius to cover the whole image from the new center
     double maxRadius = 0.0;
     std::vector<cv::Point2f> corners = {
             cv::Point2f(0, 0),
-            cv::Point2f(src.cols - 1, 0),
-            cv::Point2f(0, src.rows - 1),
-            cv::Point2f(src.cols - 1, src.rows - 1)
+            cv::Point2f(paddedSrc.cols - 1, 0),
+            cv::Point2f(0, paddedSrc.rows - 1),
+            cv::Point2f(paddedSrc.cols - 1, paddedSrc.rows - 1)
     };
 
     for (const auto& corner : corners) {
-        double radius = cv::norm(corner - customCenter);
+        double radius = cv::norm(corner - paddedCenter);
         maxRadius = std::max(maxRadius, radius);
     }
 
     // Convert to polar coordinates
     cv::Mat polarImage;
-    cv::linearPolar(src, polarImage, customCenter, maxRadius, cv::WARP_FILL_OUTLIERS);
+    cv::linearPolar(paddedSrc, polarImage, paddedCenter, maxRadius, cv::WARP_FILL_OUTLIERS);
 
     // Apply horizontal blur on the polar image
     cv::Mat blurredPolar;
     cv::blur(polarImage, blurredPolar, cv::Size(blurStrength, 1));
 
     // Convert back to Cartesian coordinates
-    cv::Mat result;
-    cv::linearPolar(blurredPolar, result, customCenter, maxRadius, cv::WARP_INVERSE_MAP | cv::WARP_FILL_OUTLIERS);
+    cv::Mat paddedResult;
+    cv::linearPolar(blurredPolar, paddedResult, paddedCenter, maxRadius, cv::WARP_INVERSE_MAP);
+
+    // Crop the padded result back to original size
+    cv::Rect cropRegion(paddingSize, paddingSize, width, height);
+    cv::Mat result = paddedResult(cropRegion);
 
     // Apply a standard blur to the final result
-    int gaussBlurStrength = 0.055 * blurStrength;
+    int gaussBlurStrength = std::max(19, static_cast<int>(0.1 * blurStrength));
     if (gaussBlurStrength % 2 == 0) {
         gaussBlurStrength += 1;
     }
-    cv::GaussianBlur(result, result, cv::Size(gaussBlurStrength, gaussBlurStrength), 0);
+    // cv::GaussianBlur(result, result, cv::Size(gaussBlurStrength, gaussBlurStrength), 0);
     return result;
 }
 
@@ -191,8 +207,6 @@ void Blur::init_effect_details()
 // modified openshot::Frame object
 std::shared_ptr<openshot::Frame> Blur::GetFrame(std::shared_ptr<openshot::Frame> frame, int64_t frame_number)
 {
-
-
 	// Get the current blur radius
 	int horizontal_radius_value = horizontal_radius.GetValue(frame_number);
 	int vertical_radius_value = vertical_radius.GetValue(frame_number);

@@ -86,7 +86,6 @@ std::shared_ptr<openshot::Frame> Mask::GetFrame(std::shared_ptr<openshot::Frame>
 		if (!reader)
 			return frame;
 
-
 		// Get mask image (if missing or different size than frame image)
 		#pragma omp critical (open_mask_reader)
 		{
@@ -97,8 +96,6 @@ std::shared_ptr<openshot::Frame> Mask::GetFrame(std::shared_ptr<openshot::Frame>
 				auto mask_without_sizing = std::make_shared<QImage>(
 						*reader->GetFrame(frame_number)->GetImage());
 
-				const auto a = frame_image->width();
-				const auto b = frame_image->height();
 				// Resize mask image to match frame size
 				original_mask = std::make_shared<QImage>(
 						mask_without_sizing->scaled(

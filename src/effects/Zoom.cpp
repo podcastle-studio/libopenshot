@@ -39,6 +39,10 @@ std::shared_ptr<openshot::Frame> Zoom::GetFrame(std::shared_ptr<openshot::Frame>
     auto anchorValX = anchorX.GetValue(frame_number);
     auto anchorValY = anchorY.GetValue(frame_number);
 
+    if (zoomPercentVal == 100) {
+        return frame;
+    }
+
 	// Get the frame's image
 	cv::Mat frame_image = frame->GetImageCV();
 
@@ -62,7 +66,7 @@ std::shared_ptr<openshot::Frame> Zoom::GetFrame(std::shared_ptr<openshot::Frame>
         cv::Rect roi(x, y, newWidth, newHeight); // Define a rectangle for cropping
         cv::Mat cropped = frame_image(roi); // Crop the image
         cv::resize(cropped, out_frame_image, cv::Size(width, height)); // Resize back to original size
-    } else if (zoomPercentVal < 100) { // Zoom Out
+    } else { // Zoom Out
         float scaleFactor = zoomPercentVal / 100.0f;
         cv::Mat resized;
         cv::resize(frame_image, resized, cv::Size(), scaleFactor, scaleFactor, cv::INTER_LINEAR);
@@ -84,8 +88,6 @@ std::shared_ptr<openshot::Frame> Zoom::GetFrame(std::shared_ptr<openshot::Frame>
 
         // Mirror edges while padding
         cv::copyMakeBorder(resized, out_frame_image, top, bottom, left, right, cv::BORDER_REFLECT);
-    } else { // No zooming, just copy the input image
-        out_frame_image = frame_image;
     }
 
     frame->SetImageCV(out_frame_image);

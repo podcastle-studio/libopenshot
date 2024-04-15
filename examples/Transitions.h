@@ -18,7 +18,7 @@ void rotationalBlurTransition(const std::string& file1 = "clips/clip-17.mp4", co
                               float transitionDuration = 0.3, const std::string& output = "./final/rotationalBlurTransition.mp4");
 
 void wooshTransition(const std::string& file1 = "clips/clip-18.mp4", const std::string& file2 = "clips/clip-19.mp4",
-                     float transitionDuration = 0.7, const std::string& output = "./final/whooshTransition.mp4");
+                     float transitionDuration = 0.6, const std::string& output = "./final/whooshTransition.mp4");
 
 void dissolveTransition(const std::string& file1 = "clips/clip-4.mp4", const std::string& file2 = "clips/clip-5.mp4",
                         float transitionDuration = 0.5, const std::string& output = "./final/dissolveTransition.mp4");
@@ -40,3 +40,6 @@ void verticalSplitTransition(const std::string& file1 = "clips/clip-6.mp4", cons
 
 void zoomInTransition(const std::string& file1 = "clips/clip-1.mp4", const std::string& file2 = "clips/clip-0.mp4",
                       float transitionDuration = 0.5, const std::string& output = "./final/zoomInTransition.mp4");
+
+void contrastTransition(const std::string& file1 = "clips/clip-14.mp4", const std::string& file2 = "clips/clip-15.mp4",
+                        float transitionDuration = 0.5, const std::string& output = "./final/contrastTransition.mp4");
