@@ -33,8 +33,8 @@ void BorderReflectedMove::init_effect_details()
 // modified openshot::Frame object
 std::shared_ptr<openshot::Frame> BorderReflectedMove::GetFrame(std::shared_ptr<openshot::Frame> frame, int64_t frame_number)
 {
-    const auto dx_value = dx.GetValue(frame_number);
-    const auto dy_value = dy.GetValue(frame_number);
+    const auto dx_value = dx.GetValue(frame_number) * frame->GetWidth();
+    const auto dy_value = dy.GetValue(frame_number) * frame->GetHeight();
 
     if (dx_value == 0 && dy_value == 0) {
         return frame;

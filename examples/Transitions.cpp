@@ -19,14 +19,6 @@
 
 namespace {
 
-void saveVideoFrame(const std::string& file, int frameNum, std::string& frameFilePath) {
-    auto* clip = new openshot::Clip(file);
-    clip->Open();
-    clip->scale = openshot::SCALE_NONE;
-
-    clip->GetFrame(frameNum)->GetImage()->save(frameFilePath.c_str());
-}
-
 int timeToFrame(float duration, float fps = 30) {
     return std::max((round)(fps * duration), 1.F);
 }
@@ -48,14 +40,20 @@ struct PointsData {
     std::vector<BezierValue> bezierValues;
 };
 
-openshot::Keyframe createKeyframe(PointsData pointsData, float transitionDuration, openshot::InterpolationType interpolation = openshot::BEZIER, int fps = 30) {
+openshot::Keyframe createTransitionKeyframe(PointsData pointsData, float transitionDuration, bool isFirstClip = true, openshot::Clip* clip = nullptr,
+                                            openshot::InterpolationType interpolation = openshot::BEZIER, float fps = 30) {
     std::vector<openshot::Point> points;
     const auto& timeValues = pointsData.timeValues;
     for (int i = 0; i < timeValues.size(); i++) {
         if (i == 0) {
             points.emplace_back(timeToFrame(0), timeValues[i].second, interpolation);
         }
-        points.emplace_back(timeToFrame(transitionDuration - (1 - timeValues[i].first) * transitionDuration), timeValues[i].second, interpolation);
+
+        if (isFirstClip) {
+            points.emplace_back(timeToFrame(clip->End() - (1 - timeValues[i].first) * transitionDuration, fps), timeValues[i].second, interpolation);
+        } else {
+            points.emplace_back(timeToFrame(clip->Start() + timeValues[i].first * transitionDuration, fps), timeValues[i].second, interpolation);
+        }
     }
 
     if (interpolation == openshot::BEZIER) {
@@ -68,63 +66,37 @@ openshot::Keyframe createKeyframe(PointsData pointsData, float transitionDuratio
     return {points};
 }
 
-std::pair<std::pair<openshot::Clip*, openshot::Clip*>, std::pair<openshot::Clip*, openshot::Clip*>>
-createTransitionClips(const std::string& file1, const std::string& file2, float transitionDuration, const int fps = 30) {
-    /// Create clips
+std::pair<openshot::Clip*, openshot::Clip*> createTransitionClips(const std::string& file1, const std::string& file2, float transitionDuration, const int fps = 30) {
+    const float perClipTransitionDuration = transitionDuration / 2.f;
+    /// Open clips
     auto* clip1 = new openshot::Clip(file1);
     auto* clip2 = new openshot::Clip(file2);
 
-    /// Define clips properties
+    /// Init clip 1 properties
     float clip1Position = 0;
     float clip1Start = 0;
-    float clip1End = clip1->info.duration - transitionDuration - 1 / clip1->info.fps.ToFloat();
+    float clip1End = clip1->info.duration + perClipTransitionDuration;
 
-    int   transitionFrame1 = timeToFrame(clip1End, clip1->info.fps.ToFloat()) + 1;
-    float transitionPosition1 = clip1End;
-    float transitionStart1 = 0;
-    float transitionEnd1 = transitionDuration;
+    /// Init clip 2 properties
+    float clip2Position = clip1Position + clip1->End() - perClipTransitionDuration;
+    float clip2Start = 0;
+    float clip2End = clip2->info.duration + perClipTransitionDuration;
+    int   freezeClip2FramesCountAtBeginning = timeToFrame(perClipTransitionDuration, clip2->info.fps.ToFloat());
 
-    int   transitionFrame2 = timeToFrame(transitionDuration, clip2->info.fps.ToFloat()) - 1;
-    float transitionPosition2 = transitionPosition1;
-    float transitionStart2 = 0;
-    float transitionEnd2 = transitionDuration;
-
-    float clip2Position = transitionPosition2 + transitionDuration;
-    float clip2Start = transitionDuration;
-    float clip2End = clip2->info.duration;
-
-    /// Initialize clips properties
+    /// Set clip 1 properties
     clip1->Position(clip1Position);
     clip1->Start(clip1Start);
     clip1->End(clip1End);
-    clip1->Layer(1);
-    clip1->scale = openshot::SCALE_NONE;
+    clip1->Layer(2);
 
-    std::string frame1 = "frame1.jpg";
-    saveVideoFrame(file1, transitionFrame1, frame1);
-    auto* transitionClip1 = new openshot::Clip(frame1);
-    transitionClip1->scale = openshot::SCALE_NONE;
-    transitionClip1->Layer(2);
-    transitionClip1->Position(transitionPosition1);
-    transitionClip1->Start(transitionStart1);
-    transitionClip1->End(transitionEnd1);
-
-    std::string frame2 = "frame2.jpg";
-    saveVideoFrame(file2, transitionFrame2, frame2);
-    auto* transitionClip2 = new openshot::Clip(frame2);
-    transitionClip2->scale = openshot::SCALE_NONE;
-    transitionClip2->Layer(1);
-    transitionClip2->Position(transitionPosition2);
-    transitionClip2->Start(transitionStart2);
-    transitionClip2->End(transitionEnd2);
-
-    clip2->scale = openshot::SCALE_NONE;
-    clip2->Layer(1);
+    /// Set clip 2 properties
     clip2->Position(clip2Position);
     clip2->Start(clip2Start);
     clip2->End(clip2End);
+    clip2->Layer(1);
+    clip2->mFreezeFramesCountAtBeginning = freezeClip2FramesCountAtBeginning;
 
-    return std::make_pair(std::make_pair(transitionClip1, transitionClip2), std::make_pair(clip1, clip2));
+    return std::make_pair(clip1, clip2);
 }
 
 void createTimelineAndWriteClips(std::vector<openshot::Clip*> clips, const std::string& outFile) {
@@ -138,7 +110,8 @@ void createTimelineAndWriteClips(std::vector<openshot::Clip*> clips, const std::
     w.SetAudioOptions(true, "libvorbis", 48000, 2, openshot::ChannelLayout::LAYOUT_STEREO, 128000);
     w.SetVideoOptions(true, "libx264" , openshot::Fraction(30, 1),  1920, 1080, openshot::Fraction(1,1), false, false, 4000000);
     w.Open();
-    openshot::Clip* maxPositionClip;
+    
+    openshot::Clip* maxPositionClip = clips[0];
     float maxPosition = 0;
     for (const auto clip : clips) {
         if (clip->Position() > maxPosition) {
@@ -147,7 +120,7 @@ void createTimelineAndWriteClips(std::vector<openshot::Clip*> clips, const std::
         }
     }
 
-    w.WriteFrame(&timeLine, 0, (maxPositionClip->Position() + maxPositionClip->End()) * 30);
+    w.WriteFrame(&timeLine, 1, (maxPositionClip->Position() + maxPositionClip->End()) * 30);
     timeLine.Close();
     w.Close();
 }
@@ -155,20 +128,17 @@ void createTimelineAndWriteClips(std::vector<openshot::Clip*> clips, const std::
 }
 
 void panBottomRightTransition(const std::string& file1, const std::string& file2, float transitionDuration, const std::string& output) {
-    auto clips = createTransitionClips(file1, file2, transitionDuration);
-
-    auto transitionClips = clips.first;
-    auto mainClips = clips.second;
+    auto transitionClips = createTransitionClips(file1, file2, transitionDuration);
 
     ////////// Clip 1 ////////////////////////////////////////////////////////////////////////////////////////////
 
     /// Diagonal Border Reflected Move Effect | Clip 1
     {
-        const auto xPointsData = PointsData({{0, 0}, {1, transitionClips.first->Reader()->info.width}}, {{0.88, 0.00, 0.12, 1.00}});
-        openshot::Keyframe dx = createKeyframe(xPointsData, transitionDuration);
+        const auto xPointsData = PointsData({{0, 0}, {1, 1}}, {{0.88, 0.00, 0.12, 1.00}});
+        openshot::Keyframe dx = createTransitionKeyframe(xPointsData, transitionDuration, true, transitionClips.first);
 
-        const auto yPointsData = PointsData({{0, 0}, {1, transitionClips.first->Reader()->info.height}}, {{0.88, 0.00, 0.12, 1.00}});
-        openshot::Keyframe dy = createKeyframe(yPointsData, transitionDuration);
+        const auto yPointsData = PointsData({{0, 0}, {1, 1}}, {{0.88, 0.00, 0.12, 1.00}});
+        openshot::Keyframe dy = createTransitionKeyframe(yPointsData, transitionDuration, true, transitionClips.first);
 
         auto pBorderReflectedMove = new openshot::BorderReflectedMove(dx, dy);
         transitionClips.first->AddEffect(pBorderReflectedMove);
@@ -177,15 +147,16 @@ void panBottomRightTransition(const std::string& file1, const std::string& file2
     /// Diagonal Blur Effect | Clip 1
     {
         PointsData pointsData({{0, 0}, {0.5, 250}}, {{0.67, 0.00, 0.83, 0.83}});
-        openshot::Keyframe keyframe = createKeyframe(pointsData, transitionDuration);
+        openshot::Keyframe keyframe = createTransitionKeyframe(pointsData, transitionDuration, true, transitionClips.first);
+
         auto blurEffect = new openshot::Blur(0, 0, keyframe, 0, 0, 0, 0, 0, 1);
         transitionClips.first->AddEffect(blurEffect);
     }
 
-    /// Alpha Effect | Clip 2
+    /// Alpha Effect | Clip 1
     {
         PointsData pointsData({{0.2, 1}, {0.6, 0}});
-        transitionClips.first->alpha = createKeyframe(pointsData, transitionDuration, openshot::LINEAR);
+        transitionClips.first->alpha = createTransitionKeyframe(pointsData, transitionDuration, true, transitionClips.first, openshot::LINEAR);
     }
 
     ////////// Clip 2 ////////////////////////////////////////////////////////////////////////////////////////////
@@ -193,41 +164,39 @@ void panBottomRightTransition(const std::string& file1, const std::string& file2
     /// Diagonal Border Reflected Move Effect | Clip 2
     {
         // Define the keyframes for x axis
-        PointsData pointsDataX({{0, -transitionClips.second->Reader()->info.width}, {1, 0}}, {{0.88, 0.00, 0.12, 1.00}});
-        openshot::Keyframe keyframeDx = createKeyframe(pointsDataX, transitionDuration);
+        PointsData pointsDataX({{0, -1}, {1, 0}}, {{0.88, 0.00, 0.12, 1.00}});
+        openshot::Keyframe keyframeDx = createTransitionKeyframe(pointsDataX, transitionDuration, false, transitionClips.second);
 
         // Define the keyframes for y axis
-        PointsData pointsDataY({{0, -transitionClips.second->Reader()->info.height}, {1, 0}}, {{0.88, 0.00, 0.12, 1.00}});
-        openshot::Keyframe keyframeDy = createKeyframe(pointsDataY, transitionDuration);
+        PointsData pointsDataY({{0, -1}, {1, 0}}, {{0.88, 0.00, 0.12, 1.00}});
+        openshot::Keyframe keyframeDy = createTransitionKeyframe(pointsDataY, transitionDuration, false, transitionClips.second);
 
         auto pBorderReflectedMove = new openshot::BorderReflectedMove(keyframeDx, keyframeDy);
         transitionClips.second->AddEffect(pBorderReflectedMove);
     }
 
-    /// Diagonal Blur Effect | Clip 1
+    /// Diagonal Blur Effect | Clip 2
     {
         PointsData pointsData({{0.5, 250}, {1, 0}}, {{0.17, 0.17, 0.33, 1.00}});
-        openshot::Keyframe keyframe = createKeyframe(pointsData, transitionDuration);
+        openshot::Keyframe keyframe = createTransitionKeyframe(pointsData, transitionDuration, false, transitionClips.second);
+
         auto blur = new openshot::Blur(0, 0, keyframe, 0, 0, 0, 0, 0, 1);
         transitionClips.second->AddEffect(blur);
     }
 
-    createTimelineAndWriteClips({ mainClips.first, transitionClips.first, transitionClips.second, mainClips.second }, output);
+    createTimelineAndWriteClips({ transitionClips.first, transitionClips.second }, output);
 }
 
 void panLeftTransition(const std::string& file1, const std::string& file2, float transitionDuration, const std::string& output)
 {
-    auto clips = createTransitionClips(file1, file2, transitionDuration);
-
-    auto transitionClips = clips.first;
-    auto mainClips = clips.second;
+    auto transitionClips = createTransitionClips(file1, file2, transitionDuration);
 
     ////////// Clip 1 ////////////////////////////////////////////////////////////////////////////////////////////
 
     /// X axis Border Reflected Move Effect | Clip 1
     {
-        const auto xPointsData = PointsData({{0, 0}, {1, transitionClips.first->Reader()->info.width}}, {{0.88, 0.00, 0.12, 1.00}});
-        auto dxKeyframe = createKeyframe(xPointsData, transitionDuration);
+        const auto xPointsData = PointsData({{0, 0}, {1, 1}}, {{0.88, 0.00, 0.12, 1.00}});
+        auto dxKeyframe = createTransitionKeyframe(xPointsData, transitionDuration, true, transitionClips.first);
 
         auto pBorderReflectedMove = new openshot::BorderReflectedMove(dxKeyframe, 0);
         transitionClips.first->AddEffect(pBorderReflectedMove);
@@ -236,7 +205,8 @@ void panLeftTransition(const std::string& file1, const std::string& file2, float
     /// Horizontal Blur Effect | Clip 1
     {
         PointsData pointsData({{0, 0}, {0.5, 250}}, {{0.67, 0.00, 0.83, 0.83}});
-        openshot::Keyframe keyframe = createKeyframe(pointsData, transitionDuration);
+        openshot::Keyframe keyframe = createTransitionKeyframe(pointsData, transitionDuration, true, transitionClips.first);
+
         auto blurEffect = new openshot::Blur(keyframe);
         transitionClips.first->AddEffect(blurEffect);
     }
@@ -244,15 +214,15 @@ void panLeftTransition(const std::string& file1, const std::string& file2, float
     /// Alpha Effect | Clip 1
     {
         PointsData pointsData({{0.2, 1}, {0.6, 0}});
-        transitionClips.first->alpha = createKeyframe(pointsData, transitionDuration, openshot::LINEAR);
+        transitionClips.first->alpha = createTransitionKeyframe(pointsData, transitionDuration, true, transitionClips.first, openshot::LINEAR);
     }
 
     ////////// Clip 2 ////////////////////////////////////////////////////////////////////////////////////////////
 
     /// Border Reflected Move with X axis Effect | Clip 2
     {
-        const auto xPointsData = PointsData({{0, -transitionClips.second->Reader()->info.width}, {1, 0}}, {{0.88, 0.00, 0.12, 1.00}});
-        auto dxKeyframe = createKeyframe(xPointsData, transitionDuration);
+        const auto xPointsData = PointsData({{ 0, -1 }, {1, 0}}, {{0.88, 0.00, 0.12, 1.00}});
+        auto dxKeyframe = createTransitionKeyframe(xPointsData, transitionDuration, false, transitionClips.second);
 
         auto pBorderReflectedMove = new openshot::BorderReflectedMove(dxKeyframe, 0);
         transitionClips.second->AddEffect(pBorderReflectedMove);
@@ -261,26 +231,24 @@ void panLeftTransition(const std::string& file1, const std::string& file2, float
     /// Horizontal Blur Effect | Clip 2
     {
         PointsData pointsData({{0.5, 250}, {1, 0}}, {{0.17, 0.17, 0.33, 1.00}});
-        openshot::Keyframe keyframe = createKeyframe(pointsData, transitionDuration);
+        openshot::Keyframe keyframe = createTransitionKeyframe(pointsData, transitionDuration, false, transitionClips.second);
         auto blurEffect = new openshot::Blur(keyframe);
         transitionClips.second->AddEffect(blurEffect);
     }
 
-    createTimelineAndWriteClips({ mainClips.first, transitionClips.first, transitionClips.second, mainClips.second }, output);
+    createTimelineAndWriteClips({ transitionClips.first, transitionClips.second }, output);
 }
 
 void blurTransition(const std::string& file1, const std::string& file2, float transitionDuration, const std::string& output) {
-    auto clips = createTransitionClips(file1, file2, transitionDuration);
-
-    auto transitionClips = clips.first;
-    auto mainClips = clips.second;
+    auto transitionClips = createTransitionClips(file1, file2, transitionDuration);
 
     ////////// Clip 1 ////////////////////////////////////////////////////////////////////////////////////////////
 
     /// Blur Effect | Clip 1
     {
         PointsData pointsData({{0, 0}, {0.5, 100}}, {{0.33, 0.00, 0.00, 1.00}});
-        openshot::Keyframe keyframe = createKeyframe(pointsData, transitionDuration);
+        openshot::Keyframe keyframe = createTransitionKeyframe(pointsData, transitionDuration, true, transitionClips.first);
+
         auto blurEffect = new openshot::Blur(keyframe, keyframe);
         transitionClips.first->AddEffect(blurEffect);
     }
@@ -288,7 +256,7 @@ void blurTransition(const std::string& file1, const std::string& file2, float tr
     /// Alpha Effect | Clip 1
     {
         PointsData pointsData({{0, 1}, {1, 0}});
-        transitionClips.first->alpha = createKeyframe(pointsData, transitionDuration, openshot::LINEAR);
+        transitionClips.first->alpha = createTransitionKeyframe(pointsData, transitionDuration, true, transitionClips.first, openshot::LINEAR);
     }
 
     ////////// Clip 2 ////////////////////////////////////////////////////////////////////////////////////////////
@@ -296,27 +264,25 @@ void blurTransition(const std::string& file1, const std::string& file2, float tr
     /// Blur Effect | Clip 2
     {
         PointsData pointsData({{0.5, 100}, {1, 0}}, {{0.17, 0.18, 0.67, 1.00}});
-        openshot::Keyframe keyframe = createKeyframe(pointsData, transitionDuration);
+        openshot::Keyframe keyframe = createTransitionKeyframe(pointsData, transitionDuration, false, transitionClips.second);
         auto blurEffect = new openshot::Blur(keyframe, keyframe);
         transitionClips.second->AddEffect(blurEffect);
     }
 
-    createTimelineAndWriteClips({ mainClips.first, transitionClips.first, transitionClips.second, mainClips.second }, output);
+    createTimelineAndWriteClips({ transitionClips.first, transitionClips.second }, output);
 }
 
 void verticalBlurTransition(const std::string& file1, const std::string& file2, float transitionDuration, const std::string& output) {
 
-    auto clips = createTransitionClips(file1, file2, transitionDuration);
-
-    auto transitionClips = clips.first;
-    auto mainClips = clips.second;
+    auto transitionClips = createTransitionClips(file1, file2, transitionDuration);
 
     ////////// Clip 1 ////////////////////////////////////////////////////////////////////////////////////////////
 
     /// Blur Effect | Clip 1
     {
         PointsData pointsData({{0, 0}, {0.5, 100}}, {{0.80, 0.00, 0.34, 1.00}});
-        openshot::Keyframe keyframe = createKeyframe(pointsData, transitionDuration);
+        openshot::Keyframe keyframe = createTransitionKeyframe(pointsData, transitionDuration, true,transitionClips.first);
+
         auto blurEffect = new openshot::Blur(0, keyframe);
         transitionClips.first->AddEffect(blurEffect);
     }
@@ -324,7 +290,7 @@ void verticalBlurTransition(const std::string& file1, const std::string& file2, 
     /// Alpha Effect | Clip 1
     {
         PointsData pointsData({{0, 1}, {1, 0}}, {{0.89, 0.00, 0.11, 1.00}});
-        transitionClips.first->alpha = createKeyframe(pointsData, transitionDuration);
+        transitionClips.first->alpha = createTransitionKeyframe(pointsData, transitionDuration, true, transitionClips.first);
     }
 
     ////////// Clip 2 ////////////////////////////////////////////////////////////////////////////////////////////
@@ -332,32 +298,30 @@ void verticalBlurTransition(const std::string& file1, const std::string& file2, 
     /// Blur Effect | Clip 2
     {
         PointsData pointsData({{0.5, 100}, {1, 0}}, {{0.64, 0.00, 0.26, 1.00}});
-        openshot::Keyframe keyframe = createKeyframe(pointsData, transitionDuration);
+        openshot::Keyframe keyframe = createTransitionKeyframe(pointsData, transitionDuration, false, transitionClips.second);
+
         auto blurEffect = new openshot::Blur(0, keyframe);
         transitionClips.second->AddEffect(blurEffect);
     }
 
-    createTimelineAndWriteClips({ mainClips.first, transitionClips.first, transitionClips.second, mainClips.second }, output);
+    createTimelineAndWriteClips({ transitionClips.first, transitionClips.second }, output);
 }
 
 void rotationalBlurTransition(const std::string& file1, const std::string& file2, float transitionDuration, const std::string& output) {
-    auto clips = createTransitionClips(file1, file2, transitionDuration);
-
-    auto transitionClips = clips.first;
-    auto mainClips = clips.second;
+    auto transitionClips = createTransitionClips(file1, file2, transitionDuration);
 
     ////////// Clip 1 ////////////////////////////////////////////////////////////////////////////////////////////
 
     /// Alpha Effect | Clip 1
     {
         PointsData pointsData({{0.3499, 1}, {0.35, 0}});
-        transitionClips.first->alpha = createKeyframe(pointsData, transitionDuration, openshot::LINEAR);
+        transitionClips.first->alpha = createTransitionKeyframe(pointsData, transitionDuration, true, transitionClips.first, openshot::LINEAR);
     }
 
     /// Border Reflected Rotation Effect | Clip 1
     {
         const auto pointsData = PointsData({{0, 0}, {1, 180}}, {{0.68, 0.00, 0.00, 1.00}});
-        auto keyframe = createKeyframe(pointsData, transitionDuration);
+        auto keyframe = createTransitionKeyframe(pointsData, transitionDuration, true, transitionClips.first);
 
         auto borderReflectedRotationEffect = new openshot::BorderReflectedRotation(keyframe);
         transitionClips.first->AddEffect(borderReflectedRotationEffect);
@@ -366,17 +330,18 @@ void rotationalBlurTransition(const std::string& file1, const std::string& file2
     /// Rotational Blur Effect | Clip 1
     {
         PointsData pointsData({{0, 0}, {1, 80}}, {{0.68, 0.00, 0.00, 1.00}});
-        openshot::Keyframe keyframe = createKeyframe(pointsData, transitionDuration);
+        openshot::Keyframe keyframe = createTransitionKeyframe(pointsData, transitionDuration, true, transitionClips.first);
+
         auto blurEffect = new openshot::Blur(0, 0, 0, keyframe);
         transitionClips.first->AddEffect(blurEffect);
     }
 
-    ////////// Clip 1 ////////////////////////////////////////////////////////////////////////////////////////////
+    ////////// Clip 2 ////////////////////////////////////////////////////////////////////////////////////////////
 
     /// Border Reflected Rotation Effect | Clip 2
     {
         const auto pointsData = PointsData({{0, -180}, {1, 0}}, {{0.68, 0.00, 0.00, 1.00}});
-        auto keyframe = createKeyframe(pointsData, transitionDuration);
+        auto keyframe = createTransitionKeyframe(pointsData, transitionDuration, false, transitionClips.second);
 
         auto borderReflectedRotationEffect = new openshot::BorderReflectedRotation(keyframe);
         transitionClips.second->AddEffect(borderReflectedRotationEffect);
@@ -386,19 +351,17 @@ void rotationalBlurTransition(const std::string& file1, const std::string& file2
     /// Rotational Blur Effect | Clip 2
     {
         PointsData pointsData({{0, 80}, {1, 0}}, {{0.68, 0.00, 0.00, 1.00}});
-        openshot::Keyframe keyframe = createKeyframe(pointsData, transitionDuration);
+        openshot::Keyframe keyframe = createTransitionKeyframe(pointsData, transitionDuration, false, transitionClips.second);
+
         auto blurEffect = new openshot::Blur(0, 0, 0, keyframe);
         transitionClips.second->AddEffect(blurEffect);
     }
 
-    createTimelineAndWriteClips({ mainClips.first, transitionClips.first, transitionClips.second, mainClips.second }, output);
+    createTimelineAndWriteClips({ transitionClips.first, transitionClips.second }, output);
 }
 
 void wooshTransition(const std::string& file1, const std::string& file2, float transitionDuration, const std::string& output) {
-    auto clips = createTransitionClips(file1, file2, transitionDuration);
-
-    auto transitionClips = clips.first;
-    auto mainClips = clips.second;
+    auto transitionClips = createTransitionClips(file1, file2, transitionDuration);
 
     ////////// Clip 1 ////////////////////////////////////////////////////////////////////////////////////////////
     openshot::Clip clip1(file1);
@@ -406,7 +369,7 @@ void wooshTransition(const std::string& file1, const std::string& file2, float t
     /// Alpha Effect | Clip 1
     {
         PointsData pointsData({{0.33, 1}, {0.66, 0}}, {{0.420, 0.000, 0.580, 1.000}});
-        transitionClips.first->alpha = createKeyframe(pointsData, transitionDuration, openshot::BEZIER);
+        transitionClips.first->alpha = createTransitionKeyframe(pointsData, transitionDuration, true, transitionClips.first, openshot::BEZIER);
     }
 
     /// Zoom Effect | Clip 1
@@ -414,10 +377,10 @@ void wooshTransition(const std::string& file1, const std::string& file2, float t
         const auto zoomPointsData = PointsData(
                 {{0, 100}, {0.5, 120}, {1, 100}},
                 {{0.71, 0.00, 0.83, 0.83}, {0.17, 0.17, 0.29, 1}});
-        openshot::Keyframe zoomKeyframe = createKeyframe(zoomPointsData, transitionDuration);
+        openshot::Keyframe zoomKeyframe = createTransitionKeyframe(zoomPointsData, transitionDuration, true, transitionClips.first);
 
         const auto anchorXPointsData = PointsData({{0, 0.18}, {0.5, 0.82}},{{0.71, 0.00, 0.29, 1.00}});
-        openshot::Keyframe anchorXKeyframe = createKeyframe(anchorXPointsData, transitionDuration);
+        openshot::Keyframe anchorXKeyframe = createTransitionKeyframe(anchorXPointsData, transitionDuration, true, transitionClips.first);
         auto zoomEffect = new openshot::Zoom(zoomKeyframe, anchorXKeyframe, 0.5);
         transitionClips.first->AddEffect(zoomEffect);
 
@@ -428,7 +391,7 @@ void wooshTransition(const std::string& file1, const std::string& file2, float t
         const auto blurPointsData = PointsData(
                 {{0, 0}, {0.5, 20}, {1, 0}},
                 {{0.71, 0.00, 0.83, 0.83}, {0.17, 0.17, 0.19, 1}});
-        openshot::Keyframe blurKeyframe = createKeyframe(blurPointsData, transitionDuration);
+        openshot::Keyframe blurKeyframe = createTransitionKeyframe(blurPointsData, transitionDuration, true, transitionClips.first);
 
         auto blurEffect = new openshot::Blur(blurKeyframe, blurKeyframe, 0, 0,  0, 0, 0, 0, 2);
         transitionClips.first->AddEffect(blurEffect);
@@ -439,10 +402,10 @@ void wooshTransition(const std::string& file1, const std::string& file2, float t
         const auto zoomBlurPointsData = PointsData(
                 {{0, 0}, {0.5, 140}, {1, 0}},
                 {{0.71, 0.00, 0.83, 0.83}, {0.17, 0.17, 0.19, 1}});
-        openshot::Keyframe zoomBlurKeyframe = createKeyframe(zoomBlurPointsData, transitionDuration);
+        openshot::Keyframe zoomBlurKeyframe = createTransitionKeyframe(zoomBlurPointsData, transitionDuration, true, transitionClips.first);
 
         const auto anchorXPointsData = PointsData({{0, 0.3}, {1, 0.6}},{{0.71, 0.00, 0.29, 1.00}});
-        openshot::Keyframe anchorXKeyframe = createKeyframe(anchorXPointsData, transitionDuration);
+        openshot::Keyframe anchorXKeyframe = createTransitionKeyframe(anchorXPointsData, transitionDuration, true, transitionClips.first);
 
         auto blur = new openshot::Blur(0, 0, 0, 0, zoomBlurKeyframe, anchorXKeyframe, 0.5);
         transitionClips.first->AddEffect(blur);
@@ -456,10 +419,10 @@ void wooshTransition(const std::string& file1, const std::string& file2, float t
         const auto zoomPointsData = PointsData(
                 {{0, 100}, {0.5, 120}, {1, 100}},
                 {{0.71, 0.00, 0.83, 0.83}, {0.17, 0.17, 0.29, 1}});
-        openshot::Keyframe zoomKeyframe = createKeyframe(zoomPointsData, transitionDuration);
+        openshot::Keyframe zoomKeyframe = createTransitionKeyframe(zoomPointsData, transitionDuration, false, transitionClips.second);
 
         const auto anchorXPointsData = PointsData({{0, 0.18}, {0.5, 0.82}},{{0.71, 0.00, 0.29, 1.00}});
-        openshot::Keyframe anchorXKeyframe = createKeyframe(anchorXPointsData, transitionDuration);
+        openshot::Keyframe anchorXKeyframe = createTransitionKeyframe(anchorXPointsData, transitionDuration, false, transitionClips.second);
         auto zoomEffect = new openshot::Zoom(zoomKeyframe, anchorXKeyframe, 0.5);
         transitionClips.second->AddEffect(zoomEffect);
     }
@@ -469,7 +432,7 @@ void wooshTransition(const std::string& file1, const std::string& file2, float t
         const auto blurPointsData = PointsData(
                 {{0, 0}, {0.5, 20}, {1, 0}},
                 {{0.71, 0.00, 0.83, 0.83}, {0.17, 0.17, 0.19, 1}});
-        openshot::Keyframe blurKeyframe = createKeyframe(blurPointsData, transitionDuration);
+        openshot::Keyframe blurKeyframe = createTransitionKeyframe(blurPointsData, transitionDuration, false, transitionClips.second);
 
         auto blurEffect = new openshot::Blur(blurKeyframe, blurKeyframe, 0, 0,  0, 0, 0, 0, 2);
 
@@ -481,51 +444,45 @@ void wooshTransition(const std::string& file1, const std::string& file2, float t
         const auto zoomBlurPointsData = PointsData(
                 {{0, 0}, {0.5, 140}, {1, 0}},
                 {{0.71, 0.00, 0.83, 0.83}, {0.17, 0.17, 0.19, 1}});
-        openshot::Keyframe zoomBlurKeyframe = createKeyframe(zoomBlurPointsData, transitionDuration);
+        openshot::Keyframe zoomBlurKeyframe = createTransitionKeyframe(zoomBlurPointsData, transitionDuration, false, transitionClips.second);
 
         const auto anchorXPointsData = PointsData({{0, 0.3}, {1, 0.6}},{{0.71, 0.00, 0.29, 1.00}});
-        openshot::Keyframe anchorXKeyframe = createKeyframe(anchorXPointsData, transitionDuration);
+        openshot::Keyframe anchorXKeyframe = createTransitionKeyframe(anchorXPointsData, transitionDuration, false, transitionClips.second);
 
         auto blurEffect = new openshot::Blur(0, 0, 0, 0, zoomBlurKeyframe, anchorXKeyframe, 0.5);
         transitionClips.second->AddEffect(blurEffect);
     }
 
-    createTimelineAndWriteClips({ mainClips.first, transitionClips.first, transitionClips.second, mainClips.second }, output);
+    createTimelineAndWriteClips({ transitionClips.first, transitionClips.second }, output);
 }
 
 void dissolveTransition(const std::string& file1, const std::string& file2, float transitionDuration, const std::string& output) {
-    auto clips = createTransitionClips(file1, file2, transitionDuration);
-
-    auto transitionClips = clips.first;
-    auto mainClips = clips.second;
+    auto transitionClips = createTransitionClips(file1, file2, transitionDuration);
 
     ////////// Clip 1 ////////////////////////////////////////////////////////////////////////////////////////////
-    /// Alpha Effect | Clip 2
+    /// Alpha Effect | Clip
     {
         PointsData pointsData({{0.33, 1}, {0.67, 0}});
-        transitionClips.first->alpha = createKeyframe(pointsData, transitionDuration, openshot::LINEAR);
+        transitionClips.first->alpha = createTransitionKeyframe(pointsData, transitionDuration, true, transitionClips.first, openshot::LINEAR);
     }
 
-    createTimelineAndWriteClips({ mainClips.first, transitionClips.first, transitionClips.second, mainClips.second }, output);
+    createTimelineAndWriteClips({ transitionClips.first, transitionClips.second }, output);
 }
 
 void dissolveBlurTransition(const std::string& file1, const std::string& file2, float transitionDuration, const std::string& output) {
-    auto clips = createTransitionClips(file1, file2, transitionDuration);
-
-    auto transitionClips = clips.first;
-    auto mainClips = clips.second;
+    auto transitionClips = createTransitionClips(file1, file2, transitionDuration);
 
     ////////// Clip 1 ////////////////////////////////////////////////////////////////////////////////////////////
-    /// Alpha Effect | Clip 2
+    /// Alpha Effect | Clip 1
     {
         PointsData pointsData({{0.33, 1}, {0.67, 0}});
-        transitionClips.first->alpha = createKeyframe(pointsData, transitionDuration, openshot::LINEAR);
+        transitionClips.first->alpha = createTransitionKeyframe(pointsData, transitionDuration, true, transitionClips.first, openshot::LINEAR);
     }
 
     /// Blur Effect | Clip 1
     {
         PointsData pointsData({{0, 0}, {1, 20}}, {{0.33, 0.00, 0.67, 1.00}});
-        openshot::Keyframe keyframe = createKeyframe(pointsData, transitionDuration);
+        openshot::Keyframe keyframe = createTransitionKeyframe(pointsData, transitionDuration, true, transitionClips.first);
         auto blurEffect = new openshot::Blur(keyframe, keyframe, 0, 0, 0, 0, 0, 0, 1);
         transitionClips.first->AddEffect(blurEffect);
     }
@@ -535,11 +492,12 @@ void dissolveBlurTransition(const std::string& file1, const std::string& file2, 
     /// Blur Effect | Clip 2
     {
         PointsData pointsData({{0, 20}, {1, 0}}, {{0.33, 0.00, 0.67, 1.00}});
-        openshot::Keyframe keyframe = createKeyframe(pointsData, transitionDuration);
+        openshot::Keyframe keyframe = createTransitionKeyframe(pointsData, transitionDuration, false, transitionClips.second);
         auto blurEffect = new openshot::Blur(keyframe, keyframe, 0, 0, 0, 0, 0, 0, 1);
         transitionClips.second->AddEffect(blurEffect);
     }
-    createTimelineAndWriteClips({ mainClips.first, transitionClips.first, transitionClips.second, mainClips.second }, output);
+
+    createTimelineAndWriteClips({ transitionClips.first, transitionClips.second }, output);
 }
 
 void circleOutTransition(const std::string& file1, float transitionDuration, const std::string& output) {
@@ -687,10 +645,7 @@ void barnDoorsTransition(const std::string& file1, const std::string& file2, flo
 }
 
 void verticalSplitTransition(const std::string& file1, const std::string& file2, float transitionDuration, const std::string& output) {
-    auto clips = createTransitionClips(file1, file2, transitionDuration);
-
-    auto transitionClips = clips.first;
-    auto mainClips = clips.second;
+    auto transitionClips = createTransitionClips(file1, file2, transitionDuration);
 
     ////////// Clip 1 ////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -698,7 +653,7 @@ void verticalSplitTransition(const std::string& file1, const std::string& file2,
     {
         PointsData pointsData({{0, 0}, {1, 1}},
                               {{0.86, 0.00, 0.14, 1.00}});
-        openshot::Keyframe keyframe = createKeyframe(pointsData, transitionDuration);
+        openshot::Keyframe keyframe = createTransitionKeyframe(pointsData, transitionDuration, true, transitionClips.first, openshot::LINEAR);
         auto verticalSplitShiftEffect = new openshot::VerticalSplitShift(keyframe);
         transitionClips.first->AddEffect(verticalSplitShiftEffect);
     }
@@ -709,31 +664,29 @@ void verticalSplitTransition(const std::string& file1, const std::string& file2,
     {
         PointsData pointsData({{0, -1}, {1, 0}},
                               {{0.86, 0.00, 0.14, 1.00}});
-        openshot::Keyframe keyframe = createKeyframe(pointsData, transitionDuration);
+        openshot::Keyframe keyframe = createTransitionKeyframe(pointsData, transitionDuration, false, transitionClips.second, openshot::LINEAR);
         auto verticalSplitShiftEffect = new openshot::VerticalSplitShift(keyframe);
         transitionClips.second->AddEffect(verticalSplitShiftEffect);
     }
 
-    createTimelineAndWriteClips({ mainClips.first, transitionClips.first, transitionClips.second, mainClips.second }, output);
+    createTimelineAndWriteClips({ transitionClips.first, transitionClips.second }, output);
 }
 
 void zoomInTransition(const std::string& file1, const std::string& file2, float transitionDuration, const std::string& output) {
-    auto clips = createTransitionClips(file1, file2, transitionDuration);
+    auto transitionClips = createTransitionClips(file1, file2, transitionDuration);
 
-    auto transitionClips = clips.first;
-    auto mainClips = clips.second;
     ////////// Clip 1 ////////////////////////////////////////////////////////////////////////////////////////////
 
     /// Alpha Effect | Clip 1
     {
         PointsData pointsData({{0.33, 1}, {0.66, 0}}, {{0.33, 0.67, 0.00, 1}});
-        transitionClips.first->alpha = createKeyframe(pointsData, transitionDuration, openshot::LINEAR);
+        transitionClips.first->alpha = createTransitionKeyframe(pointsData, transitionDuration, true, transitionClips.first, openshot::LINEAR);
     }
 
     /// Zoom Effect | Clip 1
     {
         const auto zoomPointsData = PointsData({{0, 100}, {1, 250}},{{0.58, 0.00, 0.13, 1.00}});
-        openshot::Keyframe zoomKeyframe = createKeyframe(zoomPointsData, transitionDuration);
+        openshot::Keyframe zoomKeyframe = createTransitionKeyframe(zoomPointsData, transitionDuration, true, transitionClips.first);
         auto zoomEffect = new openshot::Zoom(zoomKeyframe, 0.5, 0.5);
         transitionClips.first->AddEffect(zoomEffect);
     }
@@ -744,29 +697,28 @@ void zoomInTransition(const std::string& file1, const std::string& file2, float 
     /// Zoom Effect | Clip 2
     {
         const auto zoomPointsData = PointsData({{0, 40}, {1, 100}},{{0.58, 0.00, 0.13, 1.00}});
-        openshot::Keyframe zoomKeyframe = createKeyframe(zoomPointsData, transitionDuration);
+        openshot::Keyframe zoomKeyframe = createTransitionKeyframe(zoomPointsData, transitionDuration, false, transitionClips.second);
+
         auto zoomEffect = new openshot::Zoom(zoomKeyframe, 0.5, 0.5);
         transitionClips.second->AddEffect(zoomEffect);
     }
 
-    createTimelineAndWriteClips({ mainClips.first, transitionClips.first, transitionClips.second, mainClips.second }, output);
+    createTimelineAndWriteClips({ transitionClips.first, transitionClips.second }, output);
 }
 
 void contrastTransition(const std::string& file1, const std::string& file2, float transitionDuration, const std::string& output) {
-    auto clips = createTransitionClips(file1, file2, transitionDuration);
+    auto transitionClips = createTransitionClips(file1, file2, transitionDuration);
 
-    auto transitionClips = clips.first;
-    auto mainClips = clips.second;
     ////////// Clip 1 ////////////////////////////////////////////////////////////////////////////////////////////
 
     /// Mask Effect | Clip 1
     {
         const auto levelPercentage = PointsData({{0, 100}, {1, 0}},{{0.33, 0.00, 0.67, 1.00}});
-        openshot::Keyframe levelPercentageKeyframe = createKeyframe(levelPercentage, transitionDuration);
+        openshot::Keyframe levelPercentageKeyframe = createTransitionKeyframe(levelPercentage, transitionDuration, false, transitionClips.first);
 
         auto wipeEffect = new openshot::Wipe(levelPercentageKeyframe,levelPercentageKeyframe);
         transitionClips.first->AddEffect(wipeEffect);
     }
 
-    createTimelineAndWriteClips({ mainClips.first, transitionClips.first, transitionClips.second, mainClips.second }, output);
+    createTimelineAndWriteClips({ transitionClips.first, transitionClips.second }, output);
 }
