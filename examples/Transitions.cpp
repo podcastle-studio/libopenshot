@@ -110,7 +110,7 @@ void createTimelineAndWriteClips(std::vector<openshot::Clip*> clips, const std::
     w.SetAudioOptions(true, "libvorbis", 48000, 2, openshot::ChannelLayout::LAYOUT_STEREO, 128000);
     w.SetVideoOptions(true, "libx264" , openshot::Fraction(30, 1),  1920, 1080, openshot::Fraction(1,1), false, false, 4000000);
     w.Open();
-    
+
     openshot::Clip* maxPositionClip = clips[0];
     float maxPosition = 0;
     for (const auto clip : clips) {
@@ -714,7 +714,7 @@ void contrastTransition(const std::string& file1, const std::string& file2, floa
     /// Mask Effect | Clip 1
     {
         const auto levelPercentage = PointsData({{0, 100}, {1, 0}},{{0.33, 0.00, 0.67, 1.00}});
-        openshot::Keyframe levelPercentageKeyframe = createTransitionKeyframe(levelPercentage, transitionDuration, false, transitionClips.first);
+        openshot::Keyframe levelPercentageKeyframe = createTransitionKeyframe(levelPercentage, transitionDuration, true, transitionClips.first);
 
         auto wipeEffect = new openshot::Wipe(levelPercentageKeyframe,levelPercentageKeyframe);
         transitionClips.first->AddEffect(wipeEffect);

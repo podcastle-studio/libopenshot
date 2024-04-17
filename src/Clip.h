@@ -165,13 +165,14 @@ namespace openshot {
 		/// Reverse an audio buffer
 		void reverse_buffer(juce::AudioBuffer<float>* buffer);
 
-
 	public:
 		openshot::GravityType gravity;   ///< The gravity of a clip determines where it snaps to its parent
 		openshot::ScaleType scale;		 ///< The scale determines how a clip should be resized to fit its parent
 		openshot::AnchorType anchor;	 ///< The anchor determines what parent a clip should snap to
 		openshot::FrameDisplayType display; ///< The format to display the frame number (if any)
 		openshot::VolumeMixType mixing;  ///< What strategy should be followed when mixing audio with other clips
+
+        long mFreezeFramesCountAtBeginning = 0;
 
 		#ifdef USE_OPENCV
 			bool COMPILED_WITH_CV = true;

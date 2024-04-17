@@ -401,8 +401,9 @@ std::shared_ptr<Frame> Clip::GetFrame(std::shared_ptr<openshot::Frame> backgroun
 }
 
 // Use an existing openshot::Frame object and draw this Clip's frame onto it
-std::shared_ptr<Frame> Clip::GetFrame(std::shared_ptr<openshot::Frame> background_frame, int64_t clip_frame_number, openshot::TimelineInfoStruct* options)
+std::shared_ptr<Frame> Clip::GetFrame(std::shared_ptr<openshot::Frame> background_frame, int64_t clip_frame_number_, openshot::TimelineInfoStruct* options)
 {
+    int64_t clip_frame_number = std::max((int64_t)1, clip_frame_number_ - mFreezeFramesCountAtBeginning);
 	// Check for open reader (or throw exception)
 	if (!is_open)
 		throw ReaderClosed("The Clip is closed.  Call Open() before calling this method.");
@@ -413,20 +414,20 @@ std::shared_ptr<Frame> Clip::GetFrame(std::shared_ptr<openshot::Frame> backgroun
 		std::shared_ptr<Frame> frame = NULL;
 
 		// Check cache
-		frame = final_cache.GetFrame(clip_frame_number);
-		if (frame) {
-			// Debug output
-			ZmqLogger::Instance()->AppendDebugMethod(
-					"Clip::GetFrame (Cached frame found)",
-					"requested_frame", clip_frame_number);
-
-			// Return cached frame
-			return frame;
-		}
+//		frame = final_cache.GetFrame(clip_frame_number);
+//		if (frame) {
+//			// Debug output
+//			ZmqLogger::Instance()->AppendDebugMethod(
+//					"Clip::GetFrame (Cached frame found)",
+//					"requested_frame", clip_frame_number);
+//
+//			// Return cached frame
+//			return frame;
+//		}
 
 		// Generate clip frame
 		frame = GetOrCreateFrame(clip_frame_number);
-
+        frame->number = clip_frame_number_;
 
         if (!openshot::Settings::Instance()->ENABLE_LEGACY_MODE) {
             apply_scale_options(frame, background_frame);
