@@ -27,8 +27,8 @@ void saveVideoFrame(const std::string& file, int frameNum, std::string& frameFil
     clip->GetFrame(frameNum)->GetImage()->save(frameFilePath.c_str());
 }
 
-int timeToFrame(float duration, int fps = 30) {
-    return std::max((int)(fps * duration), 1);
+int timeToFrame(float duration, float fps = 30) {
+    return std::max((round)(fps * duration), 1.F);
 }
 
 float frameToTime(long frame, int fps = 30) {
@@ -77,21 +77,20 @@ createTransitionClips(const std::string& file1, const std::string& file2, float 
     /// Define clips properties
     float clip1Position = 0;
     float clip1Start = 0;
-    float frameNum = (clip1->info.video_length - timeToFrame(transitionDuration));
-    float clip1End = frameNum / (float)fps;
+    float clip1End = clip1->info.duration - transitionDuration - 1 / clip1->info.fps.ToFloat();
 
-    int   transitionFrame1 = frameNum;
+    int   transitionFrame1 = timeToFrame(clip1End, clip1->info.fps.ToFloat()) + 1;
     float transitionPosition1 = clip1End;
     float transitionStart1 = 0;
     float transitionEnd1 = transitionDuration;
 
-    int   transitionFrame2 = timeToFrame(transitionDuration, fps);
+    int   transitionFrame2 = timeToFrame(transitionDuration, clip2->info.fps.ToFloat()) - 1;
     float transitionPosition2 = transitionPosition1;
     float transitionStart2 = 0;
     float transitionEnd2 = transitionDuration;
 
     float clip2Position = transitionPosition2 + transitionDuration;
-    float clip2Start = frameToTime(transitionFrame2);
+    float clip2Start = transitionDuration;
     float clip2End = clip2->info.duration;
 
     /// Initialize clips properties
@@ -120,7 +119,7 @@ createTransitionClips(const std::string& file1, const std::string& file2, float 
     transitionClip2->End(transitionEnd2);
 
     clip2->scale = openshot::SCALE_NONE;
-    clip2->Layer(2);
+    clip2->Layer(1);
     clip2->Position(clip2Position);
     clip2->Start(clip2Start);
     clip2->End(clip2End);
@@ -141,7 +140,6 @@ void createTimelineAndWriteClips(std::vector<openshot::Clip*> clips, const std::
     w.Open();
     openshot::Clip* maxPositionClip;
     float maxPosition = 0;
-    float duration = 0;
     for (const auto clip : clips) {
         if (clip->Position() > maxPosition) {
             maxPosition = clip->Position();
@@ -698,7 +696,7 @@ void verticalSplitTransition(const std::string& file1, const std::string& file2,
 
     /// Vertical Split Shift Effect | Clip 1
     {
-        PointsData pointsData({{0, 0}, {1, transitionClips.first->Reader()->info.height}},
+        PointsData pointsData({{0, 0}, {1, 1}},
                               {{0.86, 0.00, 0.14, 1.00}});
         openshot::Keyframe keyframe = createKeyframe(pointsData, transitionDuration);
         auto verticalSplitShiftEffect = new openshot::VerticalSplitShift(keyframe);
@@ -709,7 +707,7 @@ void verticalSplitTransition(const std::string& file1, const std::string& file2,
 
     /// Vertical Split Shift Effect | Clip 2
     {
-        PointsData pointsData({{0, -transitionClips.second->Reader()->info.height}, {1, 0}},
+        PointsData pointsData({{0, -1}, {1, 0}},
                               {{0.86, 0.00, 0.14, 1.00}});
         openshot::Keyframe keyframe = createKeyframe(pointsData, transitionDuration);
         auto verticalSplitShiftEffect = new openshot::VerticalSplitShift(keyframe);
@@ -736,7 +734,7 @@ void zoomInTransition(const std::string& file1, const std::string& file2, float 
     {
         const auto zoomPointsData = PointsData({{0, 100}, {1, 250}},{{0.58, 0.00, 0.13, 1.00}});
         openshot::Keyframe zoomKeyframe = createKeyframe(zoomPointsData, transitionDuration);
-        auto zoomEffect = new openshot::Zoom(zoomKeyframe);
+        auto zoomEffect = new openshot::Zoom(zoomKeyframe, 0.5, 0.5);
         transitionClips.first->AddEffect(zoomEffect);
     }
 
@@ -747,7 +745,7 @@ void zoomInTransition(const std::string& file1, const std::string& file2, float 
     {
         const auto zoomPointsData = PointsData({{0, 40}, {1, 100}},{{0.58, 0.00, 0.13, 1.00}});
         openshot::Keyframe zoomKeyframe = createKeyframe(zoomPointsData, transitionDuration);
-        auto zoomEffect = new openshot::Zoom(zoomKeyframe);
+        auto zoomEffect = new openshot::Zoom(zoomKeyframe, 0.5, 0.5);
         transitionClips.second->AddEffect(zoomEffect);
     }
 

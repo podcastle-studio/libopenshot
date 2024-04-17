@@ -47,11 +47,12 @@ void VerticalSplitShift::init_effect_details()
 // modified openshot::Frame object
 std::shared_ptr<openshot::Frame> VerticalSplitShift::GetFrame(std::shared_ptr<openshot::Frame> frame, int64_t frame_number)
 {
-    double shiftAmountValue = shiftAmount.GetValue(frame_number);
+    int height = frame->GetHeight();
+
+    double shiftAmountValue = shiftAmount.GetValue(frame_number) * height;
     double splitPointValue = splitPoint.GetValue(frame_number);
 
-    int height = frame->GetHeight();
-    if (shiftAmountValue == 0 || shiftAmountValue == height) {
+    if (shiftAmountValue == 0 || shiftAmountValue > height) {
         return frame;
     }
 
@@ -66,7 +67,6 @@ std::shared_ptr<openshot::Frame> VerticalSplitShift::GetFrame(std::shared_ptr<op
         // Convert the loaded image to BGRA (with alpha channel)
         cv::cvtColor(src, srcWithAlpha, cv::COLOR_BGR2BGRA);
     }
-
 
     // Initialize the result image with an alpha channel and set all pixels to transparent
     cv::Mat result(srcWithAlpha.size(), CV_8UC4, cv::Scalar(0, 0, 0, 0));
@@ -102,7 +102,6 @@ std::shared_ptr<openshot::Frame> VerticalSplitShift::GetFrame(std::shared_ptr<op
     rightPart.copyTo(result(rightDestRect), rightPart);
 
     frame->SetImageCV(result);
-
 	// return the modified frame
 	return frame;
 }
