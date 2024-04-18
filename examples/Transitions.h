@@ -43,3 +43,9 @@ void zoomInTransition(const std::string& file1 = "clips/clip-1.mp4", const std::
 
 void contrastTransition(const std::string& file1 = "clips/clip-14.mp4", const std::string& file2 = "clips/clip-15.mp4",
                         float transitionDuration = 0.5, const std::string& output = "./final/contrastTransition.mp4");
+
+void brightnessTransition(const std::string& file1 = "clips/clip-2.mp4", const std::string& file2 = "clips/clip-3.mp4",
+                          float transitionDuration = 0.5, const std::string& output = "./final/brightnessTransition.mp4");
+
+void brightnessFootageTransition(const std::string& file1 = "clips/clip-2.mp4", const std::string& file2 = "clips/clip-3.mp4",
+                          float transitionDuration = 0.5, const std::string& output = "./final/brightnessFootageTransition.mp4");

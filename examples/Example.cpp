@@ -1,8 +1,6 @@
 #include "Transitions.h"
 #include <chrono>
 #include <iostream>
-#include <opencv2/opencv.hpp>
-
 
 int main() {
     using namespace std::chrono;
@@ -21,6 +19,8 @@ int main() {
 //    barnDoorsTransition();
 //    verticalSplitTransition();
 //    zoomInTransition();
+//    brightnessTransition();
+//    brightnessFootageTransition();
 
     auto end = high_resolution_clock::now();
     std::cout << "Completed: " << duration_cast<seconds>(end - start).count() << " sec." << std::endl;

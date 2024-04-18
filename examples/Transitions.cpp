@@ -14,6 +14,8 @@
 #include "effects/Bars.h"
 #include "effects/Zoom.h"
 #include "effects/Wipe.h"
+#include "effects/Exposure.h"
+#include "effects/Brightness.h"
 #include "effects/VerticalSplitShift.h"
 #include "Color.h"
 
@@ -653,7 +655,7 @@ void verticalSplitTransition(const std::string& file1, const std::string& file2,
     {
         PointsData pointsData({{0, 0}, {1, 1}},
                               {{0.86, 0.00, 0.14, 1.00}});
-        openshot::Keyframe keyframe = createTransitionKeyframe(pointsData, transitionDuration, true, transitionClips.first, openshot::LINEAR);
+        openshot::Keyframe keyframe = createTransitionKeyframe(pointsData, transitionDuration, true, transitionClips.first, openshot::BEZIER);
         auto verticalSplitShiftEffect = new openshot::VerticalSplitShift(keyframe);
         transitionClips.first->AddEffect(verticalSplitShiftEffect);
     }
@@ -664,7 +666,7 @@ void verticalSplitTransition(const std::string& file1, const std::string& file2,
     {
         PointsData pointsData({{0, -1}, {1, 0}},
                               {{0.86, 0.00, 0.14, 1.00}});
-        openshot::Keyframe keyframe = createTransitionKeyframe(pointsData, transitionDuration, false, transitionClips.second, openshot::LINEAR);
+        openshot::Keyframe keyframe = createTransitionKeyframe(pointsData, transitionDuration, false, transitionClips.second, openshot::BEZIER);
         auto verticalSplitShiftEffect = new openshot::VerticalSplitShift(keyframe);
         transitionClips.second->AddEffect(verticalSplitShiftEffect);
     }
@@ -721,4 +723,90 @@ void contrastTransition(const std::string& file1, const std::string& file2, floa
     }
 
     createTimelineAndWriteClips({ transitionClips.first, transitionClips.second }, output);
+}
+
+void brightnessTransition(const std::string& file1, const std::string& file2, float transitionDuration, const std::string& output) {
+    auto transitionClips = createTransitionClips(file1, file2, transitionDuration);
+
+    ////////// Clip 1 ////////////////////////////////////////////////////////////////////////////////////////////
+
+    /// Alpha Effect | Clip 1
+    {
+        PointsData pointsData({{0.499999, 1}, {0.5, 0}});
+        transitionClips.first->alpha = createTransitionKeyframe(pointsData, transitionDuration, true, transitionClips.first, openshot::LINEAR);
+    }
+
+    /// Brightness Effect | Clip 1
+    {
+        const auto exposurePoints = PointsData({{0.2, 1}, {0.5, 4}, {0.8, 0}},{{0.33, 0.00, 0.67, 1.00}});
+        openshot::Keyframe exposureKeyframe = createTransitionKeyframe(exposurePoints, transitionDuration, true, transitionClips.first);
+
+        auto brightnessEffect = new openshot::Exposure(exposureKeyframe);
+        transitionClips.first->AddEffect(brightnessEffect);
+    }
+
+    ////////// Clip 2 ////////////////////////////////////////////////////////////////////////////////////////////
+
+    /// Brightness Effect | Clip 2
+    {
+        const auto exposurePoints = PointsData({{0.2, 1}, {0.5, 4}, {0.8, 0}},{{0.33, 0.00, 0.67, 1.00}});
+        openshot::Keyframe brightnessKeyframe = createTransitionKeyframe(exposurePoints, transitionDuration, false, transitionClips.second);
+
+        auto brightnessEffect = new openshot::Exposure(brightnessKeyframe);
+        transitionClips.second->AddEffect(brightnessEffect);
+    }
+
+    createTimelineAndWriteClips({ transitionClips.first, transitionClips.second }, output);
+}
+
+void brightnessFootageTransition(const std::string& file1, const std::string& file2, float transitionDuration, const std::string& output) {
+    auto transitionClips = createTransitionClips(file1, file2, transitionDuration);
+
+    ////////// Clip 1 ////////////////////////////////////////////////////////////////////////////////////////////
+
+    /// Alpha Effect | Clip 1
+    {
+        PointsData pointsData({{0.499999, 1}, {0.5, 0}});
+        transitionClips.first->alpha = createTransitionKeyframe(pointsData, transitionDuration, true, transitionClips.first, openshot::LINEAR);
+    }
+
+    /// Brightness Effect | Clip 1
+    {
+        const auto exposurePoints = PointsData({{0.2, 0}, {0.5, 0.3}, {0.8, 0}},{{0.33, 0.00, 0.67, 1.00}});
+        openshot::Keyframe exposureKeyframe = createTransitionKeyframe(exposurePoints, transitionDuration, true, transitionClips.first);
+
+        auto brightnessEffect = new openshot::Brightness(exposureKeyframe, 3);
+        transitionClips.first->AddEffect(brightnessEffect);
+    }
+
+    ////////// Clip 2 ////////////////////////////////////////////////////////////////////////////////////////////
+
+    /// Brightness Effect | Clip 2
+    {
+        const auto exposurePoints = PointsData({{0.2, 0}, {0.5, 0.3}, {0.8, 0}},{{0.33, 0.00, 0.67, 1.00}});
+        openshot::Keyframe brightnessKeyframe = createTransitionKeyframe(exposurePoints, transitionDuration, false, transitionClips.second);
+
+        auto brightnessEffect = new openshot::Brightness(brightnessKeyframe, 3);
+        transitionClips.second->AddEffect(brightnessEffect);
+    }
+
+    ///////// Light footage clip ////////////////////////////////////////////////////////////////////////////////////
+    auto lightFootageClip = new openshot::Clip("clips/light_leaks.mp4");
+    if (transitionDuration > lightFootageClip->info.duration) {
+        throw std::runtime_error("Transition duration is longer than light footage clip duration");
+    }
+    lightFootageClip->Position(transitionClips.second->Position());
+    lightFootageClip->Start(lightFootageClip->info.duration/2.f - transitionDuration/2.f);
+    lightFootageClip->End(lightFootageClip->info.duration/2.f + transitionDuration/2.f);
+    lightFootageClip->Layer(std::max(transitionClips.first->Layer(), transitionClips.second->Layer()) + 1);
+    lightFootageClip->composition_mode = QPainter::CompositionMode_Plus;
+    {
+        openshot::Point point0(timeToFrame(lightFootageClip->Start()), 0, openshot::LINEAR);
+        openshot::Point point1(timeToFrame(lightFootageClip->Start() + 0.2 * transitionDuration), 1, openshot::LINEAR);
+        openshot::Point point2(timeToFrame(lightFootageClip->Start() + 0.8 * transitionDuration), 1, openshot::LINEAR);
+        openshot::Point point3(timeToFrame(lightFootageClip->Start() + transitionDuration), 0, openshot::LINEAR);
+        lightFootageClip->alpha = openshot::Keyframe({point0, point1, point2, point3});
+    }
+
+    createTimelineAndWriteClips({ transitionClips.first, transitionClips.second, lightFootageClip }, output);
 }

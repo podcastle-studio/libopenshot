@@ -1218,7 +1218,7 @@ void Clip::apply_background(std::shared_ptr<openshot::Frame> frame, std::shared_
 	painter.setRenderHints(QPainter::Antialiasing | QPainter::SmoothPixmapTransform | QPainter::TextAntialiasing, true);
 
 	// Composite a new layer onto the image
-	painter.setCompositionMode(QPainter::CompositionMode_SourceOver);
+    painter.setCompositionMode(composition_mode);
 	painter.drawImage(0, 0, *frame->GetImage());
 	painter.end();
 

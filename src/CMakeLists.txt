@@ -111,6 +111,7 @@ set(EFFECTS_SOURCES
   effects/BorderReflectedMove.cpp
   effects/Zoom.cpp
   effects/Wipe.cpp
+  effects/Exposure.cpp
   effects/VerticalSplitShift.cpp
   effects/Brightness.cpp
   effects/Caption.cpp

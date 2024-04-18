@@ -36,6 +36,7 @@
 #include "EffectInfo.h"
 #include "KeyFrame.h"
 #include "TrackedObjectBase.h"
+#include "QPainter"
 
 namespace openshot {
 	class AudioResampler;
@@ -313,6 +314,8 @@ namespace openshot {
 		openshot::Keyframe shear_y; ///< Curve representing Y shear angle in degrees (-45.0=down, 45.0=up)
 		openshot::Keyframe origin_x; ///< Curve representing X origin point (0.0=0% (left), 1.0=100% (right))
 		openshot::Keyframe origin_y; ///< Curve representing Y origin point (0.0=0% (top), 1.0=100% (bottom))
+
+        QPainter::CompositionMode composition_mode = QPainter::CompositionMode_SourceOver; ///< Composition mode for blending this clip with the background
 
 		// Time and Volume curves
 		openshot::Keyframe time; ///< Curve representing the frames over time to play (used for speed and direction of video)
