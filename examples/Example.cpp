@@ -21,7 +21,7 @@ int main() {
 //    zoomInTransition();
 //    brightnessTransition();
 //    brightnessFootageTransition();
-
+//    glitchTransition();
     auto end = high_resolution_clock::now();
     std::cout << "Completed: " << duration_cast<seconds>(end - start).count() << " sec." << std::endl;
 

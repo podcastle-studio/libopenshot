@@ -49,3 +49,6 @@ void brightnessTransition(const std::string& file1 = "clips/clip-2.mp4", const s
 
 void brightnessFootageTransition(const std::string& file1 = "clips/clip-2.mp4", const std::string& file2 = "clips/clip-3.mp4",
                           float transitionDuration = 0.5, const std::string& output = "./final/brightnessFootageTransition.mp4");
+
+void glitchTransition(const std::string& file1 = "clips/glitch1.mp4", const std::string& file2 = "clips/glitch2.mp4",
+                      float transitionDuration = 1, const std::string& output = "./final/glitchTransition.mp4");

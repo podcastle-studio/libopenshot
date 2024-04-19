@@ -317,6 +317,10 @@ namespace openshot {
 
         QPainter::CompositionMode composition_mode = QPainter::CompositionMode_SourceOver; ///< Composition mode for blending this clip with the background
 
+        bool isDisplacementMap = false; ///< Is this clip a displacement map for another clip
+        openshot::Keyframe horizontal_displacement; ///< Horizontal displacement for displacement map
+        openshot::Keyframe vertical_displacement; ///< Vertical displacement for displacement map
+
 		// Time and Volume curves
 		openshot::Keyframe time; ///< Curve representing the frames over time to play (used for speed and direction of video)
 		openshot::Keyframe volume; ///< Curve representing the volume (0 to 1)
