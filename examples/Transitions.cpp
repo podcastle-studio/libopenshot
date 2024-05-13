@@ -68,7 +68,6 @@ openshot::Keyframe createTransitionKeyframe(PointsData pointsData, float transit
             points[i + 3].handle_left = openshot::Coordinate(pointsData.bezierValues[i].v3, pointsData.bezierValues[i].v4);
         }
     }
-    points.back().handle_right = openshot::Coordinate(pointsData.bezierValues.back().v3, pointsData.bezierValues.back().v4);
     return {points};
 }
 
@@ -800,7 +799,7 @@ void brightnessFootageTransition(const std::string& file1, const std::string& fi
     }
 
     ///////// Light footage clip ////////////////////////////////////////////////////////////////////////////////////
-    auto lightFootageClip = new openshot::Clip("clips/light_leaks.mp4");
+    auto lightFootageClip = new openshot::Clip("input/light_leaks.mp4");
     if (transitionDuration > lightFootageClip->info.duration) {
         throw std::runtime_error("Transition duration is longer than light footage clip duration");
     }
@@ -859,7 +858,7 @@ void glitchTransition(const std::string& file1, const std::string& file2, float 
     }
 
     ///////// Light footage clip ////////////////////////////////////////////////////////////////////////////////////
-    auto glitchMapClip = new openshot::Clip("clips/glitch_map.mp4");
+    auto glitchMapClip = new openshot::Clip("input/glitch_map.mp4");
     if (transitionDuration > glitchMapClip->info.duration) {
         throw std::runtime_error("Transition duration is longer than light footage clip duration");
     }
