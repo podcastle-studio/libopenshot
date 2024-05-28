@@ -622,7 +622,7 @@ void barnDoorsTransition(const std::string& file1, const std::string& file2, flo
     clip2.End(clip2End);
     clip2.scale = openshot::SCALE_FIT;
 
-    /// Alpha Effect | Clip 2
+    /// Bars Effect | Clip 2
     {
         float startValue = 0.5;
         float endValue = 0;
@@ -857,7 +857,7 @@ void glitchTransition(const std::string& file1, const std::string& file2, float 
         transitionClips.second->AddEffect(colorShiftEffect);
     }
 
-    ///////// Light footage clip ////////////////////////////////////////////////////////////////////////////////////
+    ///////// footage clip ////////////////////////////////////////////////////////////////////////////////////
     auto glitchMapClip = new openshot::Clip("input/glitch_map.mp4");
     if (transitionDuration > glitchMapClip->info.duration) {
         throw std::runtime_error("Transition duration is longer than light footage clip duration");
