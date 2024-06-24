@@ -1,5 +1,6 @@
 #include "BorderReflectedMove.h"
 #include "Exceptions.h"
+#include "image-processing-lib/effects.h"
 
 using namespace openshot;
 
@@ -33,40 +34,16 @@ void BorderReflectedMove::init_effect_details()
 // modified openshot::Frame object
 std::shared_ptr<openshot::Frame> BorderReflectedMove::GetFrame(std::shared_ptr<openshot::Frame> frame, int64_t frame_number)
 {
-    const auto dx_value = dx.GetValue(frame_number) * frame->GetWidth();
-    const auto dy_value = dy.GetValue(frame_number) * frame->GetHeight();
+    const auto dx_value = dx.GetValue(frame_number);
+    const auto dy_value = dy.GetValue(frame_number);
 
     if (dx_value == 0 && dy_value == 0) {
         return frame;
     }
 
-	// Get the frame's image
-	cv::Mat frame_image = frame->GetImageCV();
-
-    // Adjust border size for negative values as well by taking the absolute max of dx and dy
-    int borderSize = std::max(std::abs(dx_value), std::abs(dy_value));
-
-    // Create mirrored borders to preserve image size after the shift
-    cv::Mat imgWithBorder;
-    cv::copyMakeBorder(frame_image, imgWithBorder, borderSize, borderSize, borderSize, borderSize, cv::BORDER_REFLECT);
-
-    // Define the translation matrix for the diagonal move, works with negative values too
-    cv::Mat translationMatrix = (cv::Mat_<double>(2, 3) << 1, 0, dx_value, 0, 1, dy_value);
-
-    // Apply the transformation
-    cv::Mat translatedImg;
-    cv::warpAffine(imgWithBorder, translatedImg, translationMatrix, imgWithBorder.size());
-
-    // To ensure the cropped image is correctly aligned with the original,
-    // the starting point of the crop region should consider the border size
-    // and adjust for the direction of the shift.
-    // However, since we've added equal border all around and the size of the
-    // transformed image matches the size of the bordered image, the original
-    // start point remains the best choice.
-    cv::Rect cropRegion(borderSize, borderSize, frame_image.cols, frame_image.rows);
-    cv::Mat croppedImg = translatedImg(cropRegion);
-
-    frame->SetImageCV(croppedImg);
+    auto imageCv = frame->GetImageCV();
+    Podcastle::Effects::applyBorderReflectedMoveEffect(imageCv, dx_value, dy_value);
+    frame->SetImageCV(imageCv);
 
 	// return the modified frame
 	return frame;

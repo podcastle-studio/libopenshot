@@ -12,6 +12,7 @@
 
 #include "Bars.h"
 #include "Exceptions.h"
+#include "./image-processing-lib/effects.h"
 
 using namespace openshot;
 
@@ -50,50 +51,21 @@ std::shared_ptr<openshot::Frame> Bars::GetFrame(std::shared_ptr<openshot::Frame>
 	// Get the frame's image
 	std::shared_ptr<QImage> frame_image = frame->GetImage();
 
-	// Get bar color (and create small color image)
-	auto tempColor = std::make_shared<QImage>(
-		frame_image->width(), 1, QImage::Format_RGBA8888_Premultiplied);
-	tempColor->fill(QColor(QString::fromStdString(color.GetColorHex(frame_number))));
-
 	// Get current keyframe values
 	double left_value = left.GetValue(frame_number);
 	double top_value = top.GetValue(frame_number);
 	double right_value = right.GetValue(frame_number);
 	double bottom_value = bottom.GetValue(frame_number);
 
-	// Get pixel array pointer
-	unsigned char *pixels = (unsigned char *) frame_image->bits();
-	unsigned char *color_pixels = (unsigned char *) tempColor->bits();
+    // Get pixel array pointer
+    auto *pixels = (unsigned char *)frame_image->bits();
+    int width = frame_image->width();
+    int height = frame_image->height();
 
-	// Get pixels sizes of all bars
-	int top_bar_height = top_value * frame_image->height();
-	int bottom_bar_height = bottom_value * frame_image->height();
-	int left_bar_width = left_value * frame_image->width();
-	int right_bar_width = right_value * frame_image->width();
+    // Apply the bars effect directly to the pixel data
+    Podcastle::Effects::applyBarsEffect(pixels, width, height, left_value, top_value, right_value, bottom_value);
 
-	// Loop through rows
-	for (int row = 0; row < frame_image->height(); row++) {
-
-		// Top & Bottom Bar
-		if ((top_bar_height > 0.0 && row <= top_bar_height) || (bottom_bar_height > 0.0 && row >= frame_image->height() - bottom_bar_height)) {
-			memcpy(&pixels[row * frame_image->width() * 4], color_pixels, sizeof(char) * frame_image->width() * 4);
-		} else {
-			// Left Bar
-			if (left_bar_width > 0.0) {
-				memcpy(&pixels[row * frame_image->width() * 4], color_pixels, sizeof(char) * left_bar_width * 4);
-			}
-
-			// Right Bar
-			if (right_bar_width > 0.0) {
-				memcpy(&pixels[((row * frame_image->width()) + (frame_image->width() - right_bar_width)) * 4], color_pixels, sizeof(char) * right_bar_width * 4);
-			}
-		}
-	}
-
-	// Cleanup colors and arrays
-	tempColor.reset();
-
-	// return the modified frame
+    // return the modified frame
 	return frame;
 }
 

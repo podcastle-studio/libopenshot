@@ -12,6 +12,7 @@
 
 #include "VerticalSplitShift.h"
 #include "Exceptions.h"
+#include "image-processing-lib/effects.h"
 
 using namespace openshot;
 
@@ -47,61 +48,14 @@ void VerticalSplitShift::init_effect_details()
 // modified openshot::Frame object
 std::shared_ptr<openshot::Frame> VerticalSplitShift::GetFrame(std::shared_ptr<openshot::Frame> frame, int64_t frame_number)
 {
-    int height = frame->GetHeight();
-
-    double shiftAmountValue = shiftAmount.GetValue(frame_number) * height;
+    double shiftAmountValue = shiftAmount.GetValue(frame_number);
     double splitPointValue = splitPoint.GetValue(frame_number);
 
-    if (shiftAmountValue == 0 || shiftAmountValue > height) {
-        return frame;
-    }
-
     // Get the frame's image
-    auto src = frame->GetImageCV();
+    auto imageCv = frame->GetImageCV();
+    Podcastle::Effects::applyVerticalSplitShiftEffect(imageCv, shiftAmountValue, splitPointValue);
+    frame->SetImageCV(imageCv);
 
-    // Check if the source image has an alpha channel; if not, add one.
-    cv::Mat srcWithAlpha;
-    if (src.channels() == 4) {
-        srcWithAlpha = src;
-    } else {
-        // Convert the loaded image to BGRA (with alpha channel)
-        cv::cvtColor(src, srcWithAlpha, cv::COLOR_BGR2BGRA);
-    }
-
-    // Initialize the result image with an alpha channel and set all pixels to transparent
-    cv::Mat result(srcWithAlpha.size(), CV_8UC4, cv::Scalar(0, 0, 0, 0));
-
-    // Adjust the logic for source and destination rectangles based on the shift direction
-    cv::Rect leftSourceRect, leftDestRect, rightSourceRect, rightDestRect;
-    if (shiftAmountValue > 0) {
-        shiftAmountValue = std::min(shiftAmountValue, (double)srcWithAlpha.rows - 1);
-        // Shifting parts upwards
-        leftSourceRect = cv::Rect(0, shiftAmountValue, srcWithAlpha.cols / 2, srcWithAlpha.rows - shiftAmountValue);
-        leftDestRect = cv::Rect(0, 0, srcWithAlpha.cols / 2, srcWithAlpha.rows - shiftAmountValue);
-
-        rightSourceRect = cv::Rect(srcWithAlpha.cols / 2, 0, srcWithAlpha.cols / 2, srcWithAlpha.rows - shiftAmountValue);
-        rightDestRect = cv::Rect(srcWithAlpha.cols / 2, shiftAmountValue, srcWithAlpha.cols / 2, srcWithAlpha.rows - shiftAmountValue);
-    } else {
-        shiftAmountValue = -std::min(std::abs(shiftAmountValue), (double)srcWithAlpha.rows - 1);
-
-        // Shifting parts downwards
-        int absShiftAmount = std::abs(shiftAmountValue);
-        leftSourceRect = cv::Rect(0, 0, srcWithAlpha.cols / 2, srcWithAlpha.rows - absShiftAmount);
-        leftDestRect = cv::Rect(0, absShiftAmount, srcWithAlpha.cols / 2, srcWithAlpha.rows - absShiftAmount);
-
-        rightSourceRect = cv::Rect(srcWithAlpha.cols / 2, absShiftAmount, srcWithAlpha.cols / 2, srcWithAlpha.rows - absShiftAmount);
-        rightDestRect = cv::Rect(srcWithAlpha.cols / 2, 0, srcWithAlpha.cols / 2, srcWithAlpha.rows - absShiftAmount);
-    }
-
-    // Copy the left part of the image
-    cv::Mat leftPart = srcWithAlpha(leftSourceRect);
-    leftPart.copyTo(result(leftDestRect), leftPart);
-
-    // Copy the right part of the image
-    cv::Mat rightPart = srcWithAlpha(rightSourceRect);
-    rightPart.copyTo(result(rightDestRect), rightPart);
-
-    frame->SetImageCV(result);
 	// return the modified frame
 	return frame;
 }

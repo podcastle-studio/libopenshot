@@ -24,7 +24,7 @@ namespace openshot
 
 	public:
 		Keyframe shiftAmount;
-		Keyframe splitPoint;
+		Keyframe splitPoint = 0.5;
 		/// Blank constructor, useful when using Json to load the effect properties
         VerticalSplitShift();
         VerticalSplitShift(Keyframe newShiftAmount, Keyframe newSplitPoint = 0.5);

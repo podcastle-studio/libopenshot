@@ -881,7 +881,7 @@ void glitchTransition(const std::string& file1, const std::string& file2, float 
         openshot::Point vDisplacementPoint2(timeToFrame(glitchMapClip->Start() + 0.2 * transitionDuration, glitchMapClip->info.fps.ToFloat()), 0.23, openshot::CONSTANT);
         openshot::Point vDisplacementPoint3(timeToFrame(glitchMapClip->Start() + 0.35 * transitionDuration, glitchMapClip->info.fps.ToFloat()), 0.0185, openshot::CONSTANT);
         openshot::Point vDisplacementPoint4(timeToFrame(glitchMapClip->Start() + 0.9 * transitionDuration, glitchMapClip->info.fps.ToFloat()), 0.37, openshot::CONSTANT);
-        openshot::Point vDisplacementPoint5(timeToFrame(glitchMapClip->Start() + transitionDuration, glitchMapClip->info.fps.ToFloat()), 0, openshot::CONSTANT);
+        openshot::Point vDisplacementPoint5(timeToFrame(glitchMapClip->Start() + 1 * transitionDuration, glitchMapClip->info.fps.ToFloat()), 0, openshot::CONSTANT);
         glitchMapClip->vertical_displacement = openshot::Keyframe({vDisplacementPoint0, vDisplacementPoint1, vDisplacementPoint2, vDisplacementPoint3, vDisplacementPoint4, vDisplacementPoint5});
     }
 

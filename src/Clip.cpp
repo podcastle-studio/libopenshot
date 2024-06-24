@@ -30,7 +30,10 @@
 
 #include <Qt>
 
+#include "effects/image-processing-lib/effects.h"
+
 using namespace openshot;
+
 
 // Init default settings for a clip
 void Clip::init_settings()
@@ -1212,52 +1215,25 @@ void Clip::RemoveEffect(EffectBase* effect)
 
 // Apply background image to the current clip image (i.e. flatten this image onto previous layer)
 void Clip::apply_background(std::shared_ptr<openshot::Frame> frame, std::shared_ptr<openshot::Frame> background_frame) {
-    // Retrieve the background image
-    std::shared_ptr<QImage> background_canvas = background_frame->GetImage();
-    int width = background_canvas->width();
-    int height = background_canvas->height();
-
     if (isDisplacementMap) {
-        QImage displaced_image(width, height, background_canvas->format());
-        auto displacement_map = frame->GetImage();  // Assuming this is your displacement map
-
-        // Get displacement scale values
-        const auto horizontal_displacement_value = horizontal_displacement.GetValue(frame->number) * width / 2; // horizontal_displacement: [-1, 1]
-        const auto vertical_displacement_value = vertical_displacement.GetValue(frame->number) * height / 2;  // vertical_displacement: [-1, 1]
-
-        for (int y = 0; y < height; ++y) {
-            for (int x = 0; x < width; ++x) {
-                int displacement_intensity = qGray(displacement_map->pixel(x, y)); // Grayscale intensity
-                // Normalize intensity to [0, 1]
-                float normalized_intensity = displacement_intensity / 255.0f;
-
-                // Calculate horizontal and vertical displacements
-                // These values are directly mapped to the full width/height of the image
-                int dx = normalized_intensity * horizontal_displacement_value;
-                int dy = normalized_intensity * vertical_displacement_value;
-
-                // Calculate new positions with wrapping
-                int new_x = std::max(0, std::min(x + dx, width - 1));
-                int new_y = std::max(0, std::min(y + dy, height - 1));
-
-                // Set the displaced pixel
-                displaced_image.setPixel(x, y, background_canvas->pixel(new_x, new_y));
-            }
-        }
-
+        auto backgroundImageCv = background_frame->GetImageCV();
+        Podcastle::Effects::applyDisplacementMapEffect(backgroundImageCv, frame->GetImageCV(), horizontal_displacement.GetValue(frame->number), vertical_displacement.GetValue(frame->number));
         // Apply the displaced image to the background canvas
-        *background_canvas = displaced_image;
+        background_frame->SetImageCV(backgroundImageCv);
+        frame->SetImageCV(backgroundImageCv);
     } else {
+        // Retrieve the background image
+        std::shared_ptr<QImage> background_canvas = background_frame->GetImage();
+
         // Standard procedure for drawing the frame's image onto the background
         QPainter painter(background_canvas.get());
         painter.setRenderHints(QPainter::Antialiasing | QPainter::SmoothPixmapTransform | QPainter::TextAntialiasing, true);
         painter.setCompositionMode(composition_mode);
         painter.drawImage(0, 0, *frame->GetImage());
         painter.end();
+        // Add the modified image back to the frame
+        frame->AddImage(background_canvas);
     }
-
-    // Add the modified image back to the frame
-    frame->AddImage(background_canvas);
 }
 
 // Apply effects to the source frame (if any)
@@ -1457,7 +1433,7 @@ QTransform Clip::get_transform(std::shared_ptr<Frame> frame, int width, int heig
     if (openshot::Settings::Instance()->ENABLE_LEGACY_MODE)
     {
         // Apply stretch scale to correctly fit the bounding-box
-        if (parentTrackedObject){
+        if (parentTrackedObject) {
             scale = SCALE_STRETCH;
         }
 

@@ -1,5 +1,6 @@
 #include "Zoom.h"
 #include "Exceptions.h"
+#include "image-processing-lib/effects.h"
 
 using namespace openshot;
 
@@ -42,55 +43,9 @@ std::shared_ptr<openshot::Frame> Zoom::GetFrame(std::shared_ptr<openshot::Frame>
     if (zoomPercentVal == 100) {
         return frame;
     }
-
-	// Get the frame's image
-	cv::Mat frame_image = frame->GetImageCV();
-
-    cv::Mat out_frame_image;
-    int width = frame_image.cols;
-    int height = frame_image.rows;
-
-    int anchor_point_x = anchorValX * width;
-    int anchor_point_y = anchorValY * height;
-
-    if (zoomPercentVal > 100) { // Zoom In
-        int newWidth = width * 100 / zoomPercentVal;
-        int newHeight = height * 100 / zoomPercentVal;
-        int x = std::max(anchor_point_x - newWidth / 2, 0);
-        int y = std::max(anchor_point_y - newHeight / 2, 0);
-
-        // Ensure ROI does not exceed image boundaries
-        x = std::min(x, width - newWidth);
-        y = std::min(y, height - newHeight);
-
-        cv::Rect roi(x, y, newWidth, newHeight); // Define a rectangle for cropping
-        cv::Mat cropped = frame_image(roi); // Crop the image
-        cv::resize(cropped, out_frame_image, cv::Size(width, height)); // Resize back to original size
-    } else { // Zoom Out
-        float scaleFactor = zoomPercentVal / 100.0f;
-        cv::Mat resized;
-        cv::resize(frame_image, resized, cv::Size(), scaleFactor, scaleFactor, cv::INTER_LINEAR);
-
-        int newWidth = resized.cols;
-        int newHeight = resized.rows;
-
-        int top, bottom, left, right;
-        top = (height - newHeight) / 2 - (anchor_point_y - height / 2) * (1 - scaleFactor);
-        bottom = (height - newHeight) - top;
-        left = (width - newWidth) / 2 - (anchor_point_x - width / 2) * (1 - scaleFactor);
-        right = (width - newWidth) - left;
-
-        // Adjust for possible negative padding values
-        top = std::max(top, 0);
-        bottom = std::max(bottom, 0);
-        left = std::max(left, 0);
-        right = std::max(right, 0);
-
-        // Mirror edges while padding
-        cv::copyMakeBorder(resized, out_frame_image, top, bottom, left, right, cv::BORDER_REFLECT);
-    }
-
-    frame->SetImageCV(out_frame_image);
+    auto imageCv = frame->GetImageCV();
+    Podcastle::Effects::applyZoomEffect(imageCv, zoomPercentVal, anchorValX, anchorValY);
+    frame->SetImageCV(imageCv);
 	// return the modified frame
 	return frame;
 }

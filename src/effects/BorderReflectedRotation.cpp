@@ -1,5 +1,6 @@
 #include "BorderReflectedRotation.h"
 #include "Exceptions.h"
+#include "image-processing-lib/effects.h"
 
 using namespace openshot;
 
@@ -39,30 +40,9 @@ std::shared_ptr<openshot::Frame> BorderReflectedRotation::GetFrame(std::shared_p
         return frame;
     }
 
-	// Get the frame's image
-	cv::Mat frame_image = frame->GetImageCV();
-
-    // Step 1: Create a larger canvas
-    int maxLength = std::sqrt(frame_image.cols * frame_image.cols + frame_image.rows * frame_image.rows);
-    int offset_x = (maxLength - frame_image.cols) / 2;
-    int offset_y = (maxLength - frame_image.rows) / 2;
-
-    cv::Mat padded;
-    cv::copyMakeBorder(frame_image, padded, offset_y, offset_y, offset_x, offset_x, cv::BORDER_REFLECT);
-
-    // Step 2: Calculate the rotation matrix for the larger canvas
-    cv::Point2f center(padded.cols / 2.0, padded.rows / 2.0);
-    cv::Mat rotationMatrix = cv::getRotationMatrix2D(center, angle_value, 1.0);
-
-    // Step 3: Rotate the image on the larger canvas
-    cv::Mat rotated;
-    cv::warpAffine(padded, rotated, rotationMatrix, padded.size(), cv::INTER_LINEAR, cv::BORDER_REFLECT);
-
-    // Step 4 & 5: Crop the image to ensure it is centered and retains original dimensions
-    cv::Rect roi((rotated.cols - frame_image.cols) / 2, (rotated.rows - frame_image.rows) / 2, frame_image.cols, frame_image.rows);
-    cv::Mat cropped = rotated(roi);
-
-    frame->SetImageCV(cropped);
+    auto imageCv = frame->GetImageCV();
+    Podcastle::Effects::applyBorderReflectedRotationEffect(imageCv, angle_value);
+    frame->SetImageCV(imageCv);
 
 	// return the modified frame
 	return frame;

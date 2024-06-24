@@ -1,0 +1,3 @@
+[submodule "src/effects/image-processing-lib"]
+	path = src/effects/image-processing-lib
+	url = git@github.com:senoalvrtsyan/image-processing-lib.git

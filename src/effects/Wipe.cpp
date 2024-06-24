@@ -8,10 +8,7 @@
 #include "QtImageReader.h"
 #include "QPainter"
 #include "QPainterPath"
-
-#ifdef USE_IMAGEMAGICK
-	#include "ImageReader.h"
-#endif
+#include "image-processing-lib/effects.h"
 
 using namespace openshot;
 
@@ -42,55 +39,11 @@ std::shared_ptr<openshot::Frame> Wipe::GetFrame(std::shared_ptr<openshot::Frame>
     const auto lowPercentage = mLevelsLowPercentage.GetValue(frame_number);
     const auto highPercentage = mLevelsHighPercentage.GetValue(frame_number);
 
-    // Map percentages to grayscale values (0-255)
-    int lowThreshold = static_cast<int>(lowPercentage * 255.0 / 100.0);
-    int highThreshold = static_cast<int>(highPercentage * 255.0 / 100.0);
+    auto imageCv = frame->GetImageCV();
+    Podcastle::Effects::applyLevelAdjustmentMaskEffect(imageCv, lowPercentage, highPercentage);
 
-    std::shared_ptr<QImage> frame_image = frame->GetImage();
-
-    // Convert to grayscale first
-    QImage mask_image = frame_image->convertToFormat(QImage::Format_Grayscale8);
-
-    // Adjust grayscale image levels
-    int width = frame_image->width();
-    int height = frame_image->height();
-
-    for (int y = 0; y < height; ++y) {
-        uchar* scan = mask_image.scanLine(y);
-        for (int x = 0; x < width; ++x) {
-            int gray = scan[x];
-            if (gray < lowThreshold) {
-                scan[x] = 0; // Make pixel black
-            } else if (gray > highThreshold) {
-                scan[x] = 255; // Make pixel white
-            } else {
-                // For simplicity, values exactly between thresholds are not adjusted.
-                // You can add linear interpolation here if needed.
-            }
-        }
-    }
-
-    // Apply adjusted frame to original frame as a mask to original frame
-
-    // Create a new image with the same size as the original and support for transparency
-    QImage maskedImage(frame_image->size(), QImage::Format_ARGB32);
-    maskedImage.fill(Qt::transparent); // Initialize all pixels as transparent
-
-    // Loop through all pixels
-    for (int y = 0; y < height; ++y) {
-        for (int x = 0; x < width; ++x) {
-            QRgb originalPixel = frame_image->pixel(x, y);
-            uchar maskValue = mask_image.pixelColor(x, y).value();
-
-            // Invert mask value for alpha channel, black in mask becomes transparent in result
-            int alpha = 255 - maskValue;
-
-            // Set the new pixel value in the masked image with modified alpha
-            maskedImage.setPixelColor(x, y, QColor(qRed(originalPixel), qGreen(originalPixel), qBlue(originalPixel), alpha));
-        }
-    }
     // return the modified frame
-    frame->AddImage(std::make_shared<QImage>(maskedImage));
+    frame->SetImageCV(imageCv);
 	return frame;
 }
 

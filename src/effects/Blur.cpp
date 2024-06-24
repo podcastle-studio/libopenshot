@@ -13,6 +13,7 @@
 #include "Blur.h"
 #include "Exceptions.h"
 #include "MagickUtilities.h"
+#include "image-processing-lib/effects.h"
 
 using namespace openshot;
 
@@ -80,93 +81,6 @@ void boxBlurT(const unsigned char *scl, unsigned char *tcl, int w, int h, int r)
     }
 }
 
-void diagonalBlur(cv::Mat& src, int blurAmount, int iterations = 1) {
-    // cv::GaussianBlur(src, src, cv::Size(11, 11), 5);
-
-    // Specify the kernel size. The greater the size, the more the blur.
-    int kernelSize = blurAmount * 2 + 1; // Ensure kernel size is odd
-
-    // Create the diagonal kernel.
-    cv::Mat kernel_d = cv::Mat::zeros(kernelSize, kernelSize, CV_32F);
-
-    // Fill the diagonal with ones and also normalize
-    for (int i = 0; i < kernelSize; ++i) {
-        kernel_d.at<float>(i, i) = 1.0f / kernelSize;
-    }
-
-    // Apply the diagonal kernel.
-    for (int i = 0; i < iterations; ++i) {
-        cv::filter2D(src, src, -1, kernel_d, cv::Point(-1, -1), 0, cv::BORDER_DEFAULT);
-    }
-}
-
-cv::Mat zoomBlur(cv::Mat& src, int blurStrength, const std::pair<float, float>& center) {
-    int width = src.cols;
-    int height = src.rows;
-    const cv::Point2f customCenter(center.first * width, center.second * height);
-
-    // Ensure blur strength is odd to use it as kernel size
-    if (blurStrength % 2 == 0) {
-        blurStrength += 1;
-    }
-
-    // Calculate padding size based on blur strength to ensure no black borders
-    int paddingSize = blurStrength;
-
-    // Add mirrored padding around the image
-    cv::Mat paddedSrc;
-    cv::copyMakeBorder(src, paddedSrc, paddingSize, paddingSize, paddingSize, paddingSize, cv::BORDER_REFLECT);
-
-    // Adjust center for the padded image
-    const cv::Point2f paddedCenter(customCenter.x + paddingSize, customCenter.y + paddingSize);
-
-    // Calculate the maximum radius to cover the whole image from the new center
-    double maxRadius = 0.0;
-    std::vector<cv::Point2f> corners = {
-            cv::Point2f(0, 0),
-            cv::Point2f(paddedSrc.cols - 1, 0),
-            cv::Point2f(0, paddedSrc.rows - 1),
-            cv::Point2f(paddedSrc.cols - 1, paddedSrc.rows - 1)
-    };
-
-    for (const auto& corner : corners) {
-        double radius = cv::norm(corner - paddedCenter);
-        maxRadius = std::max(maxRadius, radius);
-    }
-
-    // Convert to polar coordinates
-    cv::Mat polarImage;
-    cv::linearPolar(paddedSrc, polarImage, paddedCenter, maxRadius, cv::WARP_FILL_OUTLIERS);
-
-    // Apply horizontal blur on the polar image
-    cv::Mat blurredPolar;
-    cv::blur(polarImage, blurredPolar, cv::Size(blurStrength, 1));
-
-    // Convert back to Cartesian coordinates
-    cv::Mat paddedResult;
-    cv::linearPolar(blurredPolar, paddedResult, paddedCenter, maxRadius, cv::WARP_INVERSE_MAP);
-
-    // Crop the padded result back to original size
-    cv::Rect cropRegion(paddingSize, paddingSize, width, height);
-    cv::Mat result = paddedResult(cropRegion);
-
-    // Apply a standard blur to the final result
-    int gaussBlurStrength = std::max(19, static_cast<int>(0.1 * blurStrength));
-    if (gaussBlurStrength % 2 == 0) {
-        gaussBlurStrength += 1;
-    }
-    // cv::GaussianBlur(result, result, cv::Size(gaussBlurStrength, gaussBlurStrength), 0);
-    return result;
-}
-
-std::shared_ptr<QImage> radialBlur(std::shared_ptr<QImage> src, double amount) {
-    // Load the input image
-    auto image = openshot::QImage2Magick(src);
-    // Apply radial blur
-    image->rotationalBlur(amount);
-    return openshot::Magick2QImage(image);
-}
-
 }
 
 /// Blank constructor, useful when using Json to load the effect properties
@@ -219,55 +133,32 @@ std::shared_ptr<openshot::Frame> Blur::GetFrame(std::shared_ptr<openshot::Frame>
     std::shared_ptr<QImage> frame_image = frame->GetImage();
 
     // diagonal blur (if any)
-    if (diagonal_radius_value > 0.0) {
-        auto frame_image_cv = frame->GetImageCV();
-        diagonalBlur(frame_image_cv, diagonal_radius_value, iteration_value);
-        frame->SetImageCV(frame_image_cv);
+    if (diagonal_radius_value > 0) {
+        auto imageCv = frame->GetImageCV();
+        Podcastle::Effects::applyDiagonalBlurEffect(imageCv, diagonal_radius_value, iteration_value);
+        frame->SetImageCV(imageCv);
     }
 
-    // radia blur (if any)
-    if (radial_blur_angle_value > 0.0) {
-        frame->AddImage(radialBlur(frame_image, radial_blur_angle_value));
+    // radial blur (if any)
+    if (radial_blur_angle_value > 0) {
+        auto imageCv = frame->GetImageCV();
+        Podcastle::Effects::applyRotationalBlur(imageCv, radial_blur_angle_value);
+        frame->SetImageCV(imageCv);
     }
 
     // zoom blur (if any)
-    if (zoom_blur_radius_value > 0.0) {
+    if (zoom_blur_radius_value > 0) {
         auto centerPoint = std::make_pair(zoomBlurCenterX.GetValue(frame_number), zoomBlurCenterY.GetValue(frame_number));
-        auto src = frame->GetImageCV();
-        frame->SetImageCV(zoomBlur(src, zoom_blur_radius_value, centerPoint));
+        auto imageCv = frame->GetImageCV();
+        Podcastle::Effects::applyZoomBlurEffect(imageCv, zoom_blur_radius_value, centerPoint);
+        frame->SetImageCV(imageCv);
     }
 
-    // Loop through each iteration
-    for (int iteration = 0; iteration < iteration_value; ++iteration)
-    {
-        int w = frame_image->width();
-        int h = frame_image->height();
-
-        // horizontal blur (if any)
-        if (horizontal_radius_value > 0.0) {
-            std::shared_ptr<QImage> frame_image_2 = std::make_shared<QImage>(*frame_image);
-
-            // Apply horizontal blur to target RGBA channels
-            boxBlurH(frame_image->bits(), frame_image_2->bits(), w, h, horizontal_radius_value);
-
-            // Swap output image back to input
-            frame_image.swap(frame_image_2);
-        }
-
-        // vertical blur (if any)
-        if (vertical_radius_value > 0.0) {
-            std::shared_ptr<QImage> frame_image_2 = std::make_shared<QImage>(*frame_image);
-
-            // Apply vertical blur to target RGBA channels
-            boxBlurT(frame_image->bits(), frame_image_2->bits(), w, h, vertical_radius_value);
-
-            // Swap output image back to input
-            frame_image.swap(frame_image_2);
-        }
+    if (horizontal_radius_value > 0 || vertical_radius_value > 0) {
+        auto imageCv = frame->GetImageCV();
+        Podcastle::Effects::applyBlurEffect(imageCv, horizontal_radius_value, vertical_radius_value);
+        frame->SetImageCV(imageCv);
     }
-
-    if (horizontal_radius_value > 0.0 || vertical_radius_value > 0.0)
-        frame->AddImage(frame_image);
 
 	// return the modified frame
 	return frame;

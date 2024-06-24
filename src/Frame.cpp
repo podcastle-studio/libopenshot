@@ -866,14 +866,20 @@ std::shared_ptr<QImage> Frame::GetImage()
 #ifdef USE_OPENCV
 
 // Convert Qimage to Mat
-cv::Mat Frame::Qimage2mat( std::shared_ptr<QImage>& qimage) {
+//cv::Mat Frame::Qimage2mat(std::shared_ptr<QImage>& qimage) {
+//	cv::Mat mat = cv::Mat(qimage->height(), qimage->width(), CV_8UC4, (uchar*)qimage->constBits(), qimage->bytesPerLine()).clone();
+//	cv::Mat mat2 = cv::Mat(mat.rows, mat.cols, CV_8UC3 );
+//	int from_to[] = { 0,0,  1,1,  2,2 };
+//	cv::mixChannels( &mat, 1, &mat2, 1, from_to, 3 );
+//	cv::cvtColor(mat2, mat2, cv::COLOR_RGB2BGR);
+//	return mat2;
+//}
 
-	cv::Mat mat = cv::Mat(qimage->height(), qimage->width(), CV_8UC4, (uchar*)qimage->constBits(), qimage->bytesPerLine()).clone();
-	cv::Mat mat2 = cv::Mat(mat.rows, mat.cols, CV_8UC3 );
-	int from_to[] = { 0,0,  1,1,  2,2 };
-	cv::mixChannels( &mat, 1, &mat2, 1, from_to, 3 );
-	cv::cvtColor(mat2, mat2, cv::COLOR_RGB2BGR);
-	return mat2;
+cv::Mat Frame::Qimage2mat(std::shared_ptr<QImage> qimage) {
+    cv::Mat mat = cv::Mat(qimage->height(), qimage->width(), CV_8UC4, (uchar*)qimage->constBits(), qimage->bytesPerLine()).clone();
+    // Ensure the color channels are in the correct order
+    cv::cvtColor(mat, mat, cv::COLOR_BGRA2RGBA);
+    return mat;
 }
 
 // Get pointer to OpenCV image object
@@ -881,14 +887,9 @@ cv::Mat Frame::GetImageCV()
 {
 	// Check for blank image
 	if (!image)
-		// Fill with black
-		AddColor(width, height, color);
+		AddColor(width, height, color); // Fill with black
 
-	// if (imagecv.empty())
-	// Convert Qimage to Mat
-	imagecv = Qimage2mat(image);
-
-	return imagecv;
+	return Qimage2mat(image);
 }
 
 std::shared_ptr<QImage> Frame::Mat2Qimage(cv::Mat img){
@@ -924,10 +925,9 @@ std::shared_ptr<QImage> Frame::Mat2Qimage(cv::Mat img){
 }
 
 // Set pointer to OpenCV image object
-void Frame::SetImageCV(cv::Mat _image)
+void Frame::SetImageCV(const cv::Mat& imageCv)
 {
-	imagecv = _image;
-	image = Mat2Qimage(_image);
+	image = Mat2Qimage(imageCv);
 }
 #endif
 
