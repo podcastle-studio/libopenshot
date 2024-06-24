@@ -21,6 +21,7 @@
 #include "DummyReader.h"
 #include "Timeline.h"
 #include "ZmqLogger.h"
+#include "effects/image-processing-lib/effects.h"
 
 #ifdef USE_IMAGEMAGICK
 	#include "MagickUtilities.h"
@@ -1213,6 +1214,7 @@ void Clip::RemoveEffect(EffectBase* effect)
 	final_cache.Clear();
 }
 
+
 // Apply background image to the current clip image (i.e. flatten this image onto previous layer)
 void Clip::apply_background(std::shared_ptr<openshot::Frame> frame, std::shared_ptr<openshot::Frame> background_frame) {
     if (isDisplacementMap) {
@@ -1222,17 +1224,22 @@ void Clip::apply_background(std::shared_ptr<openshot::Frame> frame, std::shared_
         background_frame->SetImageCV(backgroundImageCv);
         frame->SetImageCV(backgroundImageCv);
     } else {
-        // Retrieve the background image
-        std::shared_ptr<QImage> background_canvas = background_frame->GetImage();
+        if (composition_mode == QPainter::CompositionMode_Plus) {
+            auto res = Podcastle::Effects::additiveBlend(background_frame->GetImageCV(), frame->GetImageCV());
+            background_frame->SetImageCV(res);
+        } else {
+            // Retrieve the background image
+            std::shared_ptr<QImage> background_canvas = background_frame->GetImage();
 
-        // Standard procedure for drawing the frame's image onto the background
-        QPainter painter(background_canvas.get());
-        painter.setRenderHints(QPainter::Antialiasing | QPainter::SmoothPixmapTransform | QPainter::TextAntialiasing, true);
-        painter.setCompositionMode(composition_mode);
-        painter.drawImage(0, 0, *frame->GetImage());
-        painter.end();
-        // Add the modified image back to the frame
-        frame->AddImage(background_canvas);
+            // Standard procedure for drawing the frame's image onto the background
+            QPainter painter(background_canvas.get());
+            painter.setRenderHints(QPainter::Antialiasing | QPainter::SmoothPixmapTransform | QPainter::TextAntialiasing, true);
+            painter.setCompositionMode(composition_mode);
+            painter.drawImage(0, 0, *frame->GetImage());
+            painter.end();
+            // Add the modified image back to the frame
+            frame->AddImage(background_canvas);
+        }
     }
 }
 
