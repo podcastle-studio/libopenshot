@@ -405,9 +405,9 @@ std::shared_ptr<Frame> Clip::GetFrame(std::shared_ptr<openshot::Frame> backgroun
 }
 
 // Use an existing openshot::Frame object and draw this Clip's frame onto it
-std::shared_ptr<Frame> Clip::GetFrame(std::shared_ptr<openshot::Frame> background_frame, int64_t clip_frame_number_, openshot::TimelineInfoStruct* options)
+std::shared_ptr<Frame> Clip::GetFrame(std::shared_ptr<openshot::Frame> background_frame, int64_t requested_clip_frame_number, openshot::TimelineInfoStruct* options)
 {
-    int64_t clip_frame_number = std::max((int64_t)1, clip_frame_number_ - mFreezeFramesCountAtBeginning);
+    int64_t actual_clip_frame_number = std::max((int64_t)1, requested_clip_frame_number - mFreezeFramesCountAtBeginning);
 	// Check for open reader (or throw exception)
 	if (!is_open)
 		throw ReaderClosed("The Clip is closed.  Call Open() before calling this method.");
@@ -417,29 +417,30 @@ std::shared_ptr<Frame> Clip::GetFrame(std::shared_ptr<openshot::Frame> backgroun
 		// Get frame object
 		std::shared_ptr<Frame> frame = NULL;
 
-		// Check cache
-//		frame = final_cache.GetFrame(clip_frame_number);
-//		if (frame) {
-//			// Debug output
-//			ZmqLogger::Instance()->AppendDebugMethod(
-//					"Clip::GetFrame (Cached frame found)",
-//					"requested_frame", clip_frame_number);
-//
-//			// Return cached frame
-//			return frame;
-//		}
+		if (requested_clip_frame_number > mFreezeFramesCountAtBeginning) {
+			// Check cache
+			frame = final_cache.GetFrame(requested_clip_frame_number);
+			if (frame) {
+				// Debug output
+				ZmqLogger::Instance()->AppendDebugMethod(
+					"Clip::GetFrame (Cached frame found)",
+					"requested_frame", requested_clip_frame_number);
+
+				// Return cached frame
+				return frame;
+			}
+		}
 
 		// Generate clip frame
-		frame = GetOrCreateFrame(clip_frame_number);
-        frame->number = clip_frame_number_;
-
+        frame = GetOrCreateFrame(actual_clip_frame_number);
+        frame->number = requested_clip_frame_number;
         if (!openshot::Settings::Instance()->ENABLE_LEGACY_MODE) {
             apply_scale_options(frame, background_frame);
         }
 
 		if (!background_frame) {
 			// Create missing background_frame w/ transparent color (if needed)
-			background_frame = std::make_shared<Frame>(clip_frame_number, frame->GetWidth(), frame->GetHeight(),
+			background_frame = std::make_shared<Frame>(actual_clip_frame_number, frame->GetWidth(), frame->GetHeight(),
 													   "#00000000",  frame->GetAudioSamplesCount(),
 													   frame->GetAudioChannelsCount());
 		}
@@ -462,8 +463,10 @@ std::shared_ptr<Frame> Clip::GetFrame(std::shared_ptr<openshot::Frame> backgroun
 		// Apply background canvas (i.e. flatten this image onto previous layer image)
 		apply_background(frame, background_frame);
 
-		// Add final frame to cache
-		final_cache.Add(frame);
+		// if (requested_clip_frame_number > mFreezeFramesCountAtBeginning) {
+			// Add final frame to cache
+			final_cache.Add(frame);
+		// }
 
 		// Return processed 'frame'
 		return frame;
