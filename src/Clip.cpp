@@ -463,10 +463,8 @@ std::shared_ptr<Frame> Clip::GetFrame(std::shared_ptr<openshot::Frame> backgroun
 		// Apply background canvas (i.e. flatten this image onto previous layer image)
 		apply_background(frame, background_frame);
 
-		// if (requested_clip_frame_number > mFreezeFramesCountAtBeginning) {
-			// Add final frame to cache
-			final_cache.Add(frame);
-		// }
+		// Add final frame to cache
+		final_cache.Add(frame);
 
 		// Return processed 'frame'
 		return frame;
