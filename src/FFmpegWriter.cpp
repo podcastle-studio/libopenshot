@@ -9,7 +9,7 @@
  * @ref License
  */
 
-// Copyright (c) 2008-2019 OpenShot Studios, LLC, Fabrice Bellard
+// Copyright (c) 2008-2024 OpenShot Studios, LLC, Fabrice Bellard
 //
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
@@ -75,7 +75,7 @@ static int set_hwframe_ctx(AVCodecContext *ctx, AVBufferRef *hw_device_ctx, int6
 FFmpegWriter::FFmpegWriter(const std::string& path) :
 		path(path), oc(NULL), audio_st(NULL), video_st(NULL), samples(NULL),
 		audio_outbuf(NULL), audio_outbuf_size(0), audio_input_frame_size(0), audio_input_position(0),
-		initial_audio_input_frame_size(0), img_convert_ctx(NULL), cache_size(1), num_of_rescalers(1),
+		initial_audio_input_frame_size(0), img_convert_ctx(NULL), num_of_rescalers(1),
 		rescaler_position(0), video_codec_ctx(NULL), audio_codec_ctx(NULL), is_writing(false), video_timestamp(0), audio_timestamp(0),
 		original_sample_rate(0), original_channels(0), avr(NULL), avr_planar(NULL), is_open(false), prepare_streams(false),
 		write_header(false), write_trailer(false), audio_encoder_buffer_size(0), audio_encoder_buffer(NULL) {
@@ -679,118 +679,50 @@ void FFmpegWriter::WriteFrame(std::shared_ptr<openshot::Frame> frame) {
 	if (!is_open)
 		throw WriterClosed("The FFmpegWriter is closed.  Call Open() before calling this method.", path);
 
-	// Add frame pointer to "queue", waiting to be processed the next
-	// time the WriteFrames() method is called.
-	if (info.has_video && video_st)
-		spooled_video_frames.push_back(frame);
-
-	if (info.has_audio && audio_st)
-		spooled_audio_frames.push_back(frame);
-
 	ZmqLogger::Instance()->AppendDebugMethod(
 		"FFmpegWriter::WriteFrame",
 		"frame->number", frame->number,
-		"spooled_video_frames.size()", spooled_video_frames.size(),
-		"spooled_audio_frames.size()", spooled_audio_frames.size(),
-		"cache_size", cache_size,
 		"is_writing", is_writing);
 
-	// Write the frames once it reaches the correct cache size
-	if ((int)spooled_video_frames.size() == cache_size || (int)spooled_audio_frames.size() == cache_size) {
-		// Write frames to video file
-		write_queued_frames();
-	}
+	// Write frames to video file
+	write_frame(frame);
 
 	// Keep track of the last frame added
 	last_frame = frame;
 }
 
 // Write all frames in the queue to the video file.
-void FFmpegWriter::write_queued_frames() {
-	ZmqLogger::Instance()->AppendDebugMethod(
-		"FFmpegWriter::write_queued_frames",
-		"spooled_video_frames.size()", spooled_video_frames.size(),
-		"spooled_audio_frames.size()", spooled_audio_frames.size());
-
+void FFmpegWriter::write_frame(std::shared_ptr<Frame> frame) {
 	// Flip writing flag
 	is_writing = true;
-
-	// Transfer spool to queue
-	queued_video_frames = spooled_video_frames;
-	queued_audio_frames = spooled_audio_frames;
-
-	// Empty spool
-	spooled_video_frames.clear();
-	spooled_audio_frames.clear();
 
 	// Create blank exception
 	bool has_error_encoding_video = false;
 
-	// Process all audio frames (in a separate thread)
-	if (info.has_audio && audio_st && !queued_audio_frames.empty())
-		write_audio_packets(false);
+	// Process audio frame
+	if (info.has_audio && audio_st)
+		write_audio_packets(false, frame);
 
-	// Loop through each queued image frame
-	while (!queued_video_frames.empty()) {
-		// Get front frame (from the queue)
-		std::shared_ptr<Frame> frame = queued_video_frames.front();
+	// Process video frame
+	if (info.has_video && video_st)
+		process_video_packet(frame);
 
-		// Add to processed queue
-		processed_frames.push_back(frame);
-
-		// Encode and add the frame to the output file
-		if (info.has_video && video_st)
-			process_video_packet(frame);
-
-		// Remove front item
-		queued_video_frames.pop_front();
-
-	} // end while
-
-
-	// Loop back through the frames (in order), and write them to the video file
-	while (!processed_frames.empty()) {
-		// Get front frame (from the queue)
-		std::shared_ptr<Frame> frame = processed_frames.front();
-
-		if (info.has_video && video_st) {
-			// Add to deallocate queue (so we can remove the AVFrames when we are done)
-			deallocate_frames.push_back(frame);
-
-			// Does this frame's AVFrame still exist
-			if (av_frames.count(frame)) {
-				// Get AVFrame
-				AVFrame *frame_final = av_frames[frame];
-
-				// Write frame to video file
-				bool success = write_video_packet(frame, frame_final);
-				if (!success)
-					has_error_encoding_video = true;
-			}
-		}
-
-		// Remove front item
-		processed_frames.pop_front();
-	}
-
-	// Loop through, and deallocate AVFrames
-	while (!deallocate_frames.empty()) {
-		// Get front frame (from the queue)
-		std::shared_ptr<Frame> frame = deallocate_frames.front();
-
+	if (info.has_video && video_st) {
 		// Does this frame's AVFrame still exist
 		if (av_frames.count(frame)) {
 			// Get AVFrame
-			AVFrame *av_frame = av_frames[frame];
+			AVFrame *frame_final = av_frames[frame];
+
+			// Write frame to video file
+			if (!write_video_packet(frame, frame_final)) {
+				has_error_encoding_video = true;
+			}
 
 			// Deallocate buffer and AVFrame
-			av_freep(&(av_frame->data[0]));
-			AV_FREE_FRAME(&av_frame);
+			av_freep(&(frame_final->data[0]));
+			AV_FREE_FRAME(&frame_final);
 			av_frames.erase(frame);
 		}
-
-		// Remove front item
-		deallocate_frames.pop_front();
 	}
 
 	// Done writing
@@ -820,12 +752,9 @@ void FFmpegWriter::WriteFrame(ReaderBase *reader, int64_t start, int64_t length)
 
 // Write the file trailer (after all frames are written)
 void FFmpegWriter::WriteTrailer() {
-	// Write any remaining queued frames to video file
-	write_queued_frames();
-
 	// Process final audio frame (if any)
 	if (info.has_audio && audio_st)
-		write_audio_packets(true);
+		write_audio_packets(true, NULL);
 
 	// Flush encoders (who sometimes hold on to frames)
 	flush_encoders();
@@ -1113,7 +1042,9 @@ AVStream *FFmpegWriter::add_audio_stream() {
 
 	// Set the sample parameters
 	c->bit_rate = info.audio_bit_rate;
+#if !HAVE_CH_LAYOUT
 	c->channels = info.channels;
+#endif
 
 	// Set valid sample rate (or throw error)
 	if (codec->supported_samplerates) {
@@ -1130,9 +1061,26 @@ AVStream *FFmpegWriter::add_audio_stream() {
 		// Set sample rate
 		c->sample_rate = info.sample_rate;
 
-
+uint64_t channel_layout = info.channel_layout;
+#if HAVE_CH_LAYOUT
 	// Set a valid number of channels (or throw error)
-	const uint64_t channel_layout = info.channel_layout;
+	AVChannelLayout ch_layout;
+	av_channel_layout_from_mask(&ch_layout, info.channel_layout);
+	if (codec->ch_layouts) {
+		int i;
+		for (i = 0; av_channel_layout_check(&codec->ch_layouts[i]); i++)
+			if (av_channel_layout_compare(&ch_layout, &codec->ch_layouts[i])) {
+				// Set valid channel layout
+				av_channel_layout_copy(&c->ch_layout, &ch_layout);
+				break;
+			}
+		if (!av_channel_layout_check(&codec->ch_layouts[i]))
+			throw InvalidChannels("An invalid channel layout was detected (i.e. MONO / STEREO).", path);
+	} else
+		// Set valid channel layout
+		av_channel_layout_copy(&c->ch_layout, &ch_layout);
+#else
+	// Set a valid number of channels (or throw error)
 	if (codec->channel_layouts) {
 		int i;
 		for (i = 0; codec->channel_layouts[i] != 0; i++)
@@ -1143,9 +1091,10 @@ AVStream *FFmpegWriter::add_audio_stream() {
 			}
 		if (codec->channel_layouts[i] == 0)
 			throw InvalidChannels("An invalid channel layout was detected (i.e. MONO / STEREO).", path);
-	} else
-		// Set valid channel layout
-		c->channel_layout = channel_layout;
+		} else
+			// Set valid channel layout
+			c->channel_layout = channel_layout;
+#endif
 
 	// Choose a valid sample_fmt
 	if (codec->sample_fmts) {
@@ -1171,13 +1120,28 @@ AVStream *FFmpegWriter::add_audio_stream() {
 
 	AV_COPY_PARAMS_FROM_CONTEXT(st, c);
 
+int nb_channels;
+const char* nb_channels_label;
+const char* channel_layout_label;
+
+#if HAVE_CH_LAYOUT
+    nb_channels = c->ch_layout.nb_channels;
+    channel_layout = c->ch_layout.u.mask;
+    nb_channels_label = "c->ch_layout.nb_channels";
+    channel_layout_label = "c->ch_layout.u.mask";
+#else
+    nb_channels = c->channels;
+    nb_channels_label = "c->channels";
+    channel_layout_label = "c->channel_layout";
+#endif
+
 	ZmqLogger::Instance()->AppendDebugMethod(
 		"FFmpegWriter::add_audio_stream",
 		"c->codec_id", c->codec_id,
 		"c->bit_rate", c->bit_rate,
-		"c->channels", c->channels,
+		nb_channels_label, nb_channels,
 		"c->sample_fmt", c->sample_fmt,
-		"c->channel_layout", c->channel_layout,
+		channel_layout_label, channel_layout,
 		"c->sample_rate", c->sample_rate);
 
 	return st;
@@ -1598,7 +1562,10 @@ void FFmpegWriter::open_video(AVFormatContext *oc, AVStream *st) {
 }
 
 // write all queued frames' audio to the video file
-void FFmpegWriter::write_audio_packets(bool is_final) {
+void FFmpegWriter::write_audio_packets(bool is_final, std::shared_ptr<openshot::Frame> frame) {
+	if (!frame && !is_final)
+		return;
+
 	// Init audio buffers / variables
 	int total_frame_samples = 0;
 	int frame_position = 0;
@@ -1608,56 +1575,49 @@ void FFmpegWriter::write_audio_packets(bool is_final) {
 	ChannelLayout channel_layout_in_frame = LAYOUT_MONO; // default channel layout
 
 	// Create a new array (to hold all S16 audio samples, for the current queued frames
-	unsigned int all_queued_samples_size = sizeof(int16_t) * (queued_audio_frames.size() * AVCODEC_MAX_AUDIO_FRAME_SIZE);
+	unsigned int all_queued_samples_size = sizeof(int16_t) * AVCODEC_MAX_AUDIO_FRAME_SIZE;
 	int16_t *all_queued_samples = (int16_t *) av_malloc(all_queued_samples_size);
 	int16_t *all_resampled_samples = NULL;
 	int16_t *final_samples_planar = NULL;
 	int16_t *final_samples = NULL;
 
-	// Loop through each queued audio frame
-	while (!queued_audio_frames.empty()) {
-		// Get front frame (from the queue)
-		std::shared_ptr<Frame> frame = queued_audio_frames.front();
+	// Get audio sample array
+	float *frame_samples_float = NULL;
 
-		// Get the audio details from this frame
+	// Get the audio details from this frame
+	if (frame) {
 		sample_rate_in_frame = frame->SampleRate();
 		samples_in_frame = frame->GetAudioSamplesCount();
 		channels_in_frame = frame->GetAudioChannelsCount();
 		channel_layout_in_frame = frame->ChannelsLayout();
 
-		// Get audio sample array
-		float *frame_samples_float = NULL;
 		// Get samples interleaved together (c1 c2 c1 c2 c1 c2)
 		frame_samples_float = frame->GetInterleavedAudioSamples(&samples_in_frame);
+	}
 
-		// Calculate total samples
-		total_frame_samples = samples_in_frame * channels_in_frame;
+	// Calculate total samples
+	total_frame_samples = samples_in_frame * channels_in_frame;
 
-		// Translate audio sample values back to 16 bit integers with saturation
-		const int16_t max16 = 32767;
-		const int16_t min16 = -32768;
-		for (int s = 0; s < total_frame_samples; s++, frame_position++) {
-			float valF = frame_samples_float[s] * (1 << 15);
-			int16_t conv;
-			if (valF > max16) {
-				conv = max16;
-			} else if (valF < min16) {
-				conv = min16;
-			} else {
-				conv = int(valF + 32768.5) - 32768; // +0.5 is for rounding
-			}
-
-			// Copy into buffer
-			all_queued_samples[frame_position] = conv;
+	// Translate audio sample values back to 16 bit integers with saturation
+	const int16_t max16 = 32767;
+	const int16_t min16 = -32768;
+	for (int s = 0; s < total_frame_samples; s++, frame_position++) {
+		float valF = frame_samples_float[s] * (1 << 15);
+		int16_t conv;
+		if (valF > max16) {
+			conv = max16;
+		} else if (valF < min16) {
+			conv = min16;
+		} else {
+			conv = int(valF + 32768.5) - 32768; // +0.5 is for rounding
 		}
 
-		// Deallocate float array
-		delete[] frame_samples_float;
+		// Copy into buffer
+		all_queued_samples[frame_position] = conv;
+	}
 
-		// Remove front item
-		queued_audio_frames.pop_front();
-
-	} // end while
+	// Deallocate float array
+	delete[] frame_samples_float;
 
 
 	// Update total samples (since we've combined all queued frames)
@@ -1740,14 +1700,23 @@ void FFmpegWriter::write_audio_packets(bool is_final) {
 		// setup resample context
 		if (!avr) {
 			avr = SWR_ALLOC();
+#if HAVE_CH_LAYOUT
+			AVChannelLayout in_chlayout;
+			AVChannelLayout out_chlayout;
+			av_channel_layout_from_mask(&in_chlayout, channel_layout_in_frame);
+			av_channel_layout_from_mask(&out_chlayout, info.channel_layout);
+			av_opt_set_chlayout(avr, "in_chlayout", &in_chlayout, 0);
+			av_opt_set_chlayout(avr, "out_chlayout", &out_chlayout, 0);
+#else
 			av_opt_set_int(avr, "in_channel_layout", channel_layout_in_frame, 0);
 			av_opt_set_int(avr, "out_channel_layout", info.channel_layout, 0);
+			av_opt_set_int(avr, "in_channels", channels_in_frame, 0);
+			av_opt_set_int(avr, "out_channels", info.channels, 0);
+#endif
 			av_opt_set_int(avr, "in_sample_fmt", AV_SAMPLE_FMT_S16, 0);
 			av_opt_set_int(avr, "out_sample_fmt", output_sample_fmt, 0); // planar not allowed here
 			av_opt_set_int(avr, "in_sample_rate", sample_rate_in_frame, 0);
 			av_opt_set_int(avr, "out_sample_rate", info.sample_rate, 0);
-			av_opt_set_int(avr, "in_channels", channels_in_frame, 0);
-			av_opt_set_int(avr, "out_channels", info.channels, 0);
 			SWR_INIT(avr);
 		}
 		// Convert audio samples
@@ -1843,14 +1812,21 @@ void FFmpegWriter::write_audio_packets(bool is_final) {
 			// setup resample context
 			if (!avr_planar) {
 				avr_planar = SWR_ALLOC();
+#if HAVE_CH_LAYOUT
+				AVChannelLayout layout;
+				av_channel_layout_from_mask(&layout, info.channel_layout);
+				av_opt_set_chlayout(avr_planar, "in_chlayout", &layout, 0);
+				av_opt_set_chlayout(avr_planar, "out_chlayout", &layout, 0);
+#else
 				av_opt_set_int(avr_planar, "in_channel_layout", info.channel_layout, 0);
 				av_opt_set_int(avr_planar, "out_channel_layout", info.channel_layout, 0);
+				av_opt_set_int(avr_planar, "in_channels", info.channels, 0);
+				av_opt_set_int(avr_planar, "out_channels", info.channels, 0);
+#endif
 				av_opt_set_int(avr_planar, "in_sample_fmt", output_sample_fmt, 0);
 				av_opt_set_int(avr_planar, "out_sample_fmt", audio_codec_ctx->sample_fmt, 0); // planar not allowed here
 				av_opt_set_int(avr_planar, "in_sample_rate", info.sample_rate, 0);
 				av_opt_set_int(avr_planar, "out_sample_rate", info.sample_rate, 0);
-				av_opt_set_int(avr_planar, "in_channels", info.channels, 0);
-				av_opt_set_int(avr_planar, "out_channels", info.channels, 0);
 				SWR_INIT(avr_planar);
 			}
 
@@ -1878,9 +1854,13 @@ void FFmpegWriter::write_audio_packets(bool is_final) {
 
 			// Create output frame (and allocate arrays)
 			frame_final->nb_samples = audio_input_frame_size;
+#if HAVE_CH_LAYOUT
+			av_channel_layout_from_mask(&frame_final->ch_layout, info.channel_layout);
+#else
 			frame_final->channels = info.channels;
-			frame_final->format = audio_codec_ctx->sample_fmt;
 			frame_final->channel_layout = info.channel_layout;
+#endif
+			frame_final->format = audio_codec_ctx->sample_fmt;
 			av_samples_alloc(frame_final->data, frame_final->linesize, info.channels,
 				frame_final->nb_samples, audio_codec_ctx->sample_fmt, 0);
 
@@ -1929,7 +1909,12 @@ void FFmpegWriter::write_audio_packets(bool is_final) {
 			frame_final->nb_samples = audio_input_frame_size;
 
 			// Fill the final_frame AVFrame with audio (non planar)
-			avcodec_fill_audio_frame(frame_final, audio_codec_ctx->channels,
+#if HAVE_CH_LAYOUT
+			int nb_channels = audio_codec_ctx->ch_layout.nb_channels;
+#else
+			int nb_channels = audio_codec_ctx->channels;
+#endif
+			avcodec_fill_audio_frame(frame_final, nb_channels,
 				audio_codec_ctx->sample_fmt, (uint8_t *) final_samples,
 				audio_encoder_buffer_size, 0);
 		}
