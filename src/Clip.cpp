@@ -31,8 +31,6 @@
 
 #include <Qt>
 
-#include "effects/image-processing-lib/effects.h"
-
 using namespace openshot;
 
 
