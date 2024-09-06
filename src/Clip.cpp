@@ -235,6 +235,10 @@ Clip::~Clip()
 		resampler = NULL;
 	}
 
+	for (const auto effect : effects) {
+		delete effect;
+	}
+
 	// Close clip
 	Close();
 }
