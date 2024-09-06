@@ -83,7 +83,7 @@ std::pair<openshot::Clip*, openshot::Clip*> createTransitionClips(const std::str
     float clip1End = clip1->info.duration + perClipTransitionDuration;
 
     /// Init clip 2 properties
-    float clip2Position = clip1Position + clip1->End() - perClipTransitionDuration;
+    float clip2Position = clip1Position + clip1->End() - perClipTransitionDuration - 1.f / fps;
     float clip2Start = 0;
     float clip2End = clip2->info.duration + perClipTransitionDuration;
     int   freezeClip2FramesCountAtBeginning = timeToFrame(perClipTransitionDuration, clip2->info.fps.ToFloat());
