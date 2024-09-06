@@ -105,14 +105,14 @@ std::pair<openshot::Clip*, openshot::Clip*> createTransitionClips(const std::str
 }
 
 void createTimelineAndWriteClips(std::vector<openshot::Clip*> clips, const std::string& outFile) {
-    openshot::Timeline timeLine(1920, 1080, openshot::Fraction(30, 1),48000, 2, openshot::ChannelLayout::LAYOUT_STEREO);
+    openshot::Timeline timeLine(1920, 1080, openshot::Fraction(30, 1), 48000, 2, openshot::ChannelLayout::LAYOUT_STEREO);
     timeLine.Open();
 
     for (const auto clip : clips) {
         timeLine.AddClip(clip);
     }
     openshot::FFmpegWriter w(outFile);
-    w.SetAudioOptions(true, "libvorbis", 48000, 2, openshot::ChannelLayout::LAYOUT_STEREO, 128000);
+    w.SetAudioOptions(true, "aac", 48000, 2, openshot::ChannelLayout::LAYOUT_STEREO, 128000);
     w.SetVideoOptions(true, "libx264" , openshot::Fraction(30, 1),  1920, 1080, openshot::Fraction(1,1), false, false, 4000000);
     w.Open();
 
@@ -799,7 +799,7 @@ void brightnessFootageTransition(const std::string& file1, const std::string& fi
     }
 
     ///////// Light footage clip ////////////////////////////////////////////////////////////////////////////////////
-    auto lightFootageClip = new openshot::Clip("input/light_leaks.mp4");
+    auto lightFootageClip = new openshot::Clip("./light_leaks.mp4");
     if (transitionDuration > lightFootageClip->info.duration) {
         throw std::runtime_error("Transition duration is longer than light footage clip duration");
     }
@@ -858,7 +858,7 @@ void glitchTransition(const std::string& file1, const std::string& file2, float 
     }
 
     ///////// footage clip ////////////////////////////////////////////////////////////////////////////////////
-    auto glitchMapClip = new openshot::Clip("input/glitch_map.mp4");
+    auto glitchMapClip = new openshot::Clip("./glitch_map.mp4");
     if (transitionDuration > glitchMapClip->info.duration) {
         throw std::runtime_error("Transition duration is longer than light footage clip duration");
     }
