@@ -24,17 +24,10 @@
 namespace {
 
 int timeToFrame(float duration, float fps = 30) {
-    return std::max((round)(fps * duration), 1.F);
+    return std::max((int)round(fps * duration), 1);
 }
 
-float frameToTime(long frame, int fps = 30) {
-    return frame / float(fps);
-}
-
-struct BezierValue {
-    BezierValue(float v1_, float v2_, float v3_, float v4_) : v1(v1_), v2(v2_), v3(v3_), v4(v4_) {}
-    float v1, v2, v3, v4;
-};
+struct BezierValue { float v1, v2, v3, v4; };
 
 struct PointsData {
     PointsData() = default;
@@ -45,8 +38,8 @@ struct PointsData {
     std::vector<BezierValue> bezierValues;
 };
 
-openshot::Keyframe createTransitionKeyframe(PointsData pointsData, float transitionDuration, bool isFirstClip = true, openshot::Clip* clip = nullptr,
-                                            openshot::InterpolationType interpolation = openshot::BEZIER, float fps = 30) {
+openshot::Keyframe createTransitionKeyframe(PointsData pointsData, const float transitionDuration, bool isFirstClip = true, const openshot::Clip* clip = nullptr,
+                                            openshot::InterpolationType interpolation = openshot::BEZIER, const float fps = 30) {
     std::vector<openshot::Point> points;
     const auto& timeValues = pointsData.timeValues;
 
@@ -83,7 +76,7 @@ std::pair<openshot::Clip*, openshot::Clip*> createTransitionClips(const std::str
     float clip1End = clip1->info.duration + perClipTransitionDuration;
 
     /// Init clip 2 properties
-    float clip2Position = clip1Position + clip1->End() - perClipTransitionDuration - 1.f / fps;
+    float clip2Position = clip1Position + clip1->End() - perClipTransitionDuration - 1.f/fps;
     float clip2Start = 0;
     float clip2End = clip2->info.duration + perClipTransitionDuration;
     int   freezeClip2FramesCountAtBeginning = timeToFrame(perClipTransitionDuration, clip2->info.fps.ToFloat());
