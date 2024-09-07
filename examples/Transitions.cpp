@@ -524,12 +524,12 @@ void circleOutTransition(const std::string& file1, float transitionDuration, con
     int height = clip.Reader()->info.height;
     float circleRadius = sqrt(width * width + height * height) / 2;
 
-    auto mask = openshot::Mask(openshot::Mask::MaskType::CIRCLE_OUT, 0, 3);
-    mask.circleRadius.AddPoint(timeToFrame(0), 0, openshot::LINEAR);
-    mask.circleRadius.AddPoint(timeToFrame(clipEnd - transitionDuration) - 1, 0, openshot::LINEAR);
-    mask.circleRadius.AddPoint(timeToFrame(clipEnd - transitionDuration), circleRadius, openshot::LINEAR);
-    mask.circleRadius.AddPoint(timeToFrame(clipEnd), 0.0000001, openshot::LINEAR);
-    clip.AddEffect(&mask);
+    auto* mask = new openshot::Mask(openshot::Mask::MaskType::CIRCLE_OUT, 0, 3);
+    mask->circleRadius.AddPoint(timeToFrame(0), 0, openshot::LINEAR);
+    mask->circleRadius.AddPoint(timeToFrame(clipEnd - transitionDuration) - 1, 0, openshot::LINEAR);
+    mask->circleRadius.AddPoint(timeToFrame(clipEnd - transitionDuration), circleRadius, openshot::LINEAR);
+    mask->circleRadius.AddPoint(timeToFrame(clipEnd), 0.0000001, openshot::LINEAR);
+    clip.AddEffect(mask);
 
     openshot::Timeline timeLine(1920, 1080, openshot::Fraction(30, 1),
                                 48000, 2, openshot::ChannelLayout::LAYOUT_STEREO);
@@ -560,11 +560,11 @@ void circleInTransition(const std::string& file1, float transitionDuration, cons
     int height = clip.Reader()->info.height;
     float circleRadius = sqrt(width * width + height * height) / 2;
 
-    auto mask = openshot::Mask(openshot::Mask::MaskType::CIRCLE_OUT, 0, 3);
-    mask.circleRadius.AddPoint(timeToFrame(0), 0.001, openshot::BEZIER);
-    mask.circleRadius.AddPoint(timeToFrame(clipStart + transitionDuration), circleRadius, openshot::LINEAR);
-    mask.circleRadius.AddPoint(timeToFrame(clipEnd), circleRadius, openshot::LINEAR);
-    clip.AddEffect(&mask);
+    auto* mask = new openshot::Mask(openshot::Mask::MaskType::CIRCLE_OUT, 0, 3);
+    mask->circleRadius.AddPoint(timeToFrame(0), 0.001, openshot::BEZIER);
+    mask->circleRadius.AddPoint(timeToFrame(clipStart + transitionDuration), circleRadius, openshot::LINEAR);
+    mask->circleRadius.AddPoint(timeToFrame(clipEnd), circleRadius, openshot::LINEAR);
+    clip.AddEffect(mask);
 
     openshot::Timeline timeLine(1920, 1080, openshot::Fraction(30, 1),
                                 48000, 2, openshot::ChannelLayout::LAYOUT_STEREO);
