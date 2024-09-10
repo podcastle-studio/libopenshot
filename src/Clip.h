@@ -190,7 +190,7 @@ namespace openshot {
 
 		/// @brief Constructor with reader
 		/// @param new_reader The reader to be used by this clip
-		Clip(openshot::ReaderBase* new_reader);
+		Clip(openshot::ReaderBase* new_reader, bool inspect_reader = true);
 
 		/// Destructor
 		virtual ~Clip();

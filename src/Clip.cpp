@@ -141,14 +141,16 @@ Clip::Clip() : resampler(NULL), reader(NULL), allocated_reader(NULL), is_open(fa
 }
 
 // Constructor with reader
-Clip::Clip(ReaderBase* new_reader) : resampler(NULL), reader(new_reader), allocated_reader(NULL), is_open(false)
+Clip::Clip(ReaderBase* new_reader, bool inspect_reader) : resampler(NULL), reader(new_reader), allocated_reader(NULL), is_open(false)
 {
 	// Init all default settings
 	init_settings();
 
 	// Open and Close the reader (to set the duration of the clip)
-	Open();
-	Close();
+	if (inspect_reader) {
+		Open();
+		Close();
+	}
 
 	// Update duration and set parent
 	if (reader) {

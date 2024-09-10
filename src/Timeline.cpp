@@ -329,7 +329,7 @@ std::string Timeline::GetTrackedObjectValues(std::string id, int64_t frame_numbe
 #endif
 
 // Add an openshot::Clip to the timeline
-void Timeline::AddClip(Clip* clip)
+void Timeline::AddClip(Clip* clip, bool sortClips)
 {
 	// Get lock (prevent getting frames while this happens)
 	const std::lock_guard<std::recursive_mutex> guard(getFrameMutex);
@@ -350,8 +350,10 @@ void Timeline::AddClip(Clip* clip)
 	// Add clip to list
 	clips.push_back(clip);
 
-	// Sort clips
-	sort_clips();
+	if (sortClips) {
+		// Sort clips
+		sort_clips();
+	}
 }
 
 // Add an effect to the timeline

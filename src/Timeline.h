@@ -196,9 +196,6 @@ namespace openshot {
 		/// Compare 2 floating point numbers for equality
 		bool isEqual(double a, double b);
 
-		/// Sort clips by position on the timeline
-		void sort_clips();
-
 		/// Sort effects by position on the timeline
 		void sort_effects();
 
@@ -206,6 +203,8 @@ namespace openshot {
 		void update_open_clips(openshot::Clip *clip, bool does_clip_intersect);
 
 	public:
+		/// Sort clips by position on the timeline
+		void sort_clips();
 
 		/// @brief Constructor for the timeline (which configures the default frame properties)
 		/// @param width The image width of generated openshot::Frame objects
@@ -244,7 +243,7 @@ namespace openshot {
 
 		/// @brief Add an openshot::Clip to the timeline
 		/// @param clip Add an openshot::Clip to the timeline. A clip can contain any type of Reader.
-		void AddClip(openshot::Clip* clip);
+		void AddClip(openshot::Clip* clip, bool sortClips = true);
 
 		/// @brief Add an effect to the timeline
 		/// @param effect Add an effect to the timeline. An effect can modify the audio or video of an openshot::Frame.
