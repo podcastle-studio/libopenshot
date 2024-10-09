@@ -269,7 +269,7 @@ std::list<std::string> Timeline::GetTrackedObjectsIds() const{
 	return trackedObjects_ids;
 }
 
-#ifdef USE_OPENCV
+#ifdef USE_OPENCV_EFFECTS
 // Return the trackedObject's properties as a JSON string
 std::string Timeline::GetTrackedObjectValues(std::string id, int64_t frame_number) const {
 

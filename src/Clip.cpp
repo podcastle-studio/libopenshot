@@ -1157,7 +1157,7 @@ void Clip::AddEffect(EffectBase* effect)
 	if (parentTimeline)
 		effect->ParentTimeline(parentTimeline);
 
-	#ifdef USE_OPENCV
+	#ifdef USE_OPENCV_EFFECTS
 	// Add Tracked Object to Timeline
 	if (effect->info.has_tracked_object){
 

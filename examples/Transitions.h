@@ -26,11 +26,11 @@ void dissolveTransition(const std::string& file1 = "clips/clip-4.mp4", const std
 void dissolveBlurTransition(const std::string& file1 = "clips/clip-4.mp4", const std::string& file2 = "clips/clip-5.mp4",
                             float transitionDuration = 0.5, const std::string& output = "./final/dissolveBlurTransition.mp4");
 
-void circleOutTransition(const std::string& file1 = "clips/clip-14.mp4",
+void circleOutInTransition(const std::string& file1 = "clips/clip-14.mp4", const std::string& file2 = "clips/clip-14.mp4",
                          float transitionDuration = 0.5, const std::string& output = "./final/circleOutTransition.mp4");
 
-void circleInTransition(const std::string& file1 = "clips/clip-14.mp4",
-                        float transitionDuration = 0.5, const std::string& output = "./final/circleInTransition.mp4");
+void fadeOutInTransition(const std::string& file1 = "clips/clip-14.mp4", const std::string& file2 = "clips/clip-14.mp4",
+                         float transitionDuration = 0.5, const std::string& output = "./final/circleOutTransition.mp4");
 
 void barnDoorsTransition(const std::string& file1 = "clips/clip-14.mp4", const std::string& file2 = "clips/clip-15.mp4",
                          float transitionDuration = 0.5, const std::string& output = "./final/barnDoorsTransition.mp4");

@@ -142,7 +142,7 @@
 #include "TimelineBase.h"
 #include "Timeline.h"
 #include "Settings.h"
-#ifdef USE_OPENCV
+#ifdef USE_OPENCV_EFFECTS
 	#include "ClipProcessingJobs.h"
 	#include "CVStabilization.h"
 	#include "CVTracker.h"

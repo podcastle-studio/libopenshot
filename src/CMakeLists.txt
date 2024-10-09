@@ -452,8 +452,17 @@ if (TARGET babl_lib)
   target_link_libraries(openshot PUBLIC babl_lib)
 endif ()
 
+find_package(OpenCV 4)
+target_link_libraries(openshot PUBLIC
+        opencv_core
+        opencv_video
+        opencv_highgui
+        opencv_dnn
+        opencv_tracking
+)
+target_compile_definitions(openshot PUBLIC USE_OPENCV=1)
 ################## OPENCV ###################
-if(ENABLE_OPENCV)
+if(ENABLE_OPENCV_EFFECTS)
   find_package(OpenCV 4)
   if(NOT OpenCV_FOUND)
     set(ENABLE_OPENCV FALSE CACHE BOOL
@@ -499,7 +508,7 @@ See https://github.com/opencv/opencv/issues/19260]])
     target_sources(openshot PRIVATE
       ${OPENSHOT_CV_SOURCES}
     )
-    target_compile_definitions(openshot PUBLIC USE_OPENCV=1)
+    target_compile_definitions(openshot PUBLIC USE_OPENCV_EFFECTS=1)
     target_link_libraries(openshot PUBLIC
       opencv_core
       opencv_video

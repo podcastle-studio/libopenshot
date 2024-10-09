@@ -76,7 +76,7 @@ std::pair<openshot::Clip*, openshot::Clip*> createTransitionClips(const std::str
     float clip1End = clip1->info.duration + perClipTransitionDuration;
 
     /// Init clip 2 properties
-    float clip2Position = clip1Position + clip1->End() - perClipTransitionDuration - 1.f/fps;
+    float clip2Position = clip1Position + (clip1->End()-clip1->Start()) - perClipTransitionDuration - 1.f/fps;
     float clip2Start = 0;
     float clip2End = clip2->info.duration + perClipTransitionDuration;
     int   freezeClip2FramesCountAtBeginning = timeToFrame(perClipTransitionDuration, clip2->info.fps.ToFloat());
@@ -502,32 +502,58 @@ void dissolveBlurTransition(const std::string& file1, const std::string& file2, 
     createTimelineAndWriteClips({ transitionClips.first, transitionClips.second }, output);
 }
 
-void circleOutTransition(const std::string& file1, float transitionDuration, const std::string& output) {
-    float clipStart = 0;
-    float clipEnd = 2;
-    float clipPosition = 0;
+void circleOutInTransition(const std::string& file1, const std::string& file2, float transitionDuration, const std::string& output) {
+    openshot::Clip clip1(file1);
+    openshot::Clip clip2(file2);
 
-    openshot::Clip clip(file1);
-    clip.Position(clipPosition);
-    clip.Start(clipStart);
-    clip.End(clipEnd);
-    clip.scale = openshot::SCALE_FIT;
+    auto perClipTransitionDuration = transitionDuration / 2;
+    float clip1Position = 0;
+    float clip1Start = 0;
+    float clip1End = clip1.info.duration;
 
-    int width = clip.Reader()->info.width;
-    int height = clip.Reader()->info.height;
-    float circleRadius = sqrt(width * width + height * height) / 2;
+    /// Init clip 2 properties
+    float clip2Position = clip1Position + (clip1.End()-clip1.Start());
+    float clip2Start = 0;
+    float clip2End = clip2.info.duration;
 
-    auto* mask = new openshot::Mask(openshot::Mask::MaskType::CIRCLE_OUT, 0, 3);
-    mask->circleRadius.AddPoint(timeToFrame(0), 0, openshot::LINEAR);
-    mask->circleRadius.AddPoint(timeToFrame(clipEnd - transitionDuration) - 1, 0, openshot::LINEAR);
-    mask->circleRadius.AddPoint(timeToFrame(clipEnd - transitionDuration), circleRadius, openshot::LINEAR);
-    mask->circleRadius.AddPoint(timeToFrame(clipEnd), 0.0000001, openshot::LINEAR);
-    clip.AddEffect(mask);
+    /// Clip 1 handling
+    clip1.Position(clip1Position);
+    clip1.Start(clip1Start);
+    clip1.End(clip1End);
+    clip1.scale = openshot::SCALE_FIT;
+
+    const int width1 = clip1.Reader()->info.width;
+    const int height1 = clip1.Reader()->info.height;
+    float circleRadius1 = sqrt(width1 * width1 + height1 * height1) / 2;
+
+    auto* mask1 = new openshot::Mask(openshot::Mask::MaskType::CIRCLE_OUT, 0, 3);
+    mask1->circleRadius.AddPoint(timeToFrame(0), 0, openshot::LINEAR);
+    mask1->circleRadius.AddPoint(timeToFrame(clip1End - perClipTransitionDuration) - 1, 0, openshot::LINEAR);
+    mask1->circleRadius.AddPoint(timeToFrame(clip1End - perClipTransitionDuration), circleRadius1, openshot::LINEAR);
+    mask1->circleRadius.AddPoint(timeToFrame(clip1End), 0.0000001, openshot::LINEAR);
+    clip1.AddEffect(mask1);
+
+    /// Clip 2 handling
+    clip2.Position(clip2Position);
+    clip2.Start(clip2Start);
+    clip2.End(clip2End);
+    clip2.scale = openshot::SCALE_FIT;
+
+    int width2 = clip2.Reader()->info.width;
+    int height2 = clip2.Reader()->info.height;
+    float circleRadius2 = sqrt(width2 * width2 + height2 * height2) / 2;
+
+    auto* mask2 = new openshot::Mask(openshot::Mask::MaskType::CIRCLE_OUT, 0, 3);
+    mask2->circleRadius.AddPoint(timeToFrame(0), 0.001, openshot::BEZIER);
+    mask2->circleRadius.AddPoint(timeToFrame(clip2Start + transitionDuration), circleRadius2, openshot::LINEAR);
+    mask2->circleRadius.AddPoint(timeToFrame(clip2End), circleRadius2, openshot::LINEAR);
+    clip2.AddEffect(mask2);
 
     openshot::Timeline timeLine(1920, 1080, openshot::Fraction(30, 1),
                                 48000, 2, openshot::ChannelLayout::LAYOUT_STEREO);
     timeLine.Open();
-    timeLine.AddClip(&clip);
+    timeLine.AddClip(&clip1);
+    timeLine.AddClip(&clip2);
     openshot::FFmpegWriter w(output);
     w.SetAudioOptions(true, "libvorbis", 48000, 2, openshot::ChannelLayout::LAYOUT_STEREO, 128000);
     w.SetVideoOptions(true, "libx264" , openshot::Fraction(30, 1),  1920, 1080, openshot::Fraction(1,1), false, false, 4000000);
@@ -538,31 +564,43 @@ void circleOutTransition(const std::string& file1, float transitionDuration, con
     w.Close();
 }
 
-void circleInTransition(const std::string& file1, float transitionDuration, const std::string& output) {
-    float clipStart = 0;
-    float clipEnd = 2;
-    float clipPosition = 0;
+void fadeOutInTransition(const std::string& file1, const std::string& file2, float transitionDuration, const std::string& output) {
+    openshot::Clip clip1(file1);
+    openshot::Clip clip2(file2);
 
-    openshot::Clip clip(file1);
-    clip.Position(clipPosition);
-    clip.Start(clipStart);
-    clip.End(clipEnd);
-    clip.scale = openshot::SCALE_FIT;
+    auto perClipTransitionDuration = transitionDuration / 2;
+    float clip1Position = 0;
+    float clip1Start = 0;
+    float clip1End = clip1.info.duration;
 
-    int width = clip.Reader()->info.width;
-    int height = clip.Reader()->info.height;
-    float circleRadius = sqrt(width * width + height * height) / 2;
+    /// Init clip 2 properties
+    float clip2Position = clip1Position + (clip1.End()-clip1.Start());
+    float clip2Start = 0;
+    float clip2End = clip2.info.duration;
 
-    auto* mask = new openshot::Mask(openshot::Mask::MaskType::CIRCLE_OUT, 0, 3);
-    mask->circleRadius.AddPoint(timeToFrame(0), 0.001, openshot::BEZIER);
-    mask->circleRadius.AddPoint(timeToFrame(clipStart + transitionDuration), circleRadius, openshot::LINEAR);
-    mask->circleRadius.AddPoint(timeToFrame(clipEnd), circleRadius, openshot::LINEAR);
-    clip.AddEffect(mask);
+    /// Clip 1 handling
+    clip1.Position(clip1Position);
+    clip1.Start(clip1Start);
+    clip1.End(clip1End);
+    clip1.scale = openshot::SCALE_FIT;
+    clip1.alpha.AddPoint(timeToFrame(0), 1, openshot::LINEAR);
+    clip1.alpha.AddPoint(timeToFrame(clip1End - perClipTransitionDuration), 1, openshot::LINEAR);
+    clip1.alpha.AddPoint(timeToFrame(clip1End), 0, openshot::LINEAR);
+
+
+    /// Clip 2 handling
+    clip2.Position(clip2Position);
+    clip2.Start(clip2Start);
+    clip2.End(clip2End);
+    clip2.scale = openshot::SCALE_FIT;
+    clip2.alpha.AddPoint(timeToFrame(0), 0, openshot::LINEAR);
+    clip2.alpha.AddPoint(timeToFrame(perClipTransitionDuration), 1, openshot::LINEAR);
 
     openshot::Timeline timeLine(1920, 1080, openshot::Fraction(30, 1),
                                 48000, 2, openshot::ChannelLayout::LAYOUT_STEREO);
     timeLine.Open();
-    timeLine.AddClip(&clip);
+    timeLine.AddClip(&clip1);
+    timeLine.AddClip(&clip2);
     openshot::FFmpegWriter w(output);
     w.SetAudioOptions(true, "libvorbis", 48000, 2, openshot::ChannelLayout::LAYOUT_STEREO, 128000);
     w.SetVideoOptions(true, "libx264" , openshot::Fraction(30, 1),  1920, 1080, openshot::Fraction(1,1), false, false, 4000000);
