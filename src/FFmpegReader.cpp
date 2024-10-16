@@ -1362,173 +1362,189 @@ bool FFmpegReader::CheckSeek(bool is_video) {
 
 // Process a video packet
 void FFmpegReader::ProcessVideoPacket(int64_t requested_frame) {
-	// Get the AVFrame from the current packet
-	// This sets the video_pts to the correct timestamp
-	int frame_finished = GetAVFrame();
+    // Get the AVFrame from the current packet
+    // This sets the video_pts to the correct timestamp
+    int frame_finished = GetAVFrame();
 
-	// Check if the AVFrame is finished and set it
-	if (!frame_finished) {
-		// No AVFrame decoded yet, bail out
-		if (pFrame) {
-			RemoveAVFrame(pFrame);
-		}
-		return;
-	}
+    // Check if the AVFrame is finished and set it
+    if (!frame_finished) {
+        // No AVFrame decoded yet, bail out
+        if (pFrame) {
+            RemoveAVFrame(pFrame);
+        }
+        return;
+    }
 
-	// Calculate current frame #
-	int64_t current_frame = ConvertVideoPTStoFrame(video_pts);
+    // Calculate current frame #
+    int64_t current_frame = ConvertVideoPTStoFrame(video_pts);
 
-	// Track 1st video packet after a successful seek
-	if (!seek_video_frame_found && is_seeking)
-		seek_video_frame_found = current_frame;
+    // Track 1st video packet after a successful seek
+    if (!seek_video_frame_found && is_seeking)
+        seek_video_frame_found = current_frame;
 
-	// Create or get the existing frame object. Requested frame needs to be created
-	// in working_cache at least once. Seek can clear the working_cache, so we must
-	// add the requested frame back to the working_cache here. If it already exists,
-	// it will be moved to the top of the working_cache.
-	working_cache.Add(CreateFrame(requested_frame));
+    // Create or get the existing frame object. Requested frame needs to be created
+    // in working_cache at least once. Seek can clear the working_cache, so we must
+    // add the requested frame back to the working_cache here. If it already exists,
+    // it will be moved to the top of the working_cache.
+    working_cache.Add(CreateFrame(requested_frame));
 
-	// Debug output
-	ZmqLogger::Instance()->AppendDebugMethod("FFmpegReader::ProcessVideoPacket (Before)", "requested_frame", requested_frame, "current_frame", current_frame);
+    // Debug output
+    ZmqLogger::Instance()->AppendDebugMethod("FFmpegReader::ProcessVideoPacket (Before)", "requested_frame", requested_frame, "current_frame", current_frame);
 
-	// Init some things local (for OpenMP)
-	PixelFormat pix_fmt = AV_GET_CODEC_PIXEL_FORMAT(pStream, pCodecCtx);
-	int height = info.height;
-	int width = info.width;
-	int64_t video_length = info.video_length;
+    // Introduce the boolean variable to determine if scaling is needed
+    bool should_scale = openshot::Settings::Instance()->ENABLE_LEGACY_MODE;
 
-	// Create variables for a RGB Frame (since most videos are not in RGB, we must convert it)
-	AVFrame *pFrameRGB = nullptr;
-	uint8_t *buffer = nullptr;
+    // Init some things local
+    PixelFormat pix_fmt = AV_GET_CODEC_PIXEL_FORMAT(pStream, pCodecCtx);
+    int height = info.height;
+    int width = info.width;
+    int64_t video_length = info.video_length;
 
-	// Allocate an AVFrame structure
-	pFrameRGB = AV_ALLOCATE_FRAME();
-	if (pFrameRGB == nullptr)
-		throw OutOfMemory("Failed to allocate frame buffer", path);
+    // Create variables for a RGB Frame (since most videos are not in RGB, we must convert it)
+    AVFrame *pFrameRGB = nullptr;
+    uint8_t *buffer = nullptr;
 
-	// Determine the max size of this source image (based on the timeline's size, the scaling mode,
-	// and the scaling keyframes). This is a performance improvement, to keep the images as small as possible,
-	// without losing quality. NOTE: We cannot go smaller than the timeline itself, or the add_layer timeline
-	// method will scale it back to timeline size before scaling it smaller again. This needs to be fixed in
-	// the future.
-	int max_width = info.width;
-	int max_height = info.height;
+    // Allocate an AVFrame structure
+    pFrameRGB = AV_ALLOCATE_FRAME();
+    if (pFrameRGB == nullptr)
+        throw OutOfMemory("Failed to allocate frame buffer", path);
 
-	Clip *parent = static_cast<Clip *>(ParentClip());
-	if (parent) {
-		if (parent->ParentTimeline()) {
-			// Set max width/height based on parent clip's timeline (if attached to a timeline)
-			max_width = parent->ParentTimeline()->preview_width;
-			max_height = parent->ParentTimeline()->preview_height;
-		}
-		if (parent->scale == SCALE_FIT || parent->scale == SCALE_STRETCH) {
-			// Best fit or Stretch scaling (based on max timeline size * scaling keyframes)
-			float max_scale_x = parent->scale_x.GetMaxPoint().co.Y;
-			float max_scale_y = parent->scale_y.GetMaxPoint().co.Y;
-			max_width = std::max(float(max_width), max_width * max_scale_x);
-			max_height = std::max(float(max_height), max_height * max_scale_y);
+    // Determine the output dimensions
+    int output_width = width;
+    int output_height = height;
 
-		} else if (parent->scale == SCALE_CROP) {
-			// Cropping scale mode (based on max timeline size * cropped size * scaling keyframes)
-			float max_scale_x = parent->scale_x.GetMaxPoint().co.Y;
-			float max_scale_y = parent->scale_y.GetMaxPoint().co.Y;
-			QSize width_size(max_width * max_scale_x,
-							 round(max_width / (float(info.width) / float(info.height))));
-			QSize height_size(round(max_height / (float(info.height) / float(info.width))),
-							  max_height * max_scale_y);
-			// respect aspect ratio
-			if (width_size.width() >= max_width && width_size.height() >= max_height) {
-				max_width = std::max(max_width, width_size.width());
-				max_height = std::max(max_height, width_size.height());
-			} else {
-				max_width = std::max(max_width, height_size.width());
-				max_height = std::max(max_height, height_size.height());
-			}
+    if (should_scale) {
+        // Proceed with scaling logic
+        // Determine the max size of this source image (based on the timeline's size, the scaling mode,
+        // and the scaling keyframes). This is a performance improvement, to keep the images as small as possible,
+        // without losing quality. NOTE: We cannot go smaller than the timeline itself, or the add_layer timeline
+        // method will scale it back to timeline size before scaling it smaller again. This needs to be fixed in
+        // the future.
+        int max_width = info.width;
+        int max_height = info.height;
 
-		} else {
-			// Scale video to equivalent unscaled size
-			// Since the preview window can change sizes, we want to always
-			// scale against the ratio of original video size to timeline size
-			float preview_ratio = 1.0;
-			if (parent->ParentTimeline()) {
-				Timeline *t = (Timeline *) parent->ParentTimeline();
-				preview_ratio = t->preview_width / float(t->info.width);
-			}
-			float max_scale_x = parent->scale_x.GetMaxPoint().co.Y;
-			float max_scale_y = parent->scale_y.GetMaxPoint().co.Y;
-			max_width = info.width * max_scale_x * preview_ratio;
-			max_height = info.height * max_scale_y * preview_ratio;
-		}
-	}
+        Clip *parent = static_cast<Clip *>(ParentClip());
+        if (parent) {
+            if (parent->ParentTimeline()) {
+                // Set max width/height based on parent clip's timeline (if attached to a timeline)
+                max_width = parent->ParentTimeline()->preview_width;
+                max_height = parent->ParentTimeline()->preview_height;
+            }
+            if (parent->scale == SCALE_FIT || parent->scale == SCALE_STRETCH) {
+                // Best fit or Stretch scaling (based on max timeline size * scaling keyframes)
+                float max_scale_x = parent->scale_x.GetMaxPoint().co.Y;
+                float max_scale_y = parent->scale_y.GetMaxPoint().co.Y;
+                max_width = std::max(float(max_width), max_width * max_scale_x);
+                max_height = std::max(float(max_height), max_height * max_scale_y);
 
-	// Determine if image needs to be scaled (for performance reasons)
-	int original_height = height;
-	if (max_width != 0 && max_height != 0 && max_width < width && max_height < height) {
-		// Override width and height (but maintain aspect ratio)
-		float ratio = float(width) / float(height);
-		int possible_width = round(max_height * ratio);
-		int possible_height = round(max_width / ratio);
+            } else if (parent->scale == SCALE_CROP) {
+                // Cropping scale mode (based on max timeline size * cropped size * scaling keyframes)
+                float max_scale_x = parent->scale_x.GetMaxPoint().co.Y;
+                float max_scale_y = parent->scale_y.GetMaxPoint().co.Y;
+                QSize width_size(max_width * max_scale_x,
+                                 round(max_width / (float(info.width) / float(info.height))));
+                QSize height_size(round(max_height / (float(info.height) / float(info.width))),
+                                  max_height * max_scale_y);
+                // Respect aspect ratio
+                if (width_size.width() >= max_width && width_size.height() >= max_height) {
+                    max_width = std::max(max_width, width_size.width());
+                    max_height = std::max(max_height, width_size.height());
+                } else {
+                    max_width = std::max(max_width, height_size.width());
+                    max_height = std::max(max_height, height_size.height());
+                }
 
-		if (possible_width <= max_width) {
-			// use calculated width, and max_height
-			width = possible_width;
-			height = max_height;
-		} else {
-			// use max_width, and calculated height
-			width = max_width;
-			height = possible_height;
-		}
-	}
+            } else {
+                // Scale video to equivalent unscaled size
+                // Since the preview window can change sizes, we want to always
+                // scale against the ratio of original video size to timeline size
+                float preview_ratio = 1.0;
+                if (parent->ParentTimeline()) {
+                    Timeline *t = (Timeline *) parent->ParentTimeline();
+                    preview_ratio = t->preview_width / float(t->info.width);
+                }
+                float max_scale_x = parent->scale_x.GetMaxPoint().co.Y;
+                float max_scale_y = parent->scale_y.GetMaxPoint().co.Y;
+                max_width = info.width * max_scale_x * preview_ratio;
+                max_height = info.height * max_scale_y * preview_ratio;
+            }
+        }
 
-	// Determine required buffer size and allocate buffer
-	const int bytes_per_pixel = 4;
-	int buffer_size = (width * height * bytes_per_pixel) + 128;
-	buffer = new unsigned char[buffer_size]();
+        // Determine if image needs to be scaled (for performance reasons)
+        if (max_width != 0 && max_height != 0 && max_width < width && max_height < height) {
+            // Override width and height (but maintain aspect ratio)
+            float ratio = float(width) / float(height);
+            int possible_width = round(max_height * ratio);
+            int possible_height = round(max_width / ratio);
 
-	// Copy picture data from one AVFrame (or AVPicture) to another one.
-	AV_COPY_PICTURE_DATA(pFrameRGB, buffer, PIX_FMT_RGBA, width, height);
+            if (possible_width <= max_width) {
+                // Use calculated width, and max_height
+                output_width = possible_width;
+                output_height = max_height;
+            } else {
+                // Use max_width, and calculated height
+                output_width = max_width;
+                output_height = possible_height;
+            }
+        }
+    } else {
+        // Do not scale, keep original dimensions
+        output_width = width;
+        output_height = height;
+    }
 
-	int scale_mode = SWS_FAST_BILINEAR;
-	if (openshot::Settings::Instance()->HIGH_QUALITY_SCALING) {
-		scale_mode = SWS_BICUBIC;
-	}
-	SwsContext *img_convert_ctx = sws_getContext(info.width, info.height, AV_GET_CODEC_PIXEL_FORMAT(pStream, pCodecCtx), width,
-												 height, PIX_FMT_RGBA, scale_mode, NULL, NULL, NULL);
+    // Determine required buffer size and allocate buffer
+    const int bytes_per_pixel = 4;
+    int buffer_size = (output_width * output_height * bytes_per_pixel) + 128;
+    buffer = new unsigned char[buffer_size]();
 
-	// Resize / Convert to RGB
-	sws_scale(img_convert_ctx, pFrame->data, pFrame->linesize, 0,
-			  original_height, pFrameRGB->data, pFrameRGB->linesize);
+    // Copy picture data from one AVFrame (or AVPicture) to another one.
+    AV_COPY_PICTURE_DATA(pFrameRGB, buffer, PIX_FMT_RGBA, output_width, output_height);
 
-	// Create or get the existing frame object
-	std::shared_ptr<Frame> f = CreateFrame(current_frame);
+    int scale_mode = SWS_FAST_BILINEAR;
+    if (openshot::Settings::Instance()->HIGH_QUALITY_SCALING) {
+        scale_mode = SWS_BICUBIC;
+    }
 
-	// Add Image data to frame
-	if (!ffmpeg_has_alpha(AV_GET_CODEC_PIXEL_FORMAT(pStream, pCodecCtx))) {
-		// Add image with no alpha channel, Speed optimization
-		f->AddImage(width, height, bytes_per_pixel, QImage::Format_RGBA8888_Premultiplied, buffer);
-	} else {
-		// Add image with alpha channel (this will be converted to premultipled when needed, but is slower)
-		f->AddImage(width, height, bytes_per_pixel, QImage::Format_RGBA8888, buffer);
-	}
+    // Create SwsContext for color conversion (and scaling if needed)
+    SwsContext *img_convert_ctx = sws_getContext(
+        width, height, AV_GET_CODEC_PIXEL_FORMAT(pStream, pCodecCtx),
+        output_width, output_height, PIX_FMT_RGBA, scale_mode, NULL, NULL, NULL);
 
-	// Update working cache
-	working_cache.Add(f);
+    // Resize (if scaling) and convert to RGB
+    sws_scale(img_convert_ctx, pFrame->data, pFrame->linesize, 0,
+              height, pFrameRGB->data, pFrameRGB->linesize);
 
-	// Keep track of last last_video_frame
-	last_video_frame = f;
+    // Create or get the existing frame object
+    std::shared_ptr<Frame> f = CreateFrame(current_frame);
 
-	// Free the RGB image
-	AV_FREE_FRAME(&pFrameRGB);
+    // Add Image data to frame
+    if (!ffmpeg_has_alpha(AV_GET_CODEC_PIXEL_FORMAT(pStream, pCodecCtx))) {
+        // Add image with no alpha channel, speed optimization
+        f->AddImage(output_width, output_height, bytes_per_pixel, QImage::Format_RGBA8888_Premultiplied, buffer);
+    } else {
+        // Add image with alpha channel (this will be converted to premultiplied when needed, but is slower)
+        f->AddImage(output_width, output_height, bytes_per_pixel, QImage::Format_RGBA8888, buffer);
+    }
 
-	// Remove frame and packet
-	RemoveAVFrame(pFrame);
-	sws_freeContext(img_convert_ctx);
+    // Update working cache
+    working_cache.Add(f);
 
-	// Get video PTS in seconds
-	video_pts_seconds = (double(video_pts) * info.video_timebase.ToDouble()) + pts_offset_seconds;
+    // Keep track of the last video frame
+    last_video_frame = f;
 
-	// Debug output
-	ZmqLogger::Instance()->AppendDebugMethod("FFmpegReader::ProcessVideoPacket (After)", "requested_frame", requested_frame, "current_frame", current_frame, "f->number", f->number, "video_pts_seconds", video_pts_seconds);
+    // Free the RGB image
+    AV_FREE_FRAME(&pFrameRGB);
+
+    // Remove frame and packet
+    RemoveAVFrame(pFrame);
+    sws_freeContext(img_convert_ctx);
+
+    // Get video PTS in seconds
+    video_pts_seconds = (double(video_pts) * info.video_timebase.ToDouble()) + pts_offset_seconds;
+
+    // Debug output
+    ZmqLogger::Instance()->AppendDebugMethod("FFmpegReader::ProcessVideoPacket (After)", "requested_frame", requested_frame, "current_frame", current_frame, "f->number", f->number, "video_pts_seconds", video_pts_seconds);
 }
 
 // Process an audio packet
