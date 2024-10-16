@@ -10,6 +10,7 @@
 //
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
+#include "Settings.h"
 #include "CacheMemory.h"
 #include "Exceptions.h"
 #include "Frame.h"
@@ -250,7 +251,8 @@ void CacheMemory::CleanUp()
 		// Create a scoped lock, to protect the cache from multiple threads
 		const std::lock_guard<std::recursive_mutex> lock(*cacheMutex);
 
-		while (GetBytes() > max_bytes && frame_numbers.size() > 20)
+		auto cleanupFramesNum = openshot::Settings::Instance()->DISABLE_CACHING ? 1 : 20;
+		while (GetBytes() > max_bytes && frame_numbers.size() > cleanupFramesNum)
 		{
 			// Get the oldest frame number.
 			int64_t frame_to_remove = frame_numbers.back();

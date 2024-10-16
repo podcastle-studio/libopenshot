@@ -110,6 +110,9 @@ namespace openshot {
         ///
         bool ENABLE_LEGACY_MODE = false;
 
+		///
+		bool DISABLE_CACHING = true;
+
  		/// Whether to dump ZeroMQ debug messages to stderr
 		bool DEBUG_TO_STDERR = false;
 
