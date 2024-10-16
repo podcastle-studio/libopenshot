@@ -115,7 +115,6 @@ namespace openshot {
 	 */
 	class FFmpegWriter : public WriterBase {
 	private:
-		AVDictionary *mux_dict = NULL;
 		std::string path;
 		bool is_writing;
 		bool is_open;
