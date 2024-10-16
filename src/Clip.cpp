@@ -1339,14 +1339,11 @@ void Clip::apply_scale_options(std::shared_ptr<Frame> frame, std::shared_ptr<ope
     }
 
     // Adjust size for scale x and scale y
-    float sx = scale_x.GetValue(frame->number); // percentage X scale
-    float sy = scale_y.GetValue(frame->number); // percentage Y scale
+    const float sx = scale_x.GetValue(frame->number); // percentage X scale
+    const float sy = scale_y.GetValue(frame->number); // percentage Y scale
 
-    float scaled_source_width = source_size.width() * sx;
-    float scaled_source_height = source_size.height() * sy;
-
-//    float source_width_scale = (float(source_size.width()) / float(source_image->width())) * sx;
-//    float source_height_scale = (float(source_size.height()) / float(source_image->height())) * sy;
+    const float scaled_source_width = source_size.width() * sx;
+    const float scaled_source_height = source_size.height() * sy;
 
     QImage scaledImg = source_image->scaled(scaled_source_width, scaled_source_height, Qt::KeepAspectRatioByExpanding, Qt::SmoothTransformation);
     frame->AddImage(std::make_shared<QImage>(scaledImg));
