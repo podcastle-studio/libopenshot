@@ -1382,14 +1382,39 @@ void FFmpegReader::ProcessVideoPacket(int64_t requested_frame) {
 	if (!seek_video_frame_found && is_seeking)
 		seek_video_frame_found = current_frame;
 
+	// Debug output
+	ZmqLogger::Instance()->AppendDebugMethod("FFmpegReader::ProcessVideoPacket (Before)", "requested_frame", requested_frame, "current_frame", current_frame);
+
+	// Do not scale if it's non legacy mode
+	if (!openshot::Settings::Instance()->ENABLE_LEGACY_MODE) {
+		// Create or get the existing frame object
+		std::shared_ptr<Frame> f = CreateFrame(current_frame);
+
+		// Add Image data to frame (without scaling)
+		f->AddImage(info.width, info.height, 4, QImage::Format_RGBA8888_Premultiplied, pFrame->data[0]);
+
+		// Update working cache
+		working_cache.Add(f);
+
+		// Keep track of the last video frame
+		last_video_frame = f;
+
+		// Get video PTS in seconds
+		video_pts_seconds = (double(video_pts) * info.video_timebase.ToDouble()) + pts_offset_seconds;
+
+		// Debug output
+		ZmqLogger::Instance()->AppendDebugMethod("FFmpegReader::ProcessVideoPacket (After - No Scaling)", "requested_frame", requested_frame, "current_frame", current_frame, "f->number", f->number, "video_pts_seconds", video_pts_seconds);
+
+		return;
+	}
+
+	// Proceed with scaling if it is legacy mode
+
 	// Create or get the existing frame object. Requested frame needs to be created
 	// in working_cache at least once. Seek can clear the working_cache, so we must
 	// add the requested frame back to the working_cache here. If it already exists,
 	// it will be moved to the top of the working_cache.
 	working_cache.Add(CreateFrame(requested_frame));
-
-	// Debug output
-	ZmqLogger::Instance()->AppendDebugMethod("FFmpegReader::ProcessVideoPacket (Before)", "requested_frame", requested_frame, "current_frame", current_frame);
 
 	// Init some things local (for OpenMP)
 	PixelFormat pix_fmt = AV_GET_CODEC_PIXEL_FORMAT(pStream, pCodecCtx);

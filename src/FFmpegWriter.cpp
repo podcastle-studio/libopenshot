@@ -30,9 +30,6 @@
 
 using namespace openshot;
 
-// Multiplexer parameters temporary storage
-AVDictionary *mux_dict = NULL;
-
 #if USE_HW_ACCEL
 int hw_en_on = 1;					// Is set in UI
 int hw_en_supported = 0;	// Is set by FFmpegWriter
@@ -689,6 +686,8 @@ void FFmpegWriter::WriteFrame(std::shared_ptr<openshot::Frame> frame) {
 
 	// Keep track of the last frame added
 	last_frame = frame;
+	if (mux_dict) av_dict_free(&mux_dict);
+
 }
 
 // Write all frames in the queue to the video file.
