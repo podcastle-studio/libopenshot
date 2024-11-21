@@ -13,6 +13,9 @@
 #include <sstream>
 
 #include "CacheBase.h"
+
+#include <iostream>
+
 #include "Settings.h"
 
 using namespace std;
@@ -31,7 +34,7 @@ CacheBase::CacheBase(int64_t max_bytes) : max_bytes(max_bytes) {
 void CacheBase::SetMaxBytesFromInfo(int64_t number_of_frames, int width, int height, int sample_rate, int channels)
 {
 	// n frames X height X width X 4 colors of chars X audio channels X 4 byte floats
-	int64_t bytes = (openshot::Settings::Instance()->DISABLE_CACHING ? 1 : number_of_frames) * (height * width * 4 + (sample_rate * channels * 4));
+	int64_t bytes = (openshot::Settings::Instance()->DISABLE_CACHING ? number_of_frames : number_of_frames) * (height * width * 4 + (sample_rate * channels * 4));
 	SetMaxBytes(bytes);
 }
 

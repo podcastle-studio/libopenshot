@@ -87,8 +87,8 @@ FFmpegReader::FFmpegReader(const std::string &path, bool inspect_reader)
 	audio_pts_seconds = NO_PTS_OFFSET;
 
 	// Init cache
-	working_cache.SetMaxBytesFromInfo(max_concurrent_frames * info.fps.ToDouble() * 2, info.width, info.height, info.sample_rate, info.channels);
-	final_cache.SetMaxBytesFromInfo(max_concurrent_frames * 2, info.width, info.height, info.sample_rate, info.channels);
+	working_cache.SetMaxBytesFromInfo(/* max_concurrent_frames */ 1 * info.fps.ToDouble() * 2, info.width, info.height, info.sample_rate, info.channels);
+	final_cache.SetMaxBytesFromInfo(/* max_concurrent_frames */ 1 * 2, info.width, info.height, info.sample_rate, info.channels);
 
 	// Open and Close the reader, to populate its attributes (such as height, width, etc...)
 	if (inspect_reader) {
@@ -559,8 +559,8 @@ void FFmpegReader::Open() {
 		previous_packet_location.sample_start = 0;
 
 		// Adjust cache size based on size of frame and audio
-		working_cache.SetMaxBytesFromInfo(max_concurrent_frames * info.fps.ToDouble() * 2, info.width, info.height, info.sample_rate, info.channels);
-		final_cache.SetMaxBytesFromInfo(max_concurrent_frames * 2, info.width, info.height, info.sample_rate, info.channels);
+		working_cache.SetMaxBytesFromInfo(/* max_concurrent_frames */ 1 * info.fps.ToDouble() * 2, info.width, info.height, info.sample_rate, info.channels);
+		final_cache.SetMaxBytesFromInfo(/* max_concurrent_frames */ 1 * 2, info.width, info.height, info.sample_rate, info.channels);
 
 		// Scan PTS for any offsets (i.e. non-zero starting streams). At least 1 stream must start at zero timestamp.
 		// This method allows us to shift timestamps to ensure at least 1 stream is starting at zero.
