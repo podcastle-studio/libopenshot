@@ -147,130 +147,106 @@ void QtImageReader::Close()
 // Get an openshot::Frame object for a specific frame number of this reader.
 std::shared_ptr<Frame> QtImageReader::GetFrame(int64_t requested_frame)
 {
- //    // Check for open reader (or throw exception)
- //    if (!is_open)
- //        throw ReaderClosed("The Image is closed.  Call Open() before calling this method.", path.toStdString());
- //
-	// // Create a scoped lock, allowing only a single thread to run the following code at one time
-	// const std::lock_guard<std::recursive_mutex> lock(getFrameMutex);
- //
- //    // Calculate max image size
- //    QSize current_max_size = calculate_max_size();
- //
- //    // Scale image smaller (or use a previous scaled image)
- //    if (!cached_image || max_size != current_max_size) {
- //        // Check for SVG files and rasterize them to QImages
- //        if (path.toLower().endsWith(".svg") || path.toLower().endsWith(".svgz")) {
- //            load_svg_path(path);
- //        }
- //
- //        // We need to resize the original image to a smaller image (for performance reasons)
- //        // Only do this once, to prevent tons of unneeded scaling operations
- //        cached_image = std::make_shared<QImage>(image->scaled(
- //                       current_max_size,
- //                       Qt::KeepAspectRatio, Qt::SmoothTransformation));
- //
- //        // Set max size (to later determine if max_size is changed)
- //        max_size = current_max_size;
- //    }
- //
- //    auto sample_count = Frame::GetSamplesPerFrame(
- //        requested_frame, info.fps, info.sample_rate, info.channels);
- //    auto sz = cached_image->size();
- //
- //    // Create frame object
- //    auto image_frame = std::make_shared<Frame>(
- //            requested_frame, sz.width(), sz.height(), "#000000",
- //            sample_count, info.channels);
- //    image_frame->AddImage(cached_image);
- //
- //    // return frame object
- //    return image_frame;
-
-
+    // Check for open reader (or throw exception)
     if (!is_open)
-        throw ReaderClosed("The Image is closed. Call Open() before calling this method.", path.toStdString());
+        throw ReaderClosed("The Image is closed.  Call Open() before calling this method.", path.toStdString());
 
-    const std::lock_guard<std::recursive_mutex> lock(getFrameMutex);
+	// Create a scoped lock, allowing only a single thread to run the following code at one time
+	const std::lock_guard<std::recursive_mutex> lock(getFrameMutex);
 
-    // Remove resizing logic
-    if (!cached_image) {
-        cached_image = image;
+    // Calculate max image size
+    QSize current_max_size = calculate_max_size();
+
+    // Scale image smaller (or use a previous scaled image)
+    if (!cached_image || max_size != current_max_size) {
+        // Check for SVG files and rasterize them to QImages
+        if (path.toLower().endsWith(".svg") || path.toLower().endsWith(".svgz")) {
+            load_svg_path(path);
+        }
+
+        // We need to resize the original image to a smaller image (for performance reasons)
+        // Only do this once, to prevent tons of unneeded scaling operations
+        cached_image = std::make_shared<QImage>(image->scaled(
+                       current_max_size,
+                       Qt::KeepAspectRatio, Qt::SmoothTransformation));
+
+        // Set max size (to later determine if max_size is changed)
+        max_size = current_max_size;
     }
 
     auto sample_count = Frame::GetSamplesPerFrame(
         requested_frame, info.fps, info.sample_rate, info.channels);
     auto sz = cached_image->size();
 
+    // Create frame object
     auto image_frame = std::make_shared<Frame>(
             requested_frame, sz.width(), sz.height(), "#000000",
             sample_count, info.channels);
     image_frame->AddImage(cached_image);
 
+    // return frame object
     return image_frame;
 }
 
 // Calculate the max_size QSize, based on parent timeline and parent clip settings
 QSize QtImageReader::calculate_max_size() {
     // Get max project size
-    // int max_width = info.width;
-    // int max_height = info.height;
-    // if (max_width == 0 || max_height == 0) {
-    //     // If no size determined yet
-    //     max_width = 1920;
-    //     max_height = 1080;
-    // }
-    //
-    // Clip* parent = (Clip*) ParentClip();
-    // if (parent) {
-    //     if (parent->ParentTimeline()) {
-    //         // Set max width/height based on parent clip's timeline (if attached to a timeline)
-    //         max_width = parent->ParentTimeline()->preview_width;
-    //         max_height = parent->ParentTimeline()->preview_height;
-    //     }
-    //     if (parent->scale == SCALE_FIT || parent->scale == SCALE_STRETCH) {
-    //         // Best fit or Stretch scaling (based on max timeline size * scaling keyframes)
-    //         float max_scale_x = parent->scale_x.GetMaxPoint().co.Y;
-    //         float max_scale_y = parent->scale_y.GetMaxPoint().co.Y;
-    //         max_width = std::max(float(max_width), max_width * max_scale_x);
-    //         max_height = std::max(float(max_height), max_height * max_scale_y);
-    //
-    //     } else if (parent->scale == SCALE_CROP) {
-    //         // Cropping scale mode (based on max timeline size * cropped size * scaling keyframes)
-    //         float max_scale_x = parent->scale_x.GetMaxPoint().co.Y;
-    //         float max_scale_y = parent->scale_y.GetMaxPoint().co.Y;
-    //         QSize width_size(max_width * max_scale_x,
-    //                          round(max_width / (float(info.width) / float(info.height))));
-    //         QSize height_size(round(max_height / (float(info.height) / float(info.width))),
-    //                           max_height * max_scale_y);
-    //         // respect aspect ratio
-    //         if (width_size.width() >= max_width && width_size.height() >= max_height) {
-    //             max_width = std::max(max_width, width_size.width());
-    //             max_height = std::max(max_height, width_size.height());
-    //         } else {
-    //             max_width = std::max(max_width, height_size.width());
-    //             max_height = std::max(max_height, height_size.height());
-    //         }
-    //     } else if (parent->scale == SCALE_NONE) {
-    //         // Scale images to equivalent unscaled size
-    //         // Since the preview window can change sizes, we want to always
-    //         // scale against the ratio of original image size to timeline size
-    //         float preview_ratio = 1.0;
-    //         if (parent->ParentTimeline()) {
-    //             Timeline *t = (Timeline *) parent->ParentTimeline();
-    //             preview_ratio = t->preview_width / float(t->info.width);
-    //         }
-    //         float max_scale_x = parent->scale_x.GetMaxPoint().co.Y;
-    //         float max_scale_y = parent->scale_y.GetMaxPoint().co.Y;
-    //         max_width = info.width * max_scale_x * preview_ratio;
-    //         max_height = info.height * max_scale_y * preview_ratio;
-    //     }
-    // }
-    //
-    // // Return new QSize of the current max size
-    // return QSize(max_width, max_height);
+    int max_width = info.width;
+    int max_height = info.height;
+    if (max_width == 0 || max_height == 0) {
+        // If no size determined yet
+        max_width = 1920;
+        max_height = 1080;
+    }
 
-    return {info.width, info.height};
+    Clip* parent = (Clip*) ParentClip();
+    if (parent) {
+        if (parent->ParentTimeline()) {
+            // Set max width/height based on parent clip's timeline (if attached to a timeline)
+            max_width = parent->ParentTimeline()->preview_width;
+            max_height = parent->ParentTimeline()->preview_height;
+        }
+        if (parent->scale == SCALE_FIT || parent->scale == SCALE_STRETCH) {
+            // Best fit or Stretch scaling (based on max timeline size * scaling keyframes)
+            float max_scale_x = parent->scale_x.GetMaxPoint().co.Y;
+            float max_scale_y = parent->scale_y.GetMaxPoint().co.Y;
+            max_width = std::max(float(max_width), max_width * max_scale_x);
+            max_height = std::max(float(max_height), max_height * max_scale_y);
+
+        } else if (parent->scale == SCALE_CROP) {
+            // Cropping scale mode (based on max timeline size * cropped size * scaling keyframes)
+            float max_scale_x = parent->scale_x.GetMaxPoint().co.Y;
+            float max_scale_y = parent->scale_y.GetMaxPoint().co.Y;
+            QSize width_size(max_width * max_scale_x,
+                             round(max_width / (float(info.width) / float(info.height))));
+            QSize height_size(round(max_height / (float(info.height) / float(info.width))),
+                              max_height * max_scale_y);
+            // respect aspect ratio
+            if (width_size.width() >= max_width && width_size.height() >= max_height) {
+                max_width = std::max(max_width, width_size.width());
+                max_height = std::max(max_height, width_size.height());
+            } else {
+                max_width = std::max(max_width, height_size.width());
+                max_height = std::max(max_height, height_size.height());
+            }
+        } else if (parent->scale == SCALE_NONE) {
+            // Scale images to equivalent unscaled size
+            // Since the preview window can change sizes, we want to always
+            // scale against the ratio of original image size to timeline size
+            float preview_ratio = 1.0;
+            if (parent->ParentTimeline()) {
+                Timeline *t = (Timeline *) parent->ParentTimeline();
+                preview_ratio = t->preview_width / float(t->info.width);
+            }
+            float max_scale_x = parent->scale_x.GetMaxPoint().co.Y;
+            float max_scale_y = parent->scale_y.GetMaxPoint().co.Y;
+            max_width = info.width * max_scale_x * preview_ratio;
+            max_height = info.height * max_scale_y * preview_ratio;
+        }
+    }
+
+    // Return new QSize of the current max size
+    return QSize(max_width, max_height);
 }
 
 // Load an SVG file with Resvg or fallback with Qt
