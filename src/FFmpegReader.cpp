@@ -973,12 +973,19 @@ std::shared_ptr<Frame> FFmpegReader::ReadStream(int64_t requested_frame) {
 	// Allocate video frame
 	bool check_seek = false;
 	int packet_error = -1;
+	const int max_retries = 1000;
+	int retry_count = 0;
 
 	// Debug output
 	ZmqLogger::Instance()->AppendDebugMethod("FFmpegReader::ReadStream", "requested_frame", requested_frame, "max_concurrent_frames", max_concurrent_frames);
 
 	// Loop through the stream until the correct frame is found
 	while (true) {
+		if (retry_count++ > max_retries) {
+			ZmqLogger::Instance()->AppendDebugMethod("FFmpegReader::ReadStream", "Max retries reached, aborting to prevent infinite loop");
+			break;
+		}
+
 		// Check if working frames are 'finished'
 		if (!is_seeking) {
 			// Check for final frames
@@ -994,6 +1001,10 @@ std::shared_ptr<Frame> FFmpegReader::ReadStream(int64_t requested_frame) {
 		if (!hold_packet || !packet) {
 			// Get the next packet
 			packet_error = GetNextPacket();
+			if (packet_error == AVERROR(EAGAIN)) {
+				ZmqLogger::Instance()->AppendDebugMethod("FFmpegReader::ReadStream", "GetNextPacket returned EAGAIN, retrying...");
+				continue;
+			}
 			if (packet_error < 0 && !packet) {
 				// No more packets to be found
 				packet_status.packets_eof = true;
