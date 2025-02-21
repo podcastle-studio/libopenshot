@@ -114,7 +114,9 @@ std::shared_ptr<openshot::Frame> Outline::GetFrame(std::shared_ptr<openshot::Fra
 }
 
 cv::Mat Outline::QImageToBGRACvMat(std::shared_ptr<QImage>& qimage) {
-	return cv::Mat(qimage->height(), qimage->width(), CV_8UC4, (uchar*)qimage->constBits(), qimage->bytesPerLine());
+	cv::Mat cv_img(qimage->height(), qimage->width(), CV_8UC4, (uchar*)qimage->constBits(), qimage->bytesPerLine());
+	cv::cvtColor(cv_img, cv_img, cv::COLOR_RGBA2BGRA);
+	return cv_img;
 }
 
 std::shared_ptr<QImage> Outline::BGRACvMatToQImage(cv::Mat img) {
