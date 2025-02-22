@@ -120,7 +120,7 @@ cv::Mat Outline::QImageToBGRACvMat(std::shared_ptr<QImage>& qimage) {
 
 std::shared_ptr<QImage> Outline::BGRACvMatToQImage(cv::Mat img) {
 	cv::Mat final_img;
-	cv::cvtColor(final_img, img, cv::COLOR_RGBA2BGRA);
+	cv::cvtColor(img, final_img, cv::COLOR_RGBA2BGRA);
 	QImage qimage(final_img.data, final_img.cols, final_img.rows, final_img.step, QImage::Format_ARGB32);
 	std::shared_ptr<QImage> imgIn = std::make_shared<QImage>(qimage.convertToFormat(QImage::Format_RGBA8888_Premultiplied));
 	return imgIn;
