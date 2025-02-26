@@ -23,7 +23,7 @@ Outline::Outline() : width(3.0), blue(0.0), green(0.0), red(0.0), alpha(255.0) {
 
 // Default constructor
 Outline::Outline(Keyframe width, Keyframe blue, Keyframe green, Keyframe red, Keyframe alpha) :
-	width(width), blue(red), green(green), red(blue), alpha(alpha)
+	width(width), blue(blue), green(green), red(red), alpha(alpha)
 {
 	// Init effect properties
 	init_effect_details();
@@ -52,8 +52,8 @@ std::shared_ptr<openshot::Frame> Outline::GetFrame(std::shared_ptr<openshot::Fra
 
 	int widthValue = width.GetValue(frame_number);
 	int blueValue = blue.GetValue(frame_number);
-	int redValue = red.GetValue(frame_number);
 	int greenValue = green.GetValue(frame_number);
+	int redValue = red.GetValue(frame_number);
 	int alphaValue = alpha.GetValue(frame_number);
 	
 	if ((widthValue <= 0) || (alphaValue <= 0)) {
