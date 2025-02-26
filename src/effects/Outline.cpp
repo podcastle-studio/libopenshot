@@ -16,14 +16,14 @@
 using namespace openshot;
 
 /// Blank constructor, useful when using Json to load the effect properties
-Outline::Outline() : width(3.0), red(0.0), green(0.0), blue(0.0), alpha(255.0) {
+Outline::Outline() : width(3.0), blue(0.0), green(0.0), red(0.0), alpha(255.0) {
 	// Init effect properties
 	init_effect_details();
 }
 
 // Default constructor
-Outline::Outline(Keyframe width, Keyframe red, Keyframe green, Keyframe blue, Keyframe alpha) :
-	width(width), red(red), green(green), blue(blue), alpha(alpha)
+Outline::Outline(Keyframe width, Keyframe blue, Keyframe green, Keyframe red, Keyframe alpha) :
+	width(width), blue(red), green(green), red(blue), alpha(alpha)
 {
 	// Init effect properties
 	init_effect_details();
@@ -51,9 +51,9 @@ std::shared_ptr<openshot::Frame> Outline::GetFrame(std::shared_ptr<openshot::Fra
 	std::shared_ptr<QImage> frame_image = frame->GetImage();
 
 	int widthValue = width.GetValue(frame_number);
+	int blueValue = blue.GetValue(frame_number);
 	int redValue = red.GetValue(frame_number);
 	int greenValue = green.GetValue(frame_number);
-	int blueValue = blue.GetValue(frame_number);
 	int alphaValue = alpha.GetValue(frame_number);
 	
 	if ((widthValue <= 0) || (alphaValue <= 0)) {
@@ -140,9 +140,9 @@ Json::Value Outline::JsonValue() const {
 	Json::Value root = EffectBase::JsonValue(); // get parent properties
 	root["type"] = info.class_name;
 	root["width"] = width.JsonValue();
-	root["red"] = red.JsonValue();
-	root["green"] = green.JsonValue();
 	root["blue"] = blue.JsonValue();
+	root["green"] = green.JsonValue();
+	root["red"] = red.JsonValue();
 	root["alpha"] = alpha.JsonValue();
 
 	// return JsonValue
@@ -175,12 +175,12 @@ void Outline::SetJsonValue(const Json::Value root) {
 	// Set data from Json (if key is found)
 	if (!root["width"].isNull())
 		width.SetJsonValue(root["width"]);
-	if (!root["red"].isNull())
-		red.SetJsonValue(root["red"]);
-	if (!root["green"].isNull())
-		green.SetJsonValue(root["green"]);
 	if (!root["blue"].isNull())
 		blue.SetJsonValue(root["blue"]);
+	if (!root["green"].isNull())
+		green.SetJsonValue(root["green"]);
+	if (!root["red"].isNull())
+		red.SetJsonValue(root["red"]);
 	if (!root["alpha"].isNull())
 		alpha.SetJsonValue(root["alpha"]);
 }
@@ -192,10 +192,10 @@ std::string Outline::PropertiesJSON(int64_t requested_frame) const {
 	Json::Value root = BasePropertiesJSON(requested_frame);
 
 	// Keyframes
-	root["width"] = add_property_json("Width", width.GetValue(requested_frame), "float", "", &width, 0, 1000, false, requested_frame);
-	root["red"] = add_property_json("Red", red.GetValue(requested_frame), "float", "", &red, 0, 255, false, requested_frame);
-	root["green"] = add_property_json("Green", green.GetValue(requested_frame), "float", "", &green, 0, 255, false, requested_frame);
+	root["width"] = add_property_json("Width", width.GetValue(requested_frame), "float", "", &width, 0, 10000, false, requested_frame);
 	root["blue"] = add_property_json("Blue", blue.GetValue(requested_frame), "float", "", &blue, 0, 255, false, requested_frame);
+	root["green"] = add_property_json("Green", green.GetValue(requested_frame), "float", "", &green, 0, 255, false, requested_frame);
+	root["red"] = add_property_json("Red", red.GetValue(requested_frame), "float", "", &red, 0, 255, false, requested_frame);
 	root["alpha"] = add_property_json("Alpha", alpha.GetValue(requested_frame), "float", "", &alpha, 0, 255, false, requested_frame);
 
 	// Return formatted string
