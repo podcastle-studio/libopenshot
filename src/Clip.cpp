@@ -169,7 +169,7 @@ Clip::Clip(std::string path) : resampler(NULL), reader(NULL), allocated_reader(N
 
 	// Determine if common video formats (or image sequences)
 	if (ext=="avi" || ext=="mov" || ext=="mkv" ||  ext=="mpg" || ext=="mpeg" || ext=="mp3" || ext=="mp4" || ext=="mts" ||
-		ext=="ogg" || ext=="wav" || ext=="wmv" || ext=="webm" || ext=="vob" || path.find("%") != std::string::npos)
+		ext=="ogg" || ext=="wav" || ext=="wmv" || ext=="webm" || ext=="vob" || ext=="gif" || path.find("%") != std::string::npos)
 	{
 		try
 		{
