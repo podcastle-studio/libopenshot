@@ -878,8 +878,21 @@ void FFmpegReader::UpdateVideoInfo() {
 
 	// Get the # of video frames (if found in stream)
 	// Only set this 1 time (this method can be called multiple times)
-	if (pStream->nb_frames > 0 && info.video_length <= 0) {
+	if (pStream->nb_frames > 0 && info.video_length <= 0)
+	{
 		info.video_length = pStream->nb_frames;
+
+		// If the file format is animated GIF, override the video_length to be (duration * fps) rounded.
+		if (pFormatCtx && pFormatCtx->iformat && strcmp(pFormatCtx->iformat->name, "gif") == 0)
+		{
+			if (pStream->nb_frames > 1) {
+				// Animated gif (nb_frames does not take into delays and gaps)
+				info.video_length = round(info.duration * info.fps.ToDouble());
+			} else {
+				// Static non-animated gif (set a default duration)
+				info.duration = 10.0;
+			}
+		}
 	}
 
 	// No duration found in stream of file
