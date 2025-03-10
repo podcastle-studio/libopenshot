@@ -841,7 +841,7 @@ std::string Clip::PropertiesJSON(int64_t requested_frame) const {
 	root["wave_color"]["red"] = add_property_json("Red", wave_color.red.GetValue(requested_frame), "float", "", &wave_color.red, 0, 255, false, requested_frame);
 	root["wave_color"]["blue"] = add_property_json("Blue", wave_color.blue.GetValue(requested_frame), "float", "", &wave_color.blue, 0, 255, false, requested_frame);
 	root["wave_color"]["green"] = add_property_json("Green", wave_color.green.GetValue(requested_frame), "float", "", &wave_color.green, 0, 255, false, requested_frame);
-
+	root["wave_color"]["alpha"] = add_property_json("Alpha", wave_color.alpha.GetValue(requested_frame), "float", "", &wave_color.alpha, 0, 255, false, requested_frame);
 
 	// Return formatted string
 	return root.toStyledString();
