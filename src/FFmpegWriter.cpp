@@ -647,11 +647,6 @@ void FFmpegWriter::WriteHeader() {
 		av_dict_set(&oc->metadata, iter->first.c_str(), iter->second.c_str(), 0);
 	}
 
-	// For HEVC (H265) to playback on Apple devices: https://github.com/OpenShot/libopenshot/issues/990
-	if (info.has_video && video_codec_ctx && video_codec_ctx->codec_id == AV_CODEC_ID_HEVC) {
-		av_dict_set(&mux_dict, "tag:v", "hvc1", 0);
-	}
-
 	// Set multiplexing parameters (only for MP4/MOV containers)
 	AVDictionary *dict = NULL;
 	if (mux_dict) {
@@ -1543,6 +1538,17 @@ void FFmpegWriter::open_video(AVFormatContext *oc, AVStream *st) {
 		}
 	}
 #endif // USE_HW_ACCEL
+
+// Set libx265 hvc1 tag (for Apple playback compatibility).
+#if USE_HW_ACCEL
+		if (!(hw_en_on && hw_en_supported) && video_codec_ctx->codec_id == AV_CODEC_ID_HEVC) {
+			video_codec_ctx->codec_tag = MKTAG('h', 'v', 'c', '1');
+		}
+#else
+		if (video_codec_ctx->codec_id == AV_CODEC_ID_HEVC) {
+			video_codec_ctx->codec_tag = MKTAG('h', 'v', 'c', '1');
+		}
+#endif
 
 	/* open the codec */
 	if (avcodec_open2(video_codec_ctx, codec, &opts) < 0)
