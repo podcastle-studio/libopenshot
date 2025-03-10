@@ -654,10 +654,7 @@ void FFmpegWriter::WriteHeader() {
 
 	// Set multiplexing parameters (only for MP4/MOV containers)
 	AVDictionary *dict = NULL;
-	bool is_mp4 = (strcmp(oc->oformat->name, "mp4") == 0);
-	bool is_mov = (strcmp(oc->oformat->name, "mov") == 0);
-	if (is_mp4 || is_mov)
-	{
+	if (mux_dict) {
 		av_dict_copy(&dict, mux_dict, 0);
 	}
 
