@@ -643,18 +643,23 @@ void FFmpegWriter::WriteHeader() {
 	AV_SET_FILENAME(oc, path.c_str());
 
 	// Add general metadata (if any)
-	for (std::map<std::string, std::string>::iterator iter = info.metadata.begin(); iter != info.metadata.end(); ++iter) {
+	for (auto iter = info.metadata.begin(); iter != info.metadata.end(); ++iter) {
 		av_dict_set(&oc->metadata, iter->first.c_str(), iter->second.c_str(), 0);
 	}
 
-	// Set multiplexing parameters
-	AVDictionary *dict = NULL;
+	// For HEVC (H265) to playback on Apple devices: https://github.com/OpenShot/libopenshot/issues/990
+	if (info.has_video && video_codec_ctx && video_codec_ctx->codec_id == AV_CODEC_ID_HEVC) {
+		av_dict_set(&mux_dict, "tag:v", "hvc1", 0);
+	}
 
-	bool is_mp4 = strcmp(oc->oformat->name, "mp4");
-	bool is_mov = strcmp(oc->oformat->name, "mov");
-	// Set dictionary preset only for MP4 and MOV files
+	// Set multiplexing parameters (only for MP4/MOV containers)
+	AVDictionary *dict = NULL;
+	bool is_mp4 = (strcmp(oc->oformat->name, "mp4") == 0);
+	bool is_mov = (strcmp(oc->oformat->name, "mov") == 0);
 	if (is_mp4 || is_mov)
+	{
 		av_dict_copy(&dict, mux_dict, 0);
+	}
 
 	// Write the stream header
 	if (avformat_write_header(oc, &dict) != 0) {
