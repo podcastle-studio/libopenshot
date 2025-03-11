@@ -39,6 +39,7 @@
 extern "C" {
     #include <libavcodec/avcodec.h>
     #include <libavformat/avformat.h>
+    #include <libavutil/display.h>
 
 #if (LIBAVFORMAT_VERSION_MAJOR >= 57)
     #include <libavutil/hwcontext.h> //PM
