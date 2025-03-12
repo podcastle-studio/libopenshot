@@ -38,7 +38,7 @@ void Outline::init_effect_details()
 	/// Set the effect info
 	info.class_name = "Outline";
 	info.name = "Outline";
-	info.description = "Add outline around the image with transparent background.";
+	info.description = "Add outline around any image or text.";
 	info.has_audio = false;
 	info.has_video = true;
 }
