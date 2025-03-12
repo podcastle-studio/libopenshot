@@ -554,6 +554,31 @@ void FFmpegReader::Open() {
 			info.metadata[str_key.toStdString()] = str_value.trimmed().toStdString();
 		}
 
+		// If "rotate" isn't already set, extract it from the video stream's side data.
+		// TODO: nb_side_data is depreciated, and I'm not sure the preferred way to do this
+		if (info.metadata.find("rotate") == info.metadata.end()) {
+			for (unsigned int i = 0; i < pFormatCtx->nb_streams; i++) {
+				if (pFormatCtx->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+					for (int j = 0; j < pFormatCtx->streams[i]->nb_side_data; j++) {
+						// Get the j-th side data element.
+						AVPacketSideData *sd = &pFormatCtx->streams[i]->side_data[j];
+#pragma GCC diagnostic pop
+						if (sd->type == AV_PKT_DATA_DISPLAYMATRIX && sd->size >= 9 * sizeof(int32_t)) {
+							double rotation = -av_display_rotation_get(reinterpret_cast<int32_t *>(sd->data));
+							if (isnan(rotation))
+								rotation = 0;
+							QString str_value = QString::number(rotation, 'g', 6);
+							info.metadata["rotate"] = str_value.trimmed().toStdString();
+							break;
+						}
+					}
+					break;  // Only process the first video stream.
+				}
+			}
+		}
+
 		// Init previous audio location to zero
 		previous_packet_location.frame = -1;
 		previous_packet_location.sample_start = 0;
