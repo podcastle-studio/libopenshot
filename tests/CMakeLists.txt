@@ -58,6 +58,7 @@ if($CACHE{HAVE_OPENCV})
   list(APPEND OPENSHOT_TESTS
     CVTracker
     CVStabilizer
+    CVOutline
     # CVObjectDetection
   )
 endif()
