@@ -57,7 +57,7 @@ namespace openshot
 
 		/// Default constructor, which require width, red, green, blue, alpha
 		///
-		/// @param width the width of the outline (between 0 and 1000, rounded to int)
+		/// @param width the width of the outline (between 0 and 100, rounded to int)
 		/// @param red the red channel of the outline (between 0 and 255, rounded to int)
 		/// @param green the green channel of the outline (between 0 and 255, rounded to int)
 		/// @param blue the blue channel of the outline (between 0 and 255, rounded to int)

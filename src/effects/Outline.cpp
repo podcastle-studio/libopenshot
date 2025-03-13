@@ -47,69 +47,55 @@ void Outline::init_effect_details()
 // modified openshot::Frame object
 std::shared_ptr<openshot::Frame> Outline::GetFrame(std::shared_ptr<openshot::Frame> frame, int64_t frame_number)
 {
-	// Get the frame's image
-	std::shared_ptr<QImage> frame_image = frame->GetImage();
-
 	int widthValue = width.GetValue(frame_number);
 	int blueValue = blue.GetValue(frame_number);
 	int greenValue = green.GetValue(frame_number);
 	int redValue = red.GetValue(frame_number);
 	int alphaValue = alpha.GetValue(frame_number);
 	
-	if ((widthValue <= 0) || (alphaValue <= 0)) {
+	if (widthValue <= 0 || alphaValue <= 0) {
 		// If alpha or width is zero, return the original frame
 		return frame;
 	}
 
-	int sigmaValue = widthValue / 3;
+	// Get the frame's image
+	std::shared_ptr<QImage> frame_image = frame->GetImage();
 
-	// Get BGRA image from QImage
+	int sigmaValue = widthValue / 3;
 	cv::Mat cv_image = QImageToBGRACvMat(frame_image);
 
-	// extract alpha channel to create the alpha mask from the image
+	// Extract alpha channel for the mask
 	std::vector<cv::Mat> channels(4);
-    cv::split(cv_image, channels);
+	cv::split(cv_image, channels);
 	cv::Mat alpha_mask = channels[3].clone();
-	
-	// Disable de-antialiased
-	// cv::threshold(alpha_mask, alpha_mask, 254, 255, cv::ThresholdTypes::THRESH_BINARY); // threshold the alpha channel to remove aliased edges
 
-	
 	// Create the outline mask
 	cv::Mat outline_mask;
 	cv::GaussianBlur(alpha_mask, outline_mask, cv::Size(0, 0), sigmaValue, sigmaValue, cv::BorderTypes::BORDER_DEFAULT);
 	cv::threshold(outline_mask, outline_mask, 0, 255, cv::ThresholdTypes::THRESH_BINARY);
 
-	// Antialias the outline edge
-	// Apply Canny edge detection to the outline mask
+	// Antialias the outline edge & apply Canny edge detection
 	cv::Mat edge_mask;
 	cv::Canny(outline_mask, edge_mask, 250, 255);
 
 	// Apply Gaussian blur only to the edge mask
 	cv::Mat blurred_edge_mask;
 	cv::GaussianBlur(edge_mask, blurred_edge_mask, cv::Size(0, 0), 0.8, 0.8, cv::BorderTypes::BORDER_DEFAULT);
-	
-	// Combine the blurred edge mask with the original alpha mask
-	cv::Mat combined_mask;
 	cv::bitwise_or(outline_mask, blurred_edge_mask, outline_mask);
-	
+
 	cv::Mat final_image;
 
-	// create solid color source mat
-	cv::Mat solid_color_mat(cv::Size(cv_image.cols, cv_image.rows), CV_8UC4, cv::Scalar(blueValue, greenValue, redValue, alphaValue));
-	
-	// place outline image first, then place the original image (de-antialiased) on top
+	// Create solid color source mat (cv::Scalar: red, green, blue, alpha)
+	cv::Mat solid_color_mat(cv::Size(cv_image.cols, cv_image.rows), CV_8UC4, cv::Scalar(redValue, greenValue, blueValue, alphaValue));
+
+	// Place outline first, then the original image on top
 	solid_color_mat.copyTo(final_image, outline_mask);
 	cv_image.copyTo(final_image, alpha_mask);
-	
+
 	std::shared_ptr<QImage> new_frame_image = BGRACvMatToQImage(final_image);
 
 	// FIXME: The shared_ptr::swap does not work somehow
-	// frame_image.swap(new_frame_image);
 	*frame_image = *new_frame_image;
-	
-	
-	// return the modified frame
 	return frame;
 }
 
@@ -119,10 +105,10 @@ cv::Mat Outline::QImageToBGRACvMat(std::shared_ptr<QImage>& qimage) {
 }
 
 std::shared_ptr<QImage> Outline::BGRACvMatToQImage(cv::Mat img) {
-	// Directly wrap the cv::Mat data in a QImage
-	QImage qimage(img.data, img.cols, img.rows, img.step, QImage::Format_ARGB32);
-	std::shared_ptr<QImage> imgIn = std::make_shared<QImage>(
-		qimage.convertToFormat(QImage::Format_RGBA8888_Premultiplied));
+	cv::Mat final_img;
+	cv::cvtColor(img, final_img, cv::COLOR_RGBA2BGRA);
+	QImage qimage(final_img.data, final_img.cols, final_img.rows, final_img.step, QImage::Format_ARGB32);
+	std::shared_ptr<QImage> imgIn = std::make_shared<QImage>(qimage.convertToFormat(QImage::Format_RGBA8888_Premultiplied));
 	return imgIn;
 }
 
@@ -192,7 +178,7 @@ std::string Outline::PropertiesJSON(int64_t requested_frame) const {
 	Json::Value root = BasePropertiesJSON(requested_frame);
 
 	// Keyframes
-	root["width"] = add_property_json("Width", width.GetValue(requested_frame), "float", "", &width, 0, 10000, false, requested_frame);
+	root["width"] = add_property_json("Width", width.GetValue(requested_frame), "float", "", &width, 0, 100, false, requested_frame);
 	root["blue"] = add_property_json("Blue", blue.GetValue(requested_frame), "float", "", &blue, 0, 255, false, requested_frame);
 	root["green"] = add_property_json("Green", green.GetValue(requested_frame), "float", "", &green, 0, 255, false, requested_frame);
 	root["red"] = add_property_json("Red", red.GetValue(requested_frame), "float", "", &red, 0, 255, false, requested_frame);
