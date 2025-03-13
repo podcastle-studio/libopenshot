@@ -62,6 +62,8 @@ std::shared_ptr<openshot::Frame> Outline::GetFrame(std::shared_ptr<openshot::Fra
 	std::shared_ptr<QImage> frame_image = frame->GetImage();
 
 	int sigmaValue = widthValue / 3;
+	if (sigmaValue < 1)
+		sigmaValue = 1;
 	cv::Mat cv_image = QImageToBGRACvMat(frame_image);
 
 	// Extract alpha channel for the mask
