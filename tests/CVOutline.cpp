@@ -45,15 +45,14 @@ TEST_CASE( "Outline_Tests", "[libopenshot][opencv][outline]" )
     CHECK(pix1 == compare1);
 
     // Test another effect constructor
-    openshot::Outline e2(Keyframe(3.0), Keyframe(255.0),
-        Keyframe(0.0), Keyframe(0.0), Keyframe(128.0));
+    openshot::Outline e2(Keyframe(3.0), Color(0, 0, 255, 128));
 
     // Get frame from effect
     auto f2 = e2.GetFrame(f, 1);
     std::shared_ptr<QImage> i2 = f2->GetImage();
 
     // Check effect colors
-    QColor pix2 = i2->pixelColor(3, 32);
+    QColor pix2 = i2->pixelColor(11, 35);
     QColor compare2{0, 0, 255, 128};
     CHECK(pix2 == compare2);
 

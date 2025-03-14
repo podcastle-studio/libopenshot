@@ -13,6 +13,8 @@
 #ifndef OPENSHOT_OUTLINE_EFFECT_H
 #define OPENSHOT_OUTLINE_EFFECT_H
 
+#include <Color.h>
+
 #include "../EffectBase.h"
 
 #include "../Frame.h"
@@ -47,22 +49,16 @@ namespace openshot
 
 	public:
 		Keyframe width;	///< Width of the outline
-		Keyframe red;	///< Red channel of the outline
-		Keyframe green;	///< Green of the outline
-		Keyframe blue;	///< Blue of the outline
-		Keyframe alpha;	///< Alpha of the outline
+		Color color;	///< Color of the outline
 
 		/// Blank constructor, useful when using Json to load the effect properties
 		Outline();
 
 		/// Default constructor, which require width, red, green, blue, alpha
 		///
-		/// @param width the width of the outline (between 0 and 100, rounded to int)
-		/// @param red the red channel of the outline (between 0 and 255, rounded to int)
-		/// @param green the green channel of the outline (between 0 and 255, rounded to int)
-		/// @param blue the blue channel of the outline (between 0 and 255, rounded to int)
-		/// @param alpha the alpha channel of the outline (between 0 and 255, rounded to int)
-		Outline(Keyframe width, Keyframe red, Keyframe green, Keyframe blue, Keyframe alpha);
+		/// @param width The width of the outline (between 0 and 100, rounded to int)
+		/// @param color The color of the outline
+		Outline(Keyframe width, Color color);
 
 		/// @brief This method is required for all derived classes of ClipBase, and returns a
 		/// new openshot::Frame object. All Clip keyframes and effects are resolved into
