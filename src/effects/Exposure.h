@@ -24,12 +24,12 @@ namespace openshot
 		void init_effect_details();
 
 	public:
-		Keyframe alpha;	///< alpha keyframe.
+		Keyframe exposure;	///< exposure keyframe.
 
 		/// Blank constructor, useful when using Json to load the effect properties
         Exposure();
 
-        Exposure(Keyframe new_alpha);
+        Exposure(Keyframe new_exposure);
 
 		/// @brief This method is required for all derived classes of ClipBase, and returns a
 		/// new openshot::Frame object. All Clip keyframes and effects are resolved into

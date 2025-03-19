@@ -1,16 +1,17 @@
 #include "Exposure.h"
 #include "Exceptions.h"
+#include "image-processing-lib/effects.h"
 
 using namespace openshot;
 
 /// Blank constructor, useful when using Json to load the effect properties
-Exposure::Exposure() : alpha(0.0) {
+Exposure::Exposure() : exposure(0.0) {
 	// Init effect properties
 	init_effect_details();
 }
 
 // Default constructor
-Exposure::Exposure(Keyframe new_alpha) : alpha(new_alpha)
+Exposure::Exposure(Keyframe new_exposure) : exposure(new_exposure)
 {
 	// Init effect properties
 	init_effect_details();
@@ -37,32 +38,24 @@ std::shared_ptr<openshot::Frame> Exposure::GetFrame(std::shared_ptr<openshot::Fr
 	// Get the frame's image
 	std::shared_ptr<QImage> frame_image = frame->GetImage();
 
-	// Get keyframe values for this frame
-	float alpha_value = std::max(1.0, alpha.GetValue(frame_number));
+	// Get keyframe exposure value (ensuring a minimum value of 1.0)
+	float exposure_value = std::max(1.0f, exposure.GetValue(frame_number));
 
-    if (frame_image->format() != QImage::Format_ARGB32 && frame_image->format() != QImage::Format_RGB32) {
-        frame_image = std::make_shared<QImage>(frame_image->convertToFormat(QImage::Format_ARGB32));
-        frame->AddImage(frame_image);
-    }
+	// Ensure the image is in a 32-bit format (ARGB32)
+	if (frame_image->format() != QImage::Format_ARGB32 && frame_image->format() != QImage::Format_RGB32) {
+		frame_image = std::make_shared<QImage>(frame_image->convertToFormat(QImage::Format_ARGB32));
+		frame->AddImage(frame_image);
+	}
 
-    uchar *bits = frame_image->bits();
-    int numBytes = frame_image->byteCount();
-    int pixelCount = numBytes / 4; // Each pixel is 4 bytes (ARGB)
+	// Retrieve the raw pixel data and image dimensions.
+	uchar *bits = frame_image->bits();
+	int width = frame_image->width();
+	int height = frame_image->height();
 
-    for (int i = 0; i < pixelCount; i++) {
-        int r = bits[4 * i + 2];     // Red
-        int g = bits[4 * i + 1];     // Green
-        int b = bits[4 * i];         // Blue
-        r = std::min(255, static_cast<int>(r * alpha_value));
-        g = std::min(255, static_cast<int>(g * alpha_value));
-        b = std::min(255, static_cast<int>(b * alpha_value));
+	// Apply the exposure effect.
+	Podcastle::Effects::applyExposureEffect(bits, width, height, exposure_value);
 
-        bits[4 * i + 2] = r;
-        bits[4 * i + 1] = g;
-        bits[4 * i] = b;
-    }
-
-	// return the modified frame
+	// Return the modified frame.
 	return frame;
 }
 
@@ -79,7 +72,7 @@ Json::Value Exposure::JsonValue() const {
 	// Create root json object
 	Json::Value root = EffectBase::JsonValue(); // get parent properties
 	root["type"] = info.class_name;
-	root["alpha"] = alpha.JsonValue();
+	root["exposure"] = exposure.JsonValue();
 
 	// return JsonValue
 	return root;
@@ -108,8 +101,8 @@ void Exposure::SetJsonValue(const Json::Value root) {
 	EffectBase::SetJsonValue(root);
 
 	// Set data from Json (if key is found)
-	if (!root["brightness"].isNull())
-		alpha.SetJsonValue(root["alpha"]);
+	if (!root["exposure"].isNull())
+		exposure.SetJsonValue(root["exposure"]);
 }
 
 // Get all properties for a specific frame
@@ -119,7 +112,7 @@ std::string Exposure::PropertiesJSON(int64_t requested_frame) const {
 	Json::Value root = BasePropertiesJSON(requested_frame);
 
 	// Keyframes
-	root["alpha"] = add_property_json("Brightness", alpha.GetValue(requested_frame), "float", "", &alpha, -1.0, 1.0, false, requested_frame);
+	root["exposure"] = add_property_json("Exposure", exposure.GetValue(requested_frame), "float", "", &exposure, -1.0, 1.0, false, requested_frame);
 
 	// Return formatted string
 	return root.toStyledString();

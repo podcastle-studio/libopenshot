@@ -1,6 +1,8 @@
 #pragma once
 
 #include <string>
+#include <chrono>
+#include <iostream>
 
 void panBottomRightTransition(const std::string& file1 = "clips/clip-13.mp4", const std::string& file2 = "clips/clip-12.mp4",
                               float transitionDuration = 0.5, const std::string& output = "./final/panBottomRightTransition.mp4");
@@ -54,26 +56,26 @@ void glitchTransition(const std::string& file1 = "clips/glitch1.mp4", const std:
                       float transitionDuration = 0.5, const std::string& output = "./final/glitchTransition.mp4");
 
 
-// void runTransitions() {
-//     // using namespace std::chrono;
-//     // auto start = high_resolution_clock::now();
-//     //    panBottomRightTransition("input/1.mp4", "input/2.mp4", 0.8);
-//     //    panLeftTransition("input/1.mp4", "input/2.mp4", 0.8);
-//     //    blurTransition("input/1.mp4", "input/2.mp4", 0.8);
-//     //    verticalBlurTransition("input/1.mp4", "input/2.mp4", 0.8);
-//     //    rotationalBlurTransition("input/1.mp4", "input/2.mp4", 0.8);
-//     //    wooshTransition("input/1.mp4", "input/2.mp4", 0.8);
-//     //    dissolveTransition("input/1.mp4", "input/2.mp4", 0.8);
-//     //    dissolveBlurTransition("input/1.mp4", "input/2.mp4", 0.8);
-//     //    circleOutTransition("input/1.mp4", 0.8);
-//     //    circleInTransition("input/1.mp4", 0.8);
-//     //    barnDoorsTransition("input/1.mp4", "input/2.mp4", 0.8);
-//     //    contrastTransition("input/1.mp4", "input/2.mp4", 0.8);
-//     //    verticalSplitTransition("input/1.mp4", "input/2.mp4", 0.8);
-//     //    zoomInTransition("input/1.mp4", "input/2.mp4", 0.8);
-//     //    brightnessTransition("input/1.mp4", "input/2.mp4", 0.8);
-//     //    brightnessFootageTransition("input/1.mp4", "input/2.mp4", 0.8);
-//     //    glitchTransition("input/1.mp4", "input/2.mp4", 0.8);
-//     // auto end = high_resolution_clock::now();
-//     // std::cout << "Completed: " << duration_cast<seconds>(end - start).count() << " sec." << std::endl;
-// }
+inline void runTransitions() {
+    using namespace std::chrono;
+    auto start = high_resolution_clock::now();
+       // panBottomRightTransition("input/1.mp4", "input/2.mp4", 0.8);
+       // panLeftTransition("input/1.mp4", "input/2.mp4", 0.8);
+       // blurTransition("input/1.mp4", "input/2.mp4", 0.8);
+       // verticalBlurTransition("input/1.mp4", "input/2.mp4", 0.8);
+       // rotationalBlurTransition("./ForRender/Rotate/1.mp4", "./ForRender/Rotate/2.mp4", 2, "./ForRender/rotateTransition.mp4");
+       // wooshTransition("input/1.mp4", "input/2.mp4", 0.8);
+       // dissolveTransition("input/1.mp4", "input/2.mp4", 0.8);
+       // dissolveBlurTransition("input/1.mp4", "input/2.mp4", 0.8);
+       // circleOutTransition("input/1.mp4", 0.8);
+       // circleInTransition("input/1.mp4", 0.8);
+       // barnDoorsTransition("input/1.mp4", "input/2.mp4", 0.8);
+       // contrastTransition("input/1.mp4", "input/2.mp4", 0.8);
+       // verticalSplitTransition("input/1.mp4", "input/2.mp4", 0.8);
+       // zoomInTransition("input/1.mp4", "input/2.mp4", 0.8);
+       brightnessTransition("./ForRender/Flash(Light)/1.mp4", "./ForRender/Flash(Light)/2.mp4", 1, "./ForRender/Flash(Light)/out.mp4");
+       // brightnessFootageTransition("./ForRender/Flash(Light)/1.mp4", "./ForRender/Flash(Light)/2.mp4", 0.8);
+       // glitchTransition("input/1.mp4", "input/2.mp4", 0.8);
+    auto end = high_resolution_clock::now();
+    std::cout << "Completed: " << duration_cast<seconds>(end - start).count() << " sec." << std::endl;
+}
