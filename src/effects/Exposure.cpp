@@ -39,7 +39,7 @@ std::shared_ptr<openshot::Frame> Exposure::GetFrame(std::shared_ptr<openshot::Fr
 	std::shared_ptr<QImage> frame_image = frame->GetImage();
 
 	// Get keyframe exposure value (ensuring a minimum value of 1.0)
-	float exposure_value = std::max(1.0f, exposure.GetValue(frame_number));
+	auto exposure_value = std::max(1.0, exposure.GetValue(frame_number));
 
 	// Ensure the image is in a 32-bit format (ARGB32)
 	if (frame_image->format() != QImage::Format_ARGB32 && frame_image->format() != QImage::Format_RGB32) {

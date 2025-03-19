@@ -73,7 +73,7 @@ inline void runTransitions() {
        // contrastTransition("input/1.mp4", "input/2.mp4", 0.8);
        // verticalSplitTransition("input/1.mp4", "input/2.mp4", 0.8);
        // zoomInTransition("input/1.mp4", "input/2.mp4", 0.8);
-       brightnessTransition("./ForRender/Flash(Light)/1.mp4", "./ForRender/Flash(Light)/2.mp4", 1, "./ForRender/Flash(Light)/out.mp4");
+       // brightnessTransition("./ForRender/Flash(Light)/1.mp4", "./ForRender/Flash(Light)/2.mp4", 1, "./ForRender/Flash(Light)/out.mp4");
        // brightnessFootageTransition("./ForRender/Flash(Light)/1.mp4", "./ForRender/Flash(Light)/2.mp4", 0.8);
        // glitchTransition("input/1.mp4", "input/2.mp4", 0.8);
     auto end = high_resolution_clock::now();
