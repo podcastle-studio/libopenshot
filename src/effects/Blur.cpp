@@ -122,12 +122,12 @@ void Blur::init_effect_details()
 std::shared_ptr<openshot::Frame> Blur::GetFrame(std::shared_ptr<openshot::Frame> frame, int64_t frame_number)
 {
 	// Get the current blur radius
-	int horizontal_radius_value = horizontal_radius.GetValue(frame_number);
-	int vertical_radius_value = vertical_radius.GetValue(frame_number);
-	int diagonal_radius_value = diagonal_radius.GetValue(frame_number);
-	int zoom_blur_radius_value = zoom_blur_radius.GetValue(frame_number);
-	int radial_blur_angle_value = radial_blur_angle.GetValue(frame_number);
-	int iteration_value = iterations.GetInt(frame_number);
+	const auto horizontal_radius_value = horizontal_radius.GetValue(frame_number);
+	const auto vertical_radius_value = vertical_radius.GetValue(frame_number);
+	const auto diagonal_radius_value = diagonal_radius.GetValue(frame_number);
+	const auto zoom_blur_radius_value = zoom_blur_radius.GetValue(frame_number);
+	const auto radial_blur_angle_value = radial_blur_angle.GetValue(frame_number);
+	const auto iteration_value = iterations.GetInt(frame_number);
 
     // Get the frame's image
     std::shared_ptr<QImage> frame_image = frame->GetImage();
@@ -148,7 +148,7 @@ std::shared_ptr<openshot::Frame> Blur::GetFrame(std::shared_ptr<openshot::Frame>
 
     // zoom blur (if any)
     if (zoom_blur_radius_value > 0) {
-        auto centerPoint = std::make_pair(zoomBlurCenterX.GetValue(frame_number), zoomBlurCenterY.GetValue(frame_number));
+        const auto centerPoint = std::make_pair(zoomBlurCenterX.GetValue(frame_number), zoomBlurCenterY.GetValue(frame_number));
         auto imageCv = frame->GetImageCV();
         Podcastle::Effects::applyZoomBlurEffect(imageCv, zoom_blur_radius_value, centerPoint);
         frame->SetImageCV(imageCv);

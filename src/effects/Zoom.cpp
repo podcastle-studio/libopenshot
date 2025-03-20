@@ -36,9 +36,9 @@ void Zoom::init_effect_details()
 // modified openshot::Frame object
 std::shared_ptr<openshot::Frame> Zoom::GetFrame(std::shared_ptr<openshot::Frame> frame, int64_t frame_number)
 {
-    auto zoomPercentVal = zoomPercent.GetValue(frame_number);
-    auto anchorValX = anchorX.GetValue(frame_number);
-    auto anchorValY = anchorY.GetValue(frame_number);
+    const auto zoomPercentVal = zoomPercent.GetValue(frame_number);
+    const auto anchorValX = anchorX.GetValue(frame_number);
+    const auto anchorValY = anchorY.GetValue(frame_number);
 
     if (zoomPercentVal == 100) {
         return frame;

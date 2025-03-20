@@ -46,8 +46,7 @@ void VerticalSplitShift::init_effect_details()
 
 // This method is required for all derived classes of EffectBase, and returns a
 // modified openshot::Frame object
-std::shared_ptr<openshot::Frame> VerticalSplitShift::GetFrame(std::shared_ptr<openshot::Frame> frame, int64_t frame_number)
-{
+std::shared_ptr<openshot::Frame> VerticalSplitShift::GetFrame(std::shared_ptr<openshot::Frame> frame, int64_t frame_number) {
     double shiftAmountValue = shiftAmount.GetValue(frame_number);
     double splitPointValue = splitPoint.GetValue(frame_number);
 
