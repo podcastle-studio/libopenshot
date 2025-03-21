@@ -16,7 +16,7 @@
 #include "effects/Wipe.h"
 #include "effects/Exposure.h"
 #include "effects/Brightness.h"
-#include "effects/VerticalSplitShift.h"
+#include "effects/SplitShift.h"
 #include "effects/ColorShift.h"
 #include "Color.h"
 
@@ -101,9 +101,9 @@ void createTimelineAndWriteClips(std::vector<openshot::Clip*> clips, const std::
     openshot::Timeline timeLine(1920, 1080, openshot::Fraction(30, 1), 48000, 2, openshot::ChannelLayout::LAYOUT_STEREO);
     timeLine.Open();
 
-    for (const auto clip : clips) {
-        timeLine.AddClip(clip);
-    }
+    timeLine.AddClip(clips[0]);
+    timeLine.AddClip(clips[1]);
+
     openshot::FFmpegWriter w(outFile);
     w.SetAudioOptions(true, "aac", 48000, 2, openshot::ChannelLayout::LAYOUT_STEREO, 128000);
     w.SetVideoOptions(true, "libx264" , openshot::Fraction(30, 1),  1920, 1080, openshot::Fraction(1,1), false, false, 4000000);
@@ -685,7 +685,7 @@ void barnDoorsTransition(const std::string& file1, const std::string& file2, flo
     w.Close();
 }
 
-void splitTransition(const std::string& file1, const std::string& file2, float transitionDuration, const std::string& output) {
+void verticalSplitTransition(const std::string& file1, const std::string& file2, float transitionDuration, const std::string& output) {
     auto transitionClips = createTransitionClips(file1, file2, transitionDuration);
 
     ////////// Clip 1 ////////////////////////////////////////////////////////////////////////////////////////////
@@ -695,7 +695,7 @@ void splitTransition(const std::string& file1, const std::string& file2, float t
         PointsData pointsData({{0, 0}, {1, 1}}, 0, {{0.86, 0.00, 0.14, 1.00}});
         openshot::Keyframe keyframe = createTransitionKeyframe(pointsData, transitionDuration, true, transitionClips.first, openshot::BEZIER);
 
-        auto verticalSplitShiftEffect = new openshot::VerticalSplitShift(keyframe);
+        auto verticalSplitShiftEffect = new openshot::SplitShift(keyframe, false, 0.5);
         transitionClips.first->AddEffect(verticalSplitShiftEffect);
     }
 
@@ -706,8 +706,36 @@ void splitTransition(const std::string& file1, const std::string& file2, float t
         PointsData pointsData({{0, -1}, {1, 0}}, -1, {{0.86, 0.00, 0.14, 1.00}});
         openshot::Keyframe keyframe = createTransitionKeyframe(pointsData, transitionDuration, false, transitionClips.second, openshot::BEZIER);
 
-        auto verticalSplitShiftEffect = new openshot::VerticalSplitShift(keyframe);
+        auto verticalSplitShiftEffect = new openshot::SplitShift(keyframe, false, 0.5);
         transitionClips.second->AddEffect(verticalSplitShiftEffect);
+    }
+
+    createTimelineAndWriteClips({ transitionClips.first, transitionClips.second }, output);
+}
+
+void horizontalSplitTransition(const std::string& file1, const std::string& file2, float transitionDuration, const std::string& output) {
+    auto transitionClips = createTransitionClips(file1, file2, transitionDuration);
+
+    ////////// Clip 1 ////////////////////////////////////////////////////////////////////////////////////////////
+
+    /// Vertical Split Shift Effect | Clip 1
+    {
+        PointsData pointsData({{0, 0}, {1, 1}}, 0, {{0.86, 0.00, 0.14, 1.00}});
+        openshot::Keyframe keyframe = createTransitionKeyframe(pointsData, transitionDuration, true, transitionClips.first, openshot::BEZIER);
+
+        auto horizontalSplitShiftEffect = new openshot::SplitShift(keyframe, true, 0.5);
+        transitionClips.first->AddEffect(horizontalSplitShiftEffect);
+    }
+
+    ////////// Clip 2 ////////////////////////////////////////////////////////////////////////////////////////////
+
+    /// Vertical Split Shift Effect | Clip 2
+    {
+        PointsData pointsData({{0, -1}, {1, 0}}, -1, {{0.86, 0.00, 0.14, 1.00}});
+        openshot::Keyframe keyframe = createTransitionKeyframe(pointsData, transitionDuration, false, transitionClips.second, openshot::BEZIER);
+
+        auto horizontalSplitShiftEffect = new openshot::SplitShift(keyframe, true, 0.5);
+        transitionClips.second->AddEffect(horizontalSplitShiftEffect);
     }
 
     createTimelineAndWriteClips({ transitionClips.first, transitionClips.second }, output);

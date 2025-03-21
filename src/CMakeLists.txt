@@ -113,7 +113,7 @@ set(EFFECTS_SOURCES
   effects/Zoom.cpp
   effects/Wipe.cpp
   effects/Exposure.cpp
-  effects/VerticalSplitShift.cpp
+  effects/SplitShift.cpp
   effects/Brightness.cpp
   effects/Caption.cpp
   effects/ChromaKey.cpp

@@ -40,7 +40,7 @@ std::shared_ptr<openshot::Frame> Wipe::GetFrame(std::shared_ptr<openshot::Frame>
     const auto highPercentage = mLevelsHighPercentage.GetValue(frame_number);
 
     auto imageCv = frame->GetImageCV();
-    Podcastle::Effects::applyThresholdWipeMask(imageCv, lowPercentage, highPercentage);
+    Podcastle::Effects::applyThresholdWipeMaskEffect(imageCv, lowPercentage, highPercentage);
 
     // return the modified frame
     frame->SetImageCV(imageCv);

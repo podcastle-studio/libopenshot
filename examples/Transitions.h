@@ -37,7 +37,10 @@ void fadeOutInTransition(const std::string& file1 = "clips/clip-14.mp4", const s
 void barnDoorsTransition(const std::string& file1 = "clips/clip-14.mp4", const std::string& file2 = "clips/clip-15.mp4",
                          float transitionDuration = 0.5, const std::string& output = "./final/barnDoorsTransition.mp4");
 
-void splitTransition(const std::string& file1 = "clips/clip-6.mp4", const std::string& file2 = "clips/clip-7.mp4",
+void verticalSplitTransition(const std::string& file1 = "clips/clip-6.mp4", const std::string& file2 = "clips/clip-7.mp4",
+                            float transitionDuration = 0.5, const std::string& output = "./final/splitTransition.mp4");
+
+void horizontalSplitTransition(const std::string& file1 = "clips/clip-6.mp4", const std::string& file2 = "clips/clip-7.mp4",
                             float transitionDuration = 0.5, const std::string& output = "./final/splitTransition.mp4");
 
 void zoomInTransition(const std::string& file1 = "clips/clip-1.mp4", const std::string& file2 = "clips/clip-0.mp4",
@@ -69,7 +72,7 @@ inline void runTransitions() {
        // circleTransition("input/1.mp4", 0.8);
        // barnDoorsTransition("input/1.mp4", "input/2.mp4", 0.8);
        // contrastTransition("input/1.mp4", "input/2.mp4", 0.8);
-       // splitTransition();
+       verticalSplitTransition();
        // zoomInTransition("input/1.mp4", "input/2.mp4", 0.8);
        // brightnessTransition("./ForRender/Flash(Light)/1.mp4", "./ForRender/Flash(Light)/2.mp4", 1, "./ForRender/Flash(Light)/out.mp4");
        // brightnessFootageTransition("./ForRender/Flash(Light)/1.mp4", "./ForRender/Flash(Light)/2.mp4", 0.8);

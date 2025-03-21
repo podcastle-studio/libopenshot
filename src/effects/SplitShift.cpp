@@ -10,49 +10,50 @@
 //
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
-#include "VerticalSplitShift.h"
+#include "SplitShift.h"
 #include "Exceptions.h"
 #include "image-processing-lib/effects.h"
 
 using namespace openshot;
 
 /// Blank constructor, useful when using Json to load the effect properties
-VerticalSplitShift::VerticalSplitShift() : shiftAmount(0.0), splitPoint(0.5) {
+SplitShift::SplitShift() : shiftAmount(0.0), splitPoint(0.5) {
 	// Init effect properties
 	init_effect_details();
 }
 
 // Default constructor
-VerticalSplitShift::VerticalSplitShift(Keyframe newShiftAmount, Keyframe newSplitPoint)
-    : splitPoint(newSplitPoint), shiftAmount(newShiftAmount)
+SplitShift::SplitShift(Keyframe newShiftAmount, bool _isHorizontal, Keyframe newSplitPoint)
+    : splitPoint(newSplitPoint), isHorizontal(_isHorizontal), shiftAmount(newShiftAmount)
 {
 	// Init effect properties
 	init_effect_details();
 }
 
 // Init effect settings
-void VerticalSplitShift::init_effect_details()
+void SplitShift::init_effect_details()
 {
 	/// Initialize the values of the EffectInfo struct.
 	InitEffectInfo();
 
 	/// Set the effect info
-	info.class_name = "VerticalShift";
-	info.name = "VerticalShift";
-	info.description = "Vertically Shift the image up, down.";
+	info.class_name = "SplitShift";
+	info.name = "SplitShift";
+	info.description = "Vertically or Horizontally Shift the image up<->down or right<->left.";
 	info.has_audio = false;
 	info.has_video = true;
 }
 
 // This method is required for all derived classes of EffectBase, and returns a
 // modified openshot::Frame object
-std::shared_ptr<openshot::Frame> VerticalSplitShift::GetFrame(std::shared_ptr<openshot::Frame> frame, int64_t frame_number) {
+std::shared_ptr<openshot::Frame> SplitShift::GetFrame(std::shared_ptr<openshot::Frame> frame, int64_t frame_number) {
     double shiftAmountValue = shiftAmount.GetValue(frame_number);
     double splitPointValue = splitPoint.GetValue(frame_number);
 
     // Get the frame's image
     auto imageCv = frame->GetImageCV();
-    Podcastle::Effects::applyVerticalSplitShiftEffect(imageCv, shiftAmountValue, splitPointValue);
+
+    Podcastle::Effects::applySplitShiftEffect(imageCv, shiftAmountValue, splitPointValue, isHorizontal);
     frame->SetImageCV(imageCv);
 
 	// return the modified frame
@@ -60,14 +61,14 @@ std::shared_ptr<openshot::Frame> VerticalSplitShift::GetFrame(std::shared_ptr<op
 }
 
 // Generate JSON string of this object
-std::string VerticalSplitShift::Json() const {
+std::string SplitShift::Json() const {
 
 	// Return formatted string
 	return JsonValue().toStyledString();
 }
 
 // Generate Json::Value for this object
-Json::Value VerticalSplitShift::JsonValue() const {
+Json::Value SplitShift::JsonValue() const {
 
 	// Create root json object
 	Json::Value root = EffectBase::JsonValue(); // get parent properties
@@ -80,7 +81,7 @@ Json::Value VerticalSplitShift::JsonValue() const {
 }
 
 // Load JSON string into this object
-void VerticalSplitShift::SetJson(const std::string value) {
+void SplitShift::SetJson(const std::string value) {
 
 	// Parse JSON string into JSON objects
 	try
@@ -97,7 +98,7 @@ void VerticalSplitShift::SetJson(const std::string value) {
 }
 
 // Load Json::Value into this object
-void VerticalSplitShift::SetJsonValue(const Json::Value root) {
+void SplitShift::SetJsonValue(const Json::Value root) {
 
 	// Set parent data
 	EffectBase::SetJsonValue(root);
@@ -110,7 +111,7 @@ void VerticalSplitShift::SetJsonValue(const Json::Value root) {
 }
 
 // Get all properties for a specific frame
-std::string VerticalSplitShift::PropertiesJSON(int64_t requested_frame) const {
+std::string SplitShift::PropertiesJSON(int64_t requested_frame) const {
 
 	// Generate JSON properties list
 	Json::Value root = BasePropertiesJSON(requested_frame);
