@@ -1206,11 +1206,11 @@ void Clip::apply_background(std::shared_ptr<openshot::Frame> frame, std::shared_
         frame->SetImageCV(backgroundImageCv);
     } else {
         if (composition_mode == QPainter::CompositionMode_Plus) {
-            auto res = Podcastle::Effects::additiveBlend(background_frame->GetImageCV(), frame->GetImageCV());
+            const auto res = Podcastle::Effects::additiveBlend(background_frame->GetImageCV(), frame->GetImageCV());
             background_frame->SetImageCV(res);
         } else {
             // Retrieve the background image
-            std::shared_ptr<QImage> background_canvas = background_frame->GetImage();
+            const std::shared_ptr<QImage> background_canvas = background_frame->GetImage();
 
             // Standard procedure for drawing the frame's image onto the background
             QPainter painter(background_canvas.get());

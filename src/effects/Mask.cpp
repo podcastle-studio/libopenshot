@@ -73,18 +73,15 @@ std::shared_ptr<openshot::Frame> Mask::GetFrame(std::shared_ptr<openshot::Frame>
 	// Get the mask image (from the mask reader)
 	std::shared_ptr<QImage> frame_image = frame->GetImage();
 
-	if (maskType == MaskType::CUSTOM)
-	{
+	if (maskType == CUSTOM) {
 		// Check if mask reader is open
 		#pragma omp critical (open_mask_reader)
 		{
-			if (reader && !reader->IsOpen())
-				reader->Open();
+			if (reader && !reader->IsOpen()) reader->Open();
 		}
 
 		// No reader (bail on applying the mask)
-		if (!reader)
-			return frame;
+		if (!reader) return frame;
 
 		// Get mask image (if missing or different size than frame image)
 		#pragma omp critical (open_mask_reader)
@@ -93,17 +90,15 @@ std::shared_ptr<openshot::Frame> Mask::GetFrame(std::shared_ptr<openshot::Frame>
 				(original_mask && original_mask->size() != frame_image->size())) {
 
 				// Only get mask if needed
-				auto mask_without_sizing = std::make_shared<QImage>(
-						*reader->GetFrame(frame_number)->GetImage());
+				const auto mask_without_sizing = std::make_shared<QImage>(*reader->GetFrame(frame_number)->GetImage());
 
 				// Resize mask image to match frame size
-				original_mask = std::make_shared<QImage>(
-						mask_without_sizing->scaled(
+				original_mask = std::make_shared<QImage>(mask_without_sizing->scaled(
 								frame_image->width(), frame_image->height(),
 								Qt::IgnoreAspectRatio, Qt::SmoothTransformation));
 			}
 		}
-	} else if (maskType == MaskType::ROUNDED_CORNERS) {
+	} else if (maskType == ROUNDED_CORNERS) {
 		QImage mask(frame_image->width(),frame_image->height(),QImage::Format_RGBA8888_Premultiplied);
 		mask.fill(Qt::white);
 		QPainter p(&mask);
@@ -116,14 +111,15 @@ std::shared_ptr<openshot::Frame> Mask::GetFrame(std::shared_ptr<openshot::Frame>
 		p.drawPath(path);
 		p.end();
 		original_mask = std::make_shared<QImage>(mask);
-	} else if (maskType == MaskType::CIRCLE_OUT) {
-        float radiusValue = circleRadius.GetValue(frame_number);
+	} else if (maskType == CIRCLE_OUT) {
+        const auto radiusValue = circleRadius.GetValue(frame_number);
 
-        if (!radiusValue) {
+        if (radiusValue == 0) {
             return frame;
         }
-        int centerX = frame_image->width() / 2;
-        int centerY = frame_image->height() / 2;
+
+        const int centerX = frame_image->width() / 2;
+        const int centerY = frame_image->height() / 2;
 
         QImage mask(frame_image->width(), frame_image->height(), QImage::Format_RGBA8888_Premultiplied);
         mask.fill(Qt::white);
@@ -138,19 +134,19 @@ std::shared_ptr<openshot::Frame> Mask::GetFrame(std::shared_ptr<openshot::Frame>
         p.drawPath(path);
         p.end();
         original_mask = std::make_shared<QImage>(mask);
-    } else if (maskType == MaskType::CIRCLE_IN) {
-        float radiusValue = circleRadius.GetValue(frame_number);
+    } else if (maskType == CIRCLE_IN) {
+        const auto radiusValue = circleRadius.GetValue(frame_number);
 
-        int width = frame_image->width();
-        int height = frame_image->height();
-        float radiusMax = sqrt(width * width + height * height) / 2;
-        float radiusMin= 0;
+        const int width = frame_image->width();
+        const int height = frame_image->height();
+        const auto radiusMax = sqrt(width * width + height * height) / 2;
+        constexpr auto radiusMin = 0.f;
 
         if (radiusValue == radiusMin || radiusValue > radiusMax) {
             return frame;
         }
-        int centerX = frame_image->width() / 2;
-        int centerY = frame_image->height() / 2;
+        const int centerX = frame_image->width() / 2;
+        const int centerY = frame_image->height() / 2;
 
         QImage mask(frame_image->width(), frame_image->height(), QImage::Format_RGBA8888_Premultiplied);
         mask.fill(Qt::white);
@@ -158,7 +154,7 @@ std::shared_ptr<openshot::Frame> Mask::GetFrame(std::shared_ptr<openshot::Frame>
         p.setRenderHint(QPainter::Antialiasing);
         QPainterPath path;
         path.addEllipse(QPointF(centerX, centerY), radiusValue, radiusValue);
-        QPen pen(Qt::black, 0);
+        const QPen pen(Qt::black, 0);
         p.setPen(pen);
         p.fillPath(path, Qt::black);
         p.drawPath(path);
@@ -171,20 +167,19 @@ std::shared_ptr<openshot::Frame> Mask::GetFrame(std::shared_ptr<openshot::Frame>
 	needs_refresh = false;
 
 	// Get pixel arrays
-	unsigned char *pixels = (unsigned char *) frame_image->bits();
-	unsigned char *mask_pixels = (unsigned char *) original_mask->bits();
+	unsigned char *pixels = frame_image->bits();
+	const unsigned char *mask_pixels = original_mask->bits();
 
-	double contrast_value = (contrast.GetValue(frame_number));
-	double brightness_value = (brightness.GetValue(frame_number));
+	const double contrast_value = (contrast.GetValue(frame_number));
+	const double brightness_value = (brightness.GetValue(frame_number));
 
 	// Loop through mask pixels, and apply average gray value to frame alpha channel
-	for (int pixel = 0, byte_index=0; pixel < original_mask->width() * original_mask->height(); pixel++, byte_index+=4)
-	{
+	for (int pixel = 0, byte_index=0; pixel < original_mask->width() * original_mask->height(); pixel++, byte_index+=4) {
 		// Get the RGB values from the pixel
-		int R = mask_pixels[byte_index];
-		int G = mask_pixels[byte_index + 1];
-		int B = mask_pixels[byte_index + 2];
-		int A = mask_pixels[byte_index + 3];
+		const int R = mask_pixels[byte_index];
+		const int G = mask_pixels[byte_index + 1];
+		const int B = mask_pixels[byte_index + 2];
+		const int A = mask_pixels[byte_index + 3];
 
 		// Get the average luminosity
 		int gray_value = qGray(R, G, B);
@@ -193,11 +188,11 @@ std::shared_ptr<openshot::Frame> Mask::GetFrame(std::shared_ptr<openshot::Frame>
 		gray_value += (255 * brightness_value);
 
 		// Adjust the contrast
-		float factor = (20 / std::fmax(0.00001, 20.0 - contrast_value));
+		const float factor = (20 / std::fmax(0.00001, 20.0 - contrast_value));
 		gray_value = (factor * (gray_value - 128) + 128);
 
 		// Calculate the % change in alpha
-		float alpha_percent = float(constrain(A - gray_value)) / 255.0;
+		const float alpha_percent = float(constrain(A - gray_value)) / 255.0;
 
 		// Set the alpha channel to the gray value
 		if (replace_image) {
@@ -214,7 +209,6 @@ std::shared_ptr<openshot::Frame> Mask::GetFrame(std::shared_ptr<openshot::Frame>
 			pixels[byte_index + 2] *= alpha_percent;
 			pixels[byte_index + 3] *= alpha_percent;
 		}
-
 	}
 
 	// return the modified frame

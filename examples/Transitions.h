@@ -29,7 +29,7 @@ void dissolveBlurTransition(const std::string& file1 = "clips/clip-4.mp4", const
                             float transitionDuration = 0.5, const std::string& output = "./final/dissolveBlurTransition.mp4");
 
 void circleTransition(const std::string& file1 = "clips/clip-14.mp4", const std::string& file2 = "clips/clip-14.mp4",
-                         float transitionDuration = 0.5, const std::string& output = "./final/circleTransition.mp4");
+                         float transitionDuration = 0.5, const std::string& output = "./circleTransition.mp4");
 
 void fadeOutInTransition(const std::string& file1 = "clips/clip-14.mp4", const std::string& file2 = "clips/clip-14.mp4",
                          float transitionDuration = 0.5, const std::string& output = "./final/circleOutTransition.mp4");
@@ -60,7 +60,7 @@ void glitchTransition(const std::string& file1 = "clips/glitch1.mp4", const std:
 
 inline void runTransitions() {
     using namespace std::chrono;
-    auto start = high_resolution_clock::now();
+    const auto start = high_resolution_clock::now();
        // panDiagonalTransition("input/1.mp4", "input/2.mp4", 0.8);
        // panHorizontal("input/1.mp4", "input/2.mp4", 0.8);
        // blurTransition("input/1.mp4", "input/2.mp4", 0.8);
@@ -69,10 +69,10 @@ inline void runTransitions() {
        // wooshTransition("input/1.mp4", "input/2.mp4", 0.8);
        // dissolveTransition("input/1.mp4", "input/2.mp4", 0.8);
        // dissolveBlurTransition("input/1.mp4", "input/2.mp4", 0.8);
-       // circleTransition("input/1.mp4", 0.8);
+       circleTransition("1.mp4", "2.mp4", 1);
        // barnDoorsTransition("input/1.mp4", "input/2.mp4", 0.8);
        // contrastTransition("input/1.mp4", "input/2.mp4", 0.8);
-       verticalSplitTransition();
+       // verticalSplitTransition();
        // zoomInTransition("input/1.mp4", "input/2.mp4", 0.8);
        // brightnessTransition("./ForRender/Flash(Light)/1.mp4", "./ForRender/Flash(Light)/2.mp4", 1, "./ForRender/Flash(Light)/out.mp4");
        // brightnessFootageTransition("./ForRender/Flash(Light)/1.mp4", "./ForRender/Flash(Light)/2.mp4", 0.8);

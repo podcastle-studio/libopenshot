@@ -10,7 +10,6 @@
 #include "effects/Blur.h"
 #include "effects/BorderReflectedMove.h"
 #include "effects/BorderReflectedRotation.h"
-#include "effects/Mask.h"
 #include "effects/Bars.h"
 #include "effects/Zoom.h"
 #include "effects/Wipe.h"
@@ -18,6 +17,7 @@
 #include "effects/Brightness.h"
 #include "effects/SplitShift.h"
 #include "effects/ColorShift.h"
+#include "effects/CircleMask.h"
 #include "Color.h"
 
 ////////////////// Helper functions //////////////////////////////////////////////////////////////////////////////////////
@@ -508,14 +508,14 @@ void circleTransition(const std::string& file1, const std::string& file2, float 
     openshot::Clip clip2(file2);
 
     auto perClipTransitionDuration = transitionDuration / 2;
-    float clip1Position = 0;
-    float clip1Start = 0;
+    const float clip1Position = 0;
+    const float clip1Start = 0;
     float clip1End = clip1.info.duration;
 
     /// Init clip 2 properties
-    float clip2Position = clip1Position + (clip1.End()-clip1.Start());
-    float clip2Start = 0;
-    float clip2End = clip2.info.duration;
+    const float clip2Position = clip1Position + clip1.info.duration;
+    constexpr float clip2Start = 0;
+    const float clip2End = clip2.info.duration;
 
     /// Clip 1 handling
     clip1.Position(clip1Position);
@@ -523,16 +523,10 @@ void circleTransition(const std::string& file1, const std::string& file2, float 
     clip1.End(clip1End);
     clip1.scale = openshot::SCALE_FIT;
 
-    const int width1 = clip1.Reader()->info.width;
-    const int height1 = clip1.Reader()->info.height;
-    float circleRadius1 = sqrt(width1 * width1 + height1 * height1) / 2;
+    const PointsData circleRadius1PointsData({{0, 1}, {1, 0}}, 1);
+    const auto radius1 = createTransitionKeyframe(circleRadius1PointsData, perClipTransitionDuration, true, &clip1, openshot::LINEAR);
 
-    auto* mask1 = new openshot::Mask(openshot::Mask::MaskType::CIRCLE_OUT, 0, 3);
-    mask1->circleRadius.AddPoint(timeToFrame(0), 0, openshot::LINEAR);
-    mask1->circleRadius.AddPoint(timeToFrame(clip1End - perClipTransitionDuration) - 1, 0, openshot::LINEAR);
-    mask1->circleRadius.AddPoint(timeToFrame(clip1End - perClipTransitionDuration), circleRadius1, openshot::LINEAR);
-    mask1->circleRadius.AddPoint(timeToFrame(clip1End), 0.0000001, openshot::LINEAR);
-    clip1.AddEffect(mask1);
+    clip1.AddEffect(new openshot::CircleMask(radius1));
 
     /// Clip 2 handling
     clip2.Position(clip2Position);
@@ -540,15 +534,9 @@ void circleTransition(const std::string& file1, const std::string& file2, float 
     clip2.End(clip2End);
     clip2.scale = openshot::SCALE_FIT;
 
-    int width2 = clip2.Reader()->info.width;
-    int height2 = clip2.Reader()->info.height;
-    float circleRadius2 = sqrt(width2 * width2 + height2 * height2) / 2;
-
-    auto* mask2 = new openshot::Mask(openshot::Mask::MaskType::CIRCLE_OUT, 0, 3);
-    mask2->circleRadius.AddPoint(timeToFrame(0), 0.001, openshot::BEZIER);
-    mask2->circleRadius.AddPoint(timeToFrame(clip2Start + transitionDuration), circleRadius2, openshot::LINEAR);
-    mask2->circleRadius.AddPoint(timeToFrame(clip2End), circleRadius2, openshot::LINEAR);
-    clip2.AddEffect(mask2);
+    const PointsData circleRadius2PointsData({{0, 0}, {1, 1}}, 0);
+    const auto radius2 = createTransitionKeyframe(circleRadius2PointsData, perClipTransitionDuration, false, &clip1, openshot::LINEAR);
+    clip2.AddEffect(new openshot::CircleMask(radius2));
 
     openshot::Timeline timeLine(1920, 1080, openshot::Fraction(30, 1),
                                 48000, 2, openshot::ChannelLayout::LAYOUT_STEREO);

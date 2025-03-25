@@ -35,7 +35,6 @@ namespace openshot
 	 */
 	class Mask : public EffectBase
 	{
-	private:
 		ReaderBase *reader;
 		std::shared_ptr<QImage> original_mask;
 		bool needs_refresh;
@@ -45,7 +44,6 @@ namespace openshot
 		void init_effect_details();
 
 	public:
-
         enum MaskType
         {
             INVALID = -1,

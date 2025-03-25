@@ -129,9 +129,6 @@ std::shared_ptr<openshot::Frame> Blur::GetFrame(std::shared_ptr<openshot::Frame>
 	const auto radial_blur_angle_value = radial_blur_angle.GetValue(frame_number);
 	const auto iteration_value = iterations.GetInt(frame_number);
 
-    // Get the frame's image
-    std::shared_ptr<QImage> frame_image = frame->GetImage();
-
     // diagonal blur (if any)
     if (diagonal_radius_value > 0) {
         auto imageCv = frame->GetImageCV();
