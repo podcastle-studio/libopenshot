@@ -21,7 +21,7 @@
 #include "DummyReader.h"
 #include "Timeline.h"
 #include "ZmqLogger.h"
-#include "effects/image-processing-lib/effects.h"
+#include "effects/image-processing-lib/src/Effects/effects.h"
 
 #ifdef USE_IMAGEMAGICK
 	#include "MagickUtilities.h"

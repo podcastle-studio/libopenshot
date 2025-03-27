@@ -1,14 +1,8 @@
 #include "Wipe.h"
 
 #include "Exceptions.h"
-
-#include "ReaderBase.h"
-#include "ChunkReader.h"
 #include "FFmpegReader.h"
-#include "QtImageReader.h"
-#include "QPainter"
-#include "QPainterPath"
-#include "image-processing-lib/effects.h"
+#include "./image-processing-lib/src/Effects/effects.h"
 
 using namespace openshot;
 

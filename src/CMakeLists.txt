@@ -105,7 +105,7 @@ set(OPENSHOT_CV_SOURCES
 
 # Video effects
 set(EFFECTS_SOURCES
-  effects/image-processing-lib/effects.cpp
+  effects/image-processing-lib/src/Effects/effects.cpp
   effects/Bars.cpp
   effects/Blur.cpp
   effects/BorderReflectedRotation.cpp

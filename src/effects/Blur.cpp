@@ -13,7 +13,7 @@
 #include "Blur.h"
 #include "Exceptions.h"
 #include "MagickUtilities.h"
-#include "image-processing-lib/effects.h"
+#include "./image-processing-lib/src/Effects/effects.h"
 
 using namespace openshot;
 

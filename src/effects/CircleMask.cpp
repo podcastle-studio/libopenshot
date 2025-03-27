@@ -11,12 +11,9 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
 #include "CircleMask.h"
-#include "image-processing-lib/effects.h"
+#include "./image-processing-lib/src/Effects/effects.h"
 
 #include "Exceptions.h"
-
-#include "ReaderBase.h"
-#include "ChunkReader.h"
 #include "FFmpegReader.h"
 
 

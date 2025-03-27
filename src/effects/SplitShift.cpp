@@ -12,7 +12,7 @@
 
 #include "SplitShift.h"
 #include "Exceptions.h"
-#include "image-processing-lib/effects.h"
+#include "./image-processing-lib/src/Effects/effects.h"
 
 using namespace openshot;
 
