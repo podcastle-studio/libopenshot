@@ -62,24 +62,83 @@ void glitchTransition(const std::string& file1 = "1.mp4", const std::string& fil
     float transitionDuration = 1, const std::string& output = "./out.mp4");
 
 inline void runTransitions() {
-    const auto start = std::chrono::high_resolution_clock::now();
+    auto start = std::chrono::high_resolution_clock::now();
+    panDiagonalTransition();
+    auto end = std::chrono::high_resolution_clock::now();
+    std::cout << "panDiagonalTransition completed: " << std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count() << " ms." << std::endl;
 
-    // panDiagonalTransition();
-    // panHorizontal();
-    // blurTransition();
-    // blurVerticalTransition();
+    start = std::chrono::high_resolution_clock::now();
+    panHorizontal();
+    end = std::chrono::high_resolution_clock::now();
+    std::cout << "panHorizontal completed: " << std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count() << " ms." << std::endl;
+
+    start = std::chrono::high_resolution_clock::now();
+    blurTransition();
+    end = std::chrono::high_resolution_clock::now();
+    std::cout << "blurTransition completed: " << std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count() << " ms." << std::endl;
+
+    start = std::chrono::high_resolution_clock::now();
+    blurVerticalTransition();
+    end = std::chrono::high_resolution_clock::now();
+    std::cout << "blurVerticalTransition completed: " << std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count() << " ms." << std::endl;
+
+    start = std::chrono::high_resolution_clock::now();
     rotateTransition();
-    // wooshTransition();
-    // dissolveTransition();
-    // dissolveBlurTransition();
-    // circleTransition();
-    // barnDoorsTransition();
-    // contrastTransition();
-    // verticalSplitTransition();
-    // zoomInTransition();
-    // lightLeakTransition();
-    // lightFootageTransition();
-    // glitchTransition();
+    end = std::chrono::high_resolution_clock::now();
+    std::cout << "rotateTransition completed: " << std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count() << " ms." << std::endl;
 
-    std::cout << "Completed: " << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::high_resolution_clock::now() - start).count() << " sec." << std::endl;
+    start = std::chrono::high_resolution_clock::now();
+    wooshTransition();
+    end = std::chrono::high_resolution_clock::now();
+    std::cout << "wooshTransition completed: " << std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count() << " ms." << std::endl;
+
+    start = std::chrono::high_resolution_clock::now();
+    dissolveTransition();
+    end = std::chrono::high_resolution_clock::now();
+    std::cout << "dissolveTransition completed: " << std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count() << " ms." << std::endl;
+
+    start = std::chrono::high_resolution_clock::now();
+    dissolveBlurTransition();
+    end = std::chrono::high_resolution_clock::now();
+    std::cout << "dissolveBlurTransition completed: " << std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count() << " ms." << std::endl;
+
+    start = std::chrono::high_resolution_clock::now();
+    circleTransition();
+    end = std::chrono::high_resolution_clock::now();
+    std::cout << "circleTransition completed: " << std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count() << " ms." << std::endl;
+
+    start = std::chrono::high_resolution_clock::now();
+    barnDoorsTransition();
+    end = std::chrono::high_resolution_clock::now();
+    std::cout << "barnDoorsTransition completed: " << std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count() << " ms." << std::endl;
+
+    start = std::chrono::high_resolution_clock::now();
+    contrastTransition();
+    end = std::chrono::high_resolution_clock::now();
+    std::cout << "contrastTransition completed: " << std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count() << " ms." << std::endl;
+
+    start = std::chrono::high_resolution_clock::now();
+    verticalSplitTransition();
+    end = std::chrono::high_resolution_clock::now();
+    std::cout << "verticalSplitTransition completed: " << std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count() << " ms." << std::endl;
+
+    start = std::chrono::high_resolution_clock::now();
+    zoomInTransition();
+    end = std::chrono::high_resolution_clock::now();
+    std::cout << "zoomInTransition completed: " << std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count() << " ms." << std::endl;
+
+    start = std::chrono::high_resolution_clock::now();
+    lightLeakTransition();
+    end = std::chrono::high_resolution_clock::now();
+    std::cout << "lightLeakTransition completed: " << std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count() << " ms." << std::endl;
+
+    start = std::chrono::high_resolution_clock::now();
+    lightFootageTransition();
+    end = std::chrono::high_resolution_clock::now();
+    std::cout << "lightFootageTransition completed: " << std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count() << " ms." << std::endl;
+
+    start = std::chrono::high_resolution_clock::now();
+    glitchTransition();
+    end = std::chrono::high_resolution_clock::now();
+    std::cout << "glitchTransition completed: " << std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count() << " ms." << std::endl;
 }

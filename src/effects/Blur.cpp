@@ -127,12 +127,11 @@ std::shared_ptr<openshot::Frame> Blur::GetFrame(std::shared_ptr<openshot::Frame>
 	const auto diagonal_radius_value = diagonal_radius.GetValue(frame_number);
 	const auto zoom_blur_radius_value = zoom_blur_radius.GetValue(frame_number);
 	const auto radial_blur_angle_value = radial_blur_angle.GetValue(frame_number);
-	const auto iteration_value = iterations.GetInt(frame_number);
 
     // diagonal blur (if any)
     if (diagonal_radius_value > 0) {
         auto imageCv = frame->GetImageCV();
-        Podcastle::Effects::applyDiagonalBlurEffect(imageCv, diagonal_radius_value, iteration_value);
+        Podcastle::Effects::applyDiagonalBlurEffect(imageCv, diagonal_radius_value);
         frame->SetImageCV(imageCv);
     }
 
