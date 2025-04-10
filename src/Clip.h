@@ -88,6 +88,12 @@ namespace openshot {
 	 * @endcode
 	 */
 	class Clip : public openshot::ClipBase, public openshot::ReaderBase {
+	public:
+		enum OverlayType {
+			OVERLAY_NONE,
+			ADDITIVE_BLEND,
+			DISPLACEMENT_MAP
+		};
 	protected:
 		/// Mutex for multiple threads
 		std::recursive_mutex getFrameMutex;
@@ -111,6 +117,10 @@ namespace openshot {
 		std::string parentObjectId; ///< Id of the bounding box that this clip is attached to
 		std::shared_ptr<openshot::TrackedObjectBase> parentTrackedObject; ///< Tracked object this clip is attached to
 		openshot::Clip* parentClipObject; ///< Clip object this clip is attached to
+
+		openshot::Clip* overlayedClip;
+		OverlayType overlayType; ///< Clip object this clip is attached to
+		bool isOverlayAtEnd; ///< Clip object this clip is attached to
 
 		/// Final cache object used to hold final frames
 		CacheMemory final_cache;
@@ -167,6 +177,7 @@ namespace openshot {
 		QSize scale_size(QSize source_size, ScaleType source_scale, int target_width, int target_height);
 
 	public:
+		bool isOverlay; ///< Whether clip is overlay itslef
 		openshot::GravityType gravity;   ///< The gravity of a clip determines where it snaps to its parent
 		openshot::ScaleType scale;		 ///< The scale determines how a clip should be resized to fit its parent
 		openshot::AnchorType anchor;	 ///< The anchor determines what parent a clip should snap to
@@ -231,6 +242,7 @@ namespace openshot {
 		/// Return the associated ParentClip (if any)
 		openshot::Clip* GetParentClip();
 
+		void setOverlayClip(openshot::Clip* clip, OverlayType oType, bool isAtEnd);
 		/// Return the associated Parent Tracked Object (if any)
 		std::shared_ptr<openshot::TrackedObjectBase> GetParentTrackedObject();
 
@@ -323,7 +335,6 @@ namespace openshot {
 
         QPainter::CompositionMode composition_mode = QPainter::CompositionMode_SourceOver; ///< Composition mode for blending this clip with the background
 
-        bool isDisplacementMap = false; ///< Is this clip a displacement map for another clip
         openshot::Keyframe horizontal_displacement; ///< Horizontal displacement for displacement map
         openshot::Keyframe vertical_displacement; ///< Vertical displacement for displacement map
 

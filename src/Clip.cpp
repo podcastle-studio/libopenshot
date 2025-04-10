@@ -97,6 +97,9 @@ void Clip::init_settings()
 
 	// Init reader info struct
 	init_reader_settings();
+
+	isOverlay = false;
+	overlayedClip = nullptr;
 }
 
 // Init reader info details
@@ -464,6 +467,39 @@ std::shared_ptr<Frame> Clip::GetFrame(std::shared_ptr<openshot::Frame> backgroun
             // Apply effects BEFORE applying keyframes (if any local or global effects are used)
             apply_effects(frame, timeline_frame_number, options, true);
 
+			if (overlayedClip) {
+				const auto currentClipFps = reader->info.fps.ToFloat();
+				const auto overlayedClipFps = overlayedClip->info.fps.ToFloat();
+				const auto overlayClipDuration = overlayedClip->end - overlayedClip->start;
+				const int64_t transitionClipStartFrame = isOverlayAtEnd ? (end - overlayClipDuration) * currentClipFps : 1;
+				const int64_t transitionClipEndFrame = (isOverlayAtEnd ? end : overlayClipDuration) * currentClipFps;
+
+				// Check if the requested main clip frame falls inside the transition region.
+				if (requested_clip_frame_number > transitionClipStartFrame && requested_clip_frame_number < transitionClipEndFrame) {
+					const int64_t overlayClipFrameNum = (overlayedClip->start + (requested_clip_frame_number - transitionClipStartFrame) / currentClipFps) * overlayedClipFps;
+					const auto overlayedFrame = overlayedClip->GetFrame(overlayClipFrameNum);
+					auto mainImageCv = frame->GetImageCV();
+
+					switch (overlayType) {
+					case OverlayType::ADDITIVE_BLEND:
+						{
+							Podcastle::Effects::additiveBlend(mainImageCv, overlayedFrame->GetImageCV());
+							frame->SetImageCV(mainImageCv);
+							break;
+						}
+					case OverlayType::DISPLACEMENT_MAP:
+						{
+							Podcastle::Effects::applyDisplacementMapEffect(mainImageCv, overlayedFrame->GetImageCV(),
+							overlayedClip->horizontal_displacement.GetValue(overlayClipFrameNum),
+							overlayedClip->vertical_displacement.GetValue(overlayClipFrameNum));
+							frame->SetImageCV(mainImageCv);
+							break;
+						}
+					default: break;
+					}
+				}
+			}
+
             // Apply keyframe / transforms to current clip image
             apply_keyframes(frame, timeline_size);
 
@@ -474,7 +510,8 @@ std::shared_ptr<Frame> Clip::GetFrame(std::shared_ptr<openshot::Frame> backgroun
             final_cache.Add(frame);
         }
 
-        if (!background_frame) {
+
+        if (!background_frame && !isOverlay) {
             // Create missing background_frame w/ transparent color (if needed)
             background_frame = std::make_shared<Frame>(actual_clip_frame_number, frame->GetWidth(), frame->GetHeight(),
                                                        "#00000000",  frame->GetAudioSamplesCount(),
@@ -482,7 +519,9 @@ std::shared_ptr<Frame> Clip::GetFrame(std::shared_ptr<openshot::Frame> backgroun
         }
 
 		// Apply background canvas (i.e. flatten this image onto previous layer image)
-		apply_background(frame, background_frame);
+		if (!isOverlay) {
+			apply_background(frame, background_frame);
+		}
 
 		// Return processed 'frame'
 		return frame;
@@ -512,6 +551,12 @@ openshot::Clip* Clip::GetParentClip() {
         AttachToObject(parentObjectId);
     }
     return parentClipObject;
+}
+
+void Clip::setOverlayClip(openshot::Clip* clip, const OverlayType oType, const bool isAtEnd) {
+	overlayedClip = clip;
+	overlayType = oType;
+	isOverlayAtEnd = isAtEnd;
 }
 
 // Return the associated Parent Tracked Object (if any)
@@ -1198,30 +1243,17 @@ void Clip::RemoveEffect(EffectBase* effect)
 
 // Apply background image to the current clip image (i.e. flatten this image onto previous layer)
 void Clip::apply_background(std::shared_ptr<openshot::Frame> frame, std::shared_ptr<openshot::Frame> background_frame) {
-    if (isDisplacementMap) {
-        auto backgroundImageCv = background_frame->GetImageCV();
-        Podcastle::Effects::applyDisplacementMapEffect(backgroundImageCv, frame->GetImageCV(), horizontal_displacement.GetValue(frame->number), vertical_displacement.GetValue(frame->number));
-        // Apply the displaced image to the background canvas
-        background_frame->SetImageCV(backgroundImageCv);
-        frame->SetImageCV(backgroundImageCv);
-    } else {
-        if (composition_mode == QPainter::CompositionMode_Plus) {
-            const auto res = Podcastle::Effects::additiveBlend(background_frame->GetImageCV(), frame->GetImageCV());
-            background_frame->SetImageCV(res);
-        } else {
-            // Retrieve the background image
-            const std::shared_ptr<QImage> background_canvas = background_frame->GetImage();
+	// Retrieve the background image
+    const std::shared_ptr<QImage> background_canvas = background_frame->GetImage();
 
-            // Standard procedure for drawing the frame's image onto the background
-            QPainter painter(background_canvas.get());
-            painter.setRenderHints(QPainter::Antialiasing | QPainter::SmoothPixmapTransform | QPainter::TextAntialiasing, true);
-            painter.setCompositionMode(composition_mode);
-            painter.drawImage(0, 0, *frame->GetImage());
-            painter.end();
-            // Add the modified image back to the frame
-            frame->AddImage(background_canvas);
-        }
-    }
+    // Standard procedure for drawing the frame's image onto the background
+    QPainter painter(background_canvas.get());
+    painter.setRenderHints(QPainter::Antialiasing | QPainter::SmoothPixmapTransform | QPainter::TextAntialiasing, true);
+    painter.setCompositionMode(composition_mode);
+    painter.drawImage(0, 0, *frame->GetImage());
+    painter.end();
+    // Add the modified image back to the frame
+    frame->AddImage(background_canvas);
 }
 
 // Apply effects to the source frame (if any)
