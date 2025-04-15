@@ -1530,13 +1530,11 @@ void FFmpegReader::ProcessVideoPacket(int64_t requested_frame) {
     }
 
     // Create SwsContext for color conversion (and scaling if needed)
-    SwsContext *img_convert_ctx = sws_getContext(
-        width, height, AV_GET_CODEC_PIXEL_FORMAT(pStream, pCodecCtx),
+    SwsContext *img_convert_ctx = sws_getContext(width, height, AV_GET_CODEC_PIXEL_FORMAT(pStream, pCodecCtx),
         output_width, output_height, PIX_FMT_RGBA, scale_mode, NULL, NULL, NULL);
 
     // Resize (if scaling) and convert to RGB
-    sws_scale(img_convert_ctx, pFrame->data, pFrame->linesize, 0,
-              height, pFrameRGB->data, pFrameRGB->linesize);
+    sws_scale(img_convert_ctx, pFrame->data, pFrame->linesize, 0, height, pFrameRGB->data, pFrameRGB->linesize);
 
     // Create or get the existing frame object
     std::shared_ptr<Frame> f = CreateFrame(current_frame);
