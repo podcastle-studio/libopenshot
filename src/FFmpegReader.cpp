@@ -906,6 +906,8 @@ void FFmpegReader::UpdateVideoInfo() {
 		QString str_value = tag->value;
 		info.metadata[str_key.toStdString()] = str_value.trimmed().toStdString();
 	}
+
+	info.has_alpha = ffmpeg_has_alpha(AV_GET_CODEC_PIXEL_FORMAT(pStream, pCodecCtx), pStream);
 }
 
 bool FFmpegReader::GetIsDurationKnown() {
@@ -1540,7 +1542,7 @@ void FFmpegReader::ProcessVideoPacket(int64_t requested_frame) {
     std::shared_ptr<Frame> f = CreateFrame(current_frame);
 
     // Add Image data to frame
-    if (!ffmpeg_has_alpha(AV_GET_CODEC_PIXEL_FORMAT(pStream, pCodecCtx), pStream)) {
+    if (!info.has_alpha) {
         // Add image with no alpha channel, speed optimization
         f->AddImage(output_width, output_height, bytes_per_pixel, QImage::Format_RGBA8888_Premultiplied, buffer);
     } else {
