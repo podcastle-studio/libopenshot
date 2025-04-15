@@ -264,6 +264,17 @@ void FFmpegReader::Open() {
 
 			// Get codec and codec context from stream
 			const AVCodec *pCodec = avcodec_find_decoder(codecId);
+
+			if (codecId == AV_CODEC_ID_VP9) {
+				// Does the stream metadata say alpha_mode=1?
+				AVDictionaryEntry *alpha =
+					av_dict_get(pFormatCtx->streams[videoStream]->metadata, "alpha_mode", NULL, 0);
+				if (alpha && strcmp(alpha->value, "1") == 0) {
+					const AVCodec *pref = avcodec_find_decoder_by_name("libvpx-vp9");
+					if (pref) pCodec = pref;               // override native decoder
+				}
+			}
+
 			AVDictionary *opts = NULL;
 			int retry_decode_open = 2;
 			// If hw accel is selected but hardware cannot handle repeat with software decoding
@@ -1282,9 +1293,9 @@ bool FFmpegReader::GetAVFrame() {
 			frameFinished = 1;
 			packet_status.video_decoded++;
 
-			av_image_alloc(pFrame->data, pFrame->linesize, info.width, info.height, (AVPixelFormat)(pStream->codecpar->format), 1);
+			av_image_alloc(pFrame->data, pFrame->linesize, info.width, info.height, pCodecCtx->pix_fmt, 1);
 			av_image_copy(pFrame->data, pFrame->linesize, (const uint8_t**)next_frame->data, next_frame->linesize,
-										(AVPixelFormat)(pStream->codecpar->format), info.width, info.height);
+										pCodecCtx->pix_fmt, info.width, info.height);
 
 			// Get display PTS from video frame, often different than packet->pts.
 			// Sending packets to the decoder (i.e. packet->pts) is async,
@@ -1418,7 +1429,7 @@ void FFmpegReader::ProcessVideoPacket(int64_t requested_frame) {
     bool should_scale = openshot::Settings::Instance()->ENABLE_LEGACY_MODE;
 
     // Init some things local
-    PixelFormat pix_fmt = AV_GET_CODEC_PIXEL_FORMAT(pStream, pCodecCtx);
+    PixelFormat pix_fmt = pCodecCtx->pix_fmt;
     int height = info.height;
     int width = info.width;
     int64_t video_length = info.video_length;
@@ -1530,7 +1541,7 @@ void FFmpegReader::ProcessVideoPacket(int64_t requested_frame) {
     }
 
     // Create SwsContext for color conversion (and scaling if needed)
-    SwsContext *img_convert_ctx = sws_getContext(width, height, AV_GET_CODEC_PIXEL_FORMAT(pStream, pCodecCtx),
+    SwsContext *img_convert_ctx = sws_getContext(width, height, pix_fmt,
         output_width, output_height, PIX_FMT_RGBA, scale_mode, NULL, NULL, NULL);
 
     // Resize (if scaling) and convert to RGB
