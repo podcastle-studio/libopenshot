@@ -445,7 +445,6 @@ std::shared_ptr<Frame> Clip::GetFrame(std::shared_ptr<openshot::Frame> backgroun
 															   frame->GetAudioChannelsCount());
 				}
 				*/
-				apply_scale_options(frame, background_frame);
 			}
 
             // Get frame size and frame #
@@ -1463,10 +1462,7 @@ QTransform Clip::get_transform(std::shared_ptr<Frame> frame, int width, int heig
 	}
 
 	/* RESIZE SOURCE IMAGE - based on scale type */
-	QSize source_size = source_image->size();
-	if (openshot::Settings::Instance()->ENABLE_LEGACY_MODE) {
-		source_size = scale_size(source_size, scale, width, height);
-	}
+	QSize source_size = scale_size(source_image->size(), scale, width, height);
 
 	// Initialize parent object's properties (Clip or Tracked Object)
 	float parentObject_location_x = 0.0;
@@ -1540,8 +1536,8 @@ QTransform Clip::get_transform(std::shared_ptr<Frame> frame, int width, int heig
 		sy*= parentObject_scale_y;
 	}
 
-    float scaled_source_width = openshot::Settings::Instance()->ENABLE_LEGACY_MODE ? source_size.width() * sx : source_size.width();
-	float scaled_source_height = openshot::Settings::Instance()->ENABLE_LEGACY_MODE ? source_size.height() * sy : source_size.height();
+	float scaled_source_width = source_size.width() * sx;
+	float scaled_source_height = source_size.height() * sy;
 
 	switch (gravity)
 	{
@@ -1619,15 +1615,12 @@ QTransform Clip::get_transform(std::shared_ptr<Frame> frame, int width, int heig
 		transform.translate(-origin_x_offset,-origin_y_offset);
 	}
 
-    if (openshot::Settings::Instance()->ENABLE_LEGACY_MODE)
-    {
-    	// SCALE CLIP (if needed)
-    	float source_width_scale = (float(source_size.width()) / float(source_image->width())) * sx;
-    	float source_height_scale = (float(source_size.height()) / float(source_image->height())) * sy;
-    	if (!isNear(source_width_scale, 1.0) || !isNear(source_height_scale, 1.0)) {
-    		transform.scale(source_width_scale, source_height_scale);
-    	}
-    }
+	// SCALE CLIP (if needed)
+	float source_width_scale = (float(source_size.width()) / float(source_image->width())) * sx;
+	float source_height_scale = (float(source_size.height()) / float(source_image->height())) * sy;
+	if (!isNear(source_width_scale, 1.0) || !isNear(source_height_scale, 1.0)) {
+		transform.scale(source_width_scale, source_height_scale);
+	}
 
 	return transform;
 }
