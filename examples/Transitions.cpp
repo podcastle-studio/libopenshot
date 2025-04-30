@@ -910,7 +910,6 @@ void glitchTransition(const std::string& file1, const std::string& file2, float 
     if (transitionDuration > glitchMapClip->info.duration) {
         throw std::runtime_error("Transition duration is longer than light footage clip duration");
     }
-    glitchMapClip->isDisplacementMap = true;
     glitchMapClip->Position(transitionClips.second->Position());
     glitchMapClip->Start(glitchMapClip->info.duration/2.f - transitionDuration/2.f);
     glitchMapClip->End(glitchMapClip->info.duration/2.f + transitionDuration/2.f);
