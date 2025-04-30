@@ -6,7 +6,7 @@
  * @ref License
  */
 
-// Copyright (c) 2008-2019 OpenShot Studios, LLC
+// Copyright (c) 2008-2024 OpenShot Studios, LLC
 //
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
@@ -32,6 +32,8 @@
 #ifndef USE_SW
 #define USE_SW FFMPEG_USE_SWRESAMPLE
 #endif
+
+#define HAVE_CH_LAYOUT (LIBAVUTIL_VERSION_INT >= AV_VERSION_INT(57, 28, 100))
 
 // Include the FFmpeg headers
 extern "C" {
@@ -116,9 +118,19 @@ inline static const std::string av_err2string(int errnum)
 #endif
 
 // Does ffmpeg pixel format contain an alpha channel?
-inline static bool ffmpeg_has_alpha(PixelFormat pix_fmt) {
+inline static bool ffmpeg_has_alpha(PixelFormat pix_fmt, AVStream* stream = nullptr) {
+    // Check regular alpha flag in pixel format
     const AVPixFmtDescriptor *fmt_desc = av_pix_fmt_desc_get(pix_fmt);
-    return bool(fmt_desc->flags & AV_PIX_FMT_FLAG_ALPHA);
+    bool has_alpha = bool(fmt_desc->flags & AV_PIX_FMT_FLAG_ALPHA);
+
+    // Also check for WebM/VP8/VP9 alpha metadata if stream is provided
+    if (!has_alpha && stream && stream->metadata) {
+        AVDictionaryEntry *tag = av_dict_get(stream->metadata, "alpha_mode", NULL, 0);
+        if (tag && tag->value && strcmp(tag->value, "1") == 0)
+            return true;
+    }
+
+    return has_alpha;
 }
 
 // FFmpeg's libavutil/common.h defines an RSHIFT incompatible with Ruby's

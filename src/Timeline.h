@@ -30,7 +30,7 @@
 #include "Fraction.h"
 #include "Frame.h"
 #include "KeyFrame.h"
-#ifdef USE_OPENCV
+#ifdef USE_OPENCV_EFFECTS
 #include "TrackedObjectBBox.h"
 #endif
 #include "TrackedObjectBase.h"
@@ -160,7 +160,8 @@ namespace openshot {
 		bool managed_cache; ///< Does this timeline instance manage the cache object
 		std::string path; ///< Optional path of loaded UTF-8 OpenShot JSON project file
 		int max_concurrent_frames; ///< Max concurrent frames to process at one time
-		double max_time; ///> The max duration (in seconds) of the timeline, based on all the clips
+		double max_time; ///> The max duration (in seconds) of the timeline, based on the furthest clip (right edge)
+		double min_time; ///> The min duration (in seconds) of the timeline, based on the position of the first clip (left edge)
 
 		std::map<std::string, std::shared_ptr<openshot::TrackedObjectBase>> tracked_objects; ///< map of TrackedObjectBBoxes and their IDs
 
@@ -196,9 +197,6 @@ namespace openshot {
 		/// Compare 2 floating point numbers for equality
 		bool isEqual(double a, double b);
 
-		/// Sort clips by position on the timeline
-		void sort_clips();
-
 		/// Sort effects by position on the timeline
 		void sort_effects();
 
@@ -206,6 +204,8 @@ namespace openshot {
 		void update_open_clips(openshot::Clip *clip, bool does_clip_intersect);
 
 	public:
+		/// Sort clips by position on the timeline
+		void sort_clips();
 
 		/// @brief Constructor for the timeline (which configures the default frame properties)
 		/// @param width The image width of generated openshot::Frame objects
@@ -238,13 +238,13 @@ namespace openshot {
 		/// Return the ID's of the tracked objects as a list of strings
 		std::list<std::string> GetTrackedObjectsIds() const;
 		/// Return the trackedObject's properties as a JSON string
-		#ifdef USE_OPENCV
+		#ifdef USE_OPENCV_EFFECTS
 		std::string GetTrackedObjectValues(std::string id, int64_t frame_number) const;
 		#endif
 
 		/// @brief Add an openshot::Clip to the timeline
 		/// @param clip Add an openshot::Clip to the timeline. A clip can contain any type of Reader.
-		void AddClip(openshot::Clip* clip);
+		void AddClip(openshot::Clip* clip, bool sortClips = true);
 
 		/// @brief Add an effect to the timeline
 		/// @param effect Add an effect to the timeline. An effect can modify the audio or video of an openshot::Frame.
@@ -285,6 +285,11 @@ namespace openshot {
 		double GetMaxTime();
 		/// Look up the end frame number of the latest element on the timeline
 		int64_t GetMaxFrame();
+
+		/// Look up the position/start time of the first timeline element
+		double GetMinTime();
+		/// Look up the start frame number of the first element on the timeline (first frame is 1)
+		int64_t GetMinFrame();
 
 		/// Close the timeline reader (and any resources it was consuming)
 		void Close() override;

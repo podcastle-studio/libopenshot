@@ -24,8 +24,8 @@ For more information, please visit <http://www.openshot.org/>.
 set(CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake/Modules")
 
 ################ PROJECT VERSION ####################
-set(PROJECT_VERSION_FULL "0.3.2")
-set(PROJECT_SO_VERSION 25)
+set(PROJECT_VERSION_FULL "0.3.3")
+set(PROJECT_SO_VERSION 26)
 
 # Remove the dash and anything following, to get the #.#.# version for project()
 STRING(REGEX REPLACE "\-.*$" "" VERSION_NUM "${PROJECT_VERSION_FULL}")
@@ -97,7 +97,7 @@ if ((${CMAKE_CXX_COMPILER_ID} STREQUAL "GNU") AND
 endif()
 
 #### Set C++ standard level
-set(CMAKE_CXX_STANDARD 14)
+set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 

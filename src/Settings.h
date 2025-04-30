@@ -103,12 +103,18 @@ namespace openshot {
 		/// The device type for the playback audio devices
 		std::string PLAYBACK_AUDIO_DEVICE_TYPE = "";
 
+		/// Size of playback buffer before audio playback starts
+		int PLAYBACK_AUDIO_BUFFER_SIZE = 512;
+
 		/// The current install path of OpenShot (needs to be set when using Timeline(path), since certain
 		/// paths depend on the location of OpenShot transitions and files)
 		std::string PATH_OPENSHOT_INSTALL = "";
 
         ///
         bool ENABLE_LEGACY_MODE = false;
+
+		///
+		bool DISABLE_CACHING = true;
 
  		/// Whether to dump ZeroMQ debug messages to stderr
 		bool DEBUG_TO_STDERR = false;

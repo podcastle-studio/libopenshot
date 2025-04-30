@@ -12,6 +12,7 @@
 
 #include "ColorShift.h"
 #include "Exceptions.h"
+#include "./image-processing-lib/src/Effects/effects.h"
 
 using namespace openshot;
 
@@ -49,7 +50,7 @@ std::shared_ptr<openshot::Frame> ColorShift::GetFrame(std::shared_ptr<openshot::
 {
 	// Get the frame's image
 	std::shared_ptr<QImage> frame_image = frame->GetImage();
-	unsigned char *pixels = (unsigned char *) frame_image->bits();
+	unsigned char *pixels = frame_image->bits();
 
 	// Get image size
 	int frame_image_width = frame_image->width();
@@ -58,119 +59,24 @@ std::shared_ptr<openshot::Frame> ColorShift::GetFrame(std::shared_ptr<openshot::
 	// Get the current shift amount, and clamp to range (-1 to 1 range)
 	// Red Keyframes
 	float red_x_shift = red_x.GetValue(frame_number);
-	int red_x_shift_limit = round(frame_image_width * fmod(fabs(red_x_shift), 1.0));
 	float red_y_shift = red_y.GetValue(frame_number);
-	int red_y_shift_limit = round(frame_image_height * fmod(fabs(red_y_shift), 1.0));
 	// Green Keyframes
 	float green_x_shift = green_x.GetValue(frame_number);
-	int green_x_shift_limit = round(frame_image_width * fmod(fabs(green_x_shift), 1.0));
 	float green_y_shift = green_y.GetValue(frame_number);
-	int green_y_shift_limit = round(frame_image_height * fmod(fabs(green_y_shift), 1.0));
 	// Blue Keyframes
 	float blue_x_shift = blue_x.GetValue(frame_number);
-	int blue_x_shift_limit = round(frame_image_width * fmod(fabs(blue_x_shift), 1.0));
 	float blue_y_shift = blue_y.GetValue(frame_number);
-	int blue_y_shift_limit = round(frame_image_height * fmod(fabs(blue_y_shift), 1.0));
 	// Alpha Keyframes
 	float alpha_x_shift = alpha_x.GetValue(frame_number);
-	int alpha_x_shift_limit = round(frame_image_width * fmod(fabs(alpha_x_shift), 1.0));
 	float alpha_y_shift = alpha_y.GetValue(frame_number);
-	int alpha_y_shift_limit = round(frame_image_height * fmod(fabs(alpha_y_shift), 1.0));
 
-	// Make temp copy of pixels
-	unsigned char *temp_image = new unsigned char[frame_image_width * frame_image_height * 4]();
-	memcpy(temp_image, pixels, sizeof(char) * frame_image_width * frame_image_height * 4);
-
-	// Init position of current row and pixel
-	int starting_row_index = 0;
-	int byte_index = 0;
-
-	// Init RGBA values
-	unsigned char R = 0;
-	unsigned char G = 0;
-	unsigned char B = 0;
-	unsigned char A = 0;
-
-	int red_starting_row_index = 0;
-	int green_starting_row_index = 0;
-	int blue_starting_row_index = 0;
-	int alpha_starting_row_index = 0;
-
-	int red_pixel_offset = 0;
-	int green_pixel_offset = 0;
-	int blue_pixel_offset = 0;
-	int alpha_pixel_offset = 0;
-
-	// Loop through rows of pixels
-	for (int row = 0; row < frame_image_height; row++) {
-		for (int col = 0; col < frame_image_width; col++) {
-			// Get position of current row and pixel
-			starting_row_index = row * frame_image_width * 4;
-			byte_index = starting_row_index + (col * 4);
-			red_starting_row_index = starting_row_index;
-			green_starting_row_index = starting_row_index;
-			blue_starting_row_index = starting_row_index;
-			alpha_starting_row_index = starting_row_index;
-
-			red_pixel_offset = col;
-			green_pixel_offset = col;
-			blue_pixel_offset = col;
-			alpha_pixel_offset = col;
-
-			// Get the RGBA value from each pixel (depending on offset)
-			R = temp_image[byte_index];
-			G = temp_image[byte_index + 1];
-			B = temp_image[byte_index + 2];
-			A = temp_image[byte_index + 3];
-
-			// Shift X
-			if (red_x_shift > 0.0)
-				red_pixel_offset = (col + red_x_shift_limit) % frame_image_width;
-			if (red_x_shift < 0.0)
-				red_pixel_offset = (frame_image_width + col - red_x_shift_limit) % frame_image_width;
-			if (green_x_shift > 0.0)
-				green_pixel_offset = (col + green_x_shift_limit) % frame_image_width;
-			if (green_x_shift < 0.0)
-				green_pixel_offset = (frame_image_width + col - green_x_shift_limit) % frame_image_width;
-			if (blue_x_shift > 0.0)
-				blue_pixel_offset = (col + blue_x_shift_limit) % frame_image_width;
-			if (blue_x_shift < 0.0)
-				blue_pixel_offset = (frame_image_width + col - blue_x_shift_limit) % frame_image_width;
-			if (alpha_x_shift > 0.0)
-				alpha_pixel_offset = (col + alpha_x_shift_limit) % frame_image_width;
-			if (alpha_x_shift < 0.0)
-				alpha_pixel_offset = (frame_image_width + col - alpha_x_shift_limit) % frame_image_width;
-
-			// Shift Y
-			if (red_y_shift > 0.0)
-				red_starting_row_index = ((row + red_y_shift_limit) % frame_image_height) * frame_image_width * 4;
-			if (red_y_shift < 0.0)
-				red_starting_row_index = ((frame_image_height + row - red_y_shift_limit) % frame_image_height) * frame_image_width * 4;
-			if (green_y_shift > 0.0)
-				green_starting_row_index = ((row + green_y_shift_limit) % frame_image_height) * frame_image_width * 4;
-			if (green_y_shift < 0.0)
-				green_starting_row_index = ((frame_image_height + row - green_y_shift_limit) % frame_image_height) * frame_image_width * 4;
-			if (blue_y_shift > 0.0)
-				blue_starting_row_index = ((row + blue_y_shift_limit) % frame_image_height) * frame_image_width * 4;
-			if (blue_y_shift < 0.0)
-				blue_starting_row_index = ((frame_image_height + row - blue_y_shift_limit) % frame_image_height) * frame_image_width * 4;
-			if (alpha_y_shift > 0.0)
-				alpha_starting_row_index = ((row + alpha_y_shift_limit) % frame_image_height) * frame_image_width * 4;
-			if (alpha_y_shift < 0.0)
-				alpha_starting_row_index = ((frame_image_height + row - alpha_y_shift_limit) % frame_image_height) * frame_image_width * 4;
-
-			// Copy new values to this pixel
-			pixels[red_starting_row_index + 0 + (red_pixel_offset * 4)] = R;
-			pixels[green_starting_row_index + 1 + (green_pixel_offset * 4)] = G;
-			pixels[blue_starting_row_index + 2 + (blue_pixel_offset * 4)] = B;
-			pixels[alpha_starting_row_index + 3 + (alpha_pixel_offset * 4)] = A;
-		}
-	}
-
-	// Delete arrays
-	delete[] temp_image;
-
-	// return the modified frame
+	// Apply color shift (example values)
+	Podcastle::Effects::applyColorShiftEffect(pixels, frame_image_width, frame_image_height,
+						  red_x_shift, red_y_shift, // Red shift X/Y
+						  green_x_shift, green_y_shift, // Green shift X/Y
+						  blue_x_shift, blue_y_shift, // Blue shift X/Y
+						  alpha_x_shift, alpha_y_shift); // Alpha shift X/Y
+	// returns the modified frame
 	return frame;
 }
 

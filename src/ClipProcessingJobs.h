@@ -11,7 +11,7 @@
 //
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
-#ifdef USE_OPENCV
+#ifdef USE_OPENCV_EFFECTS
 	#define int64 opencv_broken_int
 	#define uint64 opencv_broken_uint
 	#include <opencv2/opencv.hpp>

@@ -41,6 +41,11 @@
 %shared_ptr(juce::AudioBuffer<float>)
 %shared_ptr(openshot::Frame)
 
+/* Rename operators to avoid wrapping name collisions */
+%rename(__eq__) operator==;
+%rename(__lt__) operator<;
+%rename(__gt__) operator>;
+
 /* Instantiate the required template specializations */
 %template() std::map<std::string, int>;
 %template() std::pair<int, int>;
@@ -103,7 +108,7 @@
     %}
 #endif
 
-#ifdef USE_OPENCV
+#ifdef USE_OPENCV_EFFECTS
     %{
         #include "ClipProcessingJobs.h"
         #include "effects/Stabilizer.h"
@@ -249,6 +254,18 @@
     %}
 }
 
+%extend openshot::Profile {
+    bool __eq__(const openshot::Profile& other) const {
+        return (*self == other);
+    }
+    bool __lt__(const openshot::Profile& other) const {
+        return (*self < other);
+    }
+    bool __gt__(const openshot::Profile& other) const {
+        return (*self > other);
+    }
+}
+
 %extend openshot::OpenShotVersion {
         // Give the struct a string representation
     const std::string __str__() {
@@ -302,7 +319,7 @@
 %include "Timeline.h"
 %include "ZmqLogger.h"
 
-#ifdef USE_OPENCV
+#ifdef USE_OPENCV_EFFECTS
     %include "ClipProcessingJobs.h"
     %include "TrackedObjectBase.h"
     %include "TrackedObjectBBox.h"
@@ -330,7 +347,7 @@
 %include "effects/Saturation.h"
 %include "effects/Shift.h"
 %include "effects/Wave.h"
-#ifdef USE_OPENCV
+#ifdef USE_OPENCV_EFFECTS
     %include "effects/Stabilizer.h"
     %include "effects/Tracker.h"
     %include "effects/ObjectDetection.h"

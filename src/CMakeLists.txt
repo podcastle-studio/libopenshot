@@ -105,12 +105,20 @@ set(OPENSHOT_CV_SOURCES
 
 # Video effects
 set(EFFECTS_SOURCES
+  effects/image-processing-lib/src/Effects/effects.cpp
   effects/Bars.cpp
   effects/Blur.cpp
+  effects/BorderReflectedRotation.cpp
+  effects/BorderReflectedMove.cpp
+  effects/Zoom.cpp
+  effects/Wipe.cpp
+  effects/Exposure.cpp
+  effects/SplitShift.cpp
   effects/Brightness.cpp
   effects/Caption.cpp
   effects/ChromaKey.cpp
   effects/ColorShift.cpp
+  effects/CircleMask.cpp
   effects/Crop.cpp
   effects/Deinterlace.cpp
   effects/Hue.cpp
@@ -176,7 +184,7 @@ target_include_directories(openshot
 # Find JUCE-based openshot Audio libraries
 if(NOT TARGET OpenShot::Audio)
   # Only load if necessary (not for integrated builds)
-  find_package(OpenShotAudio 0.3.0...0.3.2 REQUIRED)
+  find_package(OpenShotAudio 0.3.0...0.3.3 REQUIRED)
 endif()
 target_link_libraries(openshot PUBLIC OpenShot::Audio)
 
@@ -445,8 +453,17 @@ if (TARGET babl_lib)
   target_link_libraries(openshot PUBLIC babl_lib)
 endif ()
 
+find_package(OpenCV 4)
+target_link_libraries(openshot PUBLIC
+        opencv_core
+        opencv_video
+        opencv_highgui
+        opencv_dnn
+        opencv_tracking
+)
+target_compile_definitions(openshot PUBLIC USE_OPENCV=1)
 ################## OPENCV ###################
-if(ENABLE_OPENCV)
+if(ENABLE_OPENCV_EFFECTS)
   find_package(OpenCV 4)
   if(NOT OpenCV_FOUND)
     set(ENABLE_OPENCV FALSE CACHE BOOL
@@ -492,7 +509,7 @@ See https://github.com/opencv/opencv/issues/19260]])
     target_sources(openshot PRIVATE
       ${OPENSHOT_CV_SOURCES}
     )
-    target_compile_definitions(openshot PUBLIC USE_OPENCV=1)
+    target_compile_definitions(openshot PUBLIC USE_OPENCV_EFFECTS=1)
     target_link_libraries(openshot PUBLIC
       opencv_core
       opencv_video

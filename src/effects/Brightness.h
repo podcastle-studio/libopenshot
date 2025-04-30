@@ -49,7 +49,7 @@ namespace openshot
 		///
 		/// @param new_brightness The curve to adjust the brightness (from -1 to +1, 0 is default/"off")
 		/// @param new_contrast The curve to adjust the contrast (3 is typical, 20 is a lot, 100 is max. 0 is invalid)
-		Brightness(Keyframe new_brightness, Keyframe new_contrast);
+		explicit Brightness(Keyframe new_brightness, Keyframe new_contrast = 3);
 
 		/// @brief This method is required for all derived classes of ClipBase, and returns a
 		/// new openshot::Frame object. All Clip keyframes and effects are resolved into

@@ -37,6 +37,7 @@ namespace openshot
 	 */
 	struct ReaderInfo
 	{
+		bool has_alpha;
 		bool has_video;				///< Determines if this file has a video stream
 		bool has_audio;				///< Determines if this file has an audio stream
 		bool has_single_image;		///< Determines if this file only contains a single image

@@ -107,7 +107,7 @@ namespace openshot
 		bool audio_reversed; ///< Keep track of audio reversal (i.e. time keyframe)
 
 #ifdef USE_OPENCV
-		cv::Mat imagecv; ///< OpenCV image. It will always be in BGR format
+		cv::Mat imagecv; ///< OpenCV image. It will always be in BGRA format
 #endif
 
 		/// Constrain a color value from 0 to 255
@@ -269,7 +269,7 @@ namespace openshot
 
 #ifdef USE_OPENCV
 		/// Convert Qimage to Mat
-		cv::Mat Qimage2mat( std::shared_ptr<QImage>& qimage);
+		cv::Mat Qimage2mat(std::shared_ptr<QImage> qimage);
 
 		/// Convert OpenCV Mat to QImage
 		std::shared_ptr<QImage> Mat2Qimage(cv::Mat img);
@@ -278,7 +278,7 @@ namespace openshot
 		cv::Mat GetImageCV();
 
 		/// Set pointer to OpenCV image object
-		void SetImageCV(cv::Mat _image);
+		void SetImageCV(const cv::Mat& imageCv);
 #endif
 	};
 

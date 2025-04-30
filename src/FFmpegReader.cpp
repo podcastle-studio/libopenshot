@@ -9,7 +9,7 @@
  * @ref License
  */
 
-// Copyright (c) 2008-2019 OpenShot Studios, LLC, Fabrice Bellard
+// Copyright (c) 2008-2024 OpenShot Studios, LLC, Fabrice Bellard
 //
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
@@ -87,8 +87,8 @@ FFmpegReader::FFmpegReader(const std::string &path, bool inspect_reader)
 	audio_pts_seconds = NO_PTS_OFFSET;
 
 	// Init cache
-	working_cache.SetMaxBytesFromInfo(max_concurrent_frames * info.fps.ToDouble() * 2, info.width, info.height, info.sample_rate, info.channels);
-	final_cache.SetMaxBytesFromInfo(max_concurrent_frames * 2, info.width, info.height, info.sample_rate, info.channels);
+	working_cache.SetMaxBytesFromInfo(1 /* max_concurrent_frames * info.fps.ToDouble() * 2 */ , info.width, info.height, info.sample_rate, info.channels);
+	final_cache.SetMaxBytesFromInfo(1/* max_concurrent_frames * 2*/ , info.width, info.height, info.sample_rate, info.channels);
 
 	// Open and Close the reader, to populate its attributes (such as height, width, etc...)
 	if (inspect_reader) {
@@ -264,6 +264,17 @@ void FFmpegReader::Open() {
 
 			// Get codec and codec context from stream
 			const AVCodec *pCodec = avcodec_find_decoder(codecId);
+
+			if (codecId == AV_CODEC_ID_VP9) {
+				// Does the stream metadata say alpha_mode=1?
+				AVDictionaryEntry *alpha =
+					av_dict_get(pFormatCtx->streams[videoStream]->metadata, "alpha_mode", NULL, 0);
+				if (alpha && strcmp(alpha->value, "1") == 0) {
+					const AVCodec *pref = avcodec_find_decoder_by_name("libvpx-vp9");
+					if (pref) pCodec = pref;               // override native decoder
+				}
+			}
+
 			AVDictionary *opts = NULL;
 			int retry_decode_open = 2;
 			// If hw accel is selected but hardware cannot handle repeat with software decoding
@@ -559,8 +570,8 @@ void FFmpegReader::Open() {
 		previous_packet_location.sample_start = 0;
 
 		// Adjust cache size based on size of frame and audio
-		working_cache.SetMaxBytesFromInfo(max_concurrent_frames * info.fps.ToDouble() * 2, info.width, info.height, info.sample_rate, info.channels);
-		final_cache.SetMaxBytesFromInfo(max_concurrent_frames * 2, info.width, info.height, info.sample_rate, info.channels);
+		working_cache.SetMaxBytesFromInfo(info.fps.ToDouble() /*max_concurrent_frames * info.fps.ToDouble() * 2*/, info.width, info.height, info.sample_rate, info.channels);
+		final_cache.SetMaxBytesFromInfo(1/* max_concurrent_frames * 2*/, info.width, info.height, info.sample_rate, info.channels);
 
 		// Scan PTS for any offsets (i.e. non-zero starting streams). At least 1 stream must start at zero timestamp.
 		// This method allows us to shift timestamps to ensure at least 1 stream is starting at zero.
@@ -671,8 +682,13 @@ bool FFmpegReader::HasAlbumArt() {
 
 void FFmpegReader::UpdateAudioInfo() {
 	// Set default audio channel layout (if needed)
+#if HAVE_CH_LAYOUT
+	if (!av_channel_layout_check(&(AV_GET_CODEC_ATTRIBUTES(aStream, aCodecCtx)->ch_layout)))
+		AV_GET_CODEC_ATTRIBUTES(aStream, aCodecCtx)->ch_layout = (AVChannelLayout) AV_CHANNEL_LAYOUT_STEREO;
+#else
 	if (AV_GET_CODEC_ATTRIBUTES(aStream, aCodecCtx)->channel_layout == 0)
 		AV_GET_CODEC_ATTRIBUTES(aStream, aCodecCtx)->channel_layout = av_get_default_channel_layout(AV_GET_CODEC_ATTRIBUTES(aStream, aCodecCtx)->channels);
+#endif
 
 	if (info.sample_rate > 0) {
 		// Skip init - if info struct already populated
@@ -683,8 +699,23 @@ void FFmpegReader::UpdateAudioInfo() {
 	info.has_audio = true;
 	info.file_size = pFormatCtx->pb ? avio_size(pFormatCtx->pb) : -1;
 	info.acodec = aCodecCtx->codec->name;
+#if HAVE_CH_LAYOUT
+	info.channels = AV_GET_CODEC_ATTRIBUTES(aStream, aCodecCtx)->ch_layout.nb_channels;
+	info.channel_layout = (ChannelLayout) AV_GET_CODEC_ATTRIBUTES(aStream, aCodecCtx)->ch_layout.u.mask;
+#else
 	info.channels = AV_GET_CODEC_ATTRIBUTES(aStream, aCodecCtx)->channels;
 	info.channel_layout = (ChannelLayout) AV_GET_CODEC_ATTRIBUTES(aStream, aCodecCtx)->channel_layout;
+#endif
+
+	// If channel layout is not set, guess based on the number of channels
+	if (info.channel_layout == 0) {
+		if (info.channels == 1) {
+			info.channel_layout = openshot::LAYOUT_MONO;
+		} else if (info.channels == 2) {
+			info.channel_layout = openshot::LAYOUT_STEREO;
+		}
+	}
+
 	info.sample_rate = AV_GET_CODEC_ATTRIBUTES(aStream, aCodecCtx)->sample_rate;
 	info.audio_bit_rate = AV_GET_CODEC_ATTRIBUTES(aStream, aCodecCtx)->bit_rate;
 	if (info.audio_bit_rate <= 0) {
@@ -886,6 +917,8 @@ void FFmpegReader::UpdateVideoInfo() {
 		QString str_value = tag->value;
 		info.metadata[str_key.toStdString()] = str_value.trimmed().toStdString();
 	}
+
+	info.has_alpha = ffmpeg_has_alpha(AV_GET_CODEC_PIXEL_FORMAT(pStream, pCodecCtx), pStream);
 }
 
 bool FFmpegReader::GetIsDurationKnown() {
@@ -963,12 +996,19 @@ std::shared_ptr<Frame> FFmpegReader::ReadStream(int64_t requested_frame) {
 	// Allocate video frame
 	bool check_seek = false;
 	int packet_error = -1;
+	const int max_retries = 1000;
+	int retry_count = 0;
 
 	// Debug output
 	ZmqLogger::Instance()->AppendDebugMethod("FFmpegReader::ReadStream", "requested_frame", requested_frame, "max_concurrent_frames", max_concurrent_frames);
 
 	// Loop through the stream until the correct frame is found
 	while (true) {
+		if (retry_count++ > max_retries) {
+			ZmqLogger::Instance()->AppendDebugMethod("FFmpegReader::ReadStream", "Max retries reached, aborting to prevent infinite loop");
+			break;
+		}
+
 		// Check if working frames are 'finished'
 		if (!is_seeking) {
 			// Check for final frames
@@ -984,6 +1024,10 @@ std::shared_ptr<Frame> FFmpegReader::ReadStream(int64_t requested_frame) {
 		if (!hold_packet || !packet) {
 			// Get the next packet
 			packet_error = GetNextPacket();
+			if (packet_error == AVERROR(EAGAIN)) {
+				ZmqLogger::Instance()->AppendDebugMethod("FFmpegReader::ReadStream", "GetNextPacket returned EAGAIN, retrying...");
+				continue;
+			}
 			if (packet_error < 0 && !packet) {
 				// No more packets to be found
 				packet_status.packets_eof = true;
@@ -1249,9 +1293,9 @@ bool FFmpegReader::GetAVFrame() {
 			frameFinished = 1;
 			packet_status.video_decoded++;
 
-			av_image_alloc(pFrame->data, pFrame->linesize, info.width, info.height, (AVPixelFormat)(pStream->codecpar->format), 1);
+			av_image_alloc(pFrame->data, pFrame->linesize, info.width, info.height, pCodecCtx->pix_fmt, 1);
 			av_image_copy(pFrame->data, pFrame->linesize, (const uint8_t**)next_frame->data, next_frame->linesize,
-										(AVPixelFormat)(pStream->codecpar->format), info.width, info.height);
+										pCodecCtx->pix_fmt, info.width, info.height);
 
 			// Get display PTS from video frame, often different than packet->pts.
 			// Sending packets to the decoder (i.e. packet->pts) is async,
@@ -1352,173 +1396,187 @@ bool FFmpegReader::CheckSeek(bool is_video) {
 
 // Process a video packet
 void FFmpegReader::ProcessVideoPacket(int64_t requested_frame) {
-	// Get the AVFrame from the current packet
-	// This sets the video_pts to the correct timestamp
-	int frame_finished = GetAVFrame();
+    // Get the AVFrame from the current packet
+    // This sets the video_pts to the correct timestamp
+    int frame_finished = GetAVFrame();
 
-	// Check if the AVFrame is finished and set it
-	if (!frame_finished) {
-		// No AVFrame decoded yet, bail out
-		if (pFrame) {
-			RemoveAVFrame(pFrame);
-		}
-		return;
-	}
+    // Check if the AVFrame is finished and set it
+    if (!frame_finished) {
+        // No AVFrame decoded yet, bail out
+        if (pFrame) {
+            RemoveAVFrame(pFrame);
+        }
+        return;
+    }
 
-	// Calculate current frame #
-	int64_t current_frame = ConvertVideoPTStoFrame(video_pts);
+    // Calculate current frame #
+    int64_t current_frame = ConvertVideoPTStoFrame(video_pts);
 
-	// Track 1st video packet after a successful seek
-	if (!seek_video_frame_found && is_seeking)
-		seek_video_frame_found = current_frame;
+    // Track 1st video packet after a successful seek
+    if (!seek_video_frame_found && is_seeking)
+        seek_video_frame_found = current_frame;
 
-	// Create or get the existing frame object. Requested frame needs to be created
-	// in working_cache at least once. Seek can clear the working_cache, so we must
-	// add the requested frame back to the working_cache here. If it already exists,
-	// it will be moved to the top of the working_cache.
-	working_cache.Add(CreateFrame(requested_frame));
+    // Create or get the existing frame object. Requested frame needs to be created
+    // in working_cache at least once. Seek can clear the working_cache, so we must
+    // add the requested frame back to the working_cache here. If it already exists,
+    // it will be moved to the top of the working_cache.
+    working_cache.Add(CreateFrame(requested_frame));
 
-	// Debug output
-	ZmqLogger::Instance()->AppendDebugMethod("FFmpegReader::ProcessVideoPacket (Before)", "requested_frame", requested_frame, "current_frame", current_frame);
+    // Debug output
+    ZmqLogger::Instance()->AppendDebugMethod("FFmpegReader::ProcessVideoPacket (Before)", "requested_frame", requested_frame, "current_frame", current_frame);
 
-	// Init some things local (for OpenMP)
-	PixelFormat pix_fmt = AV_GET_CODEC_PIXEL_FORMAT(pStream, pCodecCtx);
-	int height = info.height;
-	int width = info.width;
-	int64_t video_length = info.video_length;
+    // Introduce the boolean variable to determine if scaling is needed
+    bool should_scale = openshot::Settings::Instance()->ENABLE_LEGACY_MODE;
 
-	// Create variables for a RGB Frame (since most videos are not in RGB, we must convert it)
-	AVFrame *pFrameRGB = nullptr;
-	uint8_t *buffer = nullptr;
+    // Init some things local
+    PixelFormat pix_fmt = pCodecCtx->pix_fmt;
+    int height = info.height;
+    int width = info.width;
+    int64_t video_length = info.video_length;
 
-	// Allocate an AVFrame structure
-	pFrameRGB = AV_ALLOCATE_FRAME();
-	if (pFrameRGB == nullptr)
-		throw OutOfMemory("Failed to allocate frame buffer", path);
+    // Create variables for a RGB Frame (since most videos are not in RGB, we must convert it)
+    AVFrame *pFrameRGB = nullptr;
+    uint8_t *buffer = nullptr;
 
-	// Determine the max size of this source image (based on the timeline's size, the scaling mode,
-	// and the scaling keyframes). This is a performance improvement, to keep the images as small as possible,
-	// without losing quality. NOTE: We cannot go smaller than the timeline itself, or the add_layer timeline
-	// method will scale it back to timeline size before scaling it smaller again. This needs to be fixed in
-	// the future.
-	int max_width = info.width;
-	int max_height = info.height;
+    // Allocate an AVFrame structure
+    pFrameRGB = AV_ALLOCATE_FRAME();
+    if (pFrameRGB == nullptr)
+        throw OutOfMemory("Failed to allocate frame buffer", path);
 
-	Clip *parent = static_cast<Clip *>(ParentClip());
-	if (parent) {
-		if (parent->ParentTimeline()) {
-			// Set max width/height based on parent clip's timeline (if attached to a timeline)
-			max_width = parent->ParentTimeline()->preview_width;
-			max_height = parent->ParentTimeline()->preview_height;
-		}
-		if (parent->scale == SCALE_FIT || parent->scale == SCALE_STRETCH) {
-			// Best fit or Stretch scaling (based on max timeline size * scaling keyframes)
-			float max_scale_x = parent->scale_x.GetMaxPoint().co.Y;
-			float max_scale_y = parent->scale_y.GetMaxPoint().co.Y;
-			max_width = std::max(float(max_width), max_width * max_scale_x);
-			max_height = std::max(float(max_height), max_height * max_scale_y);
+    // Determine the output dimensions
+    int output_width = width;
+    int output_height = height;
 
-		} else if (parent->scale == SCALE_CROP) {
-			// Cropping scale mode (based on max timeline size * cropped size * scaling keyframes)
-			float max_scale_x = parent->scale_x.GetMaxPoint().co.Y;
-			float max_scale_y = parent->scale_y.GetMaxPoint().co.Y;
-			QSize width_size(max_width * max_scale_x,
-							 round(max_width / (float(info.width) / float(info.height))));
-			QSize height_size(round(max_height / (float(info.height) / float(info.width))),
-							  max_height * max_scale_y);
-			// respect aspect ratio
-			if (width_size.width() >= max_width && width_size.height() >= max_height) {
-				max_width = std::max(max_width, width_size.width());
-				max_height = std::max(max_height, width_size.height());
-			} else {
-				max_width = std::max(max_width, height_size.width());
-				max_height = std::max(max_height, height_size.height());
-			}
+    if (should_scale) {
+        // Proceed with scaling logic
+        // Determine the max size of this source image (based on the timeline's size, the scaling mode,
+        // and the scaling keyframes). This is a performance improvement, to keep the images as small as possible,
+        // without losing quality. NOTE: We cannot go smaller than the timeline itself, or the add_layer timeline
+        // method will scale it back to timeline size before scaling it smaller again. This needs to be fixed in
+        // the future.
+        int max_width = info.width;
+        int max_height = info.height;
 
-		} else {
-			// Scale video to equivalent unscaled size
-			// Since the preview window can change sizes, we want to always
-			// scale against the ratio of original video size to timeline size
-			float preview_ratio = 1.0;
-			if (parent->ParentTimeline()) {
-				Timeline *t = (Timeline *) parent->ParentTimeline();
-				preview_ratio = t->preview_width / float(t->info.width);
-			}
-			float max_scale_x = parent->scale_x.GetMaxPoint().co.Y;
-			float max_scale_y = parent->scale_y.GetMaxPoint().co.Y;
-			max_width = info.width * max_scale_x * preview_ratio;
-			max_height = info.height * max_scale_y * preview_ratio;
-		}
-	}
+        Clip *parent = static_cast<Clip *>(ParentClip());
+        if (parent) {
+            if (parent->ParentTimeline()) {
+                // Set max width/height based on parent clip's timeline (if attached to a timeline)
+                max_width = parent->ParentTimeline()->preview_width;
+                max_height = parent->ParentTimeline()->preview_height;
+            }
+            if (parent->scale == SCALE_FIT || parent->scale == SCALE_STRETCH) {
+                // Best fit or Stretch scaling (based on max timeline size * scaling keyframes)
+                float max_scale_x = parent->scale_x.GetMaxPoint().co.Y;
+                float max_scale_y = parent->scale_y.GetMaxPoint().co.Y;
+                max_width = std::max(float(max_width), max_width * max_scale_x);
+                max_height = std::max(float(max_height), max_height * max_scale_y);
 
-	// Determine if image needs to be scaled (for performance reasons)
-	int original_height = height;
-	if (max_width != 0 && max_height != 0 && max_width < width && max_height < height) {
-		// Override width and height (but maintain aspect ratio)
-		float ratio = float(width) / float(height);
-		int possible_width = round(max_height * ratio);
-		int possible_height = round(max_width / ratio);
+            } else if (parent->scale == SCALE_CROP) {
+                // Cropping scale mode (based on max timeline size * cropped size * scaling keyframes)
+                float max_scale_x = parent->scale_x.GetMaxPoint().co.Y;
+                float max_scale_y = parent->scale_y.GetMaxPoint().co.Y;
+                QSize width_size(max_width * max_scale_x,
+                                 round(max_width / (float(info.width) / float(info.height))));
+                QSize height_size(round(max_height / (float(info.height) / float(info.width))),
+                                  max_height * max_scale_y);
+                // Respect aspect ratio
+                if (width_size.width() >= max_width && width_size.height() >= max_height) {
+                    max_width = std::max(max_width, width_size.width());
+                    max_height = std::max(max_height, width_size.height());
+                } else {
+                    max_width = std::max(max_width, height_size.width());
+                    max_height = std::max(max_height, height_size.height());
+                }
 
-		if (possible_width <= max_width) {
-			// use calculated width, and max_height
-			width = possible_width;
-			height = max_height;
-		} else {
-			// use max_width, and calculated height
-			width = max_width;
-			height = possible_height;
-		}
-	}
+            } else {
+                // Scale video to equivalent unscaled size
+                // Since the preview window can change sizes, we want to always
+                // scale against the ratio of original video size to timeline size
+                float preview_ratio = 1.0;
+                if (parent->ParentTimeline()) {
+                    Timeline *t = (Timeline *) parent->ParentTimeline();
+                    preview_ratio = t->preview_width / float(t->info.width);
+                }
+                float max_scale_x = parent->scale_x.GetMaxPoint().co.Y;
+                float max_scale_y = parent->scale_y.GetMaxPoint().co.Y;
+                max_width = info.width * max_scale_x * preview_ratio;
+                max_height = info.height * max_scale_y * preview_ratio;
+            }
+        }
 
-	// Determine required buffer size and allocate buffer
-	const int bytes_per_pixel = 4;
-	int buffer_size = (width * height * bytes_per_pixel) + 128;
-	buffer = new unsigned char[buffer_size]();
+        // Determine if image needs to be scaled (for performance reasons)
+        if (max_width != 0 && max_height != 0 && max_width < width && max_height < height) {
+            // Override width and height (but maintain aspect ratio)
+            float ratio = float(width) / float(height);
+            int possible_width = round(max_height * ratio);
+            int possible_height = round(max_width / ratio);
 
-	// Copy picture data from one AVFrame (or AVPicture) to another one.
-	AV_COPY_PICTURE_DATA(pFrameRGB, buffer, PIX_FMT_RGBA, width, height);
+            if (possible_width <= max_width) {
+                // Use calculated width, and max_height
+                output_width = possible_width;
+                output_height = max_height;
+            } else {
+                // Use max_width, and calculated height
+                output_width = max_width;
+                output_height = possible_height;
+            }
+        }
+    } else {
+        // Do not scale, keep original dimensions
+        output_width = width;
+        output_height = height;
+    }
 
-	int scale_mode = SWS_FAST_BILINEAR;
-	if (openshot::Settings::Instance()->HIGH_QUALITY_SCALING) {
-		scale_mode = SWS_BICUBIC;
-	}
-	SwsContext *img_convert_ctx = sws_getContext(info.width, info.height, AV_GET_CODEC_PIXEL_FORMAT(pStream, pCodecCtx), width,
-												 height, PIX_FMT_RGBA, scale_mode, NULL, NULL, NULL);
+    // Determine required buffer size and allocate buffer
+    const int bytes_per_pixel = 4;
+    int buffer_size = (output_width * output_height * bytes_per_pixel) + 128;
+    buffer = new unsigned char[buffer_size]();
 
-	// Resize / Convert to RGB
-	sws_scale(img_convert_ctx, pFrame->data, pFrame->linesize, 0,
-			  original_height, pFrameRGB->data, pFrameRGB->linesize);
+    // Copy picture data from one AVFrame (or AVPicture) to another one.
+    AV_COPY_PICTURE_DATA(pFrameRGB, buffer, PIX_FMT_RGBA, output_width, output_height);
 
-	// Create or get the existing frame object
-	std::shared_ptr<Frame> f = CreateFrame(current_frame);
+    int scale_mode = SWS_FAST_BILINEAR;
+    if (openshot::Settings::Instance()->HIGH_QUALITY_SCALING) {
+        scale_mode = SWS_BICUBIC;
+    }
 
-	// Add Image data to frame
-	if (!ffmpeg_has_alpha(AV_GET_CODEC_PIXEL_FORMAT(pStream, pCodecCtx))) {
-		// Add image with no alpha channel, Speed optimization
-		f->AddImage(width, height, bytes_per_pixel, QImage::Format_RGBA8888_Premultiplied, buffer);
-	} else {
-		// Add image with alpha channel (this will be converted to premultipled when needed, but is slower)
-		f->AddImage(width, height, bytes_per_pixel, QImage::Format_RGBA8888, buffer);
-	}
+    // Create SwsContext for color conversion (and scaling if needed)
+    SwsContext *img_convert_ctx = sws_getContext(width, height, pix_fmt,
+        output_width, output_height, PIX_FMT_RGBA, scale_mode, NULL, NULL, NULL);
 
-	// Update working cache
-	working_cache.Add(f);
+    // Resize (if scaling) and convert to RGB
+    sws_scale(img_convert_ctx, pFrame->data, pFrame->linesize, 0, height, pFrameRGB->data, pFrameRGB->linesize);
 
-	// Keep track of last last_video_frame
-	last_video_frame = f;
+    // Create or get the existing frame object
+    std::shared_ptr<Frame> f = CreateFrame(current_frame);
 
-	// Free the RGB image
-	AV_FREE_FRAME(&pFrameRGB);
+    // Add Image data to frame
+    if (!info.has_alpha) {
+        // Add image with no alpha channel, speed optimization
+        f->AddImage(output_width, output_height, bytes_per_pixel, QImage::Format_RGBA8888_Premultiplied, buffer);
+    } else {
+        // Add image with alpha channel (this will be converted to premultiplied when needed, but is slower)
+        f->AddImage(output_width, output_height, bytes_per_pixel, QImage::Format_RGBA8888, buffer);
+    }
 
-	// Remove frame and packet
-	RemoveAVFrame(pFrame);
-	sws_freeContext(img_convert_ctx);
+    // Update working cache
+    working_cache.Add(f);
 
-	// Get video PTS in seconds
-	video_pts_seconds = (double(video_pts) * info.video_timebase.ToDouble()) + pts_offset_seconds;
+    // Keep track of the last video frame
+    last_video_frame = f;
 
-	// Debug output
-	ZmqLogger::Instance()->AppendDebugMethod("FFmpegReader::ProcessVideoPacket (After)", "requested_frame", requested_frame, "current_frame", current_frame, "f->number", f->number, "video_pts_seconds", video_pts_seconds);
+    // Free the RGB image
+    AV_FREE_FRAME(&pFrameRGB);
+
+    // Remove frame and packet
+    RemoveAVFrame(pFrame);
+    sws_freeContext(img_convert_ctx);
+
+    // Get video PTS in seconds
+    video_pts_seconds = (double(video_pts) * info.video_timebase.ToDouble()) + pts_offset_seconds;
+
+    // Debug output
+    ZmqLogger::Instance()->AppendDebugMethod("FFmpegReader::ProcessVideoPacket (After)", "requested_frame", requested_frame, "current_frame", current_frame, "f->number", f->number, "video_pts_seconds", video_pts_seconds);
 }
 
 // Process an audio packet
@@ -1593,13 +1651,16 @@ void FFmpegReader::ProcessAudioPacket(int64_t requested_frame) {
 
 		// determine how many samples were decoded
 		int plane_size = -1;
-		data_size = av_samples_get_buffer_size(&plane_size,
-											   AV_GET_CODEC_ATTRIBUTES(aStream, aCodecCtx)->channels,
-											   audio_frame->nb_samples,
-											   (AVSampleFormat) (AV_GET_SAMPLE_FORMAT(aStream, aCodecCtx)), 1);
+#if HAVE_CH_LAYOUT
+		int nb_channels = AV_GET_CODEC_ATTRIBUTES(aStream, aCodecCtx)->ch_layout.nb_channels;
+#else
+		int nb_channels = AV_GET_CODEC_ATTRIBUTES(aStream, aCodecCtx)->channels;
+#endif
+		data_size = av_samples_get_buffer_size(&plane_size, nb_channels,
+											   audio_frame->nb_samples, (AVSampleFormat) (AV_GET_SAMPLE_FORMAT(aStream, aCodecCtx)), 1);
 
 		// Calculate total number of samples
-		packet_samples = audio_frame->nb_samples * AV_GET_CODEC_ATTRIBUTES(aStream, aCodecCtx)->channels;
+		packet_samples = audio_frame->nb_samples * nb_channels;
 	} else {
 		if (audio_frame) {
 			// Free audio frame
@@ -1641,39 +1702,39 @@ void FFmpegReader::ProcessAudioPacket(int64_t requested_frame) {
 		}
 	}
 
-	// Allocate audio buffer
-	int16_t *audio_buf = new int16_t[AVCODEC_MAX_AUDIO_FRAME_SIZE + MY_INPUT_BUFFER_PADDING_SIZE];
-
 	ZmqLogger::Instance()->AppendDebugMethod("FFmpegReader::ProcessAudioPacket (ReSample)",
 										  "packet_samples", packet_samples,
 										  "info.channels", info.channels,
 										  "info.sample_rate", info.sample_rate,
-										  "aCodecCtx->sample_fmt", AV_GET_SAMPLE_FORMAT(aStream, aCodecCtx),
-										  "AV_SAMPLE_FMT_S16", AV_SAMPLE_FMT_S16);
+										  "aCodecCtx->sample_fmt", AV_GET_SAMPLE_FORMAT(aStream, aCodecCtx));
 
 	// Create output frame
 	AVFrame *audio_converted = AV_ALLOCATE_FRAME();
 	AV_RESET_FRAME(audio_converted);
 	audio_converted->nb_samples = audio_frame->nb_samples;
-	av_samples_alloc(audio_converted->data, audio_converted->linesize, info.channels, audio_frame->nb_samples, AV_SAMPLE_FMT_S16, 0);
+	av_samples_alloc(audio_converted->data, audio_converted->linesize, info.channels, audio_frame->nb_samples, AV_SAMPLE_FMT_FLTP, 0);
 
 	SWRCONTEXT *avr = NULL;
-	int nb_samples = 0;
 
 	// setup resample context
 	avr = SWR_ALLOC();
+#if HAVE_CH_LAYOUT
+	av_opt_set_chlayout(avr, "in_chlayout", &AV_GET_CODEC_ATTRIBUTES(aStream, aCodecCtx)->ch_layout, 0);
+	av_opt_set_chlayout(avr, "out_chlayout", &AV_GET_CODEC_ATTRIBUTES(aStream, aCodecCtx)->ch_layout, 0);
+#else
 	av_opt_set_int(avr, "in_channel_layout", AV_GET_CODEC_ATTRIBUTES(aStream, aCodecCtx)->channel_layout, 0);
 	av_opt_set_int(avr, "out_channel_layout", AV_GET_CODEC_ATTRIBUTES(aStream, aCodecCtx)->channel_layout, 0);
-	av_opt_set_int(avr, "in_sample_fmt", AV_GET_SAMPLE_FORMAT(aStream, aCodecCtx), 0);
-	av_opt_set_int(avr, "out_sample_fmt", AV_SAMPLE_FMT_S16, 0);
-	av_opt_set_int(avr, "in_sample_rate", info.sample_rate, 0);
-	av_opt_set_int(avr, "out_sample_rate", info.sample_rate, 0);
 	av_opt_set_int(avr, "in_channels", info.channels, 0);
 	av_opt_set_int(avr, "out_channels", info.channels, 0);
+#endif
+	av_opt_set_int(avr, "in_sample_fmt", AV_GET_SAMPLE_FORMAT(aStream, aCodecCtx), 0);
+	av_opt_set_int(avr, "out_sample_fmt", AV_SAMPLE_FMT_FLTP, 0);
+	av_opt_set_int(avr, "in_sample_rate", info.sample_rate, 0);
+	av_opt_set_int(avr, "out_sample_rate", info.sample_rate, 0);
 	SWR_INIT(avr);
 
 	// Convert audio samples
-	nb_samples = SWR_CONVERT(avr,	// audio resample context
+	int nb_samples = SWR_CONVERT(avr,	// audio resample context
 							 audio_converted->data,		  // output data pointers
 							 audio_converted->linesize[0],   // output plane size, in bytes. (0 if unknown)
 							 audio_converted->nb_samples,	// maximum number of samples that the output buffer can hold
@@ -1681,83 +1742,33 @@ void FFmpegReader::ProcessAudioPacket(int64_t requested_frame) {
 							 audio_frame->linesize[0],	   // input plane size, in bytes (0 if unknown)
 							 audio_frame->nb_samples);	   // number of input samples to convert
 
-	// Copy audio samples over original samples
-	memcpy(audio_buf,
-		audio_converted->data[0],
-		static_cast<size_t>(audio_converted->nb_samples)
-		* av_get_bytes_per_sample(AV_SAMPLE_FMT_S16)
-		* info.channels);
-
 	// Deallocate resample buffer
 	SWR_CLOSE(avr);
 	SWR_FREE(&avr);
 	avr = NULL;
 
-	// Free AVFrames
-	av_free(audio_converted->data[0]);
-	AV_FREE_FRAME(&audio_converted);
-
 	int64_t starting_frame_number = -1;
-	bool partial_frame = true;
 	for (int channel_filter = 0; channel_filter < info.channels; channel_filter++) {
 		// Array of floats (to hold samples for each channel)
 		starting_frame_number = location.frame;
-		int channel_buffer_size = packet_samples / info.channels;
-		float *channel_buffer = new float[channel_buffer_size];
-
-		// Init buffer array
-		for (int z = 0; z < channel_buffer_size; z++)
-			channel_buffer[z] = 0.0f;
-
-		// Loop through all samples and add them to our Frame based on channel.
-		// Toggle through each channel number, since channel data is stored like (left right left right)
-		int channel = 0;
-		int position = 0;
-		for (int sample = 0; sample < packet_samples; sample++) {
-			// Only add samples for current channel
-			if (channel_filter == channel) {
-				// Add sample (convert from (-32768 to 32768)  to (-1.0 to 1.0))
-				channel_buffer[position] = audio_buf[sample] * (1.0f / (1 << 15));
-
-				// Increment audio position
-				position++;
-			}
-
-			// increment channel (if needed)
-			if ((channel + 1) < info.channels)
-				// move to next channel
-				channel++;
-			else
-				// reset channel
-				channel = 0;
-		}
+		int channel_buffer_size = nb_samples;
+		auto *channel_buffer = (float *) (audio_converted->data[channel_filter]);
 
 		// Loop through samples, and add them to the correct frames
 		int start = location.sample_start;
 		int remaining_samples = channel_buffer_size;
-		float *iterate_channel_buffer = channel_buffer;	// pointer to channel buffer
 		while (remaining_samples > 0) {
 			// Get Samples per frame (for this frame number)
-			int samples_per_frame = Frame::GetSamplesPerFrame(starting_frame_number,
-													 info.fps, info.sample_rate, info.channels);
+			int samples_per_frame = Frame::GetSamplesPerFrame(starting_frame_number, info.fps, info.sample_rate, info.channels);
 
 			// Calculate # of samples to add to this frame
-			int samples = samples_per_frame - start;
-			if (samples > remaining_samples)
-				samples = remaining_samples;
+			int samples = std::fmin(samples_per_frame - start, remaining_samples);
 
 			// Create or get the existing frame object
 			std::shared_ptr<Frame> f = CreateFrame(starting_frame_number);
 
-			// Determine if this frame was "partially" filled in
-			if (samples_per_frame == start + samples)
-				partial_frame = false;
-			else
-				partial_frame = true;
-
 			// Add samples for current channel to the frame.
-			f->AddAudio(true, channel_filter, start, iterate_channel_buffer,
-			   samples, 1.0f);
+			f->AddAudio(true, channel_filter, start, channel_buffer, samples, 1.0f);
 
 			// Debug output
 			ZmqLogger::Instance()->AppendDebugMethod("FFmpegReader::ProcessAudioPacket (f->AddAudio)",
@@ -1765,7 +1776,6 @@ void FFmpegReader::ProcessAudioPacket(int64_t requested_frame) {
 											"start", start,
 											"samples", samples,
 											"channel", channel_filter,
-											"partial_frame", partial_frame,
 											"samples_per_frame", samples_per_frame);
 
 			// Add or update cache
@@ -1776,7 +1786,7 @@ void FFmpegReader::ProcessAudioPacket(int64_t requested_frame) {
 
 			// Increment buffer (to next set of samples)
 			if (remaining_samples > 0)
-				iterate_channel_buffer += samples;
+				channel_buffer += samples;
 
 			// Increment frame number
 			starting_frame_number++;
@@ -1784,18 +1794,11 @@ void FFmpegReader::ProcessAudioPacket(int64_t requested_frame) {
 			// Reset starting sample #
 			start = 0;
 		}
-
-		// clear channel buffer
-		delete[] channel_buffer;
-		channel_buffer = NULL;
-		iterate_channel_buffer = NULL;
 	}
 
-	// Clean up some arrays
-	delete[] audio_buf;
-	audio_buf = NULL;
-
-	// Free audio frame
+	// Free AVFrames
+	av_free(audio_converted->data[0]);
+	AV_FREE_FRAME(&audio_converted);
 	AV_FREE_FRAME(&audio_frame);
 
 	// Get audio PTS in seconds

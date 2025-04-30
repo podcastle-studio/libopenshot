@@ -48,7 +48,7 @@ FrameMapper::FrameMapper(ReaderBase *reader, Fraction target, PulldownType targe
 	field_toggle = true;
 
 	// Adjust cache size based on size of frame and audio
-	final_cache.SetMaxBytesFromInfo(OPEN_MP_NUM_PROCESSORS, info.width, info.height, info.sample_rate, info.channels);
+	final_cache.SetMaxBytesFromInfo(/* max_concurrent_frames */ 1, info.width, info.height, info.sample_rate, info.channels);
 }
 
 // Destructor
@@ -73,7 +73,15 @@ ReaderBase* FrameMapper::Reader()
 void FrameMapper::AddField(int64_t frame)
 {
 	// Add a field, and toggle the odd / even field
-	AddField(Field(frame, field_toggle));
+    Field f = { frame, bool(field_toggle) };
+	AddField(f);
+}
+
+void FrameMapper::AddField(int64_t frame, bool isOdd)
+{
+	// Add a field, and toggle the odd / even field
+    Field f = { frame, isOdd };
+	AddField(f);
 }
 
 void FrameMapper::AddField(Field field)
@@ -183,7 +191,7 @@ void FrameMapper::Init()
 
 					if (frame + 1 <= info.video_length)
 						// add field for next frame (if the next frame exists)
-						AddField(Field(frame + 1, field_toggle));
+						AddField(frame + 1, field_toggle);
 				}
 				else if (pulldown == PULLDOWN_NONE && field % frame_interval == 0)
 				{
@@ -244,8 +252,8 @@ void FrameMapper::Init()
 	}
 
 	// Loop through the target frames again (combining fields into frames)
-	Field Odd(0, true);		// temp field used to track the ODD field
-	Field Even(0, true);	// temp field used to track the EVEN field
+	Field Odd = {0, true};	// temp field used to track the ODD field
+	Field Even = {0, true};	// temp field used to track the EVEN field
 
 	// Variables used to remap audio samples
 	int64_t start_samples_frame = 1;
@@ -810,7 +818,7 @@ void FrameMapper::ChangeMapping(Fraction target_fps, PulldownType target_pulldow
 	final_cache.Clear();
 
 	// Adjust cache size based on size of frame and audio
-	final_cache.SetMaxBytesFromInfo(OPEN_MP_NUM_PROCESSORS, info.width, info.height, info.sample_rate, info.channels);
+	final_cache.SetMaxBytesFromInfo(/* max_concurrent_frames */ 1, info.width, info.height, info.sample_rate, info.channels);
 
 	// Deallocate resample buffer
 	if (avr) {
