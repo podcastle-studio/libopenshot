@@ -327,6 +327,10 @@ ReaderBase* Clip::Reader()
 		throw ReaderClosed("No Reader has been initialized for this Clip.  Call Reader(*reader) before calling this method.");
 }
 
+Clip* Clip::GetOverlayClip() const {
+	return overlayedClip;
+}
+
 // Open the internal reader
 void Clip::Open()
 {
