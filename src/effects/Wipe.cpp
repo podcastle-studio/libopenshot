@@ -7,8 +7,8 @@
 using namespace openshot;
 
 /// Blank constructor, useful when using Json to load the effect properties
-Wipe::Wipe(Keyframe levelsLowPercentage, Keyframe levelsHighPercentage)
-    : mLevelsLowPercentage(levelsLowPercentage), mLevelsHighPercentage(levelsHighPercentage) {
+Wipe::Wipe(Keyframe levelsLowPercentage, Keyframe levelsHighPercentage, Keyframe enableEffect)
+    : mLevelsLowPercentage(levelsLowPercentage), mLevelsHighPercentage(levelsHighPercentage), enableEffect(enableEffect) {
 	// Init effect properties
 	init_effect_details();
 }
@@ -30,7 +30,11 @@ void Wipe::init_effect_details()
 // This method is required for all derived classes of EffectBase, and returns a
 // modified openshot::Frame object
 std::shared_ptr<openshot::Frame> Wipe::GetFrame(std::shared_ptr<openshot::Frame> frame, int64_t frame_number) {
-    const auto lowPercentage = mLevelsLowPercentage.GetValue(frame_number);
+	const auto isEnabled = enableEffect.GetValue(frame_number);
+	if (!isEnabled) {
+		return frame;
+	}
+	const auto lowPercentage = mLevelsLowPercentage.GetValue(frame_number);
     const auto highPercentage = mLevelsHighPercentage.GetValue(frame_number);
 
     auto imageCv = frame->GetImageCV();

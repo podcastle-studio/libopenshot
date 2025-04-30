@@ -23,11 +23,11 @@ namespace openshot
 	public:
         Keyframe mLevelsLowPercentage;
         Keyframe mLevelsHighPercentage;
-
+		Keyframe enableEffect;
 		/// Blank constructor, useful when using Json to load the effect properties
 		Wipe() = default;
 
-        Wipe(Keyframe levelsLowPercentage, Keyframe levelsHighPercentage);
+        Wipe(Keyframe levelsLowPercentage, Keyframe levelsHighPercentage, Keyframe enableEffect = 1);
 
         /// @brief This method is required for all derived classes of ClipBase, and returns a
 		/// new openshot::Frame object. All Clip keyframes and effects are resolved into

@@ -59,33 +59,24 @@ std::shared_ptr<openshot::Frame> ColorShift::GetFrame(std::shared_ptr<openshot::
 	// Get the current shift amount, and clamp to range (-1 to 1 range)
 	// Red Keyframes
 	float red_x_shift = red_x.GetValue(frame_number);
-	int red_x_shift_limit = round(frame_image_width * fmod(fabs(red_x_shift), 1.0));
 	float red_y_shift = red_y.GetValue(frame_number);
-	int red_y_shift_limit = round(frame_image_height * fmod(fabs(red_y_shift), 1.0));
 	// Green Keyframes
 	float green_x_shift = green_x.GetValue(frame_number);
-	int green_x_shift_limit = round(frame_image_width * fmod(fabs(green_x_shift), 1.0));
 	float green_y_shift = green_y.GetValue(frame_number);
-	int green_y_shift_limit = round(frame_image_height * fmod(fabs(green_y_shift), 1.0));
 	// Blue Keyframes
 	float blue_x_shift = blue_x.GetValue(frame_number);
-	int blue_x_shift_limit = round(frame_image_width * fmod(fabs(blue_x_shift), 1.0));
 	float blue_y_shift = blue_y.GetValue(frame_number);
-	int blue_y_shift_limit = round(frame_image_height * fmod(fabs(blue_y_shift), 1.0));
 	// Alpha Keyframes
 	float alpha_x_shift = alpha_x.GetValue(frame_number);
-	int alpha_x_shift_limit = round(frame_image_width * fmod(fabs(alpha_x_shift), 1.0));
 	float alpha_y_shift = alpha_y.GetValue(frame_number);
-	int alpha_y_shift_limit = round(frame_image_height * fmod(fabs(alpha_y_shift), 1.0));
 
 	// Apply color shift (example values)
 	Podcastle::Effects::applyColorShiftEffect(pixels, frame_image_width, frame_image_height,
-						  red_x_shift_limit, red_y_shift_limit, // Red shift X/Y
-						  green_x_shift_limit, green_y_shift_limit, // Green shift X/Y
-						  blue_x_shift_limit, blue_y_shift_limit, // Blue shift X/Y
-						  alpha_x_shift_limit, alpha_y_shift_limit); // Alpha shift X/Y
-
-	// return the modified frame
+						  red_x_shift, red_y_shift, // Red shift X/Y
+						  green_x_shift, green_y_shift, // Green shift X/Y
+						  blue_x_shift, blue_y_shift, // Blue shift X/Y
+						  alpha_x_shift, alpha_y_shift); // Alpha shift X/Y
+	// returns the modified frame
 	return frame;
 }
 
