@@ -94,6 +94,11 @@ namespace openshot {
 			ADDITIVE_BLEND,
 			DISPLACEMENT_MAP
 		};
+		struct OverlayClipData {
+			Clip* clipPtr{nullptr};
+			OverlayType overlayType; ///< Clip object this clip is attached to
+			bool isOverlayAtEnd{false}; ///< Clip object this clip is attached to
+		};
 	protected:
 		/// Mutex for multiple threads
 		std::recursive_mutex getFrameMutex;
@@ -118,9 +123,7 @@ namespace openshot {
 		std::shared_ptr<openshot::TrackedObjectBase> parentTrackedObject; ///< Tracked object this clip is attached to
 		openshot::Clip* parentClipObject; ///< Clip object this clip is attached to
 
-		openshot::Clip* overlayedClip;
-		OverlayType overlayType; ///< Clip object this clip is attached to
-		bool isOverlayAtEnd; ///< Clip object this clip is attached to
+		std::vector<OverlayClipData> overlayClips;
 
 		/// Final cache object used to hold final frames
 		CacheMemory final_cache;
@@ -242,7 +245,10 @@ namespace openshot {
 		/// Return the associated ParentClip (if any)
 		openshot::Clip* GetParentClip();
 
-		void setOverlayClip(openshot::Clip* clip, OverlayType oType, bool isAtEnd);
+		void AddOverlayClip(openshot::Clip* clip, OverlayType oType, bool isAtEnd);
+
+		std::vector<OverlayClipData> GetOverlayClips() const;
+
 		/// Return the associated Parent Tracked Object (if any)
 		std::shared_ptr<openshot::TrackedObjectBase> GetParentTrackedObject();
 
@@ -294,8 +300,6 @@ namespace openshot {
 
 		/// Get the current reader
 		openshot::ReaderBase* Reader();
-
-		Clip* GetOverlayClip() const;
 
 		// Override End() position (in seconds) of clip (trim end of video)
 		float End() const override; ///< Get end position (in seconds) of clip (trim end of video), which can be affected by the time curve.

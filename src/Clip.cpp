@@ -99,7 +99,6 @@ void Clip::init_settings()
 	init_reader_settings();
 
 	isOverlay = false;
-	overlayedClip = nullptr;
 }
 
 // Init reader info details
@@ -327,10 +326,6 @@ ReaderBase* Clip::Reader()
 		throw ReaderClosed("No Reader has been initialized for this Clip.  Call Reader(*reader) before calling this method.");
 }
 
-Clip* Clip::GetOverlayClip() const {
-	return overlayedClip;
-}
-
 // Open the internal reader
 void Clip::Open()
 {
@@ -470,35 +465,41 @@ std::shared_ptr<Frame> Clip::GetFrame(std::shared_ptr<openshot::Frame> backgroun
             // Apply effects BEFORE applying keyframes (if any local or global effects are used)
             apply_effects(frame, timeline_frame_number, options, true);
 
-			if (overlayedClip) {
-				const auto currentClipFps = reader->info.fps.ToFloat();
-				const auto overlayedClipFps = overlayedClip->info.fps.ToFloat();
-				const auto overlayClipDuration = overlayedClip->end - overlayedClip->start;
-				const int64_t transitionClipStartFrame = isOverlayAtEnd ? (end - overlayClipDuration) * currentClipFps : 1;
-				const int64_t transitionClipEndFrame = (isOverlayAtEnd ? end : overlayClipDuration) * currentClipFps;
+			if (!overlayClips.empty()) {
+				for (const auto& overlayClipData : overlayClips) {
+					const auto overlayedClip = overlayClipData.clipPtr;
+					const auto isOverlayAtEnd = overlayClipData.isOverlayAtEnd;
+					const auto overlayType = overlayClipData.overlayType;
 
-				// Check if the requested main clip frame falls inside the transition region.
-				if (requested_clip_frame_number > transitionClipStartFrame && requested_clip_frame_number < transitionClipEndFrame) {
-					const int64_t overlayClipFrameNum = (overlayedClip->start + (requested_clip_frame_number - transitionClipStartFrame) / currentClipFps) * overlayedClipFps;
-					const auto overlayedFrame = overlayedClip->GetFrame(overlayClipFrameNum);
-					auto mainImageCv = frame->GetImageCV();
+					const auto currentClipFps = reader->info.fps.ToFloat();
+					const auto overlayedClipFps = overlayedClip->info.fps.ToFloat();
+					const auto overlayClipDuration = overlayedClip->end - overlayedClip->start;
+					const int64_t transitionClipStartFrame = isOverlayAtEnd ? (end - overlayClipDuration) * currentClipFps : 1;
+					const int64_t transitionClipEndFrame = (isOverlayAtEnd ? end : overlayClipDuration) * currentClipFps;
 
-					switch (overlayType) {
-					case OverlayType::ADDITIVE_BLEND:
-						{
-							Podcastle::Effects::additiveBlend(mainImageCv, overlayedFrame->GetImageCV());
-							frame->SetImageCV(mainImageCv);
-							break;
+					// Check if the requested main clip frame falls inside the transition region.
+					if (requested_clip_frame_number > transitionClipStartFrame && requested_clip_frame_number < transitionClipEndFrame) {
+						const int64_t overlayClipFrameNum = (overlayedClip->start + (requested_clip_frame_number - transitionClipStartFrame) / currentClipFps) * overlayedClipFps;
+						const auto overlayedFrame = overlayedClip->GetFrame(overlayClipFrameNum);
+						auto mainImageCv = frame->GetImageCV();
+
+						switch (overlayType) {
+						case OverlayType::ADDITIVE_BLEND:
+							{
+								Podcastle::Effects::additiveBlend(mainImageCv, overlayedFrame->GetImageCV());
+								frame->SetImageCV(mainImageCv);
+								break;
+							}
+						case OverlayType::DISPLACEMENT_MAP:
+							{
+								Podcastle::Effects::applyDisplacementMapEffect(mainImageCv, overlayedFrame->GetImageCV(),
+								overlayedClip->horizontal_displacement.GetValue(overlayClipFrameNum),
+								overlayedClip->vertical_displacement.GetValue(overlayClipFrameNum));
+								frame->SetImageCV(mainImageCv);
+								break;
+							}
+						default: break;
 						}
-					case OverlayType::DISPLACEMENT_MAP:
-						{
-							Podcastle::Effects::applyDisplacementMapEffect(mainImageCv, overlayedFrame->GetImageCV(),
-							overlayedClip->horizontal_displacement.GetValue(overlayClipFrameNum),
-							overlayedClip->vertical_displacement.GetValue(overlayClipFrameNum));
-							frame->SetImageCV(mainImageCv);
-							break;
-						}
-					default: break;
 					}
 				}
 			}
@@ -556,10 +557,16 @@ openshot::Clip* Clip::GetParentClip() {
     return parentClipObject;
 }
 
-void Clip::setOverlayClip(openshot::Clip* clip, const OverlayType oType, const bool isAtEnd) {
-	overlayedClip = clip;
-	overlayType = oType;
-	isOverlayAtEnd = isAtEnd;
+void Clip::AddOverlayClip(Clip* clip, const OverlayType oType, const bool isAtEnd) {
+	OverlayClipData overlayClipData{};
+	overlayClipData.clipPtr = clip;
+	overlayClipData.overlayType = oType;
+	overlayClipData.isOverlayAtEnd = isAtEnd;
+	overlayClips.emplace_back(overlayClipData);
+}
+
+std::vector<Clip::OverlayClipData> Clip::GetOverlayClips() const {
+	return overlayClips;
 }
 
 // Return the associated Parent Tracked Object (if any)
