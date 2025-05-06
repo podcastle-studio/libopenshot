@@ -136,7 +136,8 @@ jobs:
 
       - name: Install libopenshot
         run: |
-          cmake --build build --target install -- VERBOSE=1
+          # Stage all installs (including absolute Python paths) under our workspace/install
+          DESTDIR="${GITHUB_WORKSPACE}/install" cmake --build build --target install -- VERBOSE=1
 
       - uses: codecov/codecov-action@v3.1.4
         if: ${{ steps.coverage.outputs.value }}
