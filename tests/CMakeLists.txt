@@ -40,6 +40,7 @@ set(OPENSHOT_TESTS
   QtImageReader
   ReaderBase
   Settings
+  SphericalMetadata
   Timeline
   # Effects
   ChromaKey
