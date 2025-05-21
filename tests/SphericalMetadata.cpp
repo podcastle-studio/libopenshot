@@ -79,28 +79,19 @@ TEST_CASE( "SphericalMetadata_Test", "[libopenshot][ffmpegwriter]" )
         INFO("  " << entry.first << " = " << entry.second);
     }
     
-    // Check if spherical metadata is present in the reader
-    bool has_spherical_metadata = false;
-    if (test_reader.info.metadata.count("spherical") > 0 && 
-        test_reader.info.metadata["spherical"] == "1") {
-        has_spherical_metadata = true;
-    }
+    // Verify presence of spherical metadata and orientation keys
+    CHECK(test_reader.info.metadata.count("spherical") > 0);
+    CHECK(test_reader.info.metadata["spherical"] == "1");
+    CHECK(test_reader.info.metadata.count("spherical_projection") > 0);
+    CHECK(test_reader.info.metadata.count("spherical_yaw")   > 0);
+    CHECK(test_reader.info.metadata.count("spherical_pitch") > 0);
+    CHECK(test_reader.info.metadata.count("spherical_roll")  > 0);
 
-    // Report detection status (as warning to avoid test failures if format doesn't support it)
-    INFO("Spherical metadata detected: " << (has_spherical_metadata ? "Yes" : "No"));
-    
-    // We won't fail the test if metadata isn't detected, as this depends on FFmpeg version and container support
-    // Instead we'll warn and still consider the test a success if we could create the file without errors
-    if (!has_spherical_metadata) {
-        WARN("Spherical metadata not detected. This might be OK depending on FFmpeg version and container format.");
-    } else {
-        SUCCEED("Spherical metadata successfully detected!");
-    }
-    
-    // Success is that we could add the metadata without errors
-    SUCCEED("Successfully created video with spherical metadata");
-    
-    // Close reader
+    // Spot-check yaw value
+    float yaw_found = std::stof(test_reader.info.metadata["spherical_yaw"]);
+    CHECK(yaw_found == Approx(test_yaw).margin(0.5f));
+
+    // Clean up
     test_reader.Close();
     std::remove(test_file.c_str());
 }
@@ -156,55 +147,24 @@ TEST_CASE( "SphericalMetadata_FullOrientation", "[libopenshot][ffmpegwriter]" )
     for (const auto& entry : test_reader.info.metadata) {
         INFO("  " << entry.first << " = " << entry.second);
     }
-    
-    // Check if spherical metadata is present in the reader
-    bool has_spherical_metadata = false;
-    if (test_reader.info.metadata.count("spherical") > 0 && 
-        test_reader.info.metadata["spherical"] == "1") {
-        has_spherical_metadata = true;
-    }
 
-    // Report detection status but don't fail the test
-    INFO("Spherical metadata detected: " << (has_spherical_metadata ? "Yes" : "No"));
-    
-    // Only check for orientation values if spherical metadata was detected
-    if (has_spherical_metadata) {
-        // Check orientation values
-        bool has_yaw = false;
-        bool has_pitch = false;
-        bool has_roll = false;
-        
-        for (const auto& entry : test_reader.info.metadata) {
-            if (entry.first.find("yaw") != std::string::npos) {
-                has_yaw = true;
-                INFO("Yaw value: " << entry.second);
-            }
-            else if (entry.first.find("pitch") != std::string::npos) {
-                has_pitch = true;
-                INFO("Pitch value: " << entry.second);
-            }
-            else if (entry.first.find("roll") != std::string::npos) {
-                has_roll = true;
-                INFO("Roll value: " << entry.second);
-            }
-        }
-        
-        // Report orientation status
-        INFO("Orientation values detected - Yaw: " << (has_yaw ? "Yes" : "No") 
-            << ", Pitch: " << (has_pitch ? "Yes" : "No") 
-            << ", Roll: " << (has_roll ? "Yes" : "No"));
-        
-        if (has_yaw && has_pitch && has_roll) {
-            SUCCEED("All orientation values successfully detected!");
-        } else {
-            WARN("Some orientation values were not detected. This might be OK depending on FFmpeg version and container format.");
-        }
-    }
-    
-    // Success is that we could add the metadata without errors
-    SUCCEED("Successfully created video with spherical metadata and orientation values");
-    
-    // Close reader
+    // Verify presence of spherical metadata and orientation keys
+    CHECK(test_reader.info.metadata.count("spherical") > 0);
+    CHECK(test_reader.info.metadata["spherical"] == "1");
+    CHECK(test_reader.info.metadata.count("spherical_projection") > 0);
+    CHECK(test_reader.info.metadata.count("spherical_yaw")   > 0);
+    CHECK(test_reader.info.metadata.count("spherical_pitch") > 0);
+    CHECK(test_reader.info.metadata.count("spherical_roll")  > 0);
+
+    // Validate each orientation value
+    float yaw_found   = std::stof(test_reader.info.metadata["spherical_yaw"]);
+    float pitch_found = std::stof(test_reader.info.metadata["spherical_pitch"]);
+    float roll_found  = std::stof(test_reader.info.metadata["spherical_roll"]);
+    CHECK(yaw_found   == Approx(test_yaw).margin(0.5f));
+    CHECK(pitch_found == Approx(test_pitch).margin(0.5f));
+    CHECK(roll_found  == Approx(test_roll).margin(0.5f));
+
+    // Clean up
     test_reader.Close();
     std::remove(test_file.c_str());
 }
