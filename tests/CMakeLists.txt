@@ -44,6 +44,7 @@ set(OPENSHOT_TESTS
   # Effects
   ChromaKey
   Crop
+  Sharpen
 )
 
 # ImageMagick related test files
