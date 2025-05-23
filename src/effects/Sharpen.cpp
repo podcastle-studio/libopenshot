@@ -18,7 +18,7 @@ Sharpen::Sharpen()
   , radius(3.0)
   , threshold(0.0)
   , mode(0)
-  , channel(0)
+  , channel(1)
 {
   init_effect_details();
 }
@@ -29,7 +29,7 @@ Sharpen::Sharpen(Keyframe a, Keyframe r, Keyframe t)
   , radius(r)
   , threshold(t)
   , mode(0)
-  , channel(0)
+  , channel(1)
 {
   init_effect_details();
 }
@@ -259,22 +259,32 @@ std::shared_ptr<Frame> Sharpen::GetFrame(
       double outC[3];
 
       if (mode == 1) {
-        // High-Pass blend: base = blurred + amt * detail (no halo)
+        // HighPass: base = blurred image
+        // detail = original – blurred
+        // no halo limiter
+
+        // precompute normalized luma weights
+        const double wB = 0.114, wG = 0.587, wR = 0.299;
+
         if (channel == 1) {
-          // Luma only
-          double inc = amt * dY;
-          for (int c = 0; c < 3; ++c)
-            outC[c] = bp[c] + inc;
+          // Luma only: add back luma detail weighted per channel
+          double lumaInc = amt * dY;
+          outC[0] = bp[0] + lumaInc * wB;
+          outC[1] = bp[1] + lumaInc * wG;
+          outC[2] = bp[2] + lumaInc * wR;
         }
         else if (channel == 2) {
-          // Chroma only
-          double l = dY;
-          double chroma[3] = { dB - l, dG - l, dR - l };
-          for (int c = 0; c < 3; ++c)
-            outC[c] = bp[c] + amt * chroma[c];
+          // Chroma only: subtract luma from detail, add chroma back
+          double lumaDetail = dY;
+          double chromaB    = dB - lumaDetail * wB;
+          double chromaG    = dG - lumaDetail * wG;
+          double chromaR    = dR - lumaDetail * wR;
+          outC[0] = bp[0] + amt * chromaB;
+          outC[1] = bp[1] + amt * chromaG;
+          outC[2] = bp[2] + amt * chromaR;
         }
         else {
-          // All channels
+          // All channels: add full per-channel detail
           outC[0] = bp[0] + amt * dB;
           outC[1] = bp[1] + amt * dG;
           outC[2] = bp[2] + amt * dR;
