@@ -80,52 +80,52 @@ static void blur_axis(const QImage& src, QImage& dst, int r, bool vertical)
     for (int y = 0; y < H; ++y) {
       const uchar* rowIn  = in  + y*bpl;
       uchar*       rowOut = out + y*bpl;
-      double sumB = rowIn[0]*(r+1), sumG = rowIn[1]*(r+1),
-             sumR = rowIn[2]*(r+1), sumA = rowIn[3]*(r+1);
+      double sB = rowIn[0]*(r+1), sG = rowIn[1]*(r+1),
+             sR = rowIn[2]*(r+1), sA = rowIn[3]*(r+1);
       for (int x = 1; x <= r; ++x) {
         const uchar* p = rowIn + std::min(x, W-1)*4;
-        sumB += p[0]; sumG += p[1]; sumR += p[2]; sumA += p[3];
+        sB += p[0]; sG += p[1]; sR += p[2]; sA += p[3];
       }
       for (int x = 0; x < W; ++x) {
         uchar* o = rowOut + x*4;
-        o[0] = uchar(sumB / window + 0.5);
-        o[1] = uchar(sumG / window + 0.5);
-        o[2] = uchar(sumR / window + 0.5);
-        o[3] = uchar(sumA / window + 0.5);
+        o[0] = uchar(sB / window + 0.5);
+        o[1] = uchar(sG / window + 0.5);
+        o[2] = uchar(sR / window + 0.5);
+        o[3] = uchar(sA / window + 0.5);
 
         const uchar* addP = rowIn + std::min(x+r+1, W-1)*4;
         const uchar* subP = rowIn + std::max(x-r,     0)*4;
-        sumB += addP[0] - subP[0];
-        sumG += addP[1] - subP[1];
-        sumR += addP[2] - subP[2];
-        sumA += addP[3] - subP[3];
+        sB += addP[0] - subP[0];
+        sG += addP[1] - subP[1];
+        sR += addP[2] - subP[2];
+        sA += addP[3] - subP[3];
       }
     }
   }
   else {
     #pragma omp parallel for
     for (int x = 0; x < W; ++x) {
-      double sumB = 0, sumG = 0, sumR = 0, sumA = 0;
+      double sB = 0, sG = 0, sR = 0, sA = 0;
       const uchar* p0 = in + x*4;
-      sumB = p0[0]*(r+1); sumG = p0[1]*(r+1);
-      sumR = p0[2]*(r+1); sumA = p0[3]*(r+1);
+      sB = p0[0]*(r+1); sG = p0[1]*(r+1);
+      sR = p0[2]*(r+1); sA = p0[3]*(r+1);
       for (int y = 1; y <= r; ++y) {
         const uchar* p = in + std::min(y, H-1)*bpl + x*4;
-        sumB += p[0]; sumG += p[1]; sumR += p[2]; sumA += p[3];
+        sB += p[0]; sG += p[1]; sR += p[2]; sA += p[3];
       }
       for (int y = 0; y < H; ++y) {
         uchar* o = out + y*bpl + x*4;
-        o[0] = uchar(sumB / window + 0.5);
-        o[1] = uchar(sumG / window + 0.5);
-        o[2] = uchar(sumR / window + 0.5);
-        o[3] = uchar(sumA / window + 0.5);
+        o[0] = uchar(sB / window + 0.5);
+        o[1] = uchar(sG / window + 0.5);
+        o[2] = uchar(sR / window + 0.5);
+        o[3] = uchar(sA / window + 0.5);
 
         const uchar* addP = in + std::min(y+r+1, H-1)*bpl + x*4;
         const uchar* subP = in + std::max(y-r,     0)*bpl + x*4;
-        sumB += addP[0] - subP[0];
-        sumG += addP[1] - subP[1];
-        sumR += addP[2] - subP[2];
-        sumA += addP[3] - subP[3];
+        sB += addP[0] - subP[0];
+        sG += addP[1] - subP[1];
+        sR += addP[2] - subP[2];
+        sA += addP[3] - subP[3];
       }
     }
   }
@@ -209,11 +209,30 @@ std::shared_ptr<Frame> Sharpen::GetFrame(
   QImage blur(W, H, QImage::Format_ARGB32);
   gauss_blur(*img, blur, sigma);
 
+  // Precompute maximum luma difference for adaptive threshold
   int bplS = img->bytesPerLine();
   int bplB = blur.bytesPerLine();
   uchar* sBits = img->bits();
   uchar* bBits = blur.bits();
 
+  double maxDY = 0.0;
+  #pragma omp parallel for reduction(max:maxDY)
+  for (int y = 0; y < H; ++y) {
+    uchar* sRow = sBits + y * bplS;
+    uchar* bRow = bBits + y * bplB;
+    for (int x = 0; x < W; ++x) {
+      double dB = double(sRow[x*4+0]) - double(bRow[x*4+0]);
+      double dG = double(sRow[x*4+1]) - double(bRow[x*4+1]);
+      double dR = double(sRow[x*4+2]) - double(bRow[x*4+2]);
+      double dY = std::abs(0.114*dB + 0.587*dG + 0.299*dR);
+      maxDY = std::max(maxDY, dY);
+    }
+  }
+
+  // Compute actual threshold in luma units
+  double thr = thrUI * maxDY;
+
+  // Process pixels
   #pragma omp parallel for
   for (int y = 0; y < H; ++y) {
     uchar* sRow = sBits + y * bplS;
@@ -222,45 +241,47 @@ std::shared_ptr<Frame> Sharpen::GetFrame(
       uchar* sp = sRow + x*4;
       uchar* bp = bRow + x*4;
 
-      // Compute detail
-      double dB  = double(sp[0]) - double(bp[0]);
-      double dG  = double(sp[1]) - double(bp[1]);
-      double dR  = double(sp[2]) - double(bp[2]);
-      double dY  = 0.114*dB + 0.587*dG + 0.299*dR;
-      double dYn = std::abs(dY) / 255.0;
+      // Detail per channel
+      double dB = double(sp[0]) - double(bp[0]);
+      double dG = double(sp[1]) - double(bp[1]);
+      double dR = double(sp[2]) - double(bp[2]);
+      double dY = 0.114*dB + 0.587*dG + 0.299*dR;
 
-      // Skip below threshold
-      if (dYn < thrUI)
+      // Skip if below adaptive threshold
+      if (std::abs(dY) < thr)
         continue;
 
-      // Halo limiter for contrast
-      auto halo = [](double d){ return (255.0 - std::abs(d)) / 255.0; };
+      // Halo limiter
+      auto halo = [](double d) {
+        return (255.0 - std::abs(d)) / 255.0;
+      };
 
       double outC[3];
 
       if (mode == 1) {
-        // High-Pass Blend: base = blurred + amt * detail
+        // High-Pass blend: base = blurred + amt * detail (no halo)
         if (channel == 1) {
           // Luma only
-          double inc = amt * dY * halo(dY);
+          double inc = amt * dY;
           for (int c = 0; c < 3; ++c)
             outC[c] = bp[c] + inc;
         }
         else if (channel == 2) {
           // Chroma only
-          double chroma[3] = { dB - dY, dG - dY, dR - dY };
+          double l = dY;
+          double chroma[3] = { dB - l, dG - l, dR - l };
           for (int c = 0; c < 3; ++c)
-            outC[c] = bp[c] + amt * chroma[c] * halo(chroma[c]);
+            outC[c] = bp[c] + amt * chroma[c];
         }
         else {
           // All channels
-          double diff[3] = { dB, dG, dR };
-          for (int c = 0; c < 3; ++c)
-            outC[c] = bp[c] + amt * diff[c] * halo(diff[c]);
+          outC[0] = bp[0] + amt * dB;
+          outC[1] = bp[1] + amt * dG;
+          outC[2] = bp[2] + amt * dR;
         }
       }
       else {
-        // Unsharp-Mask: base = original + amt * detail
+        // Unsharp-Mask: base = original + amt * detail * halo(detail)
         if (channel == 1) {
           // Luma only
           double inc = amt * dY * halo(dY);
@@ -269,21 +290,23 @@ std::shared_ptr<Frame> Sharpen::GetFrame(
         }
         else if (channel == 2) {
           // Chroma only
-          double chroma[3] = { dB - dY, dG - dY, dR - dY };
+          double l = dY;
+          double chroma[3] = { dB - l, dG - l, dR - l };
           for (int c = 0; c < 3; ++c)
             outC[c] = sp[c] + amt * chroma[c] * halo(chroma[c]);
         }
         else {
           // All channels
-          double diff[3] = { dB, dG, dR };
-          for (int c = 0; c < 3; ++c)
-            outC[c] = sp[c] + amt * diff[c] * halo(diff[c]);
+          outC[0] = sp[0] + amt * dB * halo(dB);
+          outC[1] = sp[1] + amt * dG * halo(dG);
+          outC[2] = sp[2] + amt * dR * halo(dR);
         }
       }
 
       // Write back clamped
-      for (int c = 0; c < 3; ++c)
+      for (int c = 0; c < 3; ++c) {
         sp[c] = uchar(std::clamp(outC[c], 0.0, 255.0) + 0.5);
+      }
     }
   }
 
@@ -325,12 +348,12 @@ void Sharpen::SetJsonValue(Json::Value root)
   if (!root["threshold"].isNull())
     threshold.SetJsonValue(root["threshold"]);
   if (!root["mode"].isNull())
-    mode = root["mode"].asInt();
+    mode    = root["mode"].asInt();
   if (!root["channel"].isNull())
     channel = root["channel"].asInt();
 }
 
-// Properties for UI sliders
+// UI property definitions
 std::string Sharpen::PropertiesJSON(int64_t t) const
 {
   Json::Value root = BasePropertiesJSON(t);
