@@ -34,16 +34,19 @@ Mask::Mask() : maskType(MaskType::INVALID), reader(NULL), replace_image(false), 
 }
 
 // Default constructor
-Mask::Mask(ReaderBase *mask_reader, Keyframe mask_brightness, Keyframe mask_contrast) :
-		maskType(MaskType::CUSTOM), reader(mask_reader), brightness(mask_brightness), contrast(mask_contrast), replace_image(false), needs_refresh(true)
+Mask::Mask(ReaderBase *mask_reader, const Keyframe& mask_brightness, const Keyframe& mask_contrast,
+			const Keyframe& start_frame, const Keyframe& end_frame)
+		: reader(mask_reader), needs_refresh(true), maskType(MaskType::CUSTOM), replace_image(false)
+		, brightness(mask_brightness), contrast(mask_contrast), startFrame(start_frame), endFrame(end_frame)
 {
 	// Init effect properties
 	init_effect_details();
 }
 
-Mask::Mask(MaskType _maskType, Keyframe mask_brightness, Keyframe mask_contrast) :
+Mask::Mask(MaskType _maskType, const Keyframe& mask_brightness, const Keyframe& mask_contrast,
+			const Keyframe& start_frame, const Keyframe& end_frame) :
 		maskType(_maskType), reader(NULL), brightness(mask_brightness), contrast(mask_contrast), replace_image(false), needs_refresh(true),
-        roundedRadiusX(0), roundedRadiusY(0)
+        roundedRadiusX(0), roundedRadiusY(0), startFrame(start_frame), endFrame(end_frame)
 {
 	// Init effect properties
 	init_effect_details();
@@ -72,6 +75,10 @@ void Mask::init_effect_details()
 std::shared_ptr<openshot::Frame> Mask::GetFrame(std::shared_ptr<openshot::Frame> frame, int64_t frame_number) {
 	// Get the mask image (from the mask reader)
 	std::shared_ptr<QImage> frame_image = frame->GetImage();
+
+	if (frame_number < startFrame.GetValue(frame_number) || frame_number > endFrame.GetValue(frame_number)) {
+		return frame;
+	}
 
 	if (maskType == CUSTOM) {
 		// Check if mask reader is open
@@ -111,57 +118,7 @@ std::shared_ptr<openshot::Frame> Mask::GetFrame(std::shared_ptr<openshot::Frame>
 		p.drawPath(path);
 		p.end();
 		original_mask = std::make_shared<QImage>(mask);
-	} else if (maskType == CIRCLE_OUT) {
-        const auto radiusValue = circleRadius.GetValue(frame_number);
-
-        if (radiusValue == 0) {
-            return frame;
-        }
-
-        const int centerX = frame_image->width() / 2;
-        const int centerY = frame_image->height() / 2;
-
-        QImage mask(frame_image->width(), frame_image->height(), QImage::Format_RGBA8888_Premultiplied);
-        mask.fill(Qt::white);
-        QPainter p(&mask);
-        p.setRenderHint(QPainter::Antialiasing);
-
-        QPainterPath path;
-        path.addEllipse(QPointF(centerX, centerY), radiusValue, radiusValue);
-        QPen pen(Qt::black, 0);
-        p.setPen(pen);
-        p.fillPath(path, Qt::black);
-        p.drawPath(path);
-        p.end();
-        original_mask = std::make_shared<QImage>(mask);
-    } else if (maskType == CIRCLE_IN) {
-        const auto radiusValue = circleRadius.GetValue(frame_number);
-
-        const int width = frame_image->width();
-        const int height = frame_image->height();
-        const auto radiusMax = sqrt(width * width + height * height) / 2;
-        constexpr auto radiusMin = 0.f;
-
-        if (radiusValue == radiusMin || radiusValue > radiusMax) {
-            return frame;
-        }
-        const int centerX = frame_image->width() / 2;
-        const int centerY = frame_image->height() / 2;
-
-        QImage mask(frame_image->width(), frame_image->height(), QImage::Format_RGBA8888_Premultiplied);
-        mask.fill(Qt::white);
-        QPainter p(&mask);
-        p.setRenderHint(QPainter::Antialiasing);
-        QPainterPath path;
-        path.addEllipse(QPointF(centerX, centerY), radiusValue, radiusValue);
-        const QPen pen(Qt::black, 0);
-        p.setPen(pen);
-        p.fillPath(path, Qt::black);
-        p.drawPath(path);
-        p.end();
-        original_mask = std::make_shared<QImage>(mask);
-    }
-
+	}
 
     // Refresh no longer needed
 	needs_refresh = false;
@@ -235,7 +192,8 @@ Json::Value Mask::JsonValue() const {
 	else
 		root["reader"] = Json::objectValue;
 	root["replace_image"] = replace_image;
-
+	root["start_frame"] = startFrame.JsonValue();
+	root["end_frame"]   = endFrame.JsonValue();
 	// return JsonValue
 	return root;
 }
@@ -270,6 +228,8 @@ void Mask::SetJsonValue(const Json::Value root) {
 		brightness.SetJsonValue(root["brightness"]);
 	if (!root["contrast"].isNull())
 		contrast.SetJsonValue(root["contrast"]);
+	if (!root["start_frame"].isNull()) startFrame = root["start_frame"].asInt();
+	if (!root["end_frame"].isNull())   endFrame   = root["end_frame"].asInt();
 	if (!root["reader"].isNull()) // does Json contain a reader?
 	{
 		#pragma omp critical (open_mask_reader)

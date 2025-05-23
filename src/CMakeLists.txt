@@ -108,6 +108,7 @@ set(EFFECTS_SOURCES
   effects/image-processing-lib/src/Effects/effects.cpp
   effects/Bars.cpp
   effects/Blur.cpp
+  effects/Rotation.cpp
   effects/BorderReflectedRotation.cpp
   effects/BorderReflectedMove.cpp
   effects/Zoom.cpp
