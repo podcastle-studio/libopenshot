@@ -40,7 +40,7 @@ void Sharpen::init_effect_details()
   InitEffectInfo();
   info.class_name = "Sharpen";
   info.name        = "Sharpen";
-  info.description = "Edge-enhancing sharpen filter";
+  info.description = "Boost edge contrast to make video details look crisper.";
   info.has_audio   = false;
   info.has_video   = true;
 }
