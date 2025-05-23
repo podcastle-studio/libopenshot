@@ -57,6 +57,9 @@ std::shared_ptr<openshot::Frame> Bars::GetFrame(std::shared_ptr<openshot::Frame>
 	double right_value = right.GetValue(frame_number);
 	double bottom_value = bottom.GetValue(frame_number);
 
+	if (left_value == 0 && top_value == 0 && right_value == 0 && bottom_value == 0) {
+		return frame;
+	}
     // Get pixel array pointer
     auto *pixels = (unsigned char *)frame_image->bits();
     int width = frame_image->width();

@@ -70,6 +70,11 @@ std::shared_ptr<openshot::Frame> ColorShift::GetFrame(std::shared_ptr<openshot::
 	float alpha_x_shift = alpha_x.GetValue(frame_number);
 	float alpha_y_shift = alpha_y.GetValue(frame_number);
 
+	if (red_x_shift == 0 && red_y_shift == 0 && green_x_shift == 0 && green_x_shift == 0
+		&& blue_x_shift == 0 && blue_y_shift == 0 && alpha_x_shift == 0 && alpha_y_shift == 0) {
+		return frame;
+	}
+
 	// Apply color shift (example values)
 	Podcastle::Effects::applyColorShiftEffect(pixels, frame_image_width, frame_image_height,
 						  red_x_shift, red_y_shift, // Red shift X/Y
