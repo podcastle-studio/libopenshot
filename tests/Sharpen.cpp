@@ -1,7 +1,14 @@
 /**
- * @file
- * @brief Comprehensive unit tests for openshot::Sharpen effect
+* @file
+ * @brief Unit tests for Sharpen effect
+ * @author Jonathan Thomas <jonathan@openshot.org>
+ *
+ * @ref License
  */
+
+// Copyright (c) 2008-2025 OpenShot Studios, LLC
+//
+// SPDX-License-Identifier: LGPL-3.0-or-later
 
 #include <memory>
 #include <QImage>

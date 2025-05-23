@@ -7,6 +7,10 @@
  * @ref License
  */
 
+// Copyright (c) 2008-2025 OpenShot Studios, LLC
+//
+// SPDX-License-Identifier: LGPL-3.0-or-later
+
 #ifndef OPENSHOT_SHARPEN_EFFECT_H
 #define OPENSHOT_SHARPEN_EFFECT_H
 
