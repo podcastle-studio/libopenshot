@@ -12,7 +12,6 @@
 
 #include "EffectInfo.h"
 #include "Effects.h"
-#include "effects/SphericalProjection.h"
 
 using namespace openshot;
 
@@ -64,6 +63,9 @@ EffectBase* EffectInfo::CreateEffect(std::string effect_type) {
 
 	else if (effect_type == "Saturation")
 		return new Saturation();
+
+	else if (effect_type == "Sharpen")
+		return new Sharpen();
 
 	else if (effect_type == "Shift")
 		return new Shift();
@@ -138,6 +140,7 @@ Json::Value EffectInfo::JsonValue() {
 	root.append(Negate().JsonInfo());
 	root.append(Pixelate().JsonInfo());
 	root.append(Saturation().JsonInfo());
+	root.append(Sharpen().JsonInfo());
 	root.append(Shift().JsonInfo());
 	root.append(SphericalProjection().JsonInfo());
 	root.append(Wave().JsonInfo());

@@ -45,6 +45,7 @@ set(OPENSHOT_TESTS
   # Effects
   ChromaKey
   Crop
+  Sharpen
   SphericalEffect
 )
 
