@@ -16,6 +16,9 @@
 #include "../EffectBase.h"
 #include "../Json.h"
 #include "../KeyFrame.h"
+#include <QString>
+#include <QFile>
+#include <QTextStream>
 #include <vector>
 #include <string>
 
