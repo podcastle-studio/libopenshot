@@ -120,6 +120,7 @@ set(EFFECTS_SOURCES
   effects/Pixelate.cpp
   effects/Saturation.cpp
   effects/Shift.cpp
+  effects/SphericalProjection.cpp
   effects/Wave.cpp
   audio_effects/STFT.cpp
   audio_effects/Noise.cpp

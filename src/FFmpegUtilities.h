@@ -68,6 +68,10 @@ extern "C" {
     #include <libavutil/channel_layout.h>
 #endif
 
+#if LIBAVUTIL_VERSION_INT >= AV_VERSION_INT(55, 0, 0)
+    #include <libavutil/spherical.h>
+#endif
+
 #if IS_FFMPEG_3_2
     #include "libavutil/imgutils.h"
 #endif
