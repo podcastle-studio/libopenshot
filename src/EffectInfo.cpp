@@ -12,8 +12,6 @@
 
 #include "EffectInfo.h"
 #include "Effects.h"
-#include "effects/Sharpen.h"
-#include "effects/SphericalProjection.h"
 
 using namespace openshot;
 
