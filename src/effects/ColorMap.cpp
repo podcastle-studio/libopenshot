@@ -92,10 +92,10 @@ void ColorMap::init_effect_details()
 {
     InitEffectInfo();
     info.class_name = "ColorMap";
-    info.name       = "Color Map";
-    info.description = "Applies color grading by using a LUT file (.cube)";
-    info.has_video = true;
-    info.has_audio = false;
+    info.name       = "Color Map / Lookup";
+    info.description = "Adjust colors using 3D LUT lookup tables (.cube format)";
+    info.has_video  = true;
+    info.has_audio  = false;
 }
 
 ColorMap::ColorMap()
