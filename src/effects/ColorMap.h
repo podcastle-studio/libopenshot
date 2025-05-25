@@ -46,6 +46,7 @@ namespace openshot
         void load_cube_file();
 
     public:
+        Keyframe intensity;               ///< Overall intensity 0–1 (affects all channels)
         Keyframe intensity_r;             ///< Blend 0–1 for red channel
         Keyframe intensity_g;             ///< Blend 0–1 for green channel
         Keyframe intensity_b;             ///< Blend 0–1 for blue channel
@@ -57,11 +58,13 @@ namespace openshot
          * @brief Constructor with LUT path and per‐channel intensities
          *
          * @param path         Filesystem path to .cube file
+         * @param i            Keyframe for overall intensity (0–1)
          * @param iR           Keyframe for red blend (0–1)
          * @param iG           Keyframe for green blend (0–1)
          * @param iB           Keyframe for blue blend (0–1)
          */
         ColorMap(const std::string &path,
+                 const Keyframe &i = Keyframe(1.0),
                  const Keyframe &iR = Keyframe(1.0),
                  const Keyframe &iG = Keyframe(1.0),
                  const Keyframe &iB = Keyframe(1.0));

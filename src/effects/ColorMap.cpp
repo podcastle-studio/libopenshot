@@ -100,19 +100,21 @@ void ColorMap::init_effect_details()
 
 ColorMap::ColorMap()
     : lut_path(""), lut_size(0), needs_refresh(true),
-      intensity_r(1.0), intensity_g(1.0), intensity_b(1.0)
+      intensity(1.0), intensity_r(1.0), intensity_g(1.0), intensity_b(1.0)
 {
     init_effect_details();
     load_cube_file();
 }
 
 ColorMap::ColorMap(const std::string &path,
+                   const Keyframe &i,
                    const Keyframe &iR,
                    const Keyframe &iG,
                    const Keyframe &iB)
     : lut_path(path),
       lut_size(0),
       needs_refresh(true),
+      intensity(i),
       intensity_r(iR),
       intensity_g(iG),
       intensity_b(iB)
@@ -137,9 +139,10 @@ ColorMap::GetFrame(std::shared_ptr<openshot::Frame> frame, int64_t frame_number)
     int w = image->width(), h = image->height();
     unsigned char *pixels = image->bits();
 
-    float tR = float(intensity_r.GetValue(frame_number));
-    float tG = float(intensity_g.GetValue(frame_number));
-    float tB = float(intensity_b.GetValue(frame_number));
+    float overall = float(intensity.GetValue(frame_number));
+    float tR = float(intensity_r.GetValue(frame_number)) * overall;
+    float tG = float(intensity_g.GetValue(frame_number)) * overall;
+    float tB = float(intensity_b.GetValue(frame_number)) * overall;
 
     int pixel_count = w * h;
     #pragma omp parallel for
@@ -235,6 +238,7 @@ Json::Value ColorMap::JsonValue() const
     Json::Value root = EffectBase::JsonValue();
     root["type"]         = info.class_name;
     root["lut_path"]     = lut_path;
+    root["intensity"] = intensity.JsonValue();
     root["intensity_r"] = intensity_r.JsonValue();
     root["intensity_g"] = intensity_g.JsonValue();
     root["intensity_b"] = intensity_b.JsonValue();
@@ -260,6 +264,8 @@ void ColorMap::SetJsonValue(const Json::Value root)
         lut_path = root["lut_path"].asString();
         needs_refresh = true;
     }
+    if (!root["intensity"].isNull())
+        intensity.SetJsonValue(root["intensity"]);
     if (!root["intensity_r"].isNull())
         intensity_r.SetJsonValue(root["intensity_r"]);
     if (!root["intensity_g"].isNull())
@@ -274,6 +280,11 @@ std::string ColorMap::PropertiesJSON(int64_t requested_frame) const
 
     root["lut_path"] = add_property_json(
         "LUT File", 0.0, "string", lut_path, nullptr, 0, 0, false, requested_frame);
+
+    root["intensity"] = add_property_json(
+        "Overall Intensity",
+        intensity.GetValue(requested_frame),
+        "float", "", &intensity, 0.0, 1.0, false, requested_frame);
 
     root["intensity_r"] = add_property_json(
         "Red Intensity",
