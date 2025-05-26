@@ -42,9 +42,11 @@ void ColorMap::load_cube_file()
             while (!in.atEnd()) {
                 line = in.readLine().trimmed();
                 if (line.startsWith("LUT_3D_SIZE")) {
-                    auto parts = line.split(QRegExp("\\s+"), Qt::SkipEmptyParts);
-                    if (parts.size() >= 2)
+                    // split on any run of whitespace — trimmed ensures no leading/trailing empties
+                    auto parts = line.split(QRegExp("\\s+"));
+                    if (parts.size() >= 2) {
                         parsed_size = parts[1].toInt();
+                    }
                     break;
                 }
             }
