@@ -13,7 +13,7 @@
 #include "ColorMap.h"
 #include "Exceptions.h"
 #include <omp.h>
-#include <QRegExp>
+#include <QRegularExpression>
 
 using namespace openshot;
 
@@ -37,13 +37,13 @@ void ColorMap::load_cube_file()
         } else {
             QTextStream in(&file);
             QString line;
+            QRegularExpression ws_re("\\s+");
 
             // 1) Find LUT_3D_SIZE
             while (!in.atEnd()) {
                 line = in.readLine().trimmed();
                 if (line.startsWith("LUT_3D_SIZE")) {
-                    // split on any run of whitespace — trimmed ensures no leading/trailing empties
-                    auto parts = line.split(QRegExp("\\s+"));
+                    auto parts = line.split(ws_re);
                     if (parts.size() >= 2) {
                         parsed_size = parts[1].toInt();
                     }
@@ -55,7 +55,7 @@ void ColorMap::load_cube_file()
             if (parsed_size > 0) {
                 int total = parsed_size * parsed_size * parsed_size;
                 parsed_data.reserve(size_t(total * 3));
-                while (!in.atEnd() && (int)parsed_data.size() < total * 3) {
+                while (!in.atEnd() && int(parsed_data.size()) < total * 3) {
                     line = in.readLine().trimmed();
                     if (line.isEmpty() ||
                         line.startsWith("#") ||
@@ -64,7 +64,7 @@ void ColorMap::load_cube_file()
                     {
                         continue;
                     }
-                    auto vals = line.split(QRegExp("\\s+"), Qt::SkipEmptyParts);
+                    auto vals = line.split(ws_re);
                     if (vals.size() >= 3) {
                         // .cube file is R G B
                         parsed_data.push_back(vals[0].toFloat());
@@ -72,7 +72,7 @@ void ColorMap::load_cube_file()
                         parsed_data.push_back(vals[2].toFloat());
                     }
                 }
-                if ((int)parsed_data.size() != total * 3) {
+                if (int(parsed_data.size()) != total * 3) {
                     parsed_data.clear();
                     parsed_size = 0;
                 }
@@ -195,7 +195,7 @@ ColorMap::GetFrame(std::shared_ptr<openshot::Frame> frame, int64_t frame_number)
         float c11 = lut_data[base011 + 0] * (1 - dr) + lut_data[base111 + 0] * dr;
         float c0  = c00 * (1 - dg) + c10 * dg;
         float c1  = c01 * (1 - dg) + c11 * dg;
-        float lr  = c0  * (1 - db) + c1  * db;
+        float lr = c0 * (1 - db) + c1 * db;
 
         // green
         c00 = lut_data[base000 + 1] * (1 - dr) + lut_data[base100 + 1] * dr;
@@ -204,7 +204,7 @@ ColorMap::GetFrame(std::shared_ptr<openshot::Frame> frame, int64_t frame_number)
         c11 = lut_data[base011 + 1] * (1 - dr) + lut_data[base111 + 1] * dr;
         c0  = c00 * (1 - dg) + c10 * dg;
         c1  = c01 * (1 - dg) + c11 * dg;
-        float lg  = c0  * (1 - db) + c1  * db;
+        float lg = c0 * (1 - db) + c1 * db;
 
         // blue
         c00 = lut_data[base000 + 2] * (1 - dr) + lut_data[base100 + 2] * dr;
@@ -213,7 +213,7 @@ ColorMap::GetFrame(std::shared_ptr<openshot::Frame> frame, int64_t frame_number)
         c11 = lut_data[base011 + 2] * (1 - dr) + lut_data[base111 + 2] * dr;
         c0  = c00 * (1 - dg) + c10 * dg;
         c1  = c01 * (1 - dg) + c11 * dg;
-        float lb  = c0  * (1 - db) + c1  * db;
+        float lb = c0 * (1 - db) + c1 * db;
 
         // blend per-channel, re-premultiply alpha
         float outR = (lr * tR + Rn * (1 - tR)) * alpha;
