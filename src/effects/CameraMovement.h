@@ -1,5 +1,5 @@
-#ifndef OPENSHOT_ROTATION_EFFECT_H
-#define OPENSHOT_ROTATION_EFFECT_H
+#ifndef OPENSHOT_CAMERA_MOVEMENT_EFFECT_H
+#define OPENSHOT_CAMERA_MOVEMENT_EFFECT_H
 
 #include "../EffectBase.h"
 
@@ -20,20 +20,21 @@
 
 namespace openshot
 {
-	class Rotation : public EffectBase
+	class CameraMovement : public EffectBase
 	{
 	private:
 		/// Init effect settings
 		void init_effect_details();
 
 	public:
-		Keyframe angle;
-		Keyframe rotationAnchorX;
-		Keyframe rotationAnchorY;
+		Keyframe rotationAngle;
+		Keyframe zoomPercent;
+		Keyframe moveX;
+		Keyframe moveY;
 
-        Rotation();
+        CameraMovement();
 
-        Rotation(Keyframe newAngle, Keyframe anchorX = 0.5, Keyframe anchorY = 0.5);
+        CameraMovement(const Keyframe& zoomPercent, const Keyframe& rotationAngle, const Keyframe& moveX = 0.5, const Keyframe& moveY = 0.5);
 
 		/// @brief This method is required for all derived classes of ClipBase, and returns a
 		/// new openshot::Frame object. All Clip keyframes and effects are resolved into
