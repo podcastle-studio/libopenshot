@@ -80,7 +80,7 @@ void LensFlare::init_effect_details()
     info.has_audio = false;
 }
 
-// Reflector definition for GIMP logic
+// Reflector definition
 struct Reflect {
     float xp, yp, size;
     QColor col;
@@ -121,7 +121,7 @@ static QColor shifted_hsv(const QColor &base, float h_shift,
     return out;
 }
 
-// Initialize reflectors based on GIMP logic
+// Initialize reflectors
 static void init_reflectors(std::vector<Reflect> &refs, float DX, float DY,
                             int width, int height, const QColor &tint,
                             float S)
@@ -221,19 +221,21 @@ LensFlare::GetFrame(std::shared_ptr<openshot::Frame> frame, int64_t f)
     int w = img->width();
     int h = img->height();
 
-    float X = x.GetValue(f);
-    float Y = y.GetValue(f);
-    float I = brightness.GetValue(f);
-    float S = size.GetValue(f);
-    float SP = spread.GetValue(f);
+    // Fetch keyframe values
+    float X  = x.GetValue(f),
+          Y  = y.GetValue(f),
+          I  = brightness.GetValue(f),
+          S  = size.GetValue(f),
+          SP = spread.GetValue(f);
 
-    float halfW = w * 0.5f;
-    float halfH = h * 0.5f;
-    float px = (X * 0.5f + 0.5f) * w;
-    float py = (Y * 0.5f + 0.5f) * h;
-    float DX = (halfW - px) * SP;
-    float DY = (halfH - py) * SP;
+    // Compute lens center + spread
+    float halfW = w * 0.5f, halfH = h * 0.5f;
+    float px    = (X * 0.5f + 0.5f) * w;
+    float py    = (Y * 0.5f + 0.5f) * h;
+    float DX    = (halfW - px) * SP;
+    float DY    = (halfH - py) * SP;
 
+    // Tint color
     QColor tint = QColor::fromRgbF(
         color.red.GetValue(f)   / 255.0f,
         color.green.GetValue(f) / 255.0f,
@@ -241,6 +243,7 @@ LensFlare::GetFrame(std::shared_ptr<openshot::Frame> frame, int64_t f)
         color.alpha.GetValue(f) / 255.0f
     );
 
+    // Calculate radii for rings
     float matt   = w;
     float scolor = matt * 0.0375f * S;
     float sglow  = matt * 0.078125f * S;
@@ -248,6 +251,7 @@ LensFlare::GetFrame(std::shared_ptr<openshot::Frame> frame, int64_t f)
     float souter = matt * 0.3359375f * S;
     float shalo  = matt * 0.084375f * S;
 
+    // Helper to tint base hues
     auto tintify = [&](float br, float bg, float bb) {
         return QColor::fromRgbF(
             br * tint.redF(),
@@ -263,65 +267,92 @@ LensFlare::GetFrame(std::shared_ptr<openshot::Frame> frame, int64_t f)
     QColor c_outer = tintify(69/255.0f,  59/255.0f,   64/255.0f);
     QColor c_halo  = tintify(80/255.0f,  15/255.0f,    4/255.0f);
 
+    // Precompute reflectors
     std::vector<Reflect> refs;
     init_reflectors(refs, DX, DY, w, h, tint, S);
 
-    QImage overlay(w, h, QImage::Format_ARGB32_Premultiplied);
-    overlay.fill(qRgba(0, 0, 0, 0));
+    // Build an un-premultiplied overlay
+    QImage overlay(w, h, QImage::Format_ARGB32);
+    overlay.fill(Qt::transparent);
 
     #pragma omp parallel for schedule(dynamic)
     for (int yy = 0; yy < h; ++yy) {
         QRgb *scan = reinterpret_cast<QRgb*>(overlay.scanLine(yy));
         for (int xx = 0; xx < w; ++xx) {
-            QRgb pxl = scan[xx];
-            float d  = std::hypot(xx - px, yy - py);
+            // start fully transparent
+            int r=0, g=0, b=0;
+            float d = std::hypot(xx - px, yy - py);
 
+            // bright core
             if (d < scolor) {
-                float p = (scolor - d) / scolor;
-                p *= p;
-                pxl = blendAdd(pxl, c_color, p);
+                float p = (scolor - d)/scolor; p*=p;
+                QRgb tmp = blendAdd(qRgba(r,g,b,0), c_color, p);
+                r = qRed(tmp); g = qGreen(tmp); b = qBlue(tmp);
             }
+            // outer glow
             if (d < sglow) {
-                float p = (sglow - d) / sglow;
-                p *= p;
-                pxl = blendAdd(pxl, c_glow, p);
+                float p = (sglow - d)/sglow; p*=p;
+                QRgb tmp = blendAdd(qRgba(r,g,b,0), c_glow, p);
+                r = qRed(tmp); g = qGreen(tmp); b = qBlue(tmp);
             }
+            // inner ring
             if (d < sinner) {
-                float p = (sinner - d) / sinner;
-                p *= p;
-                pxl = blendAdd(pxl, c_inner, p);
+                float p = (sinner - d)/sinner; p*=p;
+                QRgb tmp = blendAdd(qRgba(r,g,b,0), c_inner, p);
+                r = qRed(tmp); g = qGreen(tmp); b = qBlue(tmp);
             }
+            // outer ring
             if (d < souter) {
-                float p = (souter - d) / souter;
-                pxl = blendAdd(pxl, c_outer, p);
+                float p = (souter - d)/souter;
+                QRgb tmp = blendAdd(qRgba(r,g,b,0), c_outer, p);
+                r = qRed(tmp); g = qGreen(tmp); b = qBlue(tmp);
             }
+            // halo ring
             {
-                float p = std::abs((d - shalo) / (shalo * 0.07f));
+                float p = std::abs((d - shalo)/(shalo*0.07f));
                 if (p < 1.0f) {
-                    pxl = blendAdd(pxl, c_halo, 1.0f - p);
+                    QRgb tmp = blendAdd(qRgba(r,g,b,0), c_halo, 1.0f-p);
+                    r = qRed(tmp); g = qGreen(tmp); b = qBlue(tmp);
                 }
             }
-
-            for (auto &r : refs) {
-                apply_reflector(pxl, r, xx, yy);
+            // little reflectors
+            for (auto &rf : refs) {
+                QRgb tmp = qRgba(r,g,b,0);
+                apply_reflector(tmp, rf, xx, yy);
+                r = qRed(tmp); g = qGreen(tmp); b = qBlue(tmp);
             }
-            scan[xx] = pxl;
+
+            // force alpha = max(R,G,B)
+            int a = std::max({r,g,b});
+            scan[xx] = qRgba(r,g,b,a);
         }
     }
 
-    //grab your original alpha channel
+    // Get original alpha
     QImage origAlpha = img->alphaChannel();
 
-    // composite with screen blend and global brightness
-    QPainter painter(img.get());
-    painter.setCompositionMode(QPainter::CompositionMode_Screen);
-    painter.setOpacity(I);
-    painter.drawImage(0, 0, overlay);
-    painter.end();
+    // Additive-light the overlay onto your frame
+    QPainter p(img.get());
+    p.setCompositionMode(QPainter::CompositionMode_Plus);
+    p.setOpacity(I);
+    p.drawImage(0, 0, overlay);
+    p.end();
 
-    // put that mask back on your image
-    img->setAlphaChannel(origAlpha);
+    // Rebuild alpha = max(orig, flare×I)
+    QImage finalA(w,h, QImage::Format_Alpha8);
+    auto overlayA = overlay.alphaChannel();
 
+    for (int yy=0; yy<h; ++yy) {
+        uchar *oL = origAlpha.scanLine(yy);
+        uchar *fL = overlayA.scanLine(yy);
+        uchar *nL = finalA.scanLine(yy);
+        for (int xx=0; xx<w; ++xx) {
+            float oa = oL[xx]/255.0f;
+            float fa = (fL[xx]/255.0f)*I;
+            nL[xx] = static_cast<uchar>(std::clamp(std::max(oa,fa)*255.0f, 0.0f, 255.0f));
+        }
+    }
+    img->setAlphaChannel(finalA);
     return frame;
 }
 
