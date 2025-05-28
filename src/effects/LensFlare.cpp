@@ -329,7 +329,7 @@ LensFlare::GetFrame(std::shared_ptr<openshot::Frame> frame, int64_t f)
     }
 
     // Get original alpha
-    QImage origAlpha = img->alphaChannel();
+    QImage origAlpha = img->convertToFormat(QImage::Format_Alpha8);
 
     // Additive-light the overlay onto your frame
     QPainter p(img.get());
@@ -340,7 +340,7 @@ LensFlare::GetFrame(std::shared_ptr<openshot::Frame> frame, int64_t f)
 
     // Rebuild alpha = max(orig, flare×I)
     QImage finalA(w,h, QImage::Format_Alpha8);
-    auto overlayA = overlay.alphaChannel();
+    auto overlayA = overlay.convertToFormat(QImage::Format_Alpha8);
 
     for (int yy=0; yy<h; ++yy) {
         uchar *oL = origAlpha.scanLine(yy);
