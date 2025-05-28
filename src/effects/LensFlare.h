@@ -21,10 +21,12 @@
 
 namespace openshot
 {
-
     class LensFlare : public EffectBase
     {
     private:
+        void init_effect_details();
+
+    public:
         Keyframe x;
         Keyframe y;
         Keyframe brightness;
@@ -32,9 +34,6 @@ namespace openshot
         Keyframe spread;
         Color color;
 
-        void init_effect_details();
-
-    public:
         LensFlare();
         ~LensFlare() override;
         LensFlare(const Keyframe &xPos,
