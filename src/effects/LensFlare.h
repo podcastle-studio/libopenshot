@@ -1,15 +1,23 @@
+/**
+* @file
+ * @brief Header file for LensFlare class
+ * @author Jonathan Thomas <jonathan@openshot.org>
+ *
+ * @ref License
+ */
+
+// Copyright (c) 2008-2025 OpenShot Studios, LLC
+//
+// SPDX-License-Identifier: LGPL-3.0-or-later
+
 #ifndef OPENSHOT_LENSFLARE_EFFECT_H
 #define OPENSHOT_LENSFLARE_EFFECT_H
 
 #include "../EffectBase.h"
-#include "../Json.h"
 #include "../KeyFrame.h"
 #include "../Color.h"
 #include <QImage>
-#include <QPainter>
-#include <QRadialGradient>
 #include <QColor>
-#include <vector>
 
 namespace openshot
 {
@@ -22,8 +30,6 @@ namespace openshot
         Keyframe brightness;
         Keyframe size;
         Keyframe spread;
-        Keyframe blades;
-        Keyframe iris_shape;
         Color color;
 
         void init_effect_details();
@@ -38,7 +44,7 @@ namespace openshot
                   const Keyframe &spreadVal,
                   const Keyframe &bladeCount,
                   const Keyframe &shapeType,
-                  const Color &tint = Color("#FFA500"));
+                  const Color &tint = Color("#ffffff"));
 
         std::shared_ptr<openshot::Frame> GetFrame(int64_t frame_number) override;
         std::shared_ptr<openshot::Frame> GetFrame(std::shared_ptr<openshot::Frame> frame,

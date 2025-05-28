@@ -1,45 +1,57 @@
+/*
+* Based on the FlareFX plug-in for GIMP 0.99 (version 1.05)
+ * Original Copyright (C) 1997-1998 Karl-Johan Andersson <t96kja@student.tdb.uu.se>
+ * Modifications May 2000 by Tim Copperfield <timecop@japan.co.jp>
+ *
+ * This code is available under the GNU GPL v2 (or any later version):
+ *   You may redistribute and/or modify it under the terms of
+ *   the GNU General Public License as published by
+ *   the Free Software Foundation; either version 2 of the License,
+ *   or (at your option) any later version.
+ *
+ *   This program is distributed in the hope that it will be useful,
+ *   but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ *   GNU General Public License for more details.
+ *
+ *   You should have received a copy of the GNU General Public License
+ *   along with this code; if not, write to the Free Software Foundation,
+ *   Inc., 59 Temple Place – Suite 330, Boston, MA 02111-1307, USA.
+ */
+
+/**
+ * @file
+ * @brief Header file for LensFlare class
+ * @author Jonathan Thomas <jonathan@openshot.org>
+ *
+ * @ref License
+ */
+
+// Copyright (c) 2008-2025 OpenShot Studios, LLC
+//
+// SPDX-License-Identifier: LGPL-3.0-or-later
+
 #include "LensFlare.h"
 #include "Exceptions.h"
+#include <QImage>
+#include <QPainter>
+#include <QColor>
 #include <cmath>
 #include <vector>
 #include <algorithm>
+#include <omp.h>
 
 using namespace openshot;
 
-struct FlareElement {
-    float offset;      // along vector center-to-flare, -1=behind, +1=past
-    float radius;      // size, as a fraction of image width
-    QColor color;      // flare color
-    float alpha;       // 0..1
-    int   type;        // 0: orb, 1: ring, 2: soft halo
-    float chromaMix;   // 0: pure tint, 1: pure element color
-};
-
-static QColor mix_color(const QColor& a, const QColor& b, float t) {
-    float r = a.redF()   * (1-t) + b.redF()   * t;
-    float g = a.greenF() * (1-t) + b.greenF() * t;
-    float b_ = a.blueF() * (1-t) + b.blueF()  * t;
-    float af = a.alphaF() * (1-t) + b.alphaF() * t;
-    QColor c; c.setRgbF(r, g, b_, af);
-    return c;
-}
-
-static QColor scale_alpha(const QColor& c, float a) {
-    QColor o = c;
-    float alpha = std::clamp(float(c.alphaF() * a), 0.0f, 1.0f);
-    o.setAlphaF(alpha);
-    return o;
-}
-
+// Default constructor
 LensFlare::LensFlare()
-    : x(0.0), y(0.0), brightness(1.0), size(1.0), spread(0.5),
-      blades(6), iris_shape(0), color(Color("#FFA500"))
+    : x(-0.5), y(-0.5), brightness(1.0), size(1.0), spread(1.0),
+      color(Color("#ffffff"))
 {
     init_effect_details();
 }
 
-LensFlare::~LensFlare() {}
-
+// Parameterized constructor
 LensFlare::LensFlare(const Keyframe &xPos,
                      const Keyframe &yPos,
                      const Keyframe &intensity,
@@ -48,230 +60,330 @@ LensFlare::LensFlare(const Keyframe &xPos,
                      const Keyframe &bladeCount,
                      const Keyframe &shapeType,
                      const Color &tint)
-    : x(xPos), y(yPos), brightness(intensity), size(scale), spread(spreadVal),
-      blades(bladeCount), iris_shape(shapeType), color(tint)
+    : x(xPos), y(yPos), brightness(intensity), size(scale),
+      spread(spreadVal), color(tint)
 {
     init_effect_details();
 }
 
+// Destructor
+LensFlare::~LensFlare() = default;
+
+// Initialize effect metadata
 void LensFlare::init_effect_details()
 {
     InitEffectInfo();
     info.class_name = "LensFlare";
-    info.name       = "Lens Flare";
-    info.description = "Realistic lens flare with bloom, ghosts, rings, streaks, chromatic split, and customizable aperture.";
+    info.name = "Lens Flare";
+    info.description = "Simulate sunlight hitting a lens with flares and spectral colors.";
     info.has_video = true;
     info.has_audio = false;
 }
 
+// Reflector definition for GIMP logic
+struct Reflect {
+    float xp, yp, size;
+    QColor col;
+    int type; // 1..4
+};
+
+// Blend a color onto a pixel using additive blending
+static inline QRgb blendAdd(QRgb dst, const QColor &c, float p)
+{
+    int dr = (255 - qRed(dst)) * p * c.redF();
+    int dg = (255 - qGreen(dst)) * p * c.greenF();
+    int db = (255 - qBlue(dst)) * p * c.blueF();
+    int da = (255 - qAlpha(dst)) * p * c.alphaF();
+    return qRgba(
+        std::clamp(qRed(dst) + dr, 0, 255),
+        std::clamp(qGreen(dst) + dg, 0, 255),
+        std::clamp(qBlue(dst) + db, 0, 255),
+        std::clamp(qAlpha(dst) + da, 0, 255)
+    );
+}
+
+// Shift HSV values by given factors
+static QColor shifted_hsv(const QColor &base, float h_shift,
+                          float s_scale, float v_scale,
+                          float a_scale = 1.0f)
+{
+    qreal h, s, v, a;
+    base.getHsvF(&h, &s, &v, &a);
+    if (s == 0.0)
+        h = 0.0;
+    h = std::fmod(h + h_shift + 1.0, 1.0);
+    s = std::clamp(s * s_scale, 0.0, 1.0);
+    v = std::clamp(v * v_scale, 0.0, 1.0);
+    a = std::clamp(a * a_scale, 0.0, 1.0);
+
+    QColor out;
+    out.setHsvF(h, s, v, a);
+    return out;
+}
+
+// Initialize reflectors based on GIMP logic
+static void init_reflectors(std::vector<Reflect> &refs, float DX, float DY,
+                            int width, int height, const QColor &tint,
+                            float S)
+{
+    float halfW = width * 0.5f;
+    float halfH = height * 0.5f;
+    float matt = width;
+
+    struct Rdef { int type; float fx, fy, fsize, r, g, b; };
+    Rdef defs[] = {
+        {1,  0.6699f,  0.6699f, 0.027f,   0.0f,       14/255.0f, 113/255.0f},
+        {1,  0.2692f,  0.2692f, 0.010f,  90/255.0f, 181/255.0f, 142/255.0f},
+        {1, -0.0112f, -0.0112f, 0.005f,  56/255.0f, 140/255.0f, 106/255.0f},
+        {2,  0.6490f,  0.6490f, 0.031f,   9/255.0f,  29/255.0f,  19/255.0f},
+        {2,  0.4696f,  0.4696f, 0.015f,  24/255.0f,  14/255.0f,   0.0f},
+        {2,  0.4087f,  0.4087f, 0.037f,  24/255.0f,  14/255.0f,   0.0f},
+        {2, -0.2003f, -0.2003f, 0.022f,  42/255.0f,  19/255.0f,   0.0f},
+        {2, -0.4103f, -0.4103f, 0.025f,   0.0f,        9/255.0f,  17/255.0f},
+        {2, -0.4503f, -0.4503f, 0.058f,  10/255.0f,   4/255.0f,   0.0f},
+        {2, -0.5112f, -0.5112f, 0.017f,   5/255.0f,   5/255.0f,  14/255.0f},
+        {2, -1.4960f, -1.4960f, 0.20f,    9/255.0f,   4/255.0f,   0.0f},
+        {2, -1.4960f, -1.4960f, 0.50f,    9/255.0f,   4/255.0f,   0.0f},
+        {3,  0.4487f,  0.4487f, 0.075f,  34/255.0f,  19/255.0f,   0.0f},
+        {3,  1.0000f,  1.0000f, 0.10f,   14/255.0f,  26/255.0f,   0.0f},
+        {3, -1.3010f, -1.3010f, 0.039f,  10/255.0f,  25/255.0f,  13/255.0f},
+        {4,  1.3090f,  1.3090f, 0.19f,    9/255.0f,   0.0f,      17/255.0f},
+        {4,  1.3090f,  1.3090f, 0.195f,   9/255.0f,   16/255.0f,   5/255.0f},
+        {4,  1.3090f,  1.3090f, 0.20f,   17/255.0f,    4/255.0f,   0.0f},
+        {4, -1.3010f, -1.3010f, 0.038f,  17/255.0f,    4/255.0f,   0.0f}
+    };
+
+    refs.clear();
+    refs.reserve(std::size(defs));
+    bool whiteTint = (tint.saturationF() < 0.01f);
+
+    for (auto &d : defs) {
+        Reflect r;
+        r.type = d.type;
+        r.size = d.fsize * matt * S;
+        r.xp = halfW + d.fx * DX;
+        r.yp = halfH + d.fy * DY;
+
+        QColor base = QColor::fromRgbF(d.r, d.g, d.b, 1.0f);
+        r.col = whiteTint ? base
+                          : shifted_hsv(base,
+                                        tint.hueF(),
+                                        tint.saturationF(),
+                                        tint.valueF(),
+                                        tint.alphaF());
+        refs.push_back(r);
+    }
+}
+
+// Apply a single reflector to a pixel
+static void apply_reflector(QRgb &pxl, const Reflect &r, int cx, int cy)
+{
+    float d = std::hypot(r.xp - cx, r.yp - cy);
+    float p = 0.0f;
+
+    switch (r.type) {
+    case 1:
+        p = (r.size - d) / r.size;
+        if (p > 0.0f) {
+            p *= p;
+            pxl = blendAdd(pxl, r.col, p);
+        }
+        break;
+    case 2:
+        p = (r.size - d) / (r.size * 0.15f);
+        if (p > 0.0f) {
+            p = std::min(p, 1.0f);
+            pxl = blendAdd(pxl, r.col, p);
+        }
+        break;
+    case 3:
+        p = (r.size - d) / (r.size * 0.12f);
+        if (p > 0.0f) {
+            p = std::min(p, 1.0f);
+            p = 1.0f - (p * 0.12f);
+            pxl = blendAdd(pxl, r.col, p);
+        }
+        break;
+    case 4:
+        p = std::abs((d - r.size) / (r.size * 0.04f));
+        if (p < 1.0f) {
+            pxl = blendAdd(pxl, r.col, 1.0f - p);
+        }
+        break;
+    }
+}
+
+// Render lens flare onto the frame
+std::shared_ptr<openshot::Frame>
+LensFlare::GetFrame(std::shared_ptr<openshot::Frame> frame, int64_t f)
+{
+    auto img = frame->GetImage();
+    int w = img->width();
+    int h = img->height();
+
+    float X = x.GetValue(f);
+    float Y = y.GetValue(f);
+    float I = brightness.GetValue(f);
+    float S = size.GetValue(f);
+    float SP = spread.GetValue(f);
+
+    float halfW = w * 0.5f;
+    float halfH = h * 0.5f;
+    float px = (X * 0.5f + 0.5f) * w;
+    float py = (Y * 0.5f + 0.5f) * h;
+    float DX = (halfW - px) * SP;
+    float DY = (halfH - py) * SP;
+
+    QColor tint = QColor::fromRgbF(
+        color.red.GetValue(f)   / 255.0f,
+        color.green.GetValue(f) / 255.0f,
+        color.blue.GetValue(f)  / 255.0f,
+        color.alpha.GetValue(f) / 255.0f
+    );
+
+    float matt   = w;
+    float scolor = matt * 0.0375f * S;
+    float sglow  = matt * 0.078125f * S;
+    float sinner = matt * 0.1796875f * S;
+    float souter = matt * 0.3359375f * S;
+    float shalo  = matt * 0.084375f * S;
+
+    auto tintify = [&](float br, float bg, float bb) {
+        return QColor::fromRgbF(
+            br * tint.redF(),
+            bg * tint.greenF(),
+            bb * tint.blueF(),
+            tint.alphaF()
+        );
+    };
+
+    QColor c_color = tintify(239/255.0f, 239/255.0f, 239/255.0f);
+    QColor c_glow  = tintify(245/255.0f, 245/255.0f, 245/255.0f);
+    QColor c_inner = tintify(1.0f,       38/255.0f,   43/255.0f);
+    QColor c_outer = tintify(69/255.0f,  59/255.0f,   64/255.0f);
+    QColor c_halo  = tintify(80/255.0f,  15/255.0f,    4/255.0f);
+
+    std::vector<Reflect> refs;
+    init_reflectors(refs, DX, DY, w, h, tint, S);
+
+    QImage overlay(w, h, QImage::Format_ARGB32_Premultiplied);
+    overlay.fill(qRgba(0, 0, 0, 0));
+
+    #pragma omp parallel for schedule(dynamic)
+    for (int yy = 0; yy < h; ++yy) {
+        QRgb *scan = reinterpret_cast<QRgb*>(overlay.scanLine(yy));
+        for (int xx = 0; xx < w; ++xx) {
+            QRgb pxl = scan[xx];
+            float d  = std::hypot(xx - px, yy - py);
+
+            if (d < scolor) {
+                float p = (scolor - d) / scolor;
+                p *= p;
+                pxl = blendAdd(pxl, c_color, p);
+            }
+            if (d < sglow) {
+                float p = (sglow - d) / sglow;
+                p *= p;
+                pxl = blendAdd(pxl, c_glow, p);
+            }
+            if (d < sinner) {
+                float p = (sinner - d) / sinner;
+                p *= p;
+                pxl = blendAdd(pxl, c_inner, p);
+            }
+            if (d < souter) {
+                float p = (souter - d) / souter;
+                pxl = blendAdd(pxl, c_outer, p);
+            }
+            {
+                float p = std::abs((d - shalo) / (shalo * 0.07f));
+                if (p < 1.0f) {
+                    pxl = blendAdd(pxl, c_halo, 1.0f - p);
+                }
+            }
+
+            for (auto &r : refs) {
+                apply_reflector(pxl, r, xx, yy);
+            }
+            scan[xx] = pxl;
+        }
+    }
+
+    //grab your original alpha channel
+    QImage origAlpha = img->alphaChannel();
+
+    // composite with screen blend and global brightness
+    QPainter painter(img.get());
+    painter.setCompositionMode(QPainter::CompositionMode_Screen);
+    painter.setOpacity(I);
+    painter.drawImage(0, 0, overlay);
+    painter.end();
+
+    // put that mask back on your image
+    img->setAlphaChannel(origAlpha);
+
+    return frame;
+}
+
+// Create a new frame for this effect
 std::shared_ptr<openshot::Frame>
 LensFlare::GetFrame(int64_t frame_number)
 {
     return GetFrame(std::make_shared<openshot::Frame>(), frame_number);
 }
 
-std::shared_ptr<openshot::Frame>
-LensFlare::GetFrame(std::shared_ptr<openshot::Frame> frame, int64_t f)
+// Convert effect to JSON string
+std::string LensFlare::Json() const
 {
-    auto img = frame->GetImage();
-    int w = img->width(), h = img->height();
-
-    // Keyframes
-    float Xn = x.GetValue(f), Yn = y.GetValue(f);
-    float I  = brightness.GetValue(f);
-    float S  = size.GetValue(f);
-    float D  = spread.GetValue(f);
-    int   B  = std::clamp(blades.GetInt(f), 3, 12);
-    int   M  = iris_shape.GetInt(f); // 0: round, 1: polygonal
-
-    // Center, position, vector
-    float cx = w*0.5f, cy = h*0.5f;
-    float px = (Xn*0.5f+0.5f)*w, py = (Yn*0.5f+0.5f)*h;
-    float dx = px-cx, dy = py-cy;
-    float diag = std::hypot((float)w, (float)h);
-    float base = std::min(w,h);
-
-    // Tint color for the core
-    QColor userTint(
-        color.red.GetInt(f),
-        color.green.GetInt(f),
-        color.blue.GetInt(f),
-        int(color.alpha.GetValue(f))
-    );
-
-    // Overlay for drawing
-    QImage overlay(w, h, QImage::Format_ARGB32_Premultiplied);
-    overlay.fill(Qt::transparent);
-    QPainter p(&overlay);
-    p.setRenderHint(QPainter::Antialiasing);
-
-    // ---- Core flare and halos ----
-    float r0 = base * 0.08f * S;
-    QRadialGradient g0(px, py, r0);
-    QColor coreCol = scale_alpha(userTint, I*0.9f);
-    g0.setColorAt(0, coreCol); g0.setColorAt(1, Qt::transparent);
-    p.setBrush(g0); p.setPen(Qt::NoPen);
-    p.drawEllipse(QPointF(px, py), r0, r0);
-
-    // Inner and outer glow/rings
-    {
-        QRadialGradient g1(px, py, r0*2.1);
-        QColor glowCol = scale_alpha(userTint, I*0.3f);
-        g1.setColorAt(0, glowCol); g1.setColorAt(1, Qt::transparent);
-        p.setBrush(g1); p.drawEllipse(QPointF(px, py), r0*2.1, r0*2.1);
-    }
-    {
-        QRadialGradient g2(px, py, r0*3.5);
-        QColor ringCol = scale_alpha(userTint, I*0.17f);
-        g2.setColorAt(0.90, Qt::transparent); g2.setColorAt(0.96, ringCol); g2.setColorAt(1.0, Qt::transparent);
-        p.setBrush(g2); p.drawEllipse(QPointF(px, py), r0*3.5, r0*3.5);
-    }
-    {
-        QRadialGradient g3(px, py, r0*7.5);
-        QColor haloCol = scale_alpha(userTint, I*0.08f);
-        g3.setColorAt(0, Qt::transparent); g3.setColorAt(1, haloCol);
-        p.setBrush(g3); p.drawEllipse(QPointF(px, py), r0*7.5, r0*7.5);
-    }
-
-    // (offset, radius, base color, alpha, type, chromaMix)
-    std::vector<FlareElement> ghosts = {
-        {  0.67f,  0.035f, QColor(0,14,113),    0.35f, 0, 0.85f },
-        {  0.27f,  0.017f, QColor(90,181,142),  0.31f, 0, 0.80f },
-        { -0.01f,  0.012f, QColor(56,140,106),  0.24f, 0, 0.75f },
-        {  0.65f,  0.032f, QColor(9,29,19),     0.12f, 1, 0.90f },
-        {  0.45f,  0.022f, QColor(24,14,0),     0.11f, 0, 0.70f },
-        {  0.41f,  0.046f, QColor(24,14,0),     0.10f, 1, 0.80f },
-        { -0.20f,  0.030f, QColor(42,19,0),     0.12f, 0, 0.65f },
-        { -0.41f,  0.038f, QColor(0,9,17),      0.13f, 1, 0.95f },
-        { -0.45f,  0.060f, QColor(0,4,10),      0.09f, 0, 1.00f },
-        { -0.51f,  0.025f, QColor(5,5,14),      0.14f, 0, 0.93f },
-        { -1.35f,  0.115f, QColor(9,4,0),       0.07f, 1, 0.70f },
-        {  1.30f,  0.175f, QColor(9,0,17),      0.08f, 1, 0.99f }
-    };
-
-    float spread_scale = D + std::min(1.0f, std::hypot(Xn,Yn));
-
-    for (const auto& g : ghosts) {
-        float gx = cx + dx * g.offset * spread_scale;
-        float gy = cy + dy * g.offset * spread_scale;
-        float gr = base * g.radius * S;
-        QColor gc = mix_color(userTint, g.color, g.chromaMix);
-        gc.setAlphaF(std::clamp(g.alpha * I, 0.0f, 1.0f));
-
-        if (g.type == 0) { // orb
-            QRadialGradient grad(gx, gy, gr);
-            grad.setColorAt(0, gc);
-            grad.setColorAt(1, Qt::transparent);
-            p.setBrush(grad); p.setPen(Qt::NoPen);
-            p.drawEllipse(QPointF(gx, gy), gr, gr);
-        } else if (g.type == 1) { // ring
-            QRadialGradient grad(gx, gy, gr);
-            grad.setColorAt(0.90, Qt::transparent);
-            grad.setColorAt(0.96, gc);
-            grad.setColorAt(1.0, Qt::transparent);
-            p.setBrush(grad); p.setPen(Qt::NoPen);
-            p.drawEllipse(QPointF(gx, gy), gr, gr);
-        }
-    }
-
-    // ---- Streaks (aperture rays/star) ----
-    // “iris_shape” 0: smooth round, 1: polygonal, for sharp rays
-    if (B >= 3) {
-        float flare_angle = std::atan2(dy, dx);
-        float r_streak = base * 0.35f * S * (0.7f + 0.7f * spread_scale);
-        float streak_alpha = 0.18f * I;
-        for (int i = 0; i < B; ++i) {
-            float a = flare_angle + (float(i) * 2.0f * M_PI / B);
-            float strength = (M==1) ? (0.5f + 0.5f * std::cos(B*a)) : 1.0f;
-            QColor rayCol = scale_alpha(userTint, streak_alpha * strength);
-            QLinearGradient lg(px, py, px + std::cos(a)*r_streak, py + std::sin(a)*r_streak);
-            lg.setColorAt(0, rayCol);
-            lg.setColorAt(0.25, Qt::transparent);
-            p.setPen(QPen(QBrush(lg), r0*0.19f, Qt::SolidLine, Qt::RoundCap));
-            p.drawLine(QPointF(px, py), QPointF(px + std::cos(a)*r_streak, py + std::sin(a)*r_streak));
-        }
-    }
-
-    // ---- Chromatic split (ghost lines) ----
-    // Red, green, blue ghosts along the main axis
-    for (int c = 0; c < 3; ++c) {
-        float frac = (c==0)?0.67f:(c==1)?0.77f:0.87f;
-        float gx = cx + dx * frac * spread_scale;
-        float gy = cy + dy * frac * spread_scale;
-        float gr = base * 0.03f * S * (1 + 0.2f*c);
-        QColor col = userTint;
-        if (c==0) { col.setRedF(std::min(1.0, col.redF()*1.1)); col.setGreenF(col.greenF()*0.7); col.setBlueF(col.blueF()*0.7); }
-        if (c==1) { col.setGreenF(std::min(1.0, col.greenF()*1.1)); col.setRedF(col.redF()*0.7); col.setBlueF(col.blueF()*0.7); }
-        if (c==2) { col.setBlueF(std::min(1.0, col.blueF()*1.1)); col.setRedF(col.redF()*0.7); col.setGreenF(col.greenF()*0.7); }
-        col.setAlphaF(0.16f * I);
-        QRadialGradient grad(gx, gy, gr);
-        grad.setColorAt(0, col);
-        grad.setColorAt(1, Qt::transparent);
-        p.setBrush(grad); p.setPen(Qt::NoPen);
-        p.drawEllipse(QPointF(gx, gy), gr, gr);
-    }
-
-    p.end();
-
-    // Composite
-    QPainter c(img.get()); c.setCompositionMode(QPainter::CompositionMode_Screen);
-    c.drawImage(0,0,overlay); c.end();
-
-    return frame;
+    return JsonValue().toStyledString();
 }
 
-// ----- JSON/Properties -----
-
-std::string LensFlare::Json() const
-{ return JsonValue().toStyledString(); }
-
+// Convert effect to JSON value
 Json::Value LensFlare::JsonValue() const
 {
-    Json::Value r=EffectBase::JsonValue();
-    r["type"]      =info.class_name;
-    r["x"]         =x.JsonValue();
-    r["y"]         =y.JsonValue();
-    r["brightness"]=brightness.JsonValue();
-    r["size"]      =size.JsonValue();
-    r["spread"]    =spread.JsonValue();
-    r["blades"]    =blades.JsonValue();
-    r["iris_shape"]=iris_shape.JsonValue();
-    r["color"]     =color.JsonValue();
+    Json::Value r = EffectBase::JsonValue();
+    r["type"] = info.class_name;
+    r["x"] = x.JsonValue();
+    r["y"] = y.JsonValue();
+    r["brightness"] = brightness.JsonValue();
+    r["size"] = size.JsonValue();
+    r["spread"] = spread.JsonValue();
+    r["color"] = color.JsonValue();
     return r;
 }
 
+// Parse JSON from string
 void LensFlare::SetJson(const std::string v)
-{ try{SetJsonValue(openshot::stringToJson(v));}catch(...){throw InvalidJSON("LensFlare JSON");} }
+{
+    try { SetJsonValue(openshot::stringToJson(v)); }
+    catch (...) { throw InvalidJSON("LensFlare JSON"); }
+}
 
+// Apply JSON values to effect
 void LensFlare::SetJsonValue(const Json::Value r)
 {
     EffectBase::SetJsonValue(r);
-    if(!r["x"].isNull())          x.SetJsonValue(r["x"]);
-    if(!r["y"].isNull())          y.SetJsonValue(r["y"]);
-    if(!r["brightness"].isNull()) brightness.SetJsonValue(r["brightness"]);
-    if(!r["size"].isNull())       size.SetJsonValue(r["size"]);
-    if(!r["spread"].isNull())     spread.SetJsonValue(r["spread"]);
-    if(!r["blades"].isNull())     blades.SetJsonValue(r["blades"]);
-    if(!r["iris_shape"].isNull()) iris_shape.SetJsonValue(r["iris_shape"]);
-    if(!r["color"].isNull())      color.SetJsonValue(r["color"]);
+    if (!r["x"].isNull()) x.SetJsonValue(r["x"]);
+    if (!r["y"].isNull()) y.SetJsonValue(r["y"]);
+    if (!r["brightness"].isNull()) brightness.SetJsonValue(r["brightness"]);
+    if (!r["size"].isNull()) size.SetJsonValue(r["size"]);
+    if (!r["spread"].isNull()) spread.SetJsonValue(r["spread"]);
+    if (!r["color"].isNull()) color.SetJsonValue(r["color"]);
 }
 
+// Get properties as JSON for UI
 std::string LensFlare::PropertiesJSON(int64_t f) const
 {
-    Json::Value r=BasePropertiesJSON(f);
-    r["x"]           =add_property_json("X",x.GetValue(f),"float","-1..1",&x,-1,1,false,f);
-    r["y"]           =add_property_json("Y",y.GetValue(f),"float","-1..1",&y,-1,1,false,f);
-    r["brightness"]  =add_property_json("Brightness",brightness.GetValue(f),"float","0..1",&brightness,0,1,false,f);
-    r["size"]        =add_property_json("Size",size.GetValue(f),"float","0.1..3",&size,0.1,3,false,f);
-    r["spread"]      =add_property_json("Spread",spread.GetValue(f),"float","0..1",&spread,0,1,false,f);
-    r["blades"]      =add_property_json("Aperture Blades",blades.GetValue(f),"int","3..12",&blades,3,12,false,f);
-    r["iris_shape"]  =add_property_json("Iris Shape",iris_shape.GetValue(f),"int","0:Circular,1:Polygonal",&iris_shape,0,1,false,f);
-    r["iris_shape"]["choices"].append(add_property_choice_json("Circular",0,iris_shape.GetValue(f)));
-    r["iris_shape"]["choices"].append(add_property_choice_json("Polygonal",1,iris_shape.GetValue(f)));
-    r["color"]       =add_property_json("Tint Color",0.0,"color","",&color.red,0,255,false,f);
-    r["color"]["red"]   =add_property_json("Red",color.red.GetInt(f),"float","0..255",&color.red,0,255,false,f);
-    r["color"]["green"] =add_property_json("Green",color.green.GetInt(f),"float","0..255",&color.green,0,255,false,f);
-    r["color"]["blue"]  =add_property_json("Blue",color.blue.GetInt(f),"float","0..255",&color.blue,0,255,false,f);
-    r["color"]["alpha"] =add_property_json("Alpha",color.alpha.GetInt(f),"float","0..255",&color.alpha,0,255,false,f);
+    Json::Value r = BasePropertiesJSON(f);
+    r["x"] = add_property_json("X", x.GetValue(f), "float", "-1..1", &x, -1, 1, false, f);
+    r["y"] = add_property_json("Y", y.GetValue(f), "float", "-1..1", &y, -1, 1, false, f);
+    r["brightness"] = add_property_json("Brightness", brightness.GetValue(f), "float", "0..1", &brightness, 0, 1, false, f);
+    r["size"] = add_property_json("Size", size.GetValue(f), "float", "0.1..3", &size, 0.1, 3, false, f);
+    r["spread"] = add_property_json("Spread", spread.GetValue(f), "float", "0..1", &spread, 0, 1, false, f);
+    r["color"] = add_property_json("Tint Color", 0.0, "color", "", &color.red, 0, 255, false, f);
+    r["color"]["red"] = add_property_json("Red", color.red.GetInt(f), "float", "0..255", &color.red, 0, 255, false, f);
+    r["color"]["green"] = add_property_json("Green", color.green.GetInt(f), "float", "0..255", &color.green, 0, 255, false, f);
+    r["color"]["blue"] = add_property_json("Blue", color.blue.GetInt(f), "float", "0..255", &color.blue, 0, 255, false, f);
+    r["color"]["alpha"] = add_property_json("Alpha", color.alpha.GetInt(f), "float", "0..255", &color.alpha, 0, 255, false, f);
     return r.toStyledString();
 }
