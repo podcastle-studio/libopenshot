@@ -12,8 +12,10 @@ variables:
 
 init-builders:
   stage: init-builders
+  except:
+    - tags
   tags:
-    - gitlab-server
+    - gitlab
   script:
     - send-ci-sqs linux
     - send-ci-sqs windows
