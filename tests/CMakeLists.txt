@@ -46,6 +46,7 @@ set(OPENSHOT_TESTS
   ColorMap
   ChromaKey
   Crop
+  LensFlare
   Sharpen
   SphericalEffect
 )
