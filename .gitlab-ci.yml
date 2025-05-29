@@ -3,11 +3,20 @@
 # SPDX-License-Identifier: LGPL-3.0-or-later
 
 stages:
+  - init-builders
   - build-libopenshot
   - trigger-openshot-qt
 
 variables:
   GIT_LOG_FORMAT: "- %h %ad %s [%aN]"
+
+init-builders:
+  stage: init-builders
+  tags:
+    - gitlab-server
+  script:
+    - send-ci-sqs linux
+    - send-ci-sqs windows
 
 linux-builder:
   stage: build-libopenshot
