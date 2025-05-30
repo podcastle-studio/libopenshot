@@ -559,43 +559,44 @@ void FFmpegReader::Open() {
 			AVStream* st = pFormatCtx->streams[i];
 			if (st->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
 				// Only inspect the first video stream
-				for (int j = 0; j < st->nb_side_data; j++) {
-					AVPacketSideData *sd = &st->side_data[j];
+				for (AVPacketSideDataType type = AV_PKT_DATA_PARAM_CHANGE;
+					 type < AV_PKT_DATA_NB;
+					 type = static_cast<AVPacketSideDataType>(type + 1)) {
 
-					// Handle rotation metadata (unchanged)
-					if (sd->type == AV_PKT_DATA_DISPLAYMATRIX &&
-						sd->size >= 9 * sizeof(int32_t) &&
-						!info.metadata.count("rotate"))
-					{
+					size_t size = 0;
+					uint8_t *data = av_stream_get_side_data(st, type, &size);
+
+					if (!data || size == 0)
+						continue;
+
+					// Handle rotation metadata
+					if (type == AV_PKT_DATA_DISPLAYMATRIX &&
+						size >= 9 * sizeof(int32_t) &&
+						!info.metadata.count("rotate")) {
+
 						double rotation = -av_display_rotation_get(
-							reinterpret_cast<int32_t *>(sd->data));
+							reinterpret_cast<const int32_t *>(data));
 						if (std::isnan(rotation)) rotation = 0;
 						info.metadata["rotate"] = std::to_string(rotation);
-					}
+						}
 					// Handle spherical video metadata
-					else if (sd->type == AV_PKT_DATA_SPHERICAL) {
-						// Always mark as spherical
+					else if (type == AV_PKT_DATA_SPHERICAL) {
 						info.metadata["spherical"] = "1";
 
-						// Cast the raw bytes to an AVSphericalMapping
 						const AVSphericalMapping* map =
-							reinterpret_cast<const AVSphericalMapping*>(sd->data);
+							reinterpret_cast<const AVSphericalMapping*>(data);
 
-						// Projection enum → string
 						const char* proj_name = av_spherical_projection_name(map->projection);
-						info.metadata["spherical_projection"] = proj_name
-							? proj_name
-							: "unknown";
+						info.metadata["spherical_projection"] = proj_name ? proj_name : "unknown";
 
-						// Convert 16.16 fixed-point to float degrees
-						auto to_deg = [](int32_t v){
-							return (double)v / 65536.0;
+						auto to_deg = [](int32_t v) {
+							return static_cast<double>(v) / 65536.0;
 						};
 						info.metadata["spherical_yaw"]   = std::to_string(to_deg(map->yaw));
 						info.metadata["spherical_pitch"] = std::to_string(to_deg(map->pitch));
 						info.metadata["spherical_roll"]  = std::to_string(to_deg(map->roll));
 					}
-				}
+					 }
 				break;
 			}
 		}
