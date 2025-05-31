@@ -1,3 +1,13 @@
+####################### CMakeLists.txt (libopenshot) #########################
+# @brief CMake build file for libopenshot-godot (used to generate GDExtension)
+# @author Jonathan Thomas <jonathan@openshot.org>
+#
+# @section LICENSE
+#
+# Copyright (c) 2008-2025 OpenShot Studios, LLC
+#
+# SPDX-License-Identifier: LGPL-3.0-or-later
+
 cmake_minimum_required(VERSION 3.17)
 
 project(libopenshot_godot)
