@@ -23,8 +23,6 @@ namespace openshot
     using juce::Thread;
     using juce::WaitableEvent;
 
-    struct Frame;  // forward declaration
-
     /**
      * @brief Handles prefetching and caching of video/audio frames for smooth playback.
      *
@@ -34,7 +32,7 @@ namespace openshot
     class VideoCacheThread : public Thread
     {
     public:
-        /// Constructor: initializes variables and assumes forward direction on first launch.
+        /// Constructor: initializes member variables and assumes forward direction on first launch.
         VideoCacheThread();
 
         /// Destructor.
@@ -80,12 +78,16 @@ namespace openshot
          */
         void Reader(ReaderBase* new_reader) { reader = new_reader; Play(); }
 
+        // Friend classes that may access protected members directly.
+        friend class PlayerPrivate;
+        friend class QtPlayer;
+
     protected:
         /**
          * @brief Thread entry point: maintains and updates the cache window.
          *
          * This method runs continuously until threadShouldExit() returns true. It:
-         * 1. Computes playback direction (dir) based on speed or last_dir.
+         * 1. Computes effective playback direction (dir) based on speed or last_dir.
          * 2. On seek or direction change, resets cache_start and last_cached.
          * 3. When paused (speed == 0), continues caching in dir without advancing playhead.
          * 4. When playing, caches in the direction of playback around the current playhead.
@@ -132,10 +134,6 @@ namespace openshot
 
         /// Forces caching in a fixed direction when seeking into an uncached frame.
         bool force_directional_cache;
-
-        // Friends that may access protected members directly.
-        friend class PlayerPrivate;
-        friend class QtPlayer;
     };
 
 } // namespace openshot

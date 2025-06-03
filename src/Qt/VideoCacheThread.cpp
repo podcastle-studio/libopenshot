@@ -96,6 +96,8 @@ namespace openshot
         using micro_sec        = std::chrono::microseconds;
         using double_micro_sec = std::chrono::duration<double, micro_sec::period>;
 
+        // last_cached_index: Index of the most recently cached frame.
+        // cache_start_index: Base index from which we build the window.
         int64_t last_cached_index = 0;
         int64_t cache_start_index = 0;
         bool    last_paused       = true;
@@ -120,7 +122,7 @@ namespace openshot
             //   Otherwise (speed == 0), use last_dir to continue caching in the same direction.
             int dir = (speed != 0 ? (speed > 0 ? 1 : -1) : last_dir);
 
-            // On transition from paused (speed==0) to playing (speed!=0), reset window base.
+            // On transition from paused (speed == 0) to playing (speed != 0), reset window base.
             if (!paused && last_paused) {
                 cache_start_index = playhead;
                 last_cached_index = playhead - dir;
@@ -148,200 +150,94 @@ namespace openshot
                 continue;
             }
 
-            // Determine how many frames ahead to cache based on settings
+            // Number of frames to keep ahead (or behind) based on settings
             int64_t ahead_count = static_cast<int64_t>(capacity * settings->VIDEO_CACHE_PERCENT_AHEAD);
 
-            // Handle user-initiated seek: reset window base if requested
+            // Handle user-initiated seek: always reset window base
             bool user_seek = userSeeked;
             if (user_seek) {
                 cache_start_index = playhead;
                 last_cached_index = playhead - dir;
                 userSeeked        = false;
             }
+            else if (!paused) {
+                // In playing mode, if playhead moves beyond last_cached, reset window
+                if ((dir > 0 && playhead > last_cached_index) || (dir < 0 && playhead < last_cached_index)) {
+                    cache_start_index = playhead;
+                    last_cached_index = playhead - dir;
+                }
+            }
 
-            // --------------------------------------------------------------------
-            // PAUSED BRANCH: Continue caching in 'dir' without advancing playhead
-            // --------------------------------------------------------------------
+            // ----------------------------------------
+            // PAUSED MODE: Continue caching in 'dir' without advancing playhead
+            // ----------------------------------------
             if (paused) {
-                // If the playhead is not currently in cache, clear cache and restart
+                // If the playhead is not in cache, clear and restart from playhead
                 if (!cache->Contains(playhead)) {
                     timeline->ClearAllCache();
                     cache_start_index = playhead;
                     last_cached_index = playhead - dir;
                 }
+            }
 
-                // Build the cache window in the effective direction
-                if (dir > 0) {
-                    // Forward: [cache_start_index ... cache_start_index + ahead_count]
-                    int64_t window_end = cache_start_index + ahead_count;
-                    window_end = std::min(window_end, timeline_end);
+            // Compute window bounds based on dir
+            int64_t window_begin, window_end;
+            if (dir > 0) {
+                // Forward: [cache_start_index ... cache_start_index + ahead_count]
+                window_begin = cache_start_index;
+                window_end   = cache_start_index + ahead_count;
+            } else {
+                // Backward: [cache_start_index - ahead_count ... cache_start_index]
+                window_begin = cache_start_index - ahead_count;
+                window_end   = cache_start_index;
+            }
 
-                    // If all frames in this forward window are already cached, touch playhead and sleep
-                    bool window_full = true;
-                    for (int64_t frame = playhead; frame <= window_end; ++frame) {
-                        if (!cache->Contains(frame)) {
-                            window_full = false;
-                            break;
-                        }
-                    }
-                    if (window_full) {
-                        cache->Touch(playhead);
-                        std::this_thread::sleep_for(double_micro_sec(50000));
-                        continue;
-                    }
+            // Clamp to valid timeline range
+            window_begin = std::max<int64_t>(window_begin, 1);
+            window_end   = std::min<int64_t>(window_end, timeline_end);
 
-                    // Prefetch missing frames forward
-                    int64_t start_index = std::max(last_cached_index + 1, cache_start_index);
-                    for (int64_t frame = start_index; frame <= window_end; ++frame) {
-                        if (threadShouldExit()) {
-                            break;
-                        }
-                        if (!cache->Contains(frame)) {
-                            try {
-                                auto framePtr = reader->GetFrame(frame);
-                                cache->Add(framePtr);
-                                ++cached_frame_count;
-                            }
-                            catch (const OutOfBoundsFrame&) {
-                                break;
-                            }
-                        }
-                        else {
-                            cache->Touch(frame);
-                        }
-                        last_cached_index = frame;
+            // Prefetch loop: start from just beyond last_cached_index toward window_end
+            int64_t next_frame = last_cached_index + dir;
+            bool window_full = true;
+
+            while ((dir > 0 && next_frame <= window_end) || (dir < 0 && next_frame >= window_begin)) {
+                if (threadShouldExit()) {
+                    break;
+                }
+
+                // Interrupt if a new seek happened
+                if (userSeeked) {
+                    break;
+                }
+
+                if (!cache->Contains(next_frame)) {
+                    // Missing frame: fetch and add to cache
+                    try {
+                        auto framePtr = reader->GetFrame(next_frame);
+                        cache->Add(framePtr);
+                        ++cached_frame_count;
                     }
+                    catch (const OutOfBoundsFrame&) {
+                        break;
+                    }
+                    window_full = false;  // We had to fetch at least one frame
                 }
                 else {
-                    // Backward: [cache_start_index - ahead_count ... cache_start_index]
-                    int64_t window_begin = cache_start_index - ahead_count;
-                    window_begin = std::max<int64_t>(window_begin, 1);
-
-                    // If all frames in this backward window are cached, touch playhead and sleep
-                    bool window_full = true;
-                    for (int64_t frame = playhead; frame >= window_begin; --frame) {
-                        if (!cache->Contains(frame)) {
-                            window_full = false;
-                            break;
-                        }
-                    }
-                    if (window_full) {
-                        cache->Touch(playhead);
-                        std::this_thread::sleep_for(double_micro_sec(50000));
-                        continue;
-                    }
-
-                    // Prefetch missing frames backward
-                    int64_t start_index = std::min(last_cached_index - 1, cache_start_index);
-                    for (int64_t frame = start_index; frame >= window_begin; --frame) {
-                        if (threadShouldExit()) {
-                            break;
-                        }
-                        if (!cache->Contains(frame)) {
-                            try {
-                                auto framePtr = reader->GetFrame(frame);
-                                cache->Add(framePtr);
-                                ++cached_frame_count;
-                            }
-                            catch (const OutOfBoundsFrame&) {
-                                break;
-                            }
-                        }
-                        else {
-                            cache->Touch(frame);
-                        }
-                        last_cached_index = frame;
-                    }
+                    cache->Touch(next_frame);
                 }
 
-                // Sleep for a fraction of a frame interval to throttle CPU usage
-                int64_t pause_sleep = static_cast<int64_t>(
-                    1000000.0 / reader->info.fps.ToFloat() / 4.0
-                );
-                std::this_thread::sleep_for(double_micro_sec(pause_sleep));
-                continue;
+                last_cached_index = next_frame;
+                next_frame += dir;
             }
 
-            // --------------------------------------------------------------------
-            // PLAYING BRANCH: Cache around the playhead in the playback direction
-            // --------------------------------------------------------------------
-            if (dir > 0 && playhead > last_cached_index) {
-                // Forward playback has moved beyond the last cached frame: reset window
-                cache_start_index = playhead;
-                last_cached_index = playhead - 1;
-            }
-            else if (dir < 0 && playhead < last_cached_index) {
-                // Backward playback has moved before the last cached frame: reset window
-                cache_start_index = playhead;
-                last_cached_index = playhead + 1;
+            // In paused mode, if the entire window was already filled, touch playhead
+            if (paused && window_full) {
+                cache->Touch(playhead);
             }
 
-            if (dir >= 0) {
-                // Forward caching: [playhead ... playhead + ahead_count]
-                int64_t window_end = playhead + ahead_count;
-                window_end = std::min(window_end, timeline_end);
-
-                int64_t start_index = std::max(last_cached_index + 1, playhead);
-                for (int64_t frame = start_index; frame <= window_end; ++frame) {
-                    if (threadShouldExit() || (userSeeked && !paused)) {
-                        if (userSeeked) {
-                            last_cached_index = playhead - 1;
-                            userSeeked        = false;
-                        }
-                        break;
-                    }
-                    if (!cache->Contains(frame)) {
-                        try {
-                            auto framePtr = reader->GetFrame(frame);
-                            cache->Add(framePtr);
-                            ++cached_frame_count;
-                        }
-                        catch (const OutOfBoundsFrame&) {
-                            break;
-                        }
-                    }
-                    else {
-                        cache->Touch(frame);
-                    }
-                    last_cached_index = frame;
-                }
-            }
-            else {
-                // Backward caching: [playhead - ahead_count ... playhead]
-                int64_t window_begin = playhead - ahead_count;
-                window_begin = std::max<int64_t>(window_begin, 1);
-
-                int64_t start_index = std::min(last_cached_index - 1, playhead);
-                for (int64_t frame = start_index; frame >= window_begin; --frame) {
-                    if (threadShouldExit() || (userSeeked && !paused)) {
-                        if (userSeeked) {
-                            last_cached_index = playhead + 1;
-                            userSeeked        = false;
-                        }
-                        break;
-                    }
-                    if (!cache->Contains(frame)) {
-                        try {
-                            auto framePtr = reader->GetFrame(frame);
-                            cache->Add(framePtr);
-                            ++cached_frame_count;
-                        }
-                        catch (const OutOfBoundsFrame&) {
-                            break;
-                        }
-                    }
-                    else {
-                        cache->Touch(frame);
-                    }
-                    last_cached_index = frame;
-                }
-            }
-
-            // Sleep for a fraction of a frame interval
-            int64_t quarter_us = static_cast<int64_t>(
-                1000000.0 / reader->info.fps.ToFloat() / 4.0
-            );
-            std::this_thread::sleep_for(double_micro_sec(quarter_us));
+            // Sleep a short fraction of a frame interval to throttle CPU usage
+            int64_t sleep_us = static_cast<int64_t>(1000000.0 / reader->info.fps.ToFloat() / 4.0);
+            std::this_thread::sleep_for(double_micro_sec(sleep_us));
         }
     }
 
