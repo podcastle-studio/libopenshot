@@ -18,6 +18,7 @@
 #include "Timeline.h"
 #include <thread>
 #include <chrono>
+#include <algorithm>
 
 namespace openshot
 {
@@ -96,11 +97,8 @@ namespace openshot
         using micro_sec        = std::chrono::microseconds;
         using double_micro_sec = std::chrono::duration<double, micro_sec::period>;
 
-        // last_cached_index: Index of the most recently cached frame.
-        // cache_start_index: Base index from which we build the window.
+        // Index of the most recently cached frame; starts “behind” the playhead.
         int64_t last_cached_index = 0;
-        int64_t cache_start_index = 0;
-        bool    last_paused       = true;
 
         while (!threadShouldExit()) {
             Settings* settings = Settings::Instance();
@@ -117,19 +115,21 @@ namespace openshot
             int64_t  playhead     = requested_display_frame;
             bool     paused       = (speed == 0);
 
-            // Determine the effective direction:
-            //   If speed != 0, dir = sign(speed).
-            //   Otherwise (speed == 0), use last_dir to continue caching in the same direction.
+            // Determine effective direction: use speed if non-zero, otherwise keep last_dir.
             int dir = (speed != 0 ? (speed > 0 ? 1 : -1) : last_dir);
 
-            // On transition from paused (speed == 0) to playing (speed != 0), reset window base.
-            if (!paused && last_paused) {
-                cache_start_index = playhead;
-                last_cached_index = playhead - dir;
+            // On any non-seek iteration, update last_dir if speed changed from zero
+            if (speed != 0) {
+                last_dir = dir;
             }
-            last_paused = paused;
 
-            // Calculate bytes needed for one frame in cache
+            // Handle user-initiated seek: reset last_cached_index to just behind playhead.
+            if (userSeeked) {
+                last_cached_index = playhead - dir;
+                userSeeked        = false;
+            }
+
+            // Determine how many frames ahead/behind to cache based on settings & memory
             int64_t bytes_per_frame = getBytes(
                 (timeline->preview_width ? timeline->preview_width : reader->info.width),
                 (timeline->preview_height ? timeline->preview_height : reader->info.height),
@@ -153,59 +153,45 @@ namespace openshot
             // Number of frames to keep ahead (or behind) based on settings
             int64_t ahead_count = static_cast<int64_t>(capacity * settings->VIDEO_CACHE_PERCENT_AHEAD);
 
-            // Handle user-initiated seek: always reset window base
-            bool user_seek = userSeeked;
-            if (user_seek) {
-                cache_start_index = playhead;
-                last_cached_index = playhead - dir;
-                userSeeked        = false;
-            }
-            else if (!paused) {
-                // In playing mode, if playhead moves beyond last_cached, reset window
-                if ((dir > 0 && playhead > last_cached_index) || (dir < 0 && playhead < last_cached_index)) {
-                    cache_start_index = playhead;
-                    last_cached_index = playhead - dir;
-                }
-            }
-
-            // ----------------------------------------
-            // PAUSED MODE: Continue caching in 'dir' without advancing playhead
-            // ----------------------------------------
-            if (paused) {
-                // If the playhead is not in cache, clear and restart from playhead
-                if (!cache->Contains(playhead)) {
-                    timeline->ClearAllCache();
-                    cache_start_index = playhead;
-                    last_cached_index = playhead - dir;
-                }
-            }
-
-            // Compute window bounds based on dir
-            int64_t window_begin, window_end;
-            if (dir > 0) {
-                // Forward: [cache_start_index ... cache_start_index + ahead_count]
-                window_begin = cache_start_index;
-                window_end   = cache_start_index + ahead_count;
-            } else {
-                // Backward: [cache_start_index - ahead_count ... cache_start_index]
-                window_begin = cache_start_index - ahead_count;
-                window_end   = cache_start_index;
-            }
+            // Compute window bounds around playhead each iteration:
+            //  - If moving forward (dir > 0): [playhead ... playhead + ahead_count]
+            //  - If moving backward (dir < 0): [playhead - ahead_count ... playhead]
+            int64_t window_begin = (dir > 0)
+                ? playhead
+                : (playhead - ahead_count);
+            int64_t window_end = (dir > 0)
+                ? (playhead + ahead_count)
+                : playhead;
 
             // Clamp to valid timeline range
             window_begin = std::max<int64_t>(window_begin, 1);
             window_end   = std::min<int64_t>(window_end, timeline_end);
 
-            // Prefetch loop: start from just beyond last_cached_index toward window_end
-            int64_t next_frame = last_cached_index + dir;
-            bool window_full = true;
+            // If we're paused and the playhead moves outside cache, clear & rebuild
+            if (paused && !cache->Contains(playhead)) {
+                timeline->ClearAllCache();
+                last_cached_index = playhead - dir;
+            }
 
-            while ((dir > 0 && next_frame <= window_end) || (dir < 0 && next_frame >= window_begin)) {
+            // If playing, ensure last_cached_index is within one step of window
+            // If it's already beyond the window, reset so caching continues from playhead
+            bool outside_window = (dir > 0 && last_cached_index > window_end) ||
+                                  (dir < 0 && last_cached_index < window_begin);
+            if (!paused && outside_window) {
+                last_cached_index = playhead - dir;
+            }
+
+            // Prefetch frames from last_cached_index + dir up to window_end (or down to window_begin)
+            int64_t next_frame  = last_cached_index + dir;
+            bool    window_full = true;
+
+            while ((dir > 0 && next_frame <= window_end) ||
+                   (dir < 0 && next_frame >= window_begin))
+            {
                 if (threadShouldExit()) {
                     break;
                 }
-
-                // Interrupt if a new seek happened
+                // If a new seek arrives mid-cache, break and start over next loop
                 if (userSeeked) {
                     break;
                 }
@@ -220,23 +206,25 @@ namespace openshot
                     catch (const OutOfBoundsFrame&) {
                         break;
                     }
-                    window_full = false;  // We had to fetch at least one frame
+                    window_full = false;
                 }
                 else {
                     cache->Touch(next_frame);
                 }
 
                 last_cached_index = next_frame;
-                next_frame += dir;
+                next_frame       += dir;
             }
 
-            // In paused mode, if the entire window was already filled, touch playhead
+            // If paused and the window was already filled, just touch playhead to keep it fresh
             if (paused && window_full) {
                 cache->Touch(playhead);
             }
 
-            // Sleep a short fraction of a frame interval to throttle CPU usage
-            int64_t sleep_us = static_cast<int64_t>(1000000.0 / reader->info.fps.ToFloat() / 4.0);
+            // Short sleep to throttle CPU (quarter-frame interval)
+            int64_t sleep_us = static_cast<int64_t>(
+                1000000.0 / reader->info.fps.ToFloat() / 4.0
+            );
             std::this_thread::sleep_for(double_micro_sec(sleep_us));
         }
     }
