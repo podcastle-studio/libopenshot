@@ -10,59 +10,50 @@
 //
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
-#include <fstream>
+#include <chrono>
 #include <iostream>
 #include <memory>
-#include <QFileDialog>
-#include "Clip.h"
 #include "Frame.h"
 #include "FFmpegReader.h"
-#include "Timeline.h"
-#include "Profiles.h"
 
 using namespace openshot;
 
-
 int main(int argc, char* argv[]) {
-    QString filename = "/home/jonathan/test-crash.osp";
-    //QString filename = "/home/jonathan/Downloads/drive-download-20221123T185423Z-001/project-3363/project-3363.osp";
-    //QString filename = "/home/jonathan/Downloads/drive-download-20221123T185423Z-001/project-3372/project-3372.osp";
-    //QString filename = "/home/jonathan/Downloads/drive-download-20221123T185423Z-001/project-3512/project-3512.osp";
-    QString project_json = "";
-    QFile file(filename);
-    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-        std::cout << "File error!" << std::endl;
-        exit(1);
-    } else {
-        while (!file.atEnd()) {
-            QByteArray line = file.readLine();
-            project_json += line;
-        }
-    }
+    // Path to your video
+    const char* path = "/home/jonathan/Downloads/openshot-testing/sintel_trailer-720p.mp4";
 
-    // Open timeline reader
-    std::cout << "Project JSON length: " << project_json.length() << std::endl;
-    Timeline r(1280, 720, openshot::Fraction(30, 1), 44100, 2, openshot::LAYOUT_STEREO);
-    r.SetJson(project_json.toStdString());
-    r.DisplayInfo();
+    FFmpegReader r(path);
     r.Open();
 
-    // Get max frame
-    int64_t max_frame = r.GetMaxFrame();
-    std::cout << "max_frame: " << max_frame << ", r.info.video_length: " << r.info.video_length << std::endl;
+    const long int total_frames = r.info.video_length;
 
-    for (long int frame = 1; frame <= max_frame; frame++)
-    {
-        float percent = (float(frame) / max_frame) * 100.0;
-        std::cout << "Requesting Frame #: " << frame << " (" << percent << "%)" << std::endl;
+    // --- Measure forward pass ---
+    auto t0 = std::chrono::high_resolution_clock::now();
+    for (long int frame = 1; frame <= total_frames; frame++) {
+        float percent = (float(frame) / total_frames) * 100.0f;
+        std::cout << "Forward: Requesting Frame #: " << frame
+                  << " (" << percent << "%)\n";
         std::shared_ptr<Frame> f = r.GetFrame(frame);
-
-        // Preview frame image
-        if (frame % 1 == 0) {
-            f->Save("preview.jpg", 1.0, "jpg", 100);
-        }
+        // (optional) preview or process f here
     }
-    r.Close();
+    auto t1 = std::chrono::high_resolution_clock::now();
+    auto forward_ms = std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count();
 
-    exit(0);
+    // --- Measure backward pass ---
+    auto t2 = std::chrono::high_resolution_clock::now();
+    for (long int frame = total_frames; frame >= 1; frame--) {
+        float percent = (float(total_frames - frame + 1) / total_frames) * 100.0f;
+        std::cout << "Backward: Requesting Frame #: " << frame
+                  << " (" << percent << "%)\n";
+        std::shared_ptr<Frame> f = r.GetFrame(frame);
+        // (optional) preview or process f here
+    }
+    auto t3 = std::chrono::high_resolution_clock::now();
+    auto backward_ms = std::chrono::duration_cast<std::chrono::milliseconds>(t3 - t2).count();
+
+    std::cout << "\nForward pass elapsed: " << forward_ms << " ms\n";
+    std::cout << "Backward pass elapsed: " << backward_ms << " ms\n";
+
+    r.Close();
+    return 0;
 }
