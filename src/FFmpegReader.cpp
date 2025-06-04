@@ -1568,8 +1568,12 @@ void FFmpegReader::ProcessVideoPacket(int64_t requested_frame) {
 
 	// Determine required buffer size and allocate buffer
 	const int bytes_per_pixel = 4;
-	int buffer_size = (width * height * bytes_per_pixel) + 128;
-	buffer = new unsigned char[buffer_size]();
+	int raw_buffer_size = (width * height * bytes_per_pixel) + 128;
+
+	// Aligned memory allocation (for speed)
+	constexpr size_t ALIGNMENT = 32;  // AVX2
+	int buffer_size = ((raw_buffer_size + ALIGNMENT - 1) / ALIGNMENT) * ALIGNMENT;
+	buffer = (unsigned char*) aligned_alloc(ALIGNMENT, buffer_size);
 
 	// Copy picture data from one AVFrame (or AVPicture) to another one.
 	AV_COPY_PICTURE_DATA(pFrameRGB, buffer, PIX_FMT_RGBA, width, height);

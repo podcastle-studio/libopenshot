@@ -31,6 +31,7 @@
 #include "Clip.h"
 #include "OpenMPUtilities.h"
 #include "Settings.h"
+#include <cstdlib>
 
 
 namespace openshot {
