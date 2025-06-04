@@ -74,8 +74,8 @@ FFmpegReader::FFmpegReader(const std::string &path, bool inspect_reader)
 		  seek_audio_frame_found(0), seek_video_frame_found(0),is_duration_known(false), largest_frame_processed(0),
 		  current_video_frame(0), packet(NULL), max_concurrent_frames(OPEN_MP_NUM_PROCESSORS), audio_pts(0),
 		  video_pts(0), pFormatCtx(NULL), videoStream(-1), audioStream(-1), pCodecCtx(NULL), aCodecCtx(NULL),
-		  pStream(NULL), aStream(NULL), pFrame(NULL), previous_packet_location{-1,0},
-		  hold_packet(false) {
+		pStream(NULL), aStream(NULL), pFrame(NULL), previous_packet_location{-1,0},
+		hold_packet(false) {
 
 	// Initialize FFMpeg, and register all formats and codecs
 	AV_REGISTER_ALL
@@ -678,6 +678,13 @@ void FFmpegReader::Close() {
 				}
 			}
 #endif // USE_HW_ACCEL
+			if (img_convert_ctx) {
+				sws_freeContext(img_convert_ctx);
+				img_convert_ctx = nullptr;
+			}
+			if (pFrameRGB_cached) {
+				AV_FREE_FRAME(&pFrameRGB_cached);
+			}
 		}
 
 		// Close the audio codec
@@ -686,6 +693,11 @@ void FFmpegReader::Close() {
 				avcodec_flush_buffers(aCodecCtx);
 			}
 			AV_FREE_CONTEXT(aCodecCtx);
+			if (avr_ctx) {
+				SWR_CLOSE(avr_ctx);
+				SWR_FREE(&avr_ctx);
+				avr_ctx = nullptr;
+			}
 		}
 
 		// Clear final cache
@@ -1469,14 +1481,16 @@ void FFmpegReader::ProcessVideoPacket(int64_t requested_frame) {
 	int width = info.width;
 	int64_t video_length = info.video_length;
 
-	// Create variables for a RGB Frame (since most videos are not in RGB, we must convert it)
-	AVFrame *pFrameRGB = nullptr;
+	// Create or reuse a RGB Frame (since most videos are not in RGB, we must convert it)
+	AVFrame *pFrameRGB = pFrameRGB_cached;
+	if (!pFrameRGB) {
+		pFrameRGB = AV_ALLOCATE_FRAME();
+		if (pFrameRGB == nullptr)
+			throw OutOfMemory("Failed to allocate frame buffer", path);
+		pFrameRGB_cached = pFrameRGB;
+	}
+	AV_RESET_FRAME(pFrameRGB);
 	uint8_t *buffer = nullptr;
-
-	// Allocate an AVFrame structure
-	pFrameRGB = AV_ALLOCATE_FRAME();
-	if (pFrameRGB == nullptr)
-		throw OutOfMemory("Failed to allocate frame buffer", path);
 
 	// Determine the max size of this source image (based on the timeline's size, the scaling mode,
 	// and the scaling keyframes). This is a performance improvement, to keep the images as small as possible,
@@ -1564,8 +1578,9 @@ void FFmpegReader::ProcessVideoPacket(int64_t requested_frame) {
 	if (openshot::Settings::Instance()->HIGH_QUALITY_SCALING) {
 		scale_mode = SWS_BICUBIC;
 	}
-	SwsContext *img_convert_ctx = sws_getContext(info.width, info.height, AV_GET_CODEC_PIXEL_FORMAT(pStream, pCodecCtx), width,
-												 height, PIX_FMT_RGBA, scale_mode, NULL, NULL, NULL);
+	img_convert_ctx = sws_getCachedContext(img_convert_ctx, info.width, info.height, AV_GET_CODEC_PIXEL_FORMAT(pStream, pCodecCtx), width, height, PIX_FMT_RGBA, scale_mode, NULL, NULL, NULL);
+	if (!img_convert_ctx)
+		throw OutOfMemory("Failed to initialize sws context", path);
 
 	// Resize / Convert to RGB
 	sws_scale(img_convert_ctx, pFrame->data, pFrame->linesize, 0,
@@ -1590,11 +1605,10 @@ void FFmpegReader::ProcessVideoPacket(int64_t requested_frame) {
 	last_video_frame = f;
 
 	// Free the RGB image
-	AV_FREE_FRAME(&pFrameRGB);
+	AV_RESET_FRAME(pFrameRGB);
 
-	// Remove frame and packet
-	RemoveAVFrame(pFrame);
-	sws_freeContext(img_convert_ctx);
+    // Remove frame and packet
+    RemoveAVFrame(pFrame);
 
 	// Get video PTS in seconds
 	video_pts_seconds = (double(video_pts) * info.video_timebase.ToDouble()) + pts_offset_seconds;
@@ -1738,10 +1752,10 @@ void FFmpegReader::ProcessAudioPacket(int64_t requested_frame) {
 	audio_converted->nb_samples = audio_frame->nb_samples;
 	av_samples_alloc(audio_converted->data, audio_converted->linesize, info.channels, audio_frame->nb_samples, AV_SAMPLE_FMT_FLTP, 0);
 
-	SWRCONTEXT *avr = NULL;
-
-	// setup resample context
-	avr = SWR_ALLOC();
+	SWRCONTEXT *avr = avr_ctx;
+	// setup resample context if needed
+	if (!avr) {
+		avr = SWR_ALLOC();
 #if HAVE_CH_LAYOUT
 	av_opt_set_chlayout(avr, "in_chlayout", &AV_GET_CODEC_ATTRIBUTES(aStream, aCodecCtx)->ch_layout, 0);
 	av_opt_set_chlayout(avr, "out_chlayout", &AV_GET_CODEC_ATTRIBUTES(aStream, aCodecCtx)->ch_layout, 0);
@@ -1756,6 +1770,8 @@ void FFmpegReader::ProcessAudioPacket(int64_t requested_frame) {
 	av_opt_set_int(avr, "in_sample_rate", info.sample_rate, 0);
 	av_opt_set_int(avr, "out_sample_rate", info.sample_rate, 0);
 	SWR_INIT(avr);
+	avr_ctx = avr;
+	}
 
 	// Convert audio samples
 	int nb_samples = SWR_CONVERT(avr,	// audio resample context
@@ -1766,10 +1782,6 @@ void FFmpegReader::ProcessAudioPacket(int64_t requested_frame) {
 							 audio_frame->linesize[0],	   // input plane size, in bytes (0 if unknown)
 							 audio_frame->nb_samples);	   // number of input samples to convert
 
-	// Deallocate resample buffer
-	SWR_CLOSE(avr);
-	SWR_FREE(&avr);
-	avr = NULL;
 
 	int64_t starting_frame_number = -1;
 	for (int channel_filter = 0; channel_filter < info.channels; channel_filter++) {

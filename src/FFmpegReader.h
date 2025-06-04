@@ -148,6 +148,11 @@ namespace openshot {
 		int64_t NO_PTS_OFFSET;
 		PacketStatus packet_status;
 
+		// Cached conversion contexts and frames for performance
+		SwsContext *img_convert_ctx = nullptr;        ///< Cached video scaler context
+		SWRCONTEXT *avr_ctx = nullptr;                ///< Cached audio resample context
+		AVFrame *pFrameRGB_cached = nullptr;          ///< Temporary frame used for video conversion
+
 		int hw_de_supported = 0;	// Is set by FFmpegReader
 #if USE_HW_ACCEL
 		AVPixelFormat hw_de_av_pix_fmt = AV_PIX_FMT_NONE;
