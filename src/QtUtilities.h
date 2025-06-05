@@ -31,7 +31,7 @@ namespace openshot {
     // Cross-platform aligned free function
     inline void aligned_free(void* ptr)
     {
-#if defined(_MSC_VER)
+#if defined(_WIN32)
         _aligned_free(ptr);
 #else
         free(ptr);
