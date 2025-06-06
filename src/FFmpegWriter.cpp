@@ -1336,7 +1336,6 @@ void FFmpegWriter::open_audio(AVFormatContext *oc, AVStream *st) {
 
 	// Audio encoding does not typically use more than 2 threads (most codecs use 1 thread)
 	audio_codec_ctx->thread_count = std::min(FF_AUDIO_NUM_PROCESSORS, 2);
-	std::cout << "FFmpegWriter audio thread_count: " << audio_codec_ctx->thread_count << std::endl;
 
 	// Find the audio encoder
 	codec = avcodec_find_encoder_by_name(info.acodec.c_str());
