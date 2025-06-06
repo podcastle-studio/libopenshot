@@ -68,6 +68,12 @@ namespace openshot
          */
         void Seek(int64_t new_position, bool start_preroll);
 
+        /// Start the cache thread at high priority. Returns true if it’s actually running.
+        bool StartThread();
+
+        /// Stop the cache thread (wait up to timeoutMs ms). Returns true if it stopped.
+        bool StopThread(int timeoutMs = 0);
+
         /**
          * @brief Attach a ReaderBase (e.g. Timeline, FFmpegReader) and begin caching.
          * @param new_reader
@@ -165,7 +171,6 @@ namespace openshot
         int64_t cached_frame_count;      ///< Count of frames currently added to cache.
 
         int64_t min_frames_ahead;        ///< Minimum number of frames considered “ready” (pre-roll).
-        int64_t max_frames_ahead;        ///< Maximum frames to attempt to cache (mem capped).
         int64_t timeline_max_frame;      ///< Highest valid frame index in the timeline.
 
         ReaderBase* reader;              ///< The source reader (e.g., Timeline, FFmpegReader).
