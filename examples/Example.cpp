@@ -15,6 +15,7 @@
 #include <memory>
 #include "Frame.h"
 #include "FFmpegReader.h"
+#include "FFmpegWriter.h"
 
 using namespace openshot;
 
@@ -27,6 +28,22 @@ int main(int argc, char* argv[]) {
 
     const long int total_frames = r.info.video_length;
 
+
+    // Reader
+    std::stringstream writer_path;
+    writer_path << TEST_MEDIA_PATH << "sintel_trailer-720p.mp4";
+
+    /* WRITER ---------------- */
+    FFmpegWriter w("/home/jonathan/Downloads/performance-test.mp4");
+
+    // Set options
+    w.SetAudioOptions("aac", 48000, 192000);
+    w.SetVideoOptions("libx264", 1280, 720, Fraction(30,1), 5000000);
+
+    // Open writer
+    w.Open();
+
+
     // --- Measure forward pass ---
     auto t0 = std::chrono::high_resolution_clock::now();
     for (long int frame = 1; frame <= total_frames; frame++) {
@@ -34,7 +51,7 @@ int main(int argc, char* argv[]) {
         std::cout << "Forward: Requesting Frame #: " << frame
                   << " (" << percent << "%)\n";
         std::shared_ptr<Frame> f = r.GetFrame(frame);
-        // (optional) preview or process f here
+        w.WriteFrame(f);
     }
     auto t1 = std::chrono::high_resolution_clock::now();
     auto forward_ms = std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count();
@@ -46,7 +63,7 @@ int main(int argc, char* argv[]) {
         std::cout << "Backward: Requesting Frame #: " << frame
                   << " (" << percent << "%)\n";
         std::shared_ptr<Frame> f = r.GetFrame(frame);
-        // (optional) preview or process f here
+        w.WriteFrame(f);
     }
     auto t3 = std::chrono::high_resolution_clock::now();
     auto backward_ms = std::chrono::duration_cast<std::chrono::milliseconds>(t3 - t2).count();
@@ -55,5 +72,6 @@ int main(int argc, char* argv[]) {
     std::cout << "Backward pass elapsed: " << backward_ms << " ms\n";
 
     r.Close();
+    w.Close();
     return 0;
 }
