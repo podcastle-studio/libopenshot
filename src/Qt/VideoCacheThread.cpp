@@ -28,7 +28,6 @@ namespace openshot
         , speed(0)
         , last_speed(1)
         , last_dir(1)                   // assume forward (+1) on first launch
-        , is_playing(false)
         , userSeeked(false)
         , requested_display_frame(1)
         , current_display_frame(1)
@@ -44,18 +43,6 @@ namespace openshot
     // Destructor
     VideoCacheThread::~VideoCacheThread()
     {
-    }
-
-    // Play the video
-    void VideoCacheThread::Play()
-    {
-        is_playing = true;
-    }
-
-    // Stop the video
-    void VideoCacheThread::Stop()
-    {
-        is_playing = false;
     }
 
     // Is cache ready for playback (pre-roll)
@@ -108,6 +95,13 @@ namespace openshot
     {
         if (start_preroll) {
             userSeeked = true;
+
+            if (!reader->GetCache()->Contains(new_position))
+            {
+                // If user initiated seek, and current frame not found (
+                Timeline* timeline = static_cast<Timeline*>(reader);
+                timeline->ClearAllCache();
+            }
         }
         requested_display_frame = new_position;
     }
@@ -218,7 +212,7 @@ namespace openshot
             CacheBase* cache   = reader ? reader->GetCache() : nullptr;
 
             // If caching disabled or no reader, sleep briefly
-            if (!settings->ENABLE_PLAYBACK_CACHING || !cache || !is_playing) {
+            if (!settings->ENABLE_PLAYBACK_CACHING || !cache) {
                 std::this_thread::sleep_for(double_micro_sec(50000));
                 continue;
             }
