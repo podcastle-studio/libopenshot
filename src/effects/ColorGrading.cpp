@@ -21,39 +21,30 @@ using namespace openshot;
 // Anonymous namespace for internal helper functions
 namespace {
 
-// Helper function to clamp values
-int clamp(int value, int min = 0, int max = 255) {
-    return std::max(min, std::min(max, value));
-}
-
-double clampDouble(double value, double min = 0.0, double max = 255.0) {
-    return std::max(min, std::min(max, value));
-}
-
-// Apply brightness adjustment to RGB values
-void applyBrightness(double& r, double& g, double& b, double brightness_value) {
+// Apply brightness adjustment to RGB values: brightness_value: -1.0 to 1.0
+void applyBrightness(double& r, double& g, double& b, const double brightness_value) {
     if (brightness_value == 0) return;
 
     if (brightness_value > 0) {
         // Positive brightness - exponential increase
-        double factor = std::pow(2.0, brightness_value / 100.0);
+        const double factor = std::pow(2.0, brightness_value);
         r *= factor;
         g *= factor;
         b *= factor;
     } else {
         // Negative brightness - preserve contrast better
-        double factor = 1.0 + (brightness_value / 100.0) * 0.7;
+        const double factor = 1.0 + brightness_value * 0.7;
         r *= factor;
         g *= factor;
         b *= factor;
     }
 }
 
-// Apply blacks adjustment to RGB values
-void applyBlacks(double& r, double& g, double& b, double blacks_value) {
+// Apply blacks adjustment to RGB values: blacks_value: -1.0 to 1.0
+void applyBlacks(double& r, double& g, double& b, const double blacks_value) {
     if (blacks_value == 0) return;
 
-    const double blacksAdjust = blacks_value / 100.0;
+    const double blacksAdjust = blacks_value;
     const double blackPoint = blacksAdjust * 0.1;
 
     if (blacksAdjust > 0) {
@@ -68,11 +59,11 @@ void applyBlacks(double& r, double& g, double& b, double blacks_value) {
     }
 }
 
-// Apply whites adjustment to RGB values
-void applyWhites(double& r, double& g, double& b, double whites_value) {
+// Apply whites adjustment to RGB values: whites_value: -1.0 to 1.0
+void applyWhites(double& r, double& g, double& b, const double whites_value) {
     if (whites_value == 0) return;
 
-    const double whitesAdjust = whites_value / 100.0;
+    const double whitesAdjust = whites_value;
     const double whitePoint = 1.0 - std::abs(whitesAdjust) * 0.1;
 
     if (whitesAdjust > 0) {
@@ -87,11 +78,11 @@ void applyWhites(double& r, double& g, double& b, double whites_value) {
     }
 }
 
-// Apply shadows adjustment to RGB values
-void applyShadows(double& r, double& g, double& b, double shadows_value) {
+// Apply shadows adjustment to RGB values: shadows_value: -1.0 to 1.0
+void applyShadows(double& r, double& g, double& b, const double shadows_value) {
     if (shadows_value == 0) return;
 
-    const double amount = shadows_value / 100.0;
+    const double amount = shadows_value;
     const double lum = (r * 0.299 + g * 0.587 + b * 0.114) / 255.0;
 
     double mask = 0;
@@ -120,11 +111,11 @@ void applyShadows(double& r, double& g, double& b, double shadows_value) {
     }
 }
 
-// Apply highlights adjustment to RGB values
-void applyHighlights(double& r, double& g, double& b, double highlights_value) {
+// Apply highlights adjustment to RGB values: highlights_value: -1.0 to 1.0
+void applyHighlights(double& r, double& g, double& b, const double highlights_value) {
     if (highlights_value == 0) return;
 
-    const double amount = highlights_value / 100.0;
+    const double amount = highlights_value;
     const double lum = (r * 0.299 + g * 0.587 + b * 0.114) / 255.0;
 
     if (lum > 0.6) {
@@ -145,11 +136,12 @@ void applyHighlights(double& r, double& g, double& b, double highlights_value) {
 }
 
 // Apply temperature and tint adjustments to RGB values
-void applyTemperatureTint(double& r, double& g, double& b, double temperature_value, double tint_value) {
+// temperature_value: -1.0 to 1.0 , tint_value: -1.0 to 1.0
+void applyTemperatureTint(double& r, double& g, double& b, const double temperature_value, const double tint_value) {
     if (temperature_value == 0 && tint_value == 0) return;
 
-    const double temp = temperature_value / 100.0;
-    const double tint = tint_value / 100.0;
+    const double temp = temperature_value;
+    const double tint = tint_value;
 
     // Temperature: blue-yellow axis
     r *= (1.0 + temp * 0.1);
@@ -161,11 +153,11 @@ void applyTemperatureTint(double& r, double& g, double& b, double temperature_va
     b *= (1.0 + tint * 0.05);
 }
 
-// Apply vibrance adjustment to RGB values
-void applyVibrance(double& r, double& g, double& b, double vibrance_value) {
+// Apply vibrance adjustment to RGB values: vibrance_value: -1.0 to 1.0
+void applyVibrance(double& r, double& g, double& b, const double vibrance_value) {
     if (vibrance_value == 0) return;
 
-    const double amount = vibrance_value / 100.0;
+    const double amount = vibrance_value;
     double gray = (r + g + b) / 3.0;
     double maxRGB = std::max({r, g, b});
     double minRGB = std::min({r, g, b});

@@ -40,11 +40,11 @@ namespace openshot
         void init_effect_details();
 
         /// Helper functions for color grading
-        static inline int clamp(int value, int min = 0, int max = 255) {
+        static int clamp(int value, int min = 0, int max = 255) {
             return std::max(min, std::min(max, value));
         }
 
-        static inline double clampDouble(double value, double min = 0.0, double max = 255.0) {
+        static double clampDouble(double value, double min = 0.0, double max = 255.0) {
             return std::max(min, std::min(max, value));
         }
 
