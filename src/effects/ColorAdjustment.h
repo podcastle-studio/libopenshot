@@ -1,8 +1,6 @@
-// ColorGrading.h
 /**
  * @file
- * @brief Header file for ColorGrading class
- * @author Your Name
+ * @brief Header file for ColorAdjustment class
  *
  * @ref License
  */
@@ -11,8 +9,8 @@
 //
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
-#ifndef OPENSHOT_COLOR_GRADING_EFFECT_H
-#define OPENSHOT_COLOR_GRADING_EFFECT_H
+#ifndef OPENSHOT_COLOR_ADJUSTMENT_H
+#define OPENSHOT_COLOR_ADJUSTMENT_H
 
 #include "../EffectBase.h"
 #include "../Frame.h"
@@ -21,25 +19,24 @@
 
 #include <memory>
 #include <string>
-#include <array>
 #include <cmath>
 
 namespace openshot
 {
     /**
-     * @brief This class provides Lightroom-style color grading adjustments
+     * @brief This class provides color adjustment controls
      *
-     * The ColorGrading effect allows for professional color correction with
-     * separate controls for highlights, shadows, whites, blacks, temperature,
-     * tint, and vibrance. All parameters can be animated with keyframes.
+     * The ColorAdjustment allows for color correction with
+     * controls for temperature, tint, vibrance, and saturation.
+     * All parameters can be animated with keyframes.
      */
-    class ColorGrading : public EffectBase
+    class ColorAdjustment : public EffectBase
     {
     private:
         /// Init effect settings
         void init_effect_details();
 
-        /// Helper functions for color grading
+        /// Helper functions for color adjustments
         static int clamp(int value, int min = 0, int max = 255) {
             return std::max(min, std::min(max, value));
         }
@@ -48,33 +45,19 @@ namespace openshot
             return std::max(min, std::min(max, value));
         }
 
-        /// Create contrast lookup table
-        std::array<uint8_t, 256> createContrastLUT(double contrast) const;
-
-        /// Tone curve for contrast adjustment
-        double toneCurve(double value, double contrast) const;
-
     public:
-        // Light adjustment keyframes
-        Keyframe brightness;    ///< Brightness keyframe (-100 to 100, 0 is default)
-        Keyframe contrast;      ///< Contrast keyframe (-100 to 100, 0 is default)
-        Keyframe highlights;    ///< Highlights keyframe (-100 to 100, 0 is default)
-        Keyframe shadows;       ///< Shadows keyframe (-100 to 100, 0 is default)
-        Keyframe whites;        ///< Whites keyframe (-100 to 100, 0 is default)
-        Keyframe blacks;        ///< Blacks keyframe (-100 to 100, 0 is default)
-
         // Color adjustment keyframes
         Keyframe temperature;   ///< Temperature keyframe (-100 to 100, 0 is default)
         Keyframe tint;          ///< Tint keyframe (-100 to 100, 0 is default)
         Keyframe vibrance;      ///< Vibrance keyframe (-100 to 100, 0 is default)
+        Keyframe saturation;    ///< Saturation keyframe (-100 to 100, 0 is default)
 
         /// Blank constructor, useful when using Json to load the effect properties
-        ColorGrading();
+        ColorAdjustment();
 
         /// Default constructor with all parameters
-        ColorGrading(Keyframe brightness, Keyframe contrast, Keyframe highlights,
-                    Keyframe shadows, Keyframe whites, Keyframe blacks,
-                    Keyframe temperature, Keyframe tint, Keyframe vibrance);
+        ColorAdjustment(Keyframe temperature, Keyframe tint,
+                       Keyframe vibrance, Keyframe saturation);
 
         /// @brief This method is required for all derived classes of ClipBase, and returns a
         /// new openshot::Frame object. All Clip keyframes and effects are resolved into

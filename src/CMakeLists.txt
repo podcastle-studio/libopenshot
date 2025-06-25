@@ -120,6 +120,8 @@ set(EFFECTS_SOURCES
   effects/Caption.cpp
   effects/ChromaKey.cpp
   effects/ColorShift.cpp
+  effects/ColorAdjustment.cpp
+  effects/LightAdjustment.cpp
   effects/CircleMask.cpp
   effects/Crop.cpp
   effects/Deinterlace.cpp

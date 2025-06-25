@@ -1,6 +1,6 @@
 /**
  * @file
- * @brief Source file for ColorGrading class
+ * @brief Source file for LightAdjustment class
  *
  * @ref License
  */
@@ -9,7 +9,7 @@
 //
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
-#include "ColorGrading.h"
+#include "LightAdjustment.h"
 #include "Exceptions.h"
 #include <QImage>
 #include <QRgb>
@@ -135,78 +135,42 @@ void applyHighlights(double& r, double& g, double& b, const double highlights_va
     }
 }
 
-// Apply temperature and tint adjustments to RGB values
-// temperature_value: -1.0 to 1.0 , tint_value: -1.0 to 1.0
-void applyTemperatureTint(double& r, double& g, double& b, const double temperature_value, const double tint_value) {
-    if (temperature_value == 0 && tint_value == 0) return;
-
-    const double temp = temperature_value;
-    const double tint = tint_value;
-
-    // Temperature: blue-yellow axis
-    r *= (1.0 + temp * 0.1);
-    b *= (1.0 - temp * 0.1);
-
-    // Tint: green-magenta axis
-    g *= (1.0 - tint * 0.1);
-    r *= (1.0 + tint * 0.05);
-    b *= (1.0 + tint * 0.05);
-}
-
-// Apply vibrance adjustment to RGB values: vibrance_value: -1.0 to 1.0
-void applyVibrance(double& r, double& g, double& b, const double vibrance_value) {
-    if (vibrance_value == 0) return;
-
-    const double amount = vibrance_value;
-    double gray = (r + g + b) / 3.0;
-    double maxRGB = std::max({r, g, b});
-    double minRGB = std::min({r, g, b});
-    double saturation = maxRGB == 0 ? 0 : (maxRGB - minRGB) / maxRGB;
-
-    double boostFactor = amount * (1.0 - saturation * saturation);
-
-    r = gray + (r - gray) * (1.0 + boostFactor);
-    g = gray + (g - gray) * (1.0 + boostFactor);
-    b = gray + (b - gray) * (1.0 + boostFactor);
-}
-
 } // anonymous namespace
 
 /// Blank constructor, useful when using Json to load the effect properties
-ColorGrading::ColorGrading() :
+LightAdjustment::LightAdjustment() :
     brightness(0.0), contrast(0.0), highlights(0.0), shadows(0.0),
-    whites(0.0), blacks(0.0), temperature(0.0), tint(0.0), vibrance(0.0) {
+    whites(0.0), blacks(0.0) {
     // Init effect properties
     init_effect_details();
 }
 
 // Constructor with all parameters
-ColorGrading::ColorGrading(Keyframe brightness, Keyframe contrast, Keyframe highlights,
-                         Keyframe shadows, Keyframe whites, Keyframe blacks,
-                         Keyframe temperature, Keyframe tint, Keyframe vibrance) :
+LightAdjustment::LightAdjustment(Keyframe brightness, Keyframe contrast, Keyframe highlights,
+                                Keyframe shadows, Keyframe whites, Keyframe blacks) :
     brightness(brightness), contrast(contrast), highlights(highlights), shadows(shadows),
-    whites(whites), blacks(blacks), temperature(temperature), tint(tint), vibrance(vibrance)
+    whites(whites), blacks(blacks)
 {
     // Init effect properties
     init_effect_details();
 }
 
 // Init effect settings
-void ColorGrading::init_effect_details()
+void LightAdjustment::init_effect_details()
 {
     /// Initialize the values of the EffectInfo struct.
     InitEffectInfo();
 
     /// Set the effect info
-    info.class_name = "ColorGrading";
-    info.name = "Color Grading";
-    info.description = "Professional color grading with separate controls for highlights, shadows, temperature, and more.";
+    info.class_name = "LightAdjustment";
+    info.name = "Light Adjustment";
+    info.description = "Professional lighting adjustment with separate controls for brightness, contrast, highlights, shadows, whites, and blacks.";
     info.has_audio = false;
     info.has_video = true;
 }
 
 // Tone curve implementation for contrast
-double ColorGrading::toneCurve(double value, double contrast) const
+double LightAdjustment::toneCurve(double value, double contrast) const
 {
     const double normalized = value / 255.0;
     double output;
@@ -233,7 +197,7 @@ double ColorGrading::toneCurve(double value, double contrast) const
 }
 
 // Create contrast lookup table
-std::array<uint8_t, 256> ColorGrading::createContrastLUT(double contrast) const
+std::array<uint8_t, 256> LightAdjustment::createContrastLUT(double contrast) const
 {
     std::array<uint8_t, 256> lut;
     for (int i = 0; i < 256; ++i) {
@@ -244,7 +208,7 @@ std::array<uint8_t, 256> ColorGrading::createContrastLUT(double contrast) const
 
 // This method is required for all derived classes of EffectBase, and returns a
 // modified openshot::Frame object
-std::shared_ptr<openshot::Frame> ColorGrading::GetFrame(std::shared_ptr<openshot::Frame> frame, int64_t frame_number)
+std::shared_ptr<openshot::Frame> LightAdjustment::GetFrame(std::shared_ptr<openshot::Frame> frame, int64_t frame_number)
 {
     // Get the frame's image
     std::shared_ptr<QImage> frame_image = frame->GetImage();
@@ -261,14 +225,10 @@ std::shared_ptr<openshot::Frame> ColorGrading::GetFrame(std::shared_ptr<openshot
     double shadows_value = shadows.GetValue(frame_number);
     double whites_value = whites.GetValue(frame_number);
     double blacks_value = blacks.GetValue(frame_number);
-    double temperature_value = temperature.GetValue(frame_number);
-    double tint_value = tint.GetValue(frame_number);
-    double vibrance_value = vibrance.GetValue(frame_number);
 
     // Skip processing if all values are at default
     if (brightness_value == 0 && contrast_value == 0 && highlights_value == 0 &&
-        shadows_value == 0 && whites_value == 0 && blacks_value == 0 &&
-        temperature_value == 0 && tint_value == 0 && vibrance_value == 0) {
+        shadows_value == 0 && whites_value == 0 && blacks_value == 0) {
         return frame;
     }
 
@@ -296,7 +256,8 @@ std::shared_ptr<openshot::Frame> ColorGrading::GetFrame(std::shared_ptr<openshot
             // Apply adjustments in the correct order for best results
 
             // 1. Brightness adjustment
-            applyBrightness(r, g, b, brightness_value);
+            if (brightness_value != 0)
+                applyBrightness(r, g, b, brightness_value);
 
             // 2. Apply contrast using LUT
             if (useContrastLUT) {
@@ -306,22 +267,20 @@ std::shared_ptr<openshot::Frame> ColorGrading::GetFrame(std::shared_ptr<openshot
             }
 
             // 3. Blacks adjustment (affects the black point)
-            applyBlacks(r, g, b, blacks_value);
+            if (blacks_value != 0)
+                applyBlacks(r, g, b, blacks_value);
 
             // 4. Whites adjustment (affects the white point)
-            applyWhites(r, g, b, whites_value);
+            if (whites_value != 0)
+                applyWhites(r, g, b, whites_value);
 
             // 5. Shadows adjustment (targets dark areas)
-            applyShadows(r, g, b, shadows_value);
+            if (shadows_value != 0)
+                applyShadows(r, g, b, shadows_value);
 
             // 6. Highlights adjustment (targets bright areas)
-            applyHighlights(r, g, b, highlights_value);
-
-            // 7. Temperature & Tint (color balance)
-            applyTemperatureTint(r, g, b, temperature_value, tint_value);
-
-            // 8. Vibrance (smart saturation)
-            applyVibrance(r, g, b, vibrance_value);
+            if (highlights_value != 0)
+                applyHighlights(r, g, b, highlights_value);
 
             // Final clamping and assignment
             line[x] = qRgba(clamp(r), clamp(g), clamp(b), a);
@@ -333,13 +292,13 @@ std::shared_ptr<openshot::Frame> ColorGrading::GetFrame(std::shared_ptr<openshot
 }
 
 // Generate JSON string of this object
-std::string ColorGrading::Json() const {
+std::string LightAdjustment::Json() const {
     // Return formatted string
     return JsonValue().toStyledString();
 }
 
 // Generate Json::Value for this object
-Json::Value ColorGrading::JsonValue() const {
+Json::Value LightAdjustment::JsonValue() const {
     // Create root json object
     Json::Value root = EffectBase::JsonValue(); // get parent properties
     root["type"] = info.class_name;
@@ -349,16 +308,13 @@ Json::Value ColorGrading::JsonValue() const {
     root["shadows"] = shadows.JsonValue();
     root["whites"] = whites.JsonValue();
     root["blacks"] = blacks.JsonValue();
-    root["temperature"] = temperature.JsonValue();
-    root["tint"] = tint.JsonValue();
-    root["vibrance"] = vibrance.JsonValue();
 
     // return JsonValue
     return root;
 }
 
 // Load JSON string into this object
-void ColorGrading::SetJson(const std::string value) {
+void LightAdjustment::SetJson(const std::string value) {
     // Parse JSON string into JSON objects
     try
     {
@@ -374,7 +330,7 @@ void ColorGrading::SetJson(const std::string value) {
 }
 
 // Load Json::Value into this object
-void ColorGrading::SetJsonValue(const Json::Value root) {
+void LightAdjustment::SetJsonValue(const Json::Value root) {
     // Set parent data
     EffectBase::SetJsonValue(root);
 
@@ -391,16 +347,10 @@ void ColorGrading::SetJsonValue(const Json::Value root) {
         whites.SetJsonValue(root["whites"]);
     if (!root["blacks"].isNull())
         blacks.SetJsonValue(root["blacks"]);
-    if (!root["temperature"].isNull())
-        temperature.SetJsonValue(root["temperature"]);
-    if (!root["tint"].isNull())
-        tint.SetJsonValue(root["tint"]);
-    if (!root["vibrance"].isNull())
-        vibrance.SetJsonValue(root["vibrance"]);
 }
 
 // Get all properties for a specific frame
-std::string ColorGrading::PropertiesJSON(int64_t requested_frame) const {
+std::string LightAdjustment::PropertiesJSON(int64_t requested_frame) const {
     // Generate JSON properties list
     Json::Value root = BasePropertiesJSON(requested_frame);
 
@@ -411,11 +361,6 @@ std::string ColorGrading::PropertiesJSON(int64_t requested_frame) const {
     root["shadows"] = add_property_json("Shadows", shadows.GetValue(requested_frame), "float", "", &shadows, -100.0, 100.0, false, requested_frame);
     root["whites"] = add_property_json("Whites", whites.GetValue(requested_frame), "float", "", &whites, -100.0, 100.0, false, requested_frame);
     root["blacks"] = add_property_json("Blacks", blacks.GetValue(requested_frame), "float", "", &blacks, -100.0, 100.0, false, requested_frame);
-
-    // Color adjustment keyframes
-    root["temperature"] = add_property_json("Temperature", temperature.GetValue(requested_frame), "float", "", &temperature, -100.0, 100.0, false, requested_frame);
-    root["tint"] = add_property_json("Tint", tint.GetValue(requested_frame), "float", "", &tint, -100.0, 100.0, false, requested_frame);
-    root["vibrance"] = add_property_json("Vibrance", vibrance.GetValue(requested_frame), "float", "", &vibrance, -100.0, 100.0, false, requested_frame);
 
     // Return formatted string
     return root.toStyledString();
