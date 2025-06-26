@@ -115,11 +115,11 @@ set(EFFECTS_SOURCES
   effects/LightAdjustment.cpp
   effects/Enhancement.cpp
   effects/CircleMask.cpp
-  effects/Bars.cpp
-  effects/Blur.cpp
   effects/Wipe.cpp
   effects/Exposure.cpp
   effects/SplitShift.cpp
+  effects/Bars.cpp
+  effects/Blur.cpp
   effects/Brightness.cpp
   effects/Caption.cpp
   effects/ChromaKey.cpp
