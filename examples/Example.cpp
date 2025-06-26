@@ -5,6 +5,7 @@
 #include "FFmpegWriter.h"
 #include "effects/ColorAdjustment.h"
 #include "effects/LightAdjustment.h"
+#include "effects/Enhancement.h"
 
 int main() {
 
@@ -12,8 +13,9 @@ int main() {
     timeLine.Open();
 
     openshot::Clip img("img.png");
-    img.AddEffect(new openshot::ColorAdjustment(0.42, 0, 0, 0.52));
-    img.AddEffect(new openshot::LightAdjustment(-0.72, 0.68, 0.42, 0.34, 0.3, -0.41));
+    // img.AddEffect(new openshot::ColorAdjustment(0, 0, 0, 0));
+    // img.AddEffect(new openshot::LightAdjustment(0, 0, 1, 0, 0, 0));
+    img.AddEffect(new openshot::Enhancement(1, 1, 1));
     timeLine.AddClip(&img);
 
     openshot::FFmpegWriter w("out.mp4");

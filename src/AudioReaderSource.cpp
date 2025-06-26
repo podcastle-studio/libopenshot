@@ -14,6 +14,7 @@
 #include "Exceptions.h"
 #include "Frame.h"
 
+
 using namespace std;
 using namespace openshot;
 
@@ -42,6 +43,7 @@ void AudioReaderSource::getNextAudioBlock(const juce::AudioSourceChannelInfo& in
 		}
 
         while (remaining_samples > 0) {
+
             try {
                 // Get current frame object
                 if (reader) {

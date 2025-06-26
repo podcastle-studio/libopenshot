@@ -1070,6 +1070,13 @@ std::shared_ptr<Frame> Timeline::GetFrame(int64_t requested_frame)
 
 			} // end clip loop
 
+
+			// ===========================================================================
+			// SUBTITLE INTEGRATION POINT - Apply subtitles AFTER all clips are processed
+			// ===========================================================================
+			// frame: new_frame, frameNumber: requested_frame
+			// double currentTime = (frame_number - 1) / info.fps.ToDouble();
+
 			// Debug output
 			ZmqLogger::Instance()->AppendDebugMethod(
 					"Timeline::GetFrame (Add frame to cache)",

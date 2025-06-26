@@ -107,12 +107,16 @@ set(OPENSHOT_CV_SOURCES
 set(EFFECTS_SOURCES
   effects/image-processing-lib/src/Effects/effects.cpp
   effects/Alpha.cpp
-  effects/Bars.cpp
-  effects/Blur.cpp
   effects/CameraMovement.cpp
   effects/BorderReflectedRotation.cpp
   effects/BorderReflectedMove.cpp
   effects/Zoom.cpp
+  effects/ColorAdjustment.cpp
+  effects/LightAdjustment.cpp
+  effects/Enhancement.cpp
+  effects/CircleMask.cpp
+  effects/Bars.cpp
+  effects/Blur.cpp
   effects/Wipe.cpp
   effects/Exposure.cpp
   effects/SplitShift.cpp
@@ -120,9 +124,6 @@ set(EFFECTS_SOURCES
   effects/Caption.cpp
   effects/ChromaKey.cpp
   effects/ColorShift.cpp
-  effects/ColorAdjustment.cpp
-  effects/LightAdjustment.cpp
-  effects/CircleMask.cpp
   effects/Crop.cpp
   effects/Deinterlace.cpp
   effects/Hue.cpp

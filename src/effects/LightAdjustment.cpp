@@ -177,7 +177,7 @@ double LightAdjustment::toneCurve(double value, double contrast) const
 
     if (contrast > 0) {
         // S-curve for positive contrast
-        const double amount = contrast / 100.0;
+        const double amount = contrast;
         const double midpoint = 0.5;
 
         if (normalized < midpoint) {
@@ -187,7 +187,7 @@ double LightAdjustment::toneCurve(double value, double contrast) const
         }
     } else if (contrast < 0) {
         // Inverse S-curve for negative contrast
-        const double amount = -contrast / 100.0;
+        const double amount = -contrast;
         output = normalized + (0.5 - normalized) * amount * std::sin(M_PI * normalized);
     } else {
         output = normalized;
