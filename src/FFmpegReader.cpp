@@ -1527,6 +1527,12 @@ void FFmpegReader::ProcessVideoPacket(int64_t requested_frame) {
         output_height = height;
     }
 
+	// compensate for non-square pixels ------------------------------
+	if (info.pixel_ratio.num != info.pixel_ratio.den) {
+		// expand or shrink the stored width so that SAR becomes 1:1
+		output_width = static_cast<int>(std::round(output_width * static_cast<double>(info.pixel_ratio.num) / info.pixel_ratio.den));
+	}
+
     // Determine required buffer size and allocate buffer
     const int bytes_per_pixel = 4;
     int buffer_size = (output_width * output_height * bytes_per_pixel) + 128;
