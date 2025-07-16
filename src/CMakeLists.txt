@@ -538,6 +538,20 @@ See https://github.com/opencv/opencv/issues/19260]])
 endif()  # ENABLE_OPENCV
 add_feature_info("OpenCV algorithms" ENABLE_OPENCV "Use OpenCV algorithms")
 
+
+###############  SKIA LIBRARY  #################
+
+find_package(Skia REQUIRED)
+if(SKIA_FOUND)
+  message(STATUS "Found Skia: ${SKIA_LIBRARIES}")
+  message(STATUS "Skia includes: ${SKIA_INCLUDE_DIRS}")
+else()
+  message(WARNING "Skia not found, subtitle support will be disabled")
+endif()
+
+target_include_directories(openshot PUBLIC ${SKIA_INCLUDE_DIRS})
+target_link_libraries(openshot PUBLIC ${SKIA_LIBRARIES})
+
 ###############  LINK LIBRARY  #################
 # Link remaining dependency libraries
 if(DEFINED PROFILER)
