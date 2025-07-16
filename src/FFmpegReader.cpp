@@ -248,6 +248,15 @@ void FFmpegReader::Open() {
 				packet_status.end_of_file = false;
 			}
 		}
+
+		if (audioStream == -1) {
+			info.has_audio = false;
+
+			// mark audio branch as already finished
+			packet_status.audio_eof   = true;
+			packet_status.end_of_file = false;   // video not done yet
+		}
+
 		if (videoStream == -1 && audioStream == -1)
 			throw NoStreamsFound("No video or audio streams found in this file.", path);
 
@@ -518,6 +527,35 @@ void FFmpegReader::Open() {
 
 			// Update the File Info struct with video details (if a video stream is found)
 			UpdateVideoInfo();
+			// ---- sanity-check FPS when nb_frames & duration disagree
+			if (info.has_video && info.duration > 0 && info.video_length > 0) {
+				double fps_from_metadata = info.fps.ToDouble();
+				double fps_from_stream   = info.video_length / info.duration;  // 1358 / 29.32 ≈ 46.3
+
+				if (std::fabs(fps_from_metadata - fps_from_stream) > 0.5) {
+					// container lied – trust the packets
+					info.fps = Fraction(int(std::round(fps_from_stream)), 1);
+					ZmqLogger::Instance()->AppendDebugMethod(
+						"FFmpegReader::Open (corrected fps)",
+						"fps_meta", fps_from_metadata,
+						"fps_real", fps_from_stream);
+				}
+			}
+			if (info.has_video &&
+				!info.has_single_image &&        // ← skip still pictures
+				info.video_length > 5 &&         // ← need enough frames to be reliable
+				info.duration > 0.0) {
+				double fps_meta   = info.fps.ToDouble();
+				double fps_stream = info.video_length / info.duration;
+
+				if (std::fabs(fps_meta - fps_stream) > 0.5) {
+					info.fps = Fraction(int(std::round(fps_stream)), 1);
+					ZmqLogger::Instance()->AppendDebugMethod(
+						"FFmpegReader::Open (corrected fps)",
+						"fps_meta", fps_meta,
+						"fps_real", fps_stream);
+				}
+			}
 		}
 
 		// Is there an audio stream?
@@ -1084,7 +1122,7 @@ std::shared_ptr<Frame> FFmpegReader::ReadStream(int64_t requested_frame) {
 
 		// Determine end-of-stream (waiting until final decoder threads finish)
 		// Force end-of-stream in some situations
-		packet_status.end_of_file = packet_status.packets_eof && packet_status.video_eof && packet_status.audio_eof;
+		packet_status.end_of_file = packet_status.packets_eof && packet_status.video_eof &&  (info.has_audio ? packet_status.audio_eof : true);
 		if ((packet_status.packets_eof && packet_status.packets_read() == packet_status.packets_decoded()) || packet_status.end_of_file) {
 			// Force EOF (end of file) variables to true, if decoder does not support EOF detection.
 			// If we have no more packets, and all known packets have been decoded
@@ -2223,6 +2261,8 @@ void FFmpegReader::CheckWorkingFrames(int64_t requested_frame) {
 
 		// Calculate PTS in seconds (of working frame), and the most recent processed pts value
 		double frame_pts_seconds = (double(f->number - 1) / info.fps.ToDouble()) + pts_offset_seconds;
+		if (!info.has_audio)
+			audio_pts_seconds = video_pts_seconds;
 		double recent_pts_seconds = std::max(video_pts_seconds, audio_pts_seconds);
 
 		// Determine if video and audio are ready (based on timestamps)
