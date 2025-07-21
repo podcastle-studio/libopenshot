@@ -1,14 +1,3 @@
-/**
- * @file
- * @brief Implementation of TextRenderer class
- *
- * @ref License
- */
-
-// Copyright (c) 2008-2024 OpenShot Studios, LLC
-//
-// SPDX-License-Identifier: LGPL-3.0-or-later
-
 #include "TextRenderer.h"
 #include "SkiaRenderer.h"
 #include "WordRenderer.h"

@@ -5,7 +5,7 @@
 #include <map>
 #include <optional>
 #include <memory>
-#include "../Point.h"
+#include "../KeyFrame.h"
 
 namespace openshot {
 namespace subtitle {
@@ -22,23 +22,23 @@ struct AnimatingTextStyle {
     int bold            = 400;
     std::string color   = "#FFFFFF";
     double opacity       = 1.0f;
-    
+
     std::optional<std::string> strokeColor;
     std::optional<double> strokeOpacity;
     std::optional<double> strokeWidth;
-    
+
     std::optional<std::string> shadowColor;
     std::optional<double> shadowOpacity;
     std::optional<double> shadowBlur;
     std::optional<double> shadowDistance;
     std::optional<double> shadowAngle;
-    
+
     std::optional<std::string> backgroundColor;
     std::optional<double> backgroundOpacity;
     std::optional<double> backgroundRadius;
     std::optional<double> backgroundPaddingX;
     std::optional<double> backgroundPaddingY;
-    
+
     std::optional<double> translateX;
     std::optional<double> translateY;
 };
@@ -62,19 +62,20 @@ struct SubtitleContainerStyle {
 
 struct AnimationParam {
     std::string name; // Property name to animate
-    std::vector<Point> keyframes; // Using OpenShot's Point class
+    Keyframe keyframe; // Using OpenShot's Keyframe class directly
 };
 
 struct AnimationParamColor {
     std::string name;
-    std::vector<std::pair<double, std::string>> keyframes; // time, color
-    InterpolationType interpolation = LINEAR;
+    Keyframe rKeyframe; // Red component keyframe
+    Keyframe gKeyframe; // Green component keyframe
+    Keyframe bKeyframe; // Blue component keyframe
 };
 
 struct WordAnimation {
+    std::string word;
     std::vector<AnimationParam> params;
     std::vector<AnimationParamColor> colorParams;
-    std::string word;
 };
 
 struct StyledWord {
@@ -84,13 +85,13 @@ struct StyledWord {
 
 struct AnimationSettings {
     InterpolationType inInterpolation = LINEAR;
-    float inSpeed = 100;
-    std::map<std::string, float> inStyles;
+    float inDuration = 100;  // Duration in milliseconds
+    std::map<std::string, double> inStyles;
     std::map<std::string, std::string> inStylesColor;
-    
+
     InterpolationType outInterpolation = LINEAR;
-    float outSpeed = 0;
-    std::map<std::string, float> outStyles;
+    float outDuration = 0;   // Duration in milliseconds
+    std::map<std::string, double> outStyles;
     std::map<std::string, std::string> outStylesColor;
 };
 
@@ -99,15 +100,15 @@ struct Transformation {
         float horizontalScale = 1.0f;
         float verticalScale = 1.0f;
     } scale;
-    
+
     float rotation = 0;
-    
+
     struct Center {
-        float x = 0;
-        float y = 0;
+        float x = 0.5f;  // Changed to match JSON (0.5 = 50%)
+        float y = 0.9f;  // Changed to match JSON (0.9 = 90%)
     } center;
-    
-    float maxWidth = 1920;
+
+    float maxWidth = 900;  // Changed to match JSON default
 };
 
 struct SegmentSettings {
@@ -153,6 +154,10 @@ struct TextBounds {
     double top;
     double bottom;
 };
+
+// Helper function declarations
+double getBaseValue(const std::string& key, const SubtitleTextStyle& style);
+std::string getBaseColor(const std::string& key, const SubtitleTextStyle& style);
 
 } // namespace subtitle
 } // namespace openshot

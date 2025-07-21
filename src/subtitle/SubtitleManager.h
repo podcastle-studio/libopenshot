@@ -1,5 +1,6 @@
 #pragma once
 
+#include "json/json.h"
 #include <vector>
 #include <memory>
 #include <string>
@@ -15,12 +16,9 @@ namespace subtitle {
 struct SubtitleSegment;
 struct SubtitleTextStyle;
 struct SegmentSettings;
+struct AnimationSettings;
 
 class SubtitleManager {
-private:
-    class Impl; // Private implementation
-    std::unique_ptr<Impl> pImpl;
-
 public:
     explicit SubtitleManager(float fps);
     ~SubtitleManager();
@@ -49,6 +47,16 @@ public:
     // Utility
     bool hasActiveSubtitlesAtFrame(int64_t frameNumber) const;
     void createExampleSubtitles() const;
+
+private:
+    class Impl;
+    std::unique_ptr<Impl> pImpl;
+
+    SegmentSettings parseSegmentSettings(const Json::Value& settingsJson) const;
+    void parseTextStyle(const Json::Value& styleJson, SubtitleTextStyle& style) const;
+    void parseAnimationSettings(const Json::Value& animJson, AnimationSettings& settings) const;
+
+    void parseGlobalSettings(const Json::Value& settingsJson) const;
 };
 }
 }

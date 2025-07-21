@@ -244,21 +244,11 @@ void Timeline::LoadSubtitles(const std::string& jsonPath) const {
 	}
 
 	subtitleManager->loadFromJSON(jsonPath);
-
-	// Clear cache to re-render frames with new subtitles
-	if (final_cache) {
-		final_cache->Clear();
-	}
 }
 
 void Timeline::ClearSubtitles() {
 	if (subtitleManager) {
 		subtitleManager->clearSegments();
-
-		// Clear cache
-		if (final_cache) {
-			final_cache->Clear();
-		}
 	}
 }
 

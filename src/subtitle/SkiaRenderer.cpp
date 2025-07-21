@@ -1,15 +1,5 @@
-/**
- * @file
- * @brief Implementation of SkiaRenderer class
- *
- * @ref License
- */
-
-// Copyright (c) 2008-2024 OpenShot Studios, LLC
-//
-// SPDX-License-Identifier: LGPL-3.0-or-later
-
 #include "SkiaRenderer.h"
+
 #include "skia/include/core/SkFontMgr.h"
 #include "skia/include/core/SkMaskFilter.h"
 #include "skia/include/core/SkBlurTypes.h"

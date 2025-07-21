@@ -1,15 +1,3 @@
-/**
- * @file
- * @brief Implementation of WordRenderer class
- * @author OpenShot Studios, LLC
- *
- * @ref License
- */
-
-// Copyright (c) 2008-2024 OpenShot Studios, LLC
-//
-// SPDX-License-Identifier: LGPL-3.0-or-later
-
 #include "subtitle/WordRenderer.h"
 #include "subtitle/SkiaRenderer.h"
 #include <skia/include/core/SkPath.h>

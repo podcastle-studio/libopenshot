@@ -1,28 +1,19 @@
-/**
- * @file
- * @brief Implementation of SubtitleManager class
- * @author OpenShot Studios, LLC
- *
- * @ref License
- */
-
-// Copyright (c) 2008-2024 OpenShot Studios, LLC
-//
-// SPDX-License-Identifier: LGPL-3.0-or-later
-
 #include "SubtitleManager.h"
 #include "SubtitleTypes.h"
 #include "SubtitleRenderer.h"
 #include "SkiaRenderer.h"
-#include "DefaultPreset.h"
 #include "Helpers.h"
+#include "DefaultPreset.h"
+
 #include <skia/include/core/SkBitmap.h>
 #include <skia/include/core/SkCanvas.h>
+
 #include <QImage>
 #include <fstream>
 
 namespace openshot {
 namespace subtitle {
+
 // Private implementation class
 class SubtitleManager::Impl {
 public:
@@ -75,183 +66,281 @@ std::vector<SubtitleSegment>& SubtitleManager::getSegments() const {
     return pImpl->segments;
 }
 
+SegmentSettings SubtitleManager::parseSegmentSettings(const Json::Value& settingsJson) const {
+    SegmentSettings settings = pImpl->defaultSettings; // Start with defaults
+
+    // Parse containerStyle
+    if (settingsJson.isMember("containerStyle")) {
+        const Json::Value& containerStyle = settingsJson["containerStyle"];
+
+        if (containerStyle.isMember("appearance")) {
+            std::string appearance = containerStyle["appearance"].asString();
+            if (appearance == "ONE_WORD") {
+                settings.containerStyle.appearance = TextAppearance::ONE_WORD;
+            } else {
+                settings.containerStyle.appearance = TextAppearance::PER_TIME;
+            }
+        }
+
+        if (containerStyle.isMember("textAlign")) {
+            std::string align = containerStyle["textAlign"].asString();
+            if (align == "LEFT") {
+                settings.containerStyle.textAlign = TextAlignment::LEFT;
+            } else if (align == "RIGHT") {
+                settings.containerStyle.textAlign = TextAlignment::RIGHT;
+            } else {
+                settings.containerStyle.textAlign = TextAlignment::CENTER;
+            }
+        }
+
+        if (containerStyle.isMember("opacity"))
+            settings.containerStyle.opacity = containerStyle["opacity"].asFloat();
+        if (containerStyle.isMember("paddingX"))
+            settings.containerStyle.paddingX = containerStyle["paddingX"].asFloat();
+        if (containerStyle.isMember("paddingY"))
+            settings.containerStyle.paddingY = containerStyle["paddingY"].asFloat();
+        if (containerStyle.isMember("radius"))
+            settings.containerStyle.radius = containerStyle["radius"].asFloat();
+        if (containerStyle.isMember("color"))
+            settings.containerStyle.color = containerStyle["color"].asString();
+    }
+
+    // Parse defaultStyle
+    if (settingsJson.isMember("defaultStyle")) {
+        parseTextStyle(settingsJson["defaultStyle"], settings.defaultStyle);
+    }
+
+    // Parse animationSettings
+    if (settingsJson.isMember("animationSettings")) {
+        parseAnimationSettings(settingsJson["animationSettings"], settings.animationSettings);
+    }
+
+    // Parse transformation
+    if (settingsJson.isMember("transformation")) {
+        const Json::Value& transform = settingsJson["transformation"];
+
+        if (transform.isMember("maxWidth"))
+            settings.transformation.maxWidth = transform["maxWidth"].asFloat();
+
+        if (transform.isMember("center")) {
+            const Json::Value& center = transform["center"];
+            if (center.isMember("x"))
+                settings.transformation.center.x = center["x"].asFloat();
+            if (center.isMember("y"))
+                settings.transformation.center.y = center["y"].asFloat();
+        }
+
+        if (transform.isMember("scale")) {
+            const Json::Value& scale = transform["scale"];
+            if (scale.isMember("horizontalScale"))
+                settings.transformation.scale.horizontalScale = scale["horizontalScale"].asFloat();
+            if (scale.isMember("verticalScale"))
+                settings.transformation.scale.verticalScale = scale["verticalScale"].asFloat();
+        }
+
+        if (transform.isMember("rotation"))
+            settings.transformation.rotation = transform["rotation"].asFloat();
+    }
+
+    return settings;
+}
+
+// Helper method to parse text style
+void SubtitleManager::parseTextStyle(const Json::Value& styleJson, SubtitleTextStyle& style) const {
+    // Basic text properties
+    if (styleJson.isMember("fontFamily"))
+        style.fontFamily = styleJson["fontFamily"].asString();
+    if (styleJson.isMember("fontSize"))
+        style.fontSize = styleJson["fontSize"].asFloat();
+    if (styleJson.isMember("bold"))
+        style.bold = styleJson["bold"].asInt();
+    if (styleJson.isMember("italic"))
+        style.italic = styleJson["italic"].asBool();
+    if (styleJson.isMember("color"))
+        style.color = styleJson["color"].asString();
+    if (styleJson.isMember("opacity"))
+        style.opacity = styleJson["opacity"].asFloat();
+    if (styleJson.isMember("letterSpacing"))
+        style.letterSpacing = styleJson["letterSpacing"].asFloat();
+    if (styleJson.isMember("lineHeight"))
+        style.lineHeight = styleJson["lineHeight"].asFloat();
+
+    // Text transform
+    if (styleJson.isMember("textTransform")) {
+        std::string transform = styleJson["textTransform"].asString();
+        if (transform == "UPPERCASE")
+            style.textTransform = TextTransform::UPPERCASE;
+        else if (transform == "LOWERCASE")
+            style.textTransform = TextTransform::LOWERCASE;
+        else if (transform == "CAPITALIZE")
+            style.textTransform = TextTransform::CAPITALIZE;
+        else
+            style.textTransform = TextTransform::NONE;
+    }
+
+    // Translation
+    if (styleJson.isMember("translateX"))
+        style.translateX = styleJson["translateX"].asFloat();
+    if (styleJson.isMember("translateY"))
+        style.translateY = styleJson["translateY"].asFloat();
+
+    // Stroke properties
+    if (styleJson.isMember("strokeColor"))
+        style.strokeColor = styleJson["strokeColor"].asString();
+    if (styleJson.isMember("strokeOpacity"))
+        style.strokeOpacity = styleJson["strokeOpacity"].asFloat();
+    if (styleJson.isMember("strokeWidth"))
+        style.strokeWidth = styleJson["strokeWidth"].asFloat();
+
+    // Shadow properties
+    if (styleJson.isMember("shadowColor") && !styleJson["shadowColor"].isNull())
+        style.shadowColor = styleJson["shadowColor"].asString();
+    if (styleJson.isMember("shadowOpacity") && !styleJson["shadowOpacity"].isNull())
+        style.shadowOpacity = styleJson["shadowOpacity"].asFloat();
+    if (styleJson.isMember("shadowBlur") && !styleJson["shadowBlur"].isNull())
+        style.shadowBlur = styleJson["shadowBlur"].asFloat();
+    if (styleJson.isMember("shadowDistance") && !styleJson["shadowDistance"].isNull())
+        style.shadowDistance = styleJson["shadowDistance"].asFloat();
+    if (styleJson.isMember("shadowAngle") && !styleJson["shadowAngle"].isNull())
+        style.shadowAngle = styleJson["shadowAngle"].asFloat();
+
+    // Background properties
+    if (styleJson.isMember("backgroundColor"))
+        style.backgroundColor = styleJson["backgroundColor"].asString();
+    if (styleJson.isMember("backgroundOpacity"))
+        style.backgroundOpacity = styleJson["backgroundOpacity"].asFloat();
+    if (styleJson.isMember("backgroundRadius"))
+        style.backgroundRadius = styleJson["backgroundRadius"].asFloat();
+    if (styleJson.isMember("backgroundPaddingX"))
+        style.backgroundPaddingX = styleJson["backgroundPaddingX"].asFloat();
+    if (styleJson.isMember("backgroundPaddingY"))
+        style.backgroundPaddingY = styleJson["backgroundPaddingY"].asFloat();
+    if (styleJson.isMember("bubble"))
+        style.bubble = styleJson["bubble"].asBool();
+}
+
+// Helper method to parse animation settings
+void SubtitleManager::parseAnimationSettings(const Json::Value& animJson, AnimationSettings& settings) const {
+    // In animation
+    if (animJson.isMember("inInterpolation")) {
+        const Json::Value& inInterp = animJson["inInterpolation"];
+        if (inInterp.isMember("type")) {
+            std::string type = inInterp["type"].asString();
+            if (type == "LINEAR")
+                settings.inInterpolation = LINEAR;
+            else if (type == "BEZIER")
+                settings.inInterpolation = BEZIER;
+            else if (type == "CONSTANT")
+                settings.inInterpolation = CONSTANT;
+        }
+    }
+
+    if (animJson.isMember("inDuration"))
+        settings.inDuration = animJson["inDuration"].asFloat();
+
+    // Parse inStyles
+    if (animJson.isMember("inStyles")) {
+        const Json::Value& inStyles = animJson["inStyles"];
+        for (const auto& key : inStyles.getMemberNames()) {
+            if (inStyles[key].isString()) {
+                // It's a color
+                settings.inStylesColor[key] = inStyles[key].asString();
+            } else if (inStyles[key].isNumeric()) {
+                // It's a numeric value
+                settings.inStyles[key] = inStyles[key].asFloat();
+            }
+        }
+    }
+
+    // Out animation
+    if (animJson.isMember("outInterpolation")) {
+        const Json::Value& outInterp = animJson["outInterpolation"];
+        if (outInterp.isMember("type")) {
+            std::string type = outInterp["type"].asString();
+            if (type == "LINEAR")
+                settings.outInterpolation = LINEAR;
+            else if (type == "BEZIER")
+                settings.outInterpolation = BEZIER;
+            else if (type == "CONSTANT")
+                settings.outInterpolation = CONSTANT;
+        }
+    }
+
+    if (animJson.isMember("outDuration"))
+        settings.outDuration = animJson["outDuration"].asFloat();
+
+    if (animJson.isMember("outStyles")) {
+        const Json::Value& outStyles = animJson["outStyles"];
+        for (const auto& key : outStyles.getMemberNames()) {
+            if (outStyles[key].isString()) {
+                settings.outStylesColor[key] = outStyles[key].asString();
+            } else if (outStyles[key].isNumeric()) {
+                settings.outStyles[key] = outStyles[key].asFloat();
+            }
+        }
+    }
+}
+
+// Helper method to parse global settings
+void SubtitleManager::parseGlobalSettings(const Json::Value& settingsJson) const {
+    pImpl->defaultSettings = parseSegmentSettings(settingsJson);
+}
+
 void SubtitleManager::loadFromJSON(const std::string& jsonPath) const {
     try {
-        // Read the JSON file
         std::ifstream file(jsonPath);
         if (!file.is_open()) {
             throw std::runtime_error("Cannot open subtitle file: " + jsonPath);
         }
 
-        // Parse JSON
         Json::Value root;
         file >> root;
         file.close();
 
-        // Clear existing segments
         clearSegments();
 
-        // Load segments
+        // Load segments - Fix field names to match JSON structure
         if (root.isMember("segments") && root["segments"].isArray()) {
             const Json::Value& segments = root["segments"];
 
             for (const auto& seg : segments) {
                 subtitle::SubtitleSegment segment;
 
-                // Basic properties
+                // Fix field names to match JSON payload
                 segment.id = seg.get("id", "").asString();
-                segment.startTimeMs = seg.get("start_ms", 0).asFloat();
-                segment.endTimeMs = seg.get("end_ms", 0).asFloat();
+                segment.startTimeMs = seg.get("startTime", 0).asFloat();  // Changed from start_ms
+                segment.endTimeMs = seg.get("endTime", 0).asFloat();      // Changed from end_ms
                 segment.visible = seg.get("visible", true).asBool();
                 segment.attached = seg.get("attached", true).asBool();
 
-                // Load words
-                if (seg.isMember("words") && seg["words"].isArray()) {
-                    const Json::Value& words = seg["words"];
+                // Load wordDetails (not "words")
+                if (seg.isMember("wordDetails") && seg["wordDetails"].isArray()) {
+                    const Json::Value& wordDetails = seg["wordDetails"];
 
-                    for (const auto& w : words) {
+                    for (const auto& w : wordDetails) {
                         subtitle::WordDetail word;
-                        word.word = w.get("text", "").asString();
-                        word.startMs = w.get("start_ms", 0).asFloat();
-                        word.endMs = w.get("end_ms", 0).asFloat();
+                        word.word = w.get("word", "").asString();
+                        word.startMs = w.get("startTime", 0).asFloat();  // Changed from start_ms
+                        word.endMs = w.get("endTime", 0).asFloat();      // Changed from end_ms
                         word.confidence = w.get("confidence", 1.0f).asFloat();
 
                         segment.wordDetails.push_back(word);
                     }
                 }
 
-                // Add segment
+                // Handle segment-specific settings (when attached = false)
+                if (!segment.attached && seg.isMember("settings")) {
+                    segment.settings = parseSegmentSettings(seg["settings"]);
+                }
+
                 addSegment(segment);
             }
         }
 
-        // Load default style if present
-        if (root.isMember("default_style")) {
-            const Json::Value& style = root["default_style"];
-            auto& defaultStyle = getDefaultStyle();
-
-            // Font properties
-            if (style.isMember("font_family"))
-                defaultStyle.fontFamily = style["font_family"].asString();
-            if (style.isMember("font_size"))
-                defaultStyle.fontSize = style["font_size"].asFloat();
-            if (style.isMember("bold"))
-                defaultStyle.bold = style["bold"].asInt();
-            if (style.isMember("italic"))
-                defaultStyle.italic = style["italic"].asBool();
-
-            // Colors
-            if (style.isMember("color"))
-                defaultStyle.color = style["color"].asString();
-            if (style.isMember("opacity"))
-                defaultStyle.opacity = style["opacity"].asFloat();
-
-            // Stroke
-            if (style.isMember("stroke_width"))
-                defaultStyle.strokeWidth = style["stroke_width"].asFloat();
-            if (style.isMember("stroke_color"))
-                defaultStyle.strokeColor = style["stroke_color"].asString();
-            if (style.isMember("stroke_opacity"))
-                defaultStyle.strokeOpacity = style["stroke_opacity"].asFloat();
-
-            // Shadow
-            if (style.isMember("shadow_color"))
-                defaultStyle.shadowColor = style["shadow_color"].asString();
-            if (style.isMember("shadow_opacity"))
-                defaultStyle.shadowOpacity = style["shadow_opacity"].asFloat();
-            if (style.isMember("shadow_blur"))
-                defaultStyle.shadowBlur = style["shadow_blur"].asFloat();
-            if (style.isMember("shadow_distance"))
-                defaultStyle.shadowDistance = style["shadow_distance"].asFloat();
-            if (style.isMember("shadow_angle"))
-                defaultStyle.shadowAngle = style["shadow_angle"].asFloat();
-
-            // Background
-            if (style.isMember("background_color"))
-                defaultStyle.backgroundColor = style["background_color"].asString();
-            if (style.isMember("background_opacity"))
-                defaultStyle.backgroundOpacity = style["background_opacity"].asFloat();
-            if (style.isMember("background_padding_x"))
-                defaultStyle.backgroundPaddingX = style["background_padding_x"].asFloat();
-            if (style.isMember("background_padding_y"))
-                defaultStyle.backgroundPaddingY = style["background_padding_y"].asFloat();
-            if (style.isMember("background_radius"))
-                defaultStyle.backgroundRadius = style["background_radius"].asFloat();
-            if (style.isMember("bubble"))
-                defaultStyle.bubble = style["bubble"].asBool();
-
-            // Text transform
-            if (style.isMember("text_transform")) {
-                std::string transform = style["text_transform"].asString();
-                if (transform == "UPPERCASE")
-                    defaultStyle.textTransform = subtitle::TextTransform::UPPERCASE;
-                else if (transform == "LOWERCASE")
-                    defaultStyle.textTransform = subtitle::TextTransform::LOWERCASE;
-                else if (transform == "CAPITALIZE")
-                    defaultStyle.textTransform = subtitle::TextTransform::CAPITALIZE;
-                else
-                    defaultStyle.textTransform = subtitle::TextTransform::NONE;
-            }
-
-            // Other properties
-            if (style.isMember("letter_spacing"))
-                defaultStyle.letterSpacing = style["letter_spacing"].asFloat();
-            if (style.isMember("line_height"))
-                defaultStyle.lineHeight = style["line_height"].asFloat();
+        // Load global settings
+        if (root.isMember("settings")) {
+            parseGlobalSettings(root["settings"]);
         }
-
-        // Load animation settings if present
-        if (root.isMember("animation_settings")) {
-            const Json::Value& anim = root["animation_settings"];
-            auto& animSettings = pImpl->defaultSettings.animationSettings;
-
-            // In animation
-            if (anim.isMember("in_interpolation")) {
-                std::string interp = anim["in_interpolation"].asString();
-                if (interp == "LINEAR")
-                    animSettings.inInterpolation = LINEAR;
-                else if (interp == "BEZIER")
-                    animSettings.inInterpolation = BEZIER;
-                else if (interp == "CONSTANT")
-                    animSettings.inInterpolation = CONSTANT;
-            }
-
-            if (anim.isMember("in_speed"))
-                animSettings.inSpeed = anim["in_speed"].asFloat();
-
-            // In styles
-            if (anim.isMember("in_styles")) {
-                const Json::Value& inStyles = anim["in_styles"];
-                for (const auto& key : inStyles.getMemberNames()) {
-                    animSettings.inStyles[key] = inStyles[key].asFloat();
-                }
-            }
-
-            // In styles color
-            if (anim.isMember("in_styles_color")) {
-                const Json::Value& inStylesColor = anim["in_styles_color"];
-                for (const auto& key : inStylesColor.getMemberNames()) {
-                    animSettings.inStylesColor[key] = inStylesColor[key].asString();
-                }
-            }
-
-            // Out animation (similar structure)
-            if (anim.isMember("out_interpolation")) {
-                std::string interp = anim["out_interpolation"].asString();
-                if (interp == "LINEAR")
-                    animSettings.outInterpolation = LINEAR;
-                else if (interp == "BEZIER")
-                    animSettings.outInterpolation = BEZIER;
-                else if (interp == "CONSTANT")
-                    animSettings.outInterpolation = CONSTANT;
-            }
-
-            if (anim.isMember("out_speed"))
-                animSettings.outSpeed = anim["out_speed"].asFloat();
-        }
-
-        std::cout << "Loaded " << pImpl->segments.size() << " subtitle segments from " << jsonPath << std::endl;
-
     } catch (const std::exception& e) {
         throw std::runtime_error("Error loading subtitle JSON: " + std::string(e.what()));
     }
@@ -353,5 +442,6 @@ void SubtitleManager::createExampleSubtitles() const {
     };
     addSegment(segment2);
 }
+
 } // namespace subtitle
 } // namespace openshot

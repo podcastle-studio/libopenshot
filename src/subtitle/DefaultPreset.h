@@ -1,9 +1,6 @@
 #pragma once
 
-#pragma once
-
 #include "SubtitleTypes.h"
-#include "../Point.h"
 
 namespace openshot {
 namespace subtitle {
@@ -47,7 +44,7 @@ inline SubtitlePreset getDefaultPreset() {
 
     // Animation settings
     preset.animationSettings.inInterpolation = LINEAR;
-    preset.animationSettings.inSpeed = 100;
+    preset.animationSettings.inDuration = 100;
 
     // In styles
     preset.animationSettings.inStyles["backgroundOpacity"] = 1;
@@ -58,7 +55,7 @@ inline SubtitlePreset getDefaultPreset() {
     preset.animationSettings.inStylesColor["backgroundColor"] = "#beee50";
 
     preset.animationSettings.outInterpolation = LINEAR;
-    preset.animationSettings.outSpeed = 0;
+    preset.animationSettings.outDuration = 0;
 
     return preset;
 }
