@@ -35,7 +35,7 @@
 #endif
 #include "TrackedObjectBase.h"
 
-
+#include "subtitle/SubtitleManager.h"
 
 namespace openshot {
 
@@ -163,6 +163,8 @@ namespace openshot {
 		double max_time; ///> The max duration (in seconds) of the timeline, based on the furthest clip (right edge)
 		double min_time; ///> The min duration (in seconds) of the timeline, based on the position of the first clip (left edge)
 
+		std::unique_ptr<subtitle::SubtitleManager> subtitleManager;
+
 		std::map<std::string, std::shared_ptr<openshot::TrackedObjectBase>> tracked_objects; ///< map of TrackedObjectBBoxes and their IDs
 
 		/// Process a new layer of video or audio
@@ -249,6 +251,21 @@ namespace openshot {
 		/// @brief Add an effect to the timeline
 		/// @param effect Add an effect to the timeline. An effect can modify the audio or video of an openshot::Frame.
 		void AddEffect(openshot::EffectBase* effect);
+
+		/// Get the subtitle manager
+		subtitle::SubtitleManager* GetSubtitleManager() const { return subtitleManager.get(); }
+
+		/// Enable or disable subtitle rendering
+		void EnableSubtitles(bool enable) const;
+
+		/// Check if subtitles are enabled
+		bool AreSubtitlesEnabled() const;
+
+		/// Load subtitles from JSON file
+		void LoadSubtitles(const std::string& jsonPath) const;
+
+		/// Clear all subtitles
+		void ClearSubtitles();
 
 		/// Apply global/timeline effects to the source frame (if any)
 		std::shared_ptr<openshot::Frame> apply_effects(std::shared_ptr<openshot::Frame> frame, int64_t timeline_frame_number, int layer, TimelineInfoStruct* options);

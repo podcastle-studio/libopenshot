@@ -22,6 +22,8 @@
 #include <QDir>
 #include <QFileInfo>
 
+#include "subtitle/SubtitleTypes.h"
+
 using namespace openshot;
 
 // Default Constructor for the timeline (which sets the canvas width and height)
@@ -31,6 +33,13 @@ Timeline::Timeline(int width, int height, Fraction fps, int sample_rate, int cha
 {
 	// Create CrashHandler and Attach (incase of errors)
 	CrashHandler::Instance();
+
+	// Initialize subtitle manager with timeline's frame rate
+	subtitleManager = std::make_unique<subtitle::SubtitleManager>(fps.ToFloat());
+
+	// Set default style (you can customize this)
+	subtitleManager->getDefaultStyle().fontFamily = "Arial";
+	subtitleManager->getDefaultStyle().fontSize = 48;
 
 	// Init viewport size (curve based, because it can be animated)
 	viewport_scale = Keyframe(100.0);
@@ -216,6 +225,40 @@ Timeline::~Timeline() {
 	if (managed_cache && final_cache) {
 		delete final_cache;
 		final_cache = NULL;
+	}
+}
+
+void Timeline::EnableSubtitles(bool enable) const {
+	if (subtitleManager) {
+		subtitleManager->setEnabled(enable);
+	}
+}
+
+bool Timeline::AreSubtitlesEnabled() const {
+	return subtitleManager ? subtitleManager->isEnabled() : false;
+}
+
+void Timeline::LoadSubtitles(const std::string& jsonPath) const {
+	if (!subtitleManager) {
+		throw InvalidFile("Subtitle manager not initialized", jsonPath);
+	}
+
+	subtitleManager->loadFromJSON(jsonPath);
+
+	// Clear cache to re-render frames with new subtitles
+	if (final_cache) {
+		final_cache->Clear();
+	}
+}
+
+void Timeline::ClearSubtitles() {
+	if (subtitleManager) {
+		subtitleManager->clearSegments();
+
+		// Clear cache
+		if (final_cache) {
+			final_cache->Clear();
+		}
 	}
 }
 
@@ -1076,6 +1119,34 @@ std::shared_ptr<Frame> Timeline::GetFrame(int64_t requested_frame)
 			// ===========================================================================
 			// frame: new_frame, frameNumber: requested_frame
 			// double currentTime = (frame_number - 1) / info.fps.ToDouble();
+			// Apply subtitles if enabled and we have active subtitles
+			if (subtitleManager && subtitleManager->isEnabled()) {
+				// Check if there are active subtitles at this frame to avoid unnecessary processing
+				if (subtitleManager->hasActiveSubtitlesAtFrame(requested_frame)) {
+					// Debug output
+					ZmqLogger::Instance()->AppendDebugMethod(
+						"Timeline::GetFrame (Applying subtitles)",
+						"requested_frame", requested_frame,
+						"preview_width", preview_width,
+						"preview_height", preview_height);
+
+					// Get the frame's QImage
+					std::shared_ptr<QImage> frameImage = new_frame->GetImage();
+
+					if (frameImage && !frameImage->isNull()) {
+						// Render subtitles directly onto the frame
+						subtitleManager->renderAtFrame(frameImage, requested_frame);
+					}
+				}
+			}
+
+			///////////////////////////////////////////////////////////////////////////////////////
+			///////////////////////////////////////////////////////////////////////////////////////
+			///////////////////////////////////////////////////////////////////////////////////////
+			///////////////////////////////////////////////////////////////////////////////////////
+			//////////////////////////////////////////////////////////////////////////////////
+			/////////////////////////////////////////////////////////////////////////////////
+			/////////////////////////////////////////////////////////////////////////////////
 
 			// Debug output
 			ZmqLogger::Instance()->AppendDebugMethod(

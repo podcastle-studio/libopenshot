@@ -46,6 +46,12 @@ add_feature_info("IWYU (include-what-you-use)" ENABLE_IWYU "Scan all source file
 
 # Main library sources
 set(OPENSHOT_SOURCES
+  subtitle/Helpers.cpp
+  subtitle/SkiaRenderer.cpp
+  subtitle/SubtitleManager.cpp
+  subtitle/SubtitleRenderer.cpp
+  subtitle/TextRenderer.cpp
+  subtitle/WordRenderer.cpp
   AudioBufferSource.cpp
   AudioDevices.cpp
   AudioReaderSource.cpp
