@@ -14,6 +14,12 @@ enum class TextAlignment { LEFT, CENTER, RIGHT };
 enum class TextTransform { NONE, UPPERCASE, LOWERCASE, CAPITALIZE };
 enum class TextAppearance { ONE_WORD, PER_TIME };
 
+// Animation parameter using OpenShot's Keyframe
+struct AnimationParam {
+    std::string name;
+    Keyframe keyframe;
+};
+
 // Style types
 struct AnimatingTextStyle {
     double fontSize      = 64;
@@ -60,22 +66,9 @@ struct SubtitleContainerStyle {
     std::string color = "#000000";
 };
 
-struct AnimationParam {
-    std::string name; // Property name to animate
-    Keyframe keyframe; // Using OpenShot's Keyframe class directly
-};
-
-struct AnimationParamColor {
-    std::string name;
-    Keyframe rKeyframe; // Red component keyframe
-    Keyframe gKeyframe; // Green component keyframe
-    Keyframe bKeyframe; // Blue component keyframe
-};
-
 struct WordAnimation {
     std::string word;
     std::vector<AnimationParam> params;
-    std::vector<AnimationParamColor> colorParams;
 };
 
 struct StyledWord {
@@ -104,11 +97,11 @@ struct Transformation {
     float rotation = 0;
 
     struct Center {
-        float x = 0.5f;  // Changed to match JSON (0.5 = 50%)
-        float y = 0.9f;  // Changed to match JSON (0.9 = 90%)
+        float x = 0.5f;  // 0.5 = 50% (center)
+        float y = 0.9f;  // 0.9 = 90% (near bottom)
     } center;
 
-    float maxWidth = 900;  // Changed to match JSON default
+    float maxWidth = 900;
 };
 
 struct SegmentSettings {
@@ -119,11 +112,11 @@ struct SegmentSettings {
     Transformation transformation;
 };
 
-// Word detail - timing in milliseconds
+// Word detail - timing in milliseconds relative to segment
 struct WordDetail {
     std::string word;
-    float startMs;  // Start time in milliseconds
-    float endMs;    // End time in milliseconds
+    float startMs;  // Start time in milliseconds (relative to segment)
+    float endMs;    // End time in milliseconds (relative to segment)
     float confidence = 1.0f;
 };
 
@@ -132,14 +125,9 @@ struct SubtitleSegment {
     std::vector<WordDetail> wordDetails;
     bool attached = true;
     bool visible = true;
-    float startTimeMs;  // Start time in milliseconds
-    float endTimeMs;    // End time in milliseconds
+    float startTimeMs;  // Start time in milliseconds (absolute)
+    float endTimeMs;    // End time in milliseconds (absolute)
     std::optional<SegmentSettings> settings;
-};
-
-struct SubtitleSettings : public SegmentSettings {
-    bool locked = false;
-    bool visible = true;
 };
 
 struct SubtitlePreset {

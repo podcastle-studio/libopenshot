@@ -15,8 +15,7 @@ double getAnimatedValue(const std::vector<Point>& keyframes, float timeMs, float
 std::string getAnimatedColor(const std::vector<std::pair<float, std::string>>& keyframes, float timeMs, InterpolationType interpolation);
 
 // Apply animation parameters to style
-SubtitleTextStyle applyAnimationParams(const std::vector<AnimationParam>& params, const std::vector<AnimationParamColor>& colorParams,
-    float timeMs, float fps, const SubtitleTextStyle& baseStyle);
+SubtitleTextStyle applyAnimationParams(const std::vector<AnimationParam>& params, float timeMs, float fps, const SubtitleTextStyle& baseStyle);
 
 // Convert milliseconds to frame number
 int64_t msToFrame(const float ms, const float fps);

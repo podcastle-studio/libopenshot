@@ -1,6 +1,7 @@
 #include "subtitle/WordRenderer.h"
 #include "subtitle/SkiaRenderer.h"
 #include <skia/include/core/SkPath.h>
+#include <skia/include/core/SkPaint.h>
 #include <skia/include/core/SkRRect.h>
 #include <skia/include/core/SkFont.h>
 #include <skia/include/core/SkFontMetrics.h>
@@ -16,12 +17,12 @@ namespace subtitle {
 
 WordRenderer::WordRenderer(SkiaRenderer* renderer) : renderer(renderer) {}
 
-void WordRenderer::bubblePath(SkPath* path, const float x, const float y, const float width, const float height, const float radius) {
-    const float left = x;
-    const float top = y;
-    const float right = x + width;
-    const  float bottom = y + height;
-    const float r = std::max(0.0f, radius + 2);
+void WordRenderer::bubblePath(SkPath* path, float x, float y, float width, float height, float radius) {
+    float left = x;
+    float top = y;
+    float right = x + width;
+    float bottom = y + height;
+    float r = std::max(0.0f, radius + 2);
 
     path->moveTo(left, bottom);
     path->lineTo(left, top + r);
@@ -56,8 +57,8 @@ void WordRenderer::bubblePath(SkPath* path, const float x, const float y, const 
 }
 
 void WordRenderer::renderWord(const std::string& word, const SubtitleTextStyle& style,
-                             const double x, const double y, const double deltaY) {
-    const float wordWidth = getTextWidth(word, style);
+                             double x, double y, double deltaY) {
+    float wordWidth = getTextWidth(word, style);
 
     renderer->save();
     renderer->translate(x, y);
@@ -69,18 +70,31 @@ void WordRenderer::renderWord(const std::string& word, const SubtitleTextStyle& 
 }
 
 float WordRenderer::getTextWidth(const std::string& text, const SubtitleTextStyle& style) const {
-    const SkFont skFont = renderer->getFont({
+    SkFont skFont = renderer->getFont({
         style.fontFamily,
         style.fontSize,
         style.bold,
         style.italic
     });
 
-    return skFont.measureText(text.c_str(), text.length(), SkTextEncoding::kUTF8, nullptr);
+    // Calculate width letter by letter to include letter spacing
+    float totalWidth = 0;
+    for (size_t i = 0; i < text.length(); ++i) {
+        std::string letter(1, text[i]);
+        float letterWidth = skFont.measureText(letter.c_str(), letter.length(), SkTextEncoding::kUTF8, nullptr);
+        totalWidth += letterWidth;
+
+        // Add letter spacing except after last letter
+        if (i < text.length() - 1) {
+            totalWidth += style.letterSpacing;
+        }
+    }
+
+    return totalWidth;
 }
 
 TextBounds WordRenderer::getTextHeight(const std::string& text, const SubtitleTextStyle& style) const {
-    const SkFont skFont = renderer->getFont({
+    SkFont skFont = renderer->getFont({
         style.fontFamily,
         style.fontSize,
         style.bold,
@@ -97,37 +111,35 @@ TextBounds WordRenderer::getTextHeight(const std::string& text, const SubtitleTe
 }
 
 float WordRenderer::getSpaceWidth(const SubtitleTextStyle& style) const {
-    const SkFont skFont = renderer->getFont({
+    SkFont skFont = renderer->getFont({
         style.fontFamily,
         style.fontSize,
         style.bold,
         style.italic
     });
 
-    const float spaceWidth = skFont.measureText(" ", 1, SkTextEncoding::kUTF8, nullptr);
+    float spaceWidth = skFont.measureText(" ", 1, SkTextEncoding::kUTF8, nullptr);
     return spaceWidth + style.letterSpacing;
 }
 
-void WordRenderer::drawBubbleBackground(const float wordWidth, const SubtitleTextStyle& style, const float deltaY) const {
+void WordRenderer::drawBubbleBackground(float wordWidth, const SubtitleTextStyle& style, float deltaY) const {
     if (!style.backgroundColor.has_value()) return;
 
-    const PaintProps bgPaintProps{
+    PaintProps bgPaintProps{
         style.backgroundColor.value(),
         style.backgroundOpacity.value_or(1.0f)
     };
+    SkPaint* bgPaint = renderer->getPaint(bgPaintProps);
 
-    const SkPaint* bgPaint = renderer->getPaint(bgPaintProps);
-
-    const PaintProps bgStrokePaintProps{
+    PaintProps bgStrokePaintProps{
         "#000000",
         style.backgroundOpacity.value_or(1.0f)
     };
+    SkPaint* bgStrokePaint = renderer->getPaint(bgStrokePaintProps);
 
-    const SkPaint* bgStrokePaint = renderer->getPaint(bgStrokePaintProps);
-
-    const float paddingX = style.backgroundPaddingX.value_or(0);
-    const float paddingY = style.backgroundPaddingY.value_or(0);
-    const float radius = style.backgroundRadius.value_or(0);
+    float paddingX = style.backgroundPaddingX.value_or(0);
+    float paddingY = style.backgroundPaddingY.value_or(0);
+    float radius = style.backgroundRadius.value_or(0);
 
     // Shadow path
     SkPath pathShadow;
@@ -160,7 +172,7 @@ void WordRenderer::drawBubbleBackground(const float wordWidth, const SubtitleTex
     renderer->drawPath(path, *bgPaint);
 }
 
-void WordRenderer::drawWordBackground(const float wordWidth, const SubtitleTextStyle& style, const float deltaY) const {
+void WordRenderer::drawWordBackground(float wordWidth, const SubtitleTextStyle& style, float deltaY) const {
     if (!style.backgroundColor.has_value()) return;
 
     if (style.bubble.has_value() && style.bubble.value()) {
@@ -168,32 +180,32 @@ void WordRenderer::drawWordBackground(const float wordWidth, const SubtitleTextS
         return;
     }
 
-    const PaintProps bgPaintProps{
+    PaintProps bgPaintProps{
         style.backgroundColor.value(),
         style.backgroundOpacity.value_or(1.0f)
     };
-    const SkPaint* bgPaint = renderer->getPaint(bgPaintProps);
+    SkPaint* bgPaint = renderer->getPaint(bgPaintProps);
 
-    const float paddingX = style.backgroundPaddingX.value_or(0);
-    const float paddingY = style.backgroundPaddingY.value_or(0);
-    const float radius = style.backgroundRadius.value_or(0);
+    float paddingX = style.backgroundPaddingX.value_or(0);
+    float paddingY = style.backgroundPaddingY.value_or(0);
+    float radius = style.backgroundRadius.value_or(0);
 
-    const SkRect rect = renderer->makeRect(
+    SkRect rect = renderer->makeRect(
         -wordWidth / 2 - paddingX + 2,
         -style.fontSize - paddingY + deltaY,
         wordWidth / 2 + paddingX - 2,
         paddingY + deltaY
     );
 
-    const SkRRect rrect = renderer->makeRRect(rect, radius, radius);
+    SkRRect rrect = renderer->makeRRect(rect, radius, radius);
     renderer->drawRRect(rrect, *bgPaint);
 }
 
 void WordRenderer::drawWordText(const std::string& word, float wordWidth, const SubtitleTextStyle& style) const {
-    const PaintProps textPaintProps{style.color, style.opacity };
-    const SkPaint* textPaint = renderer->getPaint(textPaintProps);
+    PaintProps textPaintProps{style.color, style.opacity};
+    SkPaint* textPaint = renderer->getPaint(textPaintProps);
 
-    const SkFont skFont = renderer->getFont({
+    SkFont skFont = renderer->getFont({
         style.fontFamily,
         style.fontSize,
         style.bold,
@@ -204,7 +216,7 @@ void WordRenderer::drawWordText(const std::string& word, float wordWidth, const 
     float currentX = -wordWidth / 2;
     for (size_t i = 0; i < word.length(); ++i) {
         std::string letter(1, word[i]);
-        float letterWidth = getTextWidth(letter, style);
+        float letterWidth = skFont.measureText(letter.c_str(), letter.length(), SkTextEncoding::kUTF8, nullptr);
 
         renderer->drawText(letter, currentX, 0, *textPaint, skFont);
         currentX += letterWidth + style.letterSpacing;
@@ -214,7 +226,7 @@ void WordRenderer::drawWordText(const std::string& word, float wordWidth, const 
 void WordRenderer::drawWordShadow(const std::string& word, float wordWidth, const SubtitleTextStyle& style) const {
     if (!style.shadowColor.has_value()) return;
 
-    const SkFont skFont = renderer->getFont({
+    SkFont skFont = renderer->getFont({
         style.fontFamily,
         style.fontSize,
         style.bold,
@@ -222,32 +234,32 @@ void WordRenderer::drawWordShadow(const std::string& word, float wordWidth, cons
     });
 
     // Shadow with stroke (if any)
-    const PaintProps strokePaintProps{
+    PaintProps strokePaintProps{
         style.shadowColor.value(),
         style.shadowOpacity.value_or(1.0f),
         style.strokeWidth,
         style.shadowBlur
     };
-    const SkPaint* strokePaint = renderer->getPaint(strokePaintProps);
+    SkPaint* strokePaint = renderer->getPaint(strokePaintProps);
 
     // Shadow fill
-    const PaintProps shadowPaintProps{
+    PaintProps shadowPaintProps{
         style.shadowColor.value(),
         style.shadowOpacity.value_or(1.0f),
         std::nullopt,
         style.shadowBlur
     };
-    const SkPaint* shadowPaint = renderer->getPaint(shadowPaintProps);
+    SkPaint* shadowPaint = renderer->getPaint(shadowPaintProps);
 
-    const float angle = style.shadowAngle.value_or(0) * M_PI / 180;
-    const float shadowX = cos(angle) * style.shadowDistance.value_or(0);
-    const float shadowY = sin(angle) * style.shadowDistance.value_or(0);
+    float angle = style.shadowAngle.value_or(0) * M_PI / 180;
+    float shadowX = cos(angle) * style.shadowDistance.value_or(0);
+    float shadowY = sin(angle) * style.shadowDistance.value_or(0);
 
     float currentX = -wordWidth / 2 + shadowX;
 
     for (size_t i = 0; i < word.length(); ++i) {
         std::string letter(1, word[i]);
-        const float letterWidth = getTextWidth(letter, style);
+        float letterWidth = skFont.measureText(letter.c_str(), letter.length(), SkTextEncoding::kUTF8, nullptr);
 
         renderer->drawText(letter, currentX, shadowY, *strokePaint, skFont);
         renderer->drawText(letter, currentX, shadowY, *shadowPaint, skFont);
@@ -260,25 +272,25 @@ void WordRenderer::drawWordStroke(const std::string& word, float wordWidth, cons
     if (!style.strokeWidth.has_value() || style.strokeWidth.value() <= 0 ||
         !style.strokeColor.has_value()) return;
 
-    const SkFont skFont = renderer->getFont({
+    SkFont skFont = renderer->getFont({
         style.fontFamily,
         style.fontSize,
         style.bold,
         style.italic
     });
 
-    const PaintProps strokePaintProps{
+    PaintProps strokePaintProps{
         style.strokeColor.value(),
         style.strokeOpacity.value_or(1.0f),
         style.strokeWidth
     };
-    const SkPaint* strokePaint = renderer->getPaint(strokePaintProps);
+    SkPaint* strokePaint = renderer->getPaint(strokePaintProps);
 
     float currentX = -wordWidth / 2;
 
     for (size_t i = 0; i < word.length(); ++i) {
         std::string letter(1, word[i]);
-        const float letterWidth = getTextWidth(letter, style);
+        float letterWidth = skFont.measureText(letter.c_str(), letter.length(), SkTextEncoding::kUTF8, nullptr);
 
         renderer->drawText(letter, currentX, 0, *strokePaint, skFont);
         currentX += letterWidth + style.letterSpacing;
