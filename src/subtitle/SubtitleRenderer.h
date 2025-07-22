@@ -32,8 +32,11 @@ public:
     double getHeight(const SubtitleSegment& segment, const SegmentSettings& settings, float maxWidth) const;
 
     // Main rendering methods
-    void renderSegment(const SubtitleSegment& segment, const SegmentSettings& settings, float segmentTimeMs) const;
-    void renderSegmentAtFrame(const SubtitleSegment& segment, const SegmentSettings& settings, int64_t frameNumber);
+    void renderSegment(const SubtitleSegment& segment, const SegmentSettings& settings,
+                     float segmentTimeMs, float canvasWidth, float canvasHeight) const;
+
+    void renderSegmentAtFrame(const SubtitleSegment& segment, const SegmentSettings& settings,
+                            int64_t frameNumber, float canvasWidth, float canvasHeight);
 };
 
 } // namespace subtitle

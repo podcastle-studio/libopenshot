@@ -159,8 +159,7 @@ double SubtitleRenderer::getHeight(const SubtitleSegment& segment, const Segment
 }
 
 void SubtitleRenderer::renderSegment(const SubtitleSegment& segment, const SegmentSettings& settings,
-                                   float segmentTimeMs) const {
-
+                                   float segmentTimeMs, float canvasWidth, float canvasHeight) const {
     const SegmentSettings& segmentSettings = segment.attached ? settings :
         (segment.settings.has_value() ? segment.settings.value() : settings);
 
@@ -238,6 +237,54 @@ void SubtitleRenderer::renderSegment(const SubtitleSegment& segment, const Segme
 
     auto lines = getLines(lastFrameStyledWords, maxWidth, containerStyle);
 
+    // Calculate total subtitle block dimensions
+    float totalHeight = defaultStyle.fontSize * lines.size() +
+                       (lines.size() - 1) * (defaultStyle.lineHeight - 1) * defaultStyle.fontSize;
+
+    // Find the widest line
+    float maxLineWidth = 0;
+    for (const auto& line : lines) {
+        std::vector<StyledWord> lineWords;
+        for (size_t wordIdx : line) {
+            if (wordIdx < lastFrameStyledWords.size()) {
+                lineWords.push_back(lastFrameStyledWords[wordIdx]);
+            }
+        }
+        float lineWidth = textRenderer->measureTextWidth(lineWords);
+        maxLineWidth = std::max(maxLineWidth, lineWidth);
+    }
+
+    // Calculate the center position based on transformation settings
+    // center.x and center.y are percentages (0.5 = 50%, 0.9 = 90%)
+    float centerX = canvasWidth * transformation.center.x;
+    float centerY = canvasHeight * transformation.center.y;
+
+    // Apply transformations
+    renderer->save();
+
+    // Step 1: Translate to the desired center point
+    renderer->translate(centerX, centerY);
+
+    // Step 2: Apply rotation around this center point
+    if (transformation.rotation != 0) {
+        renderer->rotate(transformation.rotation);
+    }
+
+    // Step 3: Apply scale around this center point
+    if (transformation.scale.horizontalScale != 1.0f || transformation.scale.verticalScale != 1.0f) {
+        renderer->scale(transformation.scale.horizontalScale, transformation.scale.verticalScale);
+    }
+
+    // Step 4: Offset to position the content correctly
+    // The content should be centered horizontally around the center point
+    // For vertical, since center.y = 0.9 (90%), the text should be positioned
+    // so that its vertical center is at 90% of canvas height
+    float contentOffsetX = -maxLineWidth / 2;
+    float contentOffsetY = -totalHeight / 2;
+
+    renderer->translate(contentOffsetX, contentOffsetY);
+
+    // Render each line
     for (size_t lineIdx = 0; lineIdx < lines.size(); ++lineIdx) {
         const auto& line = lines[lineIdx];
 
@@ -250,22 +297,42 @@ void SubtitleRenderer::renderSegment(const SubtitleSegment& segment, const Segme
         }
 
         float totalLineWidth = textRenderer->measureTextWidth(lineStyledWords);
-        double x = getStartX(totalLineWidth, maxWidth, containerStyle);
+
+        // Calculate x position for this line based on alignment
+        double x = 0;
+        switch (containerStyle.textAlign) {
+            case TextAlignment::LEFT:
+                x = containerStyle.paddingX;
+                break;
+            case TextAlignment::CENTER:
+                x = (maxLineWidth - totalLineWidth) / 2;
+                break;
+            case TextAlignment::RIGHT:
+                x = maxLineWidth - totalLineWidth - containerStyle.paddingX;
+                break;
+        }
+
+        // Calculate y position for this line
         double y = getStartY(lineIdx, defaultStyle, containerStyle);
 
         textRenderer->renderText(lineStyledWords, x, y);
     }
+
+    // Restore canvas state
+    renderer->restore();
 }
 
+// Update the renderSegmentAtFrame to pass canvas dimensions
 void SubtitleRenderer::renderSegmentAtFrame(const SubtitleSegment& segment, const SegmentSettings& settings,
-                                          int64_t frameNumber) {
+                                          int64_t frameNumber, float canvasWidth, float canvasHeight) {
     float timeMs = frameToMs(frameNumber, fps);
     float segmentTimeMs = timeMs - segment.startTimeMs;
 
     if (segmentTimeMs >= 0 && segmentTimeMs <= (segment.endTimeMs - segment.startTimeMs)) {
-        renderSegment(segment, settings, segmentTimeMs);
+        renderSegment(segment, settings, segmentTimeMs, canvasWidth, canvasHeight);
     }
 }
+
 
 } // namespace subtitle
 } // namespace openshot

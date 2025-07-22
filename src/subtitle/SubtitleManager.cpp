@@ -362,6 +362,8 @@ void SubtitleManager::renderAtFrame(std::shared_ptr<QImage> frameImage, int64_t 
 
     // Create canvas from bitmap
     SkCanvas canvas(bitmap);
+    float canvasWidth = frameImage->width();
+    float canvasHeight = frameImage->height();
 
     // Create renderer
     SkiaRenderer skiaRenderer(&canvas);
@@ -374,28 +376,28 @@ void SubtitleManager::renderAtFrame(std::shared_ptr<QImage> frameImage, int64_t 
     for (const auto& segment : pImpl->segments) {
         if (segment.visible && timeMs >= segment.startTimeMs && timeMs <= segment.endTimeMs) {
             float segmentTimeMs = timeMs - segment.startTimeMs;
-            subtitleRenderer.renderSegment(segment, pImpl->defaultSettings, segmentTimeMs);
+            subtitleRenderer.renderSegment(segment, pImpl->defaultSettings, segmentTimeMs, canvasWidth, canvasHeight);
         }
     }
 }
 
-void SubtitleManager::renderAtTime(SkCanvas* canvas, float timeInSeconds) const {
-    if (!pImpl->enabled || !canvas) return;
-
-    const float timeMs = timeInSeconds * 1000;
-
-    // Create renderer
-    SkiaRenderer skiaRenderer(canvas);
-    SubtitleRenderer subtitleRenderer(&skiaRenderer, pImpl->fps);
-
-    // Find and render active segments
-    for (const auto& segment : pImpl->segments) {
-        if (segment.visible && timeMs >= segment.startTimeMs && timeMs <= segment.endTimeMs) {
-            const float segmentTimeMs = timeMs - segment.startTimeMs;
-            subtitleRenderer.renderSegment(segment, pImpl->defaultSettings, segmentTimeMs);
-        }
-    }
-}
+// void SubtitleManager::renderAtTime(SkCanvas* canvas, float timeInSeconds) const {
+//     if (!pImpl->enabled || !canvas) return;
+//
+//     const float timeMs = timeInSeconds * 1000;
+//
+//     // Create renderer
+//     SkiaRenderer skiaRenderer(canvas);
+//     SubtitleRenderer subtitleRenderer(&skiaRenderer, pImpl->fps);
+//
+//     // Find and render active segments
+//     for (const auto& segment : pImpl->segments) {
+//         if (segment.visible && timeMs >= segment.startTimeMs && timeMs <= segment.endTimeMs) {
+//             const float segmentTimeMs = timeMs - segment.startTimeMs;
+//             subtitleRenderer.renderSegment(segment, pImpl->defaultSettings, segmentTimeMs);
+//         }
+//     }
+// }
 
 bool SubtitleManager::hasActiveSubtitlesAtFrame(int64_t frameNumber) const {
     if (!pImpl->enabled) return false;

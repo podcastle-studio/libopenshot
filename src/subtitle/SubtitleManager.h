@@ -42,7 +42,7 @@ public:
 
     // Rendering
     void renderAtFrame(std::shared_ptr<QImage> frameImage, int64_t frameNumber) const;
-    void renderAtTime(SkCanvas* canvas, float timeInSeconds) const;
+    // void renderAtTime(SkCanvas* canvas, float timeInSeconds) const;
 
     // Utility
     bool hasActiveSubtitlesAtFrame(int64_t frameNumber) const;
