@@ -75,7 +75,7 @@ int main() {
     w.SetVideoOptions(true, "libx264" , openshot::Fraction(30, 1),  1920, 1080, openshot::Fraction(1,1), false, false, 4000000);
     w.Open();
 
-    w.WriteFrame(&timeLine, 1, 4*30);  // This will now include subtitles!
+    w.WriteFrame(&timeLine, 1, 8*30);  // This will now include subtitles!
     timeLine.Close();
     w.Close();
     return 0;
