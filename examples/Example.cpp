@@ -4,8 +4,6 @@
 #include "FFmpegWriter.h"
 #include "effects/ColorAdjustment.h"
 
-#include "subtitle/SubtitleTypes.h"
-
 int main() {
 
     openshot::Timeline timeLine(1920, 1080, openshot::Fraction(30, 1), 48000, 2, openshot::ChannelLayout::LAYOUT_STEREO);

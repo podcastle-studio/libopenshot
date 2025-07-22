@@ -186,10 +186,13 @@ std::vector<WordAnimation> processSegmentAnimation(const std::vector<WordDetail>
                     // Add out animation
                     param.keyframe.AddPoint(outEndFrame, animSettings.outStyles.at(key), animSettings.outInterpolation);
                 } else {
-                    // Maintain the target value for the rest of the word duration
+                    // No out animation - return to base value after inDuration
+                    // This creates a spike effect: base -> target -> base
                     int64_t wordEndFrame = msToFrame(wordEndMs, fps);
                     if (wordEndFrame > inEndFrame) {
-                        param.keyframe.AddPoint(wordEndFrame, targetValue, animSettings.inInterpolation);
+                        // Add a point to return to base value
+                        param.keyframe.AddPoint(inEndFrame + 1, baseValue, animSettings.inInterpolation);
+                        param.keyframe.AddPoint(wordEndFrame, baseValue, animSettings.inInterpolation);
                     }
                 }
 
@@ -243,12 +246,18 @@ std::vector<WordAnimation> processSegmentAnimation(const std::vector<WordDetail>
                     paramG.keyframe.AddPoint(outEndFrame, outG, animSettings.outInterpolation);
                     paramB.keyframe.AddPoint(outEndFrame, outB, animSettings.outInterpolation);
                 } else {
-                    // Maintain color for rest of duration
+                    // No out animation - return to base color after inDuration
                     int64_t wordEndFrame = msToFrame(wordEndMs, fps);
                     if (wordEndFrame > inEndFrame) {
-                        paramR.keyframe.AddPoint(wordEndFrame, targetR, animSettings.inInterpolation);
-                        paramG.keyframe.AddPoint(wordEndFrame, targetG, animSettings.inInterpolation);
-                        paramB.keyframe.AddPoint(wordEndFrame, targetB, animSettings.inInterpolation);
+                        // Add points to return to base color
+                        paramR.keyframe.AddPoint(inEndFrame + 1, baseR, animSettings.inInterpolation);
+                        paramR.keyframe.AddPoint(wordEndFrame, baseR, animSettings.inInterpolation);
+
+                        paramG.keyframe.AddPoint(inEndFrame + 1, baseG, animSettings.inInterpolation);
+                        paramG.keyframe.AddPoint(wordEndFrame, baseG, animSettings.inInterpolation);
+
+                        paramB.keyframe.AddPoint(inEndFrame + 1, baseB, animSettings.inInterpolation);
+                        paramB.keyframe.AddPoint(wordEndFrame, baseB, animSettings.inInterpolation);
                     }
                 }
 
