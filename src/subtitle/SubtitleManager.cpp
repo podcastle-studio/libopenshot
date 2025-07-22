@@ -13,56 +13,44 @@
 namespace openshot {
 namespace subtitle {
 
-// Private implementation class
-class SubtitleManager::Impl {
-public:
-    std::vector<SubtitleSegment> segments;
-    SegmentSettings defaultSettings;
-    bool enabled = true;
-    float fps;
-
-    explicit Impl(const float fps) : fps(fps) {}
-};
-
-SubtitleManager::SubtitleManager(float fps)
-    : pImpl(std::make_unique<Impl>(fps)) {}
+SubtitleManager::SubtitleManager(float fps) : fps(fps) {}
 
 SubtitleManager::~SubtitleManager() = default;
 
-void SubtitleManager::setEnabled(const bool enable) const {
-    pImpl->enabled = enable;
+void SubtitleManager::setEnabled(const bool enable) {
+    enabled = enable;
 }
 
 bool SubtitleManager::isEnabled() const {
-    return pImpl->enabled;
+    return enabled;
 }
 
-void SubtitleManager::setDefaultStyle(const SubtitleTextStyle& style) const {
-    pImpl->defaultSettings.defaultStyle = style;
+void SubtitleManager::setDefaultStyle(const SubtitleTextStyle& style) {
+    defaultSettings.defaultStyle = style;
 }
 
-SubtitleTextStyle& SubtitleManager::getDefaultStyle() const {
-    return pImpl->defaultSettings.defaultStyle;
+SubtitleTextStyle& SubtitleManager::getDefaultStyle() {
+    return defaultSettings.defaultStyle;
 }
 
-void SubtitleManager::setMaxWidth(const float width) const {
-    pImpl->defaultSettings.transformation.maxWidth = width;
+void SubtitleManager::setMaxWidth(const float width) {
+    defaultSettings.transformation.maxWidth = width;
 }
 
-void SubtitleManager::addSegment(const SubtitleSegment& segment) const {
-    pImpl->segments.push_back(segment);
+void SubtitleManager::addSegment(const SubtitleSegment& segment) {
+    segments.push_back(segment);
 }
 
-void SubtitleManager::clearSegments() const {
-    pImpl->segments.clear();
+void SubtitleManager::clearSegments() {
+    segments.clear();
 }
 
-std::vector<SubtitleSegment>& SubtitleManager::getSegments() const {
-    return pImpl->segments;
+std::vector<SubtitleSegment>& SubtitleManager::getSegments() {
+    return segments;
 }
 
 SegmentSettings SubtitleManager::parseSegmentSettings(const Json::Value& settingsJson) const {
-    SegmentSettings settings = pImpl->defaultSettings; // Start with defaults
+    SegmentSettings settings = defaultSettings; // Start with defaults
 
     // Parse containerStyle
     if (settingsJson.isMember("containerStyle")) {
@@ -277,11 +265,11 @@ void SubtitleManager::parseAnimationSettings(const Json::Value& animJson, Animat
 }
 
 // Helper method to parse global settings
-void SubtitleManager::parseGlobalSettings(const Json::Value& settingsJson) const {
-    pImpl->defaultSettings = parseSegmentSettings(settingsJson);
+void SubtitleManager::parseGlobalSettings(const Json::Value& settingsJson) {
+    defaultSettings = parseSegmentSettings(settingsJson);
 }
 
-void SubtitleManager::loadFromJSON(const std::string& jsonPath) const {
+void SubtitleManager::loadFromJSON(const std::string& jsonPath) {
     try {
         std::ifstream file(jsonPath);
         if (!file.is_open()) {
@@ -292,60 +280,79 @@ void SubtitleManager::loadFromJSON(const std::string& jsonPath) const {
         file >> root;
         file.close();
 
-        clearSegments();
-
-        // Load segments - Fix field names to match JSON structure
-        if (root.isMember("segments") && root["segments"].isArray()) {
-            const Json::Value& segments = root["segments"];
-
-            for (const auto& seg : segments) {
-                SubtitleSegment segment;
-
-                // Fix field names to match JSON payload
-                segment.id = seg.get("id", "").asString();
-                segment.startTimeMs = seg.get("startTime", 0).asFloat();  // Changed from start_ms
-                segment.endTimeMs = seg.get("endTime", 0).asFloat();      // Changed from end_ms
-                segment.visible = seg.get("visible", true).asBool();
-                segment.attached = seg.get("attached", true).asBool();
-
-                // Load wordDetails (not "words")
-                if (seg.isMember("wordDetails") && seg["wordDetails"].isArray()) {
-                    const Json::Value& wordDetails = seg["wordDetails"];
-
-                    for (const auto& w : wordDetails) {
-                        WordDetail word;
-                        word.word = w.get("word", "").asString();
-                        word.startMs = w.get("startTime", 0).asFloat();  // Changed from start_ms
-                        word.endMs = w.get("endTime", 0).asFloat();      // Changed from end_ms
-                        word.confidence = w.get("confidence", 1.0f).asFloat();
-
-                        segment.wordDetails.push_back(word);
-                    }
-                }
-
-                // Handle segment-specific settings (when attached = false)
-                if (!segment.attached && seg.isMember("settings")) {
-                    segment.settings = parseSegmentSettings(seg["settings"]);
-                }
-
-                addSegment(segment);
-            }
-        }
-
-        // Load global settings
-        if (root.isMember("settings")) {
-            parseGlobalSettings(root["settings"]);
-        }
+        parseJSONRoot(root);
     } catch (const std::exception& e) {
         throw std::runtime_error("Error loading subtitle JSON: " + std::string(e.what()));
     }
 }
 
+void SubtitleManager::loadFromJSONString(const std::string& jsonString) {
+    try {
+        Json::Value root;
+        Json::Reader reader;
+
+        if (!reader.parse(jsonString, root)) {
+            throw std::runtime_error("Failed to parse JSON string: " + reader.getFormattedErrorMessages());
+        }
+
+        parseJSONRoot(root);
+    } catch (const std::exception& e) {
+        throw std::runtime_error("Error loading subtitle JSON: " + std::string(e.what()));
+    }
+}
+
+void SubtitleManager::parseJSONRoot(const Json::Value& root) {
+    clearSegments();
+
+    // Load segments - Fix field names to match JSON structure
+    if (root.isMember("segments") && root["segments"].isArray()) {
+        const Json::Value& segments = root["segments"];
+
+        for (const auto& seg : segments) {
+            SubtitleSegment segment;
+
+            // Fix field names to match JSON payload
+            segment.id = seg.get("id", "").asString();
+            segment.startTimeMs = seg.get("startTime", 0).asFloat();  // Changed from start_ms
+            segment.endTimeMs = seg.get("endTime", 0).asFloat();      // Changed from end_ms
+            segment.visible = seg.get("visible", true).asBool();
+            segment.attached = seg.get("attached", true).asBool();
+
+            // Load wordDetails (not "words")
+            if (seg.isMember("wordDetails") && seg["wordDetails"].isArray()) {
+                const Json::Value& wordDetails = seg["wordDetails"];
+
+                for (const auto& w : wordDetails) {
+                    WordDetail word;
+                    word.word = w.get("word", "").asString();
+                    word.startMs = w.get("startTime", 0).asFloat();  // Changed from start_ms
+                    word.endMs = w.get("endTime", 0).asFloat();      // Changed from end_ms
+                    word.confidence = w.get("confidence", 1.0f).asFloat();
+
+                    segment.wordDetails.push_back(word);
+                }
+            }
+
+            // Handle segment-specific settings (when attached = false)
+            if (!segment.attached && seg.isMember("settings")) {
+                segment.settings = parseSegmentSettings(seg["settings"]);
+            }
+
+            addSegment(segment);
+        }
+    }
+
+    // Load global settings
+    if (root.isMember("settings")) {
+        parseGlobalSettings(root["settings"]);
+    }
+}
+
 void SubtitleManager::renderAtFrame(std::shared_ptr<QImage> frameImage, int64_t frameNumber) const {
-    if (!pImpl->enabled || !frameImage || frameImage->isNull()) return;
+    if (!enabled || !frameImage || frameImage->isNull()) return;
 
     // Convert frame to time
-    float timeMs = frameToMs(frameNumber, pImpl->fps);
+    float timeMs = frameToMs(frameNumber, fps);
 
     // Create SkBitmap that wraps the QImage data
     SkBitmap bitmap;
@@ -362,26 +369,26 @@ void SubtitleManager::renderAtFrame(std::shared_ptr<QImage> frameImage, int64_t 
 
     // Create renderer
     SkiaRenderer skiaRenderer(&canvas);
-    SubtitleRenderer subtitleRenderer(&skiaRenderer, pImpl->fps);
+    SubtitleRenderer subtitleRenderer(&skiaRenderer, fps);
 
     // Update max width based on current frame size
-    pImpl->defaultSettings.transformation.maxWidth = frameImage->width() - 100; // Some margin
+    const_cast<SubtitleManager*>(this)->defaultSettings.transformation.maxWidth = frameImage->width() - 100; // Some margin
 
     // Find and render active segments
-    for (const auto& segment : pImpl->segments) {
+    for (const auto& segment : segments) {
         if (segment.visible && timeMs >= segment.startTimeMs && timeMs <= segment.endTimeMs) {
             float segmentTimeMs = timeMs - segment.startTimeMs;
-            subtitleRenderer.renderSegment(segment, pImpl->defaultSettings, segmentTimeMs, canvasWidth, canvasHeight);
+            subtitleRenderer.renderSegment(segment, defaultSettings, segmentTimeMs, canvasWidth, canvasHeight);
         }
     }
 }
 
 bool SubtitleManager::hasActiveSubtitlesAtFrame(int64_t frameNumber) const {
-    if (!pImpl->enabled) return false;
+    if (!enabled) return false;
 
-    const float timeMs = frameToMs(frameNumber, pImpl->fps);
+    const float timeMs = frameToMs(frameNumber, fps);
 
-    for (const auto& segment : pImpl->segments) {
+    for (const auto& segment : segments) {
         if (segment.visible && timeMs >= segment.startTimeMs && timeMs <= segment.endTimeMs) {
             return true;
         }

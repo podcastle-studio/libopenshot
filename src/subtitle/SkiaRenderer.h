@@ -17,7 +17,7 @@ namespace subtitle {
 
 struct FontProps {
     std::string fontFamily;
-    float fontSize;
+    double fontSize;
     int fontWeight = 400;
     bool italic = false;
 
@@ -30,9 +30,9 @@ struct FontProps {
 
 struct PaintProps {
     std::string color;
-    float opacity = 1.0f;
-    std::optional<float> strokeWidth;
-    std::optional<float> maskBlur;
+    double opacity = 1.0f;
+    std::optional<double> strokeWidth;
+    std::optional<double> maskBlur;
 
     std::string getKey() const {
         std::stringstream ss;

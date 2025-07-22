@@ -14,16 +14,9 @@ TextRenderer::~TextRenderer() {
 }
 
 TextBounds TextRenderer::getTextVerticalBounds(const std::vector<StyledWord>& styledWords) const {
-    TextBounds bounds{
-        std::numeric_limits<float>::infinity(),   // top (will find max/most negative)
-        -std::numeric_limits<float>::infinity()   // bottom (will find min/least negative)
-    };
-
+    TextBounds bounds{std::numeric_limits<double>::infinity(), -std::numeric_limits<double>::infinity()};
     for (const auto& styledWord : styledWords) {
-        TextBounds wordBounds = wordRenderer->getTextHeight(
-            styledWord.word, 
-            styledWord.style
-        );
+        TextBounds wordBounds = wordRenderer->getTextHeight(styledWord.word, styledWord.style);
         
         bounds.top = std::min(bounds.top, wordBounds.top);
         bounds.bottom = std::max(bounds.bottom, wordBounds.bottom);
@@ -33,7 +26,9 @@ TextBounds TextRenderer::getTextVerticalBounds(const std::vector<StyledWord>& st
 }
 
 float TextRenderer::measureTextWidth(const std::vector<StyledWord>& styledWords) const {
-    if (styledWords.empty()) return 0;
+    if (styledWords.empty()) {
+        return 0;
+    }
 
     float totalWidth = 0;
     for (const auto& styledWord : styledWords) {
@@ -48,7 +43,9 @@ float TextRenderer::measureTextWidth(const std::vector<StyledWord>& styledWords)
 }
 
 void TextRenderer::renderText(const std::vector<StyledWord>& styledWords, const double x, const double y) const {
-    if (styledWords.empty()) return;
+    if (styledWords.empty()) {
+        return;
+    }
 
     // Calculate word widths
     std::vector<double> wordWidths;
@@ -73,13 +70,7 @@ void TextRenderer::renderText(const std::vector<StyledWord>& styledWords, const 
         const auto dx = (wordStyle.translateX.value_or(0) * wordStyle.fontSize) / 100;
         const auto dy = (wordStyle.translateY.value_or(0) * wordStyle.fontSize) / 100;
 
-        wordRenderer->renderWord(
-            styledWord.word,
-            wordStyle,
-            currentX + wordWidth / 2 + dx,
-            y + dy,
-            deltaY
-        );
+        wordRenderer->renderWord(styledWord.word, wordStyle, currentX + wordWidth / 2 + dx, y + dy, deltaY);
 
         currentX += wordWidth + spaceWidth;
     }

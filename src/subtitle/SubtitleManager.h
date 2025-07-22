@@ -1,9 +1,12 @@
 #pragma once
 
+#include "SubtitleTypes.h"
+
 #include "json/json.h"
 #include <vector>
 #include <memory>
 #include <string>
+
 
 // Forward declarations
 class QImage;
@@ -24,21 +27,22 @@ public:
     ~SubtitleManager();
 
     // Configuration
-    void setEnabled(bool enable) const;
+    void setEnabled(bool enable);
     bool isEnabled() const;
 
-    void setDefaultStyle(const SubtitleTextStyle& style) const;
-    SubtitleTextStyle& getDefaultStyle() const;
+    void setDefaultStyle(const SubtitleTextStyle& style);
+    SubtitleTextStyle& getDefaultStyle();
 
-    void setMaxWidth(float width) const;
+    void setMaxWidth(float width);
 
     // Segment management
-    void addSegment(const SubtitleSegment& segment) const;
-    void clearSegments() const;
-    std::vector<SubtitleSegment>& getSegments() const;
+    void addSegment(const SubtitleSegment& segment);
+    void clearSegments();
+    std::vector<SubtitleSegment>& getSegments();
 
     // Load from JSON
-    void loadFromJSON(const std::string& jsonPath) const;
+    void loadFromJSON(const std::string& jsonPath);
+    void loadFromJSONString(const std::string& jsonString);
 
     // Rendering
     void renderAtFrame(std::shared_ptr<QImage> frameImage, int64_t frameNumber) const;
@@ -47,15 +51,17 @@ public:
     bool hasActiveSubtitlesAtFrame(int64_t frameNumber) const;
 
 private:
-    class Impl;
-    std::unique_ptr<Impl> pImpl;
+    std::vector<SubtitleSegment> segments;
+    SegmentSettings defaultSettings;
+    bool enabled = true;
+    float fps;
 
     SegmentSettings parseSegmentSettings(const Json::Value& settingsJson) const;
-    static void parseTextStyle(const Json::Value& styleJson, SubtitleTextStyle& style) ;
-    static void parseAnimationSettings(const Json::Value& animJson, AnimationSettings& settings) ;
+    static void parseTextStyle(const Json::Value& styleJson, SubtitleTextStyle& style);
+    static void parseAnimationSettings(const Json::Value& animJson, AnimationSettings& settings);
 
-    void parseGlobalSettings(const Json::Value& settingsJson) const;
+    void parseGlobalSettings(const Json::Value& settingsJson);
+    void parseJSONRoot(const Json::Value& root);
 };
 }
 }
-

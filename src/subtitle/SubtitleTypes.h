@@ -14,14 +14,12 @@ enum class TextAlignment { LEFT, CENTER, RIGHT };
 enum class TextTransform { NONE, UPPERCASE, LOWERCASE, CAPITALIZE };
 enum class TextAppearance { ONE_WORD, PER_TIME };
 
-// Animation parameter using OpenShot's Keyframe
 struct AnimationParam {
     std::string name;
     Keyframe keyframe;
 };
 
-// Style types
-struct AnimatingTextStyle {
+struct SubtitleTextStyle {
     double fontSize      = 64;
     double letterSpacing = 0;
     double lineHeight    = 1.2f;
@@ -47,9 +45,7 @@ struct AnimatingTextStyle {
 
     std::optional<double> translateX;
     std::optional<double> translateY;
-};
 
-struct SubtitleTextStyle : public AnimatingTextStyle {
     std::string fontFamily = "Arial";
     bool italic = false;
     std::optional<bool> bubble;
@@ -130,22 +126,10 @@ struct SubtitleSegment {
     std::optional<SegmentSettings> settings;
 };
 
-struct SubtitlePreset {
-    std::string id;
-    std::string placeholder;
-    SubtitleContainerStyle containerStyle;
-    SubtitleTextStyle defaultStyle;
-    AnimationSettings animationSettings;
-};
-
 struct TextBounds {
     double top;
     double bottom;
 };
-
-// Helper function declarations
-double getBaseValue(const std::string& key, const SubtitleTextStyle& style);
-std::string getBaseColor(const std::string& key, const SubtitleTextStyle& style);
 
 } // namespace subtitle
 } // namespace openshot

@@ -44,6 +44,34 @@ double getAnimatedValue(const openshot::Keyframe& keyframe, const float timeMs, 
     return keyframe.GetValue(frame);
 }
 
+double getBaseValue(const std::string& key, const openshot::subtitle::SubtitleTextStyle& style) {
+    if (key == "fontSize") return style.fontSize;
+    if (key == "opacity") return style.opacity;
+    if (key == "letterSpacing") return style.letterSpacing;
+    if (key == "lineHeight") return style.lineHeight;
+    if (key == "bold") return style.bold;
+    if (key == "translateX") return style.translateX.value_or(0);
+    if (key == "translateY") return style.translateY.value_or(0);
+    if (key == "strokeWidth") return style.strokeWidth.value_or(0);
+    if (key == "strokeOpacity") return style.strokeOpacity.value_or(1);
+    if (key == "shadowBlur") return style.shadowBlur.value_or(0);
+    if (key == "shadowDistance") return style.shadowDistance.value_or(0);
+    if (key == "shadowAngle") return style.shadowAngle.value_or(0);
+    if (key == "shadowOpacity") return style.shadowOpacity.value_or(1);
+    if (key == "backgroundOpacity") return style.backgroundOpacity.value_or(0);
+    if (key == "backgroundRadius") return style.backgroundRadius.value_or(0);
+    if (key == "backgroundPaddingX") return style.backgroundPaddingX.value_or(0);
+    if (key == "backgroundPaddingY") return style.backgroundPaddingY.value_or(0);
+    return 0;
+}
+
+std::string getBaseColor(const std::string& key, const openshot::subtitle::SubtitleTextStyle& style) {
+    if (key == "color") return style.color;
+    if (key == "strokeColor") return style.strokeColor.value_or("#000000");
+    if (key == "shadowColor") return style.shadowColor.value_or("#000000");
+    if (key == "backgroundColor") return style.backgroundColor.value_or("#000000");
+    return "#FFFFFF";
+}
 }
 
 namespace openshot {
@@ -355,36 +383,6 @@ std::vector<WordAnimation> processSegmentAnimation(const std::vector<WordDetail>
     }
 
     return animations;
-}
-
-// Helper functions to get base values from default style
-double getBaseValue(const std::string& key, const SubtitleTextStyle& style) {
-    if (key == "fontSize") return style.fontSize;
-    if (key == "opacity") return style.opacity;
-    if (key == "letterSpacing") return style.letterSpacing;
-    if (key == "lineHeight") return style.lineHeight;
-    if (key == "bold") return style.bold;
-    if (key == "translateX") return style.translateX.value_or(0);
-    if (key == "translateY") return style.translateY.value_or(0);
-    if (key == "strokeWidth") return style.strokeWidth.value_or(0);
-    if (key == "strokeOpacity") return style.strokeOpacity.value_or(1);
-    if (key == "shadowBlur") return style.shadowBlur.value_or(0);
-    if (key == "shadowDistance") return style.shadowDistance.value_or(0);
-    if (key == "shadowAngle") return style.shadowAngle.value_or(0);
-    if (key == "shadowOpacity") return style.shadowOpacity.value_or(1);
-    if (key == "backgroundOpacity") return style.backgroundOpacity.value_or(0);
-    if (key == "backgroundRadius") return style.backgroundRadius.value_or(0);
-    if (key == "backgroundPaddingX") return style.backgroundPaddingX.value_or(0);
-    if (key == "backgroundPaddingY") return style.backgroundPaddingY.value_or(0);
-    return 0;
-}
-
-std::string getBaseColor(const std::string& key, const SubtitleTextStyle& style) {
-    if (key == "color") return style.color;
-    if (key == "strokeColor") return style.strokeColor.value_or("#000000");
-    if (key == "shadowColor") return style.shadowColor.value_or("#000000");
-    if (key == "backgroundColor") return style.backgroundColor.value_or("#000000");
-    return "#FFFFFF";
 }
 
 } // namespace subtitle

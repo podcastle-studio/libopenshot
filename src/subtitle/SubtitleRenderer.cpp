@@ -13,47 +13,7 @@ SubtitleRenderer::~SubtitleRenderer() {
     delete textRenderer;
 }
 
-std::vector<StyledWord> SubtitleRenderer::getAnimatedStyledWords(
-    const std::vector<WordAnimation>& wordAnimations,
-    float segmentTimeMs, const SubtitleTextStyle& defaultStyle) const {
-
-    std::vector<StyledWord> styledWords;
-
-    for (size_t i = 0; i < wordAnimations.size(); ++i) {
-        const auto& wordAnim = wordAnimations[i];
-        StyledWord styledWord;
-        styledWord.word = transformText(wordAnim.word, defaultStyle);
-
-        // CRITICAL: JavaScript passes elapsed time relative to each word's start time
-        // Calculate elapsed time for this specific word
-        const auto& wordDetail = wordAnim.word; // We need to track word timings
-        float wordStartMs = 0;
-        float wordEndMs = 0;
-
-        // Find the corresponding word detail to get timing
-        // Note: This assumes wordAnimations are created in the same order as wordDetails
-        // which is guaranteed by processSegmentAnimation
-        if (i < wordAnimations.size()) {
-            // Get word timing from the animation (we'll need to modify WordAnimation to include timing)
-            // For now, we'll use segmentTimeMs directly, but this needs to be fixed
-            // to match JS behavior where elapsed = segmentTimeMs - wordStartMs
-        }
-
-        // Apply animations at the current segment time
-        styledWord.style = applyAnimationParams(
-            wordAnim.params,
-            segmentTimeMs, // This should be elapsed time relative to word start
-            fps,
-            defaultStyle
-        );
-
-        styledWords.push_back(styledWord);
-    }
-
-    return styledWords;
-}
-
-double SubtitleRenderer::getStartX(float textWidth, float containerWidth, const SubtitleContainerStyle& containerStyles) {
+double SubtitleRenderer::getStartX(const float textWidth, const float containerWidth, const SubtitleContainerStyle& containerStyles) {
     switch (containerStyles.textAlign) {
         case TextAlignment::LEFT:
             return containerStyles.paddingX;
@@ -66,19 +26,14 @@ double SubtitleRenderer::getStartX(float textWidth, float containerWidth, const 
     }
 }
 
-double SubtitleRenderer::getStartY(int currentLine, const SubtitleTextStyle& textStyle,
-                                   const SubtitleContainerStyle& containerStyle) {
-    int line = (containerStyle.appearance == TextAppearance::ONE_WORD) ? 0 : currentLine;
+double SubtitleRenderer::getStartY(const int currentLine, const SubtitleTextStyle& textStyle, const SubtitleContainerStyle& containerStyle) {
+    const int line = (containerStyle.appearance == TextAppearance::ONE_WORD) ? 0 : currentLine;
 
-    // Same calculation as JS: fontSize * (line + 1) + line * (lineHeight - 1) * fontSize
-    return containerStyle.paddingY +
-           textStyle.fontSize * (line + 1) +
-           line * (textStyle.lineHeight - 1) * textStyle.fontSize;
+    return containerStyle.paddingY + textStyle.fontSize * (line + 1) + line * (textStyle.lineHeight - 1) * textStyle.fontSize;
 }
 
-std::vector<std::vector<size_t>> SubtitleRenderer::getLines(
-    const std::vector<StyledWord>& styledWords,
-    float maxWidth, const SubtitleContainerStyle& containerStyles) const {
+std::vector<std::vector<size_t>> SubtitleRenderer::getLines(const std::vector<StyledWord>& styledWords,
+    const float maxWidth, const SubtitleContainerStyle& containerStyles) const {
 
     std::vector<std::vector<size_t>> lines;
 
@@ -101,8 +56,7 @@ std::vector<std::vector<size_t>> SubtitleRenderer::getLines(
             testLine.push_back(styledWords[j]);
         }
 
-        float testLineWidth = textRenderer->measureTextWidth(testLine);
-
+        const float testLineWidth = textRenderer->measureTextWidth(testLine);
         if (testLineWidth > maxWidth && !currentLine.empty()) {
             lines.push_back(currentLine);
             startIdx = i;
@@ -118,18 +72,14 @@ std::vector<std::vector<size_t>> SubtitleRenderer::getLines(
     return lines;
 }
 
-double SubtitleRenderer::getHeight(const SubtitleSegment& segment, const SegmentSettings& settings, float maxWidth) const {
+double SubtitleRenderer::getHeight(const SubtitleSegment& segment, const SegmentSettings& settings, const float maxWidth) const {
     const SegmentSettings& segmentSettings = segment.attached ? settings :
         (segment.settings.has_value() ? segment.settings.value() : settings);
 
-    std::vector<WordAnimation> wordAnimations = processSegmentAnimation(
-        segment.wordDetails, segmentSettings, fps);
+    const std::vector<WordAnimation> wordAnimations = processSegmentAnimation(segment.wordDetails, segmentSettings, fps);
 
     const auto& defaultStyle = segmentSettings.defaultStyle;
     const auto& containerStyle = segmentSettings.containerStyle;
-
-    // Get styled words at the last frame (end of segment)
-    float segmentDuration = segment.endTimeMs - segment.startTimeMs;
 
     // For height calculation, we need words at their final state
     std::vector<StyledWord> lastFrameStyledWords;
@@ -141,21 +91,14 @@ double SubtitleRenderer::getHeight(const SubtitleSegment& segment, const Segment
         styledWord.word = transformText(wordAnim.word, defaultStyle);
 
         // Apply animations at the end of this word's duration
-        float wordElapsed = wordDetail.endMs - wordDetail.startMs;
-        styledWord.style = applyAnimationParams(
-            wordAnim.params,
-            wordDetail.startMs + wordElapsed, // Use absolute time for keyframe lookup
-            fps,
-            defaultStyle
-        );
+        const float wordElapsed = wordDetail.endMs - wordDetail.startMs;
+        styledWord.style = applyAnimationParams(wordAnim.params, wordDetail.startMs + wordElapsed, fps, defaultStyle);
 
         lastFrameStyledWords.push_back(styledWord);
     }
 
-    auto lines = getLines(lastFrameStyledWords, maxWidth, containerStyle);
-
-    return defaultStyle.fontSize * lines.size() +
-           (lines.size() - 1) * (defaultStyle.lineHeight - 1) * defaultStyle.fontSize;
+    const auto lines = getLines(lastFrameStyledWords, maxWidth, containerStyle);
+    return defaultStyle.fontSize * lines.size() + (lines.size() - 1) * (defaultStyle.lineHeight - 1) * defaultStyle.fontSize;
 }
 
 void SubtitleRenderer::renderSegment(const SubtitleSegment& segment, const SegmentSettings& settings,
@@ -184,31 +127,15 @@ void SubtitleRenderer::renderSegment(const SubtitleSegment& segment, const Segme
         if (segmentTimeMs >= wordDetail.startMs && segmentTimeMs <= wordDetail.endMs) {
             // Word is active - calculate elapsed time relative to word start
             float wordElapsed = segmentTimeMs - wordDetail.startMs;
-
             // Apply animations using absolute time (word start + elapsed)
-            styledWord.style = applyAnimationParams(
-                wordAnim.params,
-                wordDetail.startMs + wordElapsed, // Absolute time for keyframe lookup
-                fps,
-                defaultStyle
-            );
+            styledWord.style = applyAnimationParams(wordAnim.params, wordDetail.startMs + wordElapsed, fps, defaultStyle);
         } else if (segmentTimeMs > wordDetail.endMs) {
             // Word has finished - show at final state
             float wordDuration = wordDetail.endMs - wordDetail.startMs;
-            styledWord.style = applyAnimationParams(
-                wordAnim.params,
-                wordDetail.startMs + wordDuration, // End time
-                fps,
-                defaultStyle
-            );
+            styledWord.style = applyAnimationParams(wordAnim.params, wordDetail.startMs + wordDuration, fps, defaultStyle);
         } else {
             // Word hasn't started yet - show at initial state
-            styledWord.style = applyAnimationParams(
-                wordAnim.params,
-                wordDetail.startMs, // Start time
-                fps,
-                defaultStyle
-            );
+            styledWord.style = applyAnimationParams(wordAnim.params, wordDetail.startMs, fps, defaultStyle);
         }
 
         frameStyledWords.push_back(styledWord);
@@ -225,12 +152,7 @@ void SubtitleRenderer::renderSegment(const SubtitleSegment& segment, const Segme
 
         // Apply animations at the end of this word's duration
         float wordDuration = wordDetail.endMs - wordDetail.startMs;
-        styledWord.style = applyAnimationParams(
-            wordAnim.params,
-            wordDetail.startMs + wordDuration,
-            fps,
-            defaultStyle
-        );
+        styledWord.style = applyAnimationParams(wordAnim.params, wordDetail.startMs + wordDuration, fps, defaultStyle);
 
         lastFrameStyledWords.push_back(styledWord);
     }
@@ -254,8 +176,7 @@ void SubtitleRenderer::renderSegment(const SubtitleSegment& segment, const Segme
         maxLineWidth = std::max(maxLineWidth, lineWidth);
     }
 
-    // Calculate the center position based on transformation settings
-    // center.x and center.y are percentages (0.5 = 50%, 0.9 = 90%)
+    // Calculate the center position based on transformation settings. center.x and center.y are percentages
     float centerX = canvasWidth * transformation.center.x;
     float centerY = canvasHeight * transformation.center.y;
 
@@ -318,15 +239,13 @@ void SubtitleRenderer::renderSegment(const SubtitleSegment& segment, const Segme
         textRenderer->renderText(lineStyledWords, x, y);
     }
 
-    // Restore canvas state
     renderer->restore();
 }
 
-// Update the renderSegmentAtFrame to pass canvas dimensions
 void SubtitleRenderer::renderSegmentAtFrame(const SubtitleSegment& segment, const SegmentSettings& settings,
-                                          int64_t frameNumber, float canvasWidth, float canvasHeight) {
-    float timeMs = frameToMs(frameNumber, fps);
-    float segmentTimeMs = timeMs - segment.startTimeMs;
+                                          const int64_t frameNumber, const float canvasWidth, const float canvasHeight) const {
+    const float timeMs = frameToMs(frameNumber, fps);
+    const float segmentTimeMs = timeMs - segment.startTimeMs;
 
     if (segmentTimeMs >= 0 && segmentTimeMs <= (segment.endTimeMs - segment.startTimeMs)) {
         renderSegment(segment, settings, segmentTimeMs, canvasWidth, canvasHeight);

@@ -16,18 +16,12 @@ namespace subtitle {
 class SkiaRenderer;
 
 class WordRenderer {
-private:
-    SkiaRenderer* renderer;
-
-    // Private helper method
-    static void bubblePath(SkPath* path, float x, float y, float width, float height, float radius);
-
 public:
     explicit WordRenderer(SkiaRenderer* renderer);
 
     // Main rendering method
     void renderWord(const std::string& word, const SubtitleTextStyle& style,
-                   const double x, const double y, const double deltaY = 0);
+                   const double x, const double y, const double deltaY = 0) const;
 
     // Measurement methods
     float getTextWidth(const std::string& text, const SubtitleTextStyle& style) const;
@@ -40,6 +34,11 @@ public:
     void drawWordText(const std::string& word, float wordWidth, const SubtitleTextStyle& style) const;
     void drawWordShadow(const std::string& word, float wordWidth, const SubtitleTextStyle& style) const;
     void drawWordStroke(const std::string& word, float wordWidth, const SubtitleTextStyle& style) const;
+
+private:
+    static void bubblePath(SkPath* path, float x, float y, float width, float height, float radius);
+
+    SkiaRenderer* renderer;
 };
 
 } // namespace subtitle
