@@ -27,13 +27,13 @@ public:
     void setEnabled(bool enable) const;
     bool isEnabled() const;
 
-    void setDefaultStyle(const subtitle::SubtitleTextStyle& style) const;
+    void setDefaultStyle(const SubtitleTextStyle& style) const;
     SubtitleTextStyle& getDefaultStyle() const;
 
     void setMaxWidth(float width) const;
 
     // Segment management
-    void addSegment(const subtitle::SubtitleSegment& segment) const;
+    void addSegment(const SubtitleSegment& segment) const;
     void clearSegments() const;
     std::vector<SubtitleSegment>& getSegments() const;
 
@@ -42,19 +42,17 @@ public:
 
     // Rendering
     void renderAtFrame(std::shared_ptr<QImage> frameImage, int64_t frameNumber) const;
-    // void renderAtTime(SkCanvas* canvas, float timeInSeconds) const;
 
     // Utility
     bool hasActiveSubtitlesAtFrame(int64_t frameNumber) const;
-    void createExampleSubtitles() const;
 
 private:
     class Impl;
     std::unique_ptr<Impl> pImpl;
 
     SegmentSettings parseSegmentSettings(const Json::Value& settingsJson) const;
-    void parseTextStyle(const Json::Value& styleJson, SubtitleTextStyle& style) const;
-    void parseAnimationSettings(const Json::Value& animJson, AnimationSettings& settings) const;
+    static void parseTextStyle(const Json::Value& styleJson, SubtitleTextStyle& style) ;
+    static void parseAnimationSettings(const Json::Value& animJson, AnimationSettings& settings) ;
 
     void parseGlobalSettings(const Json::Value& settingsJson) const;
 };

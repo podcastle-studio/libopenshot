@@ -1,4 +1,3 @@
-// Helpers.cpp - Using OpenShot's Keyframe class
 #include "Helpers.h"
 #include "SubtitleTypes.h"
 #include "../KeyFrame.h"
@@ -7,12 +6,51 @@
 #include <cctype>
 #include <cmath>
 
+namespace {
+
+std::string rgbToHex(const int r, const int g, const int b) {
+    char buffer[8];
+    snprintf(buffer, sizeof(buffer), "#%02X%02X%02X",
+        std::clamp(r, 0, 255),
+        std::clamp(g, 0, 255),
+        std::clamp(b, 0, 255));
+    return buffer;
+}
+
+std::tuple<int, int, int> hexToRgb(const std::string& hex) {
+    if (hex.empty() || hex[0] != '#' || hex.length() < 7) {
+        return {255, 255, 255};
+    }
+
+    try {
+        int r = std::stoi(hex.substr(1, 2), nullptr, 16);
+        int g = std::stoi(hex.substr(3, 2), nullptr, 16);
+        int b = std::stoi(hex.substr(5, 2), nullptr, 16);
+        return {r, g, b};
+    } catch (...) {
+        return {255, 255, 255};
+    }
+}
+
+int64_t msToFrame(const float ms, const float fps) {
+    // OpenShot uses 1-based frame indexing
+    return static_cast<int64_t>((ms / 1000.0f) * fps) + 1;
+}
+
+// Get animated value using OpenShot's Keyframe at millisecond time
+double getAnimatedValue(const openshot::Keyframe& keyframe, const float timeMs, const float fps) {
+    // Convert milliseconds to frame number (OpenShot uses 1-based frame indexing)
+    const int64_t frame = msToFrame(timeMs, fps);
+    return keyframe.GetValue(frame);
+}
+
+}
+
 namespace openshot {
 namespace subtitle {
 
 std::string transformText(const std::string& text, const SubtitleTextStyle& style) {
     std::string result = text;
-
     switch (style.textTransform) {
         case TextTransform::UPPERCASE:
             std::transform(result.begin(), result.end(), result.begin(), ::toupper);
@@ -37,38 +75,8 @@ std::string transformText(const std::string& text, const SubtitleTextStyle& styl
     return result;
 }
 
-// Helper functions for color conversion
-std::tuple<int, int, int> hexToRgb(const std::string& hex) {
-    if (hex.empty() || hex[0] != '#' || hex.length() < 7) return {255, 255, 255};
-    try {
-        int r = std::stoi(hex.substr(1, 2), nullptr, 16);
-        int g = std::stoi(hex.substr(3, 2), nullptr, 16);
-        int b = std::stoi(hex.substr(5, 2), nullptr, 16);
-        return {r, g, b};
-    } catch (...) {
-        return {255, 255, 255};
-    }
-}
-
-std::string rgbToHex(int r, int g, int b) {
-    char buffer[8];
-    snprintf(buffer, sizeof(buffer), "#%02X%02X%02X",
-        std::clamp(r, 0, 255),
-        std::clamp(g, 0, 255),
-        std::clamp(b, 0, 255));
-    return buffer;
-}
-
-// Get animated value using OpenShot's Keyframe at millisecond time
-double getAnimatedValue(const Keyframe& keyframe, float timeMs, float fps) {
-    // Convert milliseconds to frame number (OpenShot uses 1-based frame indexing)
-    int64_t frame = msToFrame(timeMs, fps);
-    return keyframe.GetValue(frame);
-}
-
 SubtitleTextStyle applyAnimationParams(const std::vector<AnimationParam>& params,
-                                      float timeMs, float fps,
-                                      const SubtitleTextStyle& baseStyle) {
+    const float timeMs, const float fps, const SubtitleTextStyle& baseStyle) {
     SubtitleTextStyle result = baseStyle;
 
     // Store RGB components for color properties
@@ -128,18 +136,12 @@ SubtitleTextStyle applyAnimationParams(const std::vector<AnimationParam>& params
     return result;
 }
 
-int64_t msToFrame(float ms, float fps) {
-    // OpenShot uses 1-based frame indexing
-    return static_cast<int64_t>((ms / 1000.0f) * fps) + 1;
-}
-
-float frameToMs(int64_t frame, float fps) {
+float frameToMs(const int64_t frame, const float fps) {
     // OpenShot uses 1-based frame indexing
     return ((frame - 1) * 1000.0f) / fps;
 }
 
-std::vector<WordAnimation> processSegmentAnimation(const std::vector<WordDetail>& wordDetails,
-                                                 const SegmentSettings& settings, float fps) {
+std::vector<WordAnimation> processSegmentAnimation(const std::vector<WordDetail>& wordDetails, const SegmentSettings& settings, float fps) {
     std::vector<WordAnimation> animations;
 
     const auto& animSettings = settings.animationSettings;

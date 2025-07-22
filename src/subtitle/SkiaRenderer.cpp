@@ -94,9 +94,9 @@ SkColor SkiaRenderer::parseColorString(const std::string& colorStr, float opacit
         return SkColorSetARGB(255 * opacity, 255, 255, 255);
     }
 
-    int r = std::stoi(colorStr.substr(1, 2), nullptr, 16);
-    int g = std::stoi(colorStr.substr(3, 2), nullptr, 16);
-    int b = std::stoi(colorStr.substr(5, 2), nullptr, 16);
+    const int r = std::stoi(colorStr.substr(1, 2), nullptr, 16);
+    const int g = std::stoi(colorStr.substr(3, 2), nullptr, 16);
+    const int b = std::stoi(colorStr.substr(5, 2), nullptr, 16);
 
     // Platform-specific: This build/platform expects BGR order instead of RGB
     // Despite the function name suggesting RGB order, we need to swap R and B

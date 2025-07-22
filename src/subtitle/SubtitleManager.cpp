@@ -3,7 +3,6 @@
 #include "SubtitleRenderer.h"
 #include "SkiaRenderer.h"
 #include "Helpers.h"
-#include "DefaultPreset.h"
 
 #include <skia/include/core/SkBitmap.h>
 #include <skia/include/core/SkCanvas.h>
@@ -22,11 +21,7 @@ public:
     bool enabled = true;
     float fps;
 
-    explicit Impl(const float fps) : fps(fps) {
-        // Initialize with default preset
-        const SubtitlePreset preset = getDefaultPreset();
-        defaultSettings = createSegmentSettings(preset);
-    }
+    explicit Impl(const float fps) : fps(fps) {}
 };
 
 SubtitleManager::SubtitleManager(float fps)
@@ -83,7 +78,7 @@ SegmentSettings SubtitleManager::parseSegmentSettings(const Json::Value& setting
         }
 
         if (containerStyle.isMember("textAlign")) {
-            std::string align = containerStyle["textAlign"].asString();
+            const std::string align = containerStyle["textAlign"].asString();
             if (align == "LEFT") {
                 settings.containerStyle.textAlign = TextAlignment::LEFT;
             } else if (align == "RIGHT") {
@@ -146,7 +141,7 @@ SegmentSettings SubtitleManager::parseSegmentSettings(const Json::Value& setting
 }
 
 // Helper method to parse text style
-void SubtitleManager::parseTextStyle(const Json::Value& styleJson, SubtitleTextStyle& style) const {
+void SubtitleManager::parseTextStyle(const Json::Value& styleJson, SubtitleTextStyle& style) {
     // Basic text properties
     if (styleJson.isMember("fontFamily"))
         style.fontFamily = styleJson["fontFamily"].asString();
@@ -220,7 +215,7 @@ void SubtitleManager::parseTextStyle(const Json::Value& styleJson, SubtitleTextS
 }
 
 // Helper method to parse animation settings
-void SubtitleManager::parseAnimationSettings(const Json::Value& animJson, AnimationSettings& settings) const {
+void SubtitleManager::parseAnimationSettings(const Json::Value& animJson, AnimationSettings& settings) {
     // In animation
     if (animJson.isMember("inInterpolation")) {
         const Json::Value& inInterp = animJson["inInterpolation"];
@@ -304,7 +299,7 @@ void SubtitleManager::loadFromJSON(const std::string& jsonPath) const {
             const Json::Value& segments = root["segments"];
 
             for (const auto& seg : segments) {
-                subtitle::SubtitleSegment segment;
+                SubtitleSegment segment;
 
                 // Fix field names to match JSON payload
                 segment.id = seg.get("id", "").asString();
@@ -318,7 +313,7 @@ void SubtitleManager::loadFromJSON(const std::string& jsonPath) const {
                     const Json::Value& wordDetails = seg["wordDetails"];
 
                     for (const auto& w : wordDetails) {
-                        subtitle::WordDetail word;
+                        WordDetail word;
                         word.word = w.get("word", "").asString();
                         word.startMs = w.get("startTime", 0).asFloat();  // Changed from start_ms
                         word.endMs = w.get("endTime", 0).asFloat();      // Changed from end_ms
@@ -381,24 +376,6 @@ void SubtitleManager::renderAtFrame(std::shared_ptr<QImage> frameImage, int64_t 
     }
 }
 
-// void SubtitleManager::renderAtTime(SkCanvas* canvas, float timeInSeconds) const {
-//     if (!pImpl->enabled || !canvas) return;
-//
-//     const float timeMs = timeInSeconds * 1000;
-//
-//     // Create renderer
-//     SkiaRenderer skiaRenderer(canvas);
-//     SubtitleRenderer subtitleRenderer(&skiaRenderer, pImpl->fps);
-//
-//     // Find and render active segments
-//     for (const auto& segment : pImpl->segments) {
-//         if (segment.visible && timeMs >= segment.startTimeMs && timeMs <= segment.endTimeMs) {
-//             const float segmentTimeMs = timeMs - segment.startTimeMs;
-//             subtitleRenderer.renderSegment(segment, pImpl->defaultSettings, segmentTimeMs);
-//         }
-//     }
-// }
-
 bool SubtitleManager::hasActiveSubtitlesAtFrame(int64_t frameNumber) const {
     if (!pImpl->enabled) return false;
 
@@ -411,38 +388,6 @@ bool SubtitleManager::hasActiveSubtitlesAtFrame(int64_t frameNumber) const {
     }
 
     return false;
-}
-
-void SubtitleManager::createExampleSubtitles() const {
-    clearSegments();
-
-    // Example 1: Simple subtitle
-    SubtitleSegment segment1;
-    segment1.id = "example-1";
-    segment1.visible = true;
-    segment1.attached = true;
-    segment1.startTimeMs = 0;
-    segment1.endTimeMs = 3000;
-    segment1.wordDetails = {
-        {"HELLO", 0, 800, 1.0f},
-        {"WORLD", 800, 1600, 1.0f},
-        {"SUBTITLES", 1600, 2400, 1.0f}
-    };
-    addSegment(segment1);
-
-    // Example 2: Another subtitle
-    SubtitleSegment segment2;
-    segment2.id = "example-2";
-    segment2.visible = true;
-    segment2.attached = true;
-    segment2.startTimeMs = 3000;
-    segment2.endTimeMs = 6000;
-    segment2.wordDetails = {
-        {"ANIMATED", 3000, 3800, 1.0f},
-        {"TEXT", 3800, 4600, 1.0f},
-        {"RENDERING", 4600, 5400, 1.0f}
-    };
-    addSegment(segment2);
 }
 
 } // namespace subtitle

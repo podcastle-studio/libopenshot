@@ -50,11 +50,10 @@ public:
     void save() const { canvas->save(); }
     void restore() const { canvas->restore(); }
     void translate(const double x, const double y) const { canvas->translate(x, y); }
-    void rotate(float degrees) const { canvas->rotate(degrees); }
-    void scale(float sx, float sy) const { canvas->scale(sx, sy); }
+    void rotate(const float degrees) const { canvas->rotate(degrees); }
+    void scale(const float sx, const float sy) const { canvas->scale(sx, sy); }
 
     SkFont getFont(const FontProps& fontProps);
-
     SkPaint* getPaint(const PaintProps& paintProps);
 
     // Skia-specific helpers
