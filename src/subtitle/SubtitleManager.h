@@ -7,7 +7,6 @@
 #include <memory>
 #include <string>
 
-
 // Forward declarations
 class QImage;
 class SkCanvas;
@@ -25,15 +24,6 @@ class SubtitleManager {
 public:
     explicit SubtitleManager(float fps);
     ~SubtitleManager();
-
-    // Configuration
-    void setEnabled(bool enable);
-    bool isEnabled() const;
-
-    void setDefaultStyle(const SubtitleTextStyle& style);
-    SubtitleTextStyle& getDefaultStyle();
-
-    void setMaxWidth(float width);
 
     // Segment management
     void addSegment(const SubtitleSegment& segment);
@@ -53,7 +43,6 @@ public:
 private:
     std::vector<SubtitleSegment> segments;
     SegmentSettings defaultSettings;
-    bool enabled = true;
     float fps;
 
     SegmentSettings parseSegmentSettings(const Json::Value& settingsJson) const;

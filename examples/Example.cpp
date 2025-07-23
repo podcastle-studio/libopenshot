@@ -12,15 +12,8 @@ int main() {
     auto clip = new openshot::Clip("img.jpeg");
     timeLine.AddClip(clip);
 
-    // Get subtitle manager
-    auto* subtitleManager = timeLine.GetSubtitleManager();
-    if (subtitleManager) {
-        // Enable subtitles
-        timeLine.EnableSubtitles(true);
-
-        // Load from JSON file (alternative to programmatic creation)
-        timeLine.LoadSubtitles("./subtitles.json");
-    }
+    // Load from JSON file (alternative to programmatic creation)
+    timeLine.LoadSubtitles("./subtitles.json");
 
     openshot::FFmpegWriter w("out.mp4");
     w.SetAudioOptions(true, "aac", 48000, 2, openshot::ChannelLayout::LAYOUT_STEREO, 128000);

@@ -13,29 +13,9 @@
 namespace openshot {
 namespace subtitle {
 
-SubtitleManager::SubtitleManager(float fps) : fps(fps) {}
+SubtitleManager::SubtitleManager(const float fps) : fps(fps) {}
 
 SubtitleManager::~SubtitleManager() = default;
-
-void SubtitleManager::setEnabled(const bool enable) {
-    enabled = enable;
-}
-
-bool SubtitleManager::isEnabled() const {
-    return enabled;
-}
-
-void SubtitleManager::setDefaultStyle(const SubtitleTextStyle& style) {
-    defaultSettings.defaultStyle = style;
-}
-
-SubtitleTextStyle& SubtitleManager::getDefaultStyle() {
-    return defaultSettings.defaultStyle;
-}
-
-void SubtitleManager::setMaxWidth(const float width) {
-    defaultSettings.transformation.maxWidth = width;
-}
 
 void SubtitleManager::addSegment(const SubtitleSegment& segment) {
     segments.push_back(segment);
@@ -290,7 +270,7 @@ void SubtitleManager::loadFromJSONString(const std::string& jsonString) {
     try {
         Json::Value root;
         Json::Reader reader;
-
+        
         if (!reader.parse(jsonString, root)) {
             throw std::runtime_error("Failed to parse JSON string: " + reader.getFormattedErrorMessages());
         }
@@ -349,7 +329,8 @@ void SubtitleManager::parseJSONRoot(const Json::Value& root) {
 }
 
 void SubtitleManager::renderAtFrame(std::shared_ptr<QImage> frameImage, int64_t frameNumber) const {
-    if (!enabled || !frameImage || frameImage->isNull()) return;
+    // Skip rendering if no segments are loaded
+    if (segments.empty() || !frameImage || frameImage->isNull()) return;
 
     // Convert frame to time
     float timeMs = frameToMs(frameNumber, fps);
@@ -371,20 +352,23 @@ void SubtitleManager::renderAtFrame(std::shared_ptr<QImage> frameImage, int64_t 
     SkiaRenderer skiaRenderer(&canvas);
     SubtitleRenderer subtitleRenderer(&skiaRenderer, fps);
 
-    // Update max width based on current frame size
-    const_cast<SubtitleManager*>(this)->defaultSettings.transformation.maxWidth = frameImage->width() - 100; // Some margin
-
     // Find and render active segments
     for (const auto& segment : segments) {
         if (segment.visible && timeMs >= segment.startTimeMs && timeMs <= segment.endTimeMs) {
             float segmentTimeMs = timeMs - segment.startTimeMs;
-            subtitleRenderer.renderSegment(segment, defaultSettings, segmentTimeMs, canvasWidth, canvasHeight);
+            
+            // Use the segment's maxWidth if it has custom settings, otherwise use default
+            const SegmentSettings& settings = segment.attached ? defaultSettings :
+                (segment.settings.has_value() ? segment.settings.value() : defaultSettings);
+            
+            subtitleRenderer.renderSegment(segment, settings, segmentTimeMs, canvasWidth, canvasHeight);
         }
     }
 }
 
 bool SubtitleManager::hasActiveSubtitlesAtFrame(int64_t frameNumber) const {
-    if (!enabled) return false;
+    // No need to check enabled flag - just check if we have segments
+    if (segments.empty()) return false;
 
     const float timeMs = frameToMs(frameNumber, fps);
 
