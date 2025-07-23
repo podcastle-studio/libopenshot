@@ -13,7 +13,7 @@ int main() {
     timeLine.AddClip(clip);
 
     // Load from JSON file (alternative to programmatic creation)
-    timeLine.LoadSubtitles("./subtitles.json");
+    timeLine.LoadSubtitlesFromJsonFile("./subtitles.json");
 
     openshot::FFmpegWriter w("out.mp4");
     w.SetAudioOptions(true, "aac", 48000, 2, openshot::ChannelLayout::LAYOUT_STEREO, 128000);

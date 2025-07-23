@@ -224,12 +224,20 @@ Timeline::~Timeline() {
 	}
 }
 
-void Timeline::LoadSubtitles(const std::string& jsonPath) const {
+void Timeline::LoadSubtitlesFromJsonFile(const std::string& jsonPath) const {
 	if (!subtitleManager) {
 		throw InvalidFile("Subtitle manager not initialized", jsonPath);
 	}
 
 	subtitleManager->loadFromJSON(jsonPath);
+}
+
+void Timeline::LoadSubtitlesFromJsonString(const std::string& jsonString) const {
+	if (!subtitleManager) {
+		throw InvalidFile("Subtitle manager not initialized", jsonString);
+	}
+
+	subtitleManager->loadFromJSONString(jsonString);
 }
 
 void Timeline::ClearSubtitles() const {

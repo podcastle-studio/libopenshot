@@ -253,7 +253,9 @@ namespace openshot {
 		void AddEffect(openshot::EffectBase* effect);
 
 		/// Load subtitles from JSON file
-		void LoadSubtitles(const std::string& jsonPath) const;
+		void LoadSubtitlesFromJsonFile(const std::string& jsonPath) const;
+		/// Load subtitles from JSON string
+		void LoadSubtitlesFromJsonString(const std::string& jsonPath) const;
 
 		/// Clear all subtitles
 		void ClearSubtitles() const;
