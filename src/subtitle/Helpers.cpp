@@ -169,7 +169,7 @@ float frameToMs(const int64_t frame, const float fps) {
     // OpenShot uses 1-based frame indexing
     return ((frame - 1) * 1000.0f) / fps;
 }
-
+/*
 std::vector<WordAnimation> processSegmentAnimation(const std::vector<WordDetail>& wordDetails, const SegmentSettings& settings, float fps) {
     std::vector<WordAnimation> animations;
 
@@ -338,6 +338,162 @@ std::vector<WordAnimation> processSegmentAnimation(const std::vector<WordDetail>
         }
 
         animations.push_back(anim);
+    }
+
+    return animations;
+}
+*/
+
+std::vector<WordAnimation> processSegmentAnimation(
+        const std::vector<WordDetail>& wordDetails,
+        const SegmentSettings&         settings,
+        float                          fps)
+{
+    std::vector<WordAnimation> animations;
+    if (wordDetails.empty())
+        return animations;
+
+    const auto& animSet      = settings.animationSettings;
+    const auto& defaultStyle = settings.defaultStyle;
+
+    // ──────────────────────────────────────────────────────────────
+    // 1.  Work on *copies* of the style maps – we will mutate them.
+    // ──────────────────────────────────────────────────────────────
+    auto inNumStyles   = animSet.inStyles;        // numeric (opacity, size, …)
+    auto outNumStyles  = animSet.outStyles;
+    auto inColStyles   = animSet.inStylesColor;   // colours  (#RRGGBB)
+    auto outColStyles  = animSet.outStylesColor;
+
+    // Animated‑key sets are frozen **before** we touch outNum/ColStyles.
+    std::set<std::string> animatedNumKeys;
+    for (auto& [k, _] : inNumStyles)  animatedNumKeys.insert(k);
+    for (auto& [k, _] : outNumStyles) animatedNumKeys.insert(k);
+
+    std::set<std::string> animatedColKeys;
+    for (auto& [k, _] : inColStyles)  animatedColKeys.insert(k);
+    for (auto& [k, _] : outColStyles) animatedColKeys.insert(k);
+
+    // ──────────────────────────────────────────────────────────────
+    // 2.  ONE_WORD appearance – force opacities to 0 in *out* maps,
+    //     but DON'T add them to animatedNumKeys
+    // ──────────────────────────────────────────────────────────────
+    if (settings.containerStyle.appearance == TextAppearance::ONE_WORD) {
+        outNumStyles["opacity"]            = 0.0;
+        outNumStyles["backgroundOpacity"]  = 0.0;
+        outNumStyles["shadowOpacity"]      = 0.0;
+        outNumStyles["strokeOpacity"]      = 0.0;
+    }
+
+    // ──────────────────────────────────────────────────────────────
+    float segmentStart = wordDetails.front().startMs;
+
+    for (const WordDetail& wd : wordDetails) {
+        WordAnimation anim;
+        anim.word = wd.word;
+
+        float relStart = wd.startMs - segmentStart;
+        float relEnd   = wd.endMs   - segmentStart;
+        float duration = relEnd - relStart;
+
+        float inDur  = animSet.inDuration;
+        float outDur = animSet.outDuration;
+        if (duration < inDur + outDur) {
+            inDur = outDur = duration * 0.5f;
+        }
+
+        // ----------------------------------------------------------
+        // Numeric properties (opacity, fontSize, …)
+        // ----------------------------------------------------------
+        for (const std::string& key : animatedNumKeys) {
+
+            double initial  = getBaseValue(key, defaultStyle);
+            double animated = inNumStyles.count(key)  ? inNumStyles[key]  : initial;
+            double final    = outNumStyles.count(key) ? outNumStyles[key] : initial;
+
+            int64_t f0        = msToFrame(0, fps);
+            int64_t fStart    = msToFrame(relStart, fps);
+            int64_t fInEnd    = msToFrame(relStart + inDur, fps);
+            int64_t fOutStart = msToFrame(relEnd   - outDur, fps);
+            int64_t fEnd      = msToFrame(relEnd, fps);
+
+            AnimationParam p;
+            p.name = key;
+
+            // 0) initial plateau until the word begins
+            p.keyframe.AddPoint(f0,     initial, CONSTANT);
+            p.keyframe.AddPoint(fStart, initial, CONSTANT);
+
+            // 1) in‑animation
+            p.keyframe.AddPoint(fInEnd, animated, animSet.inInterpolation);
+
+            if (outDur > 0) {
+                // 2a) constant plateau until out‑animation begins
+                if (fOutStart > fInEnd)
+                    p.keyframe.AddPoint(fOutStart, animated, CONSTANT);
+
+                // 3) out‑animation to final value
+                p.keyframe.AddPoint(fEnd, final, animSet.outInterpolation);
+            }
+            else {
+                // 2b) keep animated value until the frame just before the end…
+                if (fEnd - 1 > fInEnd)
+                    p.keyframe.AddPoint(fEnd - 1, animated, CONSTANT);
+
+                // 3) …then snap to final value on the very last frame
+                p.keyframe.AddPoint(fEnd, final, CONSTANT);
+            }
+
+            anim.params.emplace_back(std::move(p));
+        }
+
+        // ----------------------------------------------------------
+        // Colour properties (split into .r/.g/.b channels)
+        // ----------------------------------------------------------
+        for (const std::string& key : animatedColKeys) {
+
+            std::string initHex  = getBaseColor(key, defaultStyle);
+            std::string animHex  = inColStyles.count(key)  ? inColStyles[key]  : initHex;
+            std::string finalHex = outColStyles.count(key) ? outColStyles[key] : initHex;
+
+            auto [ir, ig, ib] = hexToRgb(initHex);
+            auto [ar, ag, ab] = hexToRgb(animHex);
+            auto [fr, fg, fb] = hexToRgb(finalHex);
+
+            int64_t f0        = msToFrame(0, fps);
+            int64_t fStart    = msToFrame(relStart, fps);
+            int64_t fInEnd    = msToFrame(relStart + inDur, fps);
+            int64_t fOutStart = msToFrame(relEnd   - outDur, fps);
+            int64_t fEnd      = msToFrame(relEnd, fps);
+
+            auto addRGB = [&](const std::string& suffix,
+                              const double i, const double a, const double f)
+            {
+                AnimationParam p;
+                p.name = key + suffix;
+
+                p.keyframe.AddPoint(f0,     i, CONSTANT);
+                p.keyframe.AddPoint(fStart, i, CONSTANT);
+                p.keyframe.AddPoint(fInEnd, a, animSet.inInterpolation);
+
+                if (outDur > 0) {
+                    if (fOutStart > fInEnd)
+                        p.keyframe.AddPoint(fOutStart, a, CONSTANT);
+                    p.keyframe.AddPoint(fEnd, f, animSet.outInterpolation);
+                }
+                else {
+                    if (fEnd - 1 > fInEnd)
+                        p.keyframe.AddPoint(fEnd - 1, a, CONSTANT);
+                    p.keyframe.AddPoint(fEnd, f, CONSTANT);
+                }
+                anim.params.emplace_back(std::move(p));
+            };
+
+            addRGB(".r", ir, ar, fr);
+            addRGB(".g", ig, ag, fg);
+            addRGB(".b", ib, ab, fb);
+        }
+
+        animations.emplace_back(std::move(anim));
     }
 
     return animations;
