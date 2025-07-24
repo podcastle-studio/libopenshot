@@ -11,15 +11,23 @@ if(PKG_CONFIG_FOUND)
 endif()
 
 # Find include directory
-find_path(SKIA_INCLUDE_DIR
-        NAMES core/SkCanvas.h
-        PATHS
-        ${PC_SKIA_INCLUDE_DIRS}
-        /usr/local/include/skia
-        /usr/include/skia
-        /opt/skia/include
-        PATH_SUFFIXES skia
-)
+# First try to use pkg-config result if available
+if(PC_SKIA_FOUND AND PC_SKIA_INCLUDE_DIRS)
+    set(SKIA_INCLUDE_DIR ${PC_SKIA_INCLUDE_DIRS})
+    message(STATUS "Using Skia include from pkg-config: ${SKIA_INCLUDE_DIR}")
+else()
+    # Fallback to manual search
+    # Skia headers use paths like "include/core/SkCanvas.h"
+    # So we need to find the parent directory of "include"
+    find_path(SKIA_INCLUDE_DIR
+            NAMES include/core/SkCanvas.h
+            PATHS
+            /usr/local/include/skia
+            /usr/include/skia
+            /opt/skia
+            PATH_SUFFIXES skia
+    )
+endif()
 
 # Find library
 find_library(SKIA_LIBRARY

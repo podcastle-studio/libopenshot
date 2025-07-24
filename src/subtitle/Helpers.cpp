@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <set>
 #include <cmath>
 
 namespace {
@@ -175,208 +176,165 @@ std::vector<WordAnimation> processSegmentAnimation(const std::vector<WordDetail>
     const auto& animSettings = settings.animationSettings;
     const auto& defaultStyle = settings.defaultStyle;
 
+    if (wordDetails.empty()) return animations;
+
+    // Get segment start time
+    float segmentStart = wordDetails[0].startMs;
+
     for (const auto& detail : wordDetails) {
         WordAnimation anim;
         anim.word = detail.word;
 
-        // Word timing is relative to segment start
-        float wordStartMs = detail.startMs;
-        float wordEndMs = detail.endMs;
+        // Calculate relative times to segment start
+        float relativeStart = detail.startMs - segmentStart;
+        float relativeEnd = detail.endMs - segmentStart;
+        float duration = relativeEnd - relativeStart;
 
-        // IN ANIMATION - Applied during word's active time
-        if (animSettings.inDuration > 0) {
-            // Create animations for numeric properties
-            for (const auto& [key, targetValue] : animSettings.inStyles) {
-                AnimationParam param;
-                param.name = key;
+        // Handle duration adjustments like in JS
+        float inDuration = animSettings.inDuration;
+        float outDuration = animSettings.outDuration;
 
-                // Get base value from default style
-                double baseValue = getBaseValue(key, defaultStyle);
-
-                // Create keyframes for transition during word display
-                // Animation happens from wordStart to wordStart + inDuration
-                int64_t wordStartFrame = msToFrame(wordStartMs, fps);
-                int64_t inEndFrame = msToFrame(wordStartMs + animSettings.inDuration, fps);
-
-                // Add points to keyframe
-                param.keyframe.AddPoint(wordStartFrame, baseValue, animSettings.inInterpolation);
-                param.keyframe.AddPoint(inEndFrame, targetValue, animSettings.inInterpolation);
-
-                // If there's an out animation for this property, add those keyframes
-                if (animSettings.outDuration > 0 && animSettings.outStyles.count(key) > 0) {
-                    float outStartMs = wordEndMs - animSettings.outDuration;
-                    int64_t outStartFrame = msToFrame(outStartMs, fps);
-                    int64_t outEndFrame = msToFrame(wordEndMs, fps);
-
-                    // Maintain target value until out animation starts
-                    if (outStartFrame > inEndFrame) {
-                        param.keyframe.AddPoint(outStartFrame, targetValue, animSettings.inInterpolation);
-                    }
-
-                    // Add out animation
-                    param.keyframe.AddPoint(outEndFrame, animSettings.outStyles.at(key), animSettings.outInterpolation);
-                } else {
-                    // No out animation - return to base value after inDuration
-                    // This creates a spike effect: base -> target -> base
-                    int64_t wordEndFrame = msToFrame(wordEndMs, fps);
-                    if (wordEndFrame > inEndFrame) {
-                        // Add a point to return to base value
-                        param.keyframe.AddPoint(inEndFrame + 1, baseValue, animSettings.inInterpolation);
-                        param.keyframe.AddPoint(wordEndFrame, baseValue, animSettings.inInterpolation);
-                    }
-                }
-
-                anim.params.push_back(param);
-            }
-
-            // Create animations for color properties
-            for (const auto& [key, targetColor] : animSettings.inStylesColor) {
-                // Get base color from default style
-                std::string baseColor = getBaseColor(key, defaultStyle);
-                auto [baseR, baseG, baseB] = hexToRgb(baseColor);
-                auto [targetR, targetG, targetB] = hexToRgb(targetColor);
-
-                // Create separate params for R, G, B components
-                AnimationParam paramR, paramG, paramB;
-                paramR.name = key + ".r";
-                paramG.name = key + ".g";
-                paramB.name = key + ".b";
-
-                // Create keyframes for color components
-                int64_t wordStartFrame = msToFrame(wordStartMs, fps);
-                int64_t inEndFrame = msToFrame(wordStartMs + animSettings.inDuration, fps);
-
-                // Add points to RGB keyframes
-                paramR.keyframe.AddPoint(wordStartFrame, baseR, animSettings.inInterpolation);
-                paramR.keyframe.AddPoint(inEndFrame, targetR, animSettings.inInterpolation);
-
-                paramG.keyframe.AddPoint(wordStartFrame, baseG, animSettings.inInterpolation);
-                paramG.keyframe.AddPoint(inEndFrame, targetG, animSettings.inInterpolation);
-
-                paramB.keyframe.AddPoint(wordStartFrame, baseB, animSettings.inInterpolation);
-                paramB.keyframe.AddPoint(inEndFrame, targetB, animSettings.inInterpolation);
-
-                // Handle out animation for colors
-                if (animSettings.outDuration > 0 && animSettings.outStylesColor.count(key) > 0) {
-                    float outStartMs = wordEndMs - animSettings.outDuration;
-                    int64_t outStartFrame = msToFrame(outStartMs, fps);
-                    int64_t outEndFrame = msToFrame(wordEndMs, fps);
-
-                    auto [outR, outG, outB] = hexToRgb(animSettings.outStylesColor.at(key));
-
-                    // Maintain target color until out animation starts
-                    if (outStartFrame > inEndFrame) {
-                        paramR.keyframe.AddPoint(outStartFrame, targetR, animSettings.inInterpolation);
-                        paramG.keyframe.AddPoint(outStartFrame, targetG, animSettings.inInterpolation);
-                        paramB.keyframe.AddPoint(outStartFrame, targetB, animSettings.inInterpolation);
-                    }
-
-                    // Add out animation points
-                    paramR.keyframe.AddPoint(outEndFrame, outR, animSettings.outInterpolation);
-                    paramG.keyframe.AddPoint(outEndFrame, outG, animSettings.outInterpolation);
-                    paramB.keyframe.AddPoint(outEndFrame, outB, animSettings.outInterpolation);
-                } else {
-                    // No out animation - return to base color after inDuration
-                    int64_t wordEndFrame = msToFrame(wordEndMs, fps);
-                    if (wordEndFrame > inEndFrame) {
-                        // Add points to return to base color
-                        paramR.keyframe.AddPoint(inEndFrame + 1, baseR, animSettings.inInterpolation);
-                        paramR.keyframe.AddPoint(wordEndFrame, baseR, animSettings.inInterpolation);
-
-                        paramG.keyframe.AddPoint(inEndFrame + 1, baseG, animSettings.inInterpolation);
-                        paramG.keyframe.AddPoint(wordEndFrame, baseG, animSettings.inInterpolation);
-
-                        paramB.keyframe.AddPoint(inEndFrame + 1, baseB, animSettings.inInterpolation);
-                        paramB.keyframe.AddPoint(wordEndFrame, baseB, animSettings.inInterpolation);
-                    }
-                }
-
-                anim.params.push_back(paramR);
-                anim.params.push_back(paramG);
-                anim.params.push_back(paramB);
-            }
+        if (duration < inDuration + outDuration) {
+            inDuration = duration / 2;
+            outDuration = duration / 2;
         }
 
-        // OUT ANIMATION - for properties not handled in IN animation
-        if (animSettings.outDuration > 0) {
-            float outStartMs = wordEndMs - animSettings.outDuration;
+        // Process numeric properties
+        std::set<std::string> animatedStyles;
+        for (const auto& [key, value] : animSettings.inStyles) {
+            animatedStyles.insert(key);
+        }
+        for (const auto& [key, value] : animSettings.outStyles) {
+            animatedStyles.insert(key);
+        }
 
-            // Handle numeric properties that only have out animation
-            for (const auto& [key, targetValue] : animSettings.outStyles) {
-                // Check if this property was already animated in the IN animation
-                bool found = false;
-                for (const auto& param : anim.params) {
-                    if (param.name == key) {
-                        found = true;
-                        break;
-                    }
+        for (const auto& styleName : animatedStyles) {
+            AnimationParam param;
+            param.name = styleName;
+
+            // Get values
+            double initialValue = getBaseValue(styleName, defaultStyle);
+            double animatedValue = animSettings.inStyles.count(styleName) > 0 ? animSettings.inStyles.at(styleName) : initialValue;
+            double finalValue = animSettings.outStyles.count(styleName) > 0 ? animSettings.outStyles.at(styleName) : initialValue;
+
+            // Convert times to frames
+            int64_t frame0 = msToFrame(0, fps);
+            int64_t frameStart = msToFrame(relativeStart, fps);
+            int64_t frameInEnd = msToFrame(relativeStart + inDuration, fps);
+            int64_t frameOutStart = msToFrame(relativeEnd - outDuration, fps);
+            int64_t frameEnd = msToFrame(relativeEnd, fps);
+
+            // Create keyframes matching JS structure
+            param.keyframe.AddPoint(frame0, initialValue, CONSTANT);
+            param.keyframe.AddPoint(frameStart, initialValue, CONSTANT);
+            param.keyframe.AddPoint(frameInEnd, animatedValue, animSettings.inInterpolation);
+
+            // Handle the end of the word animation
+            if (outDuration > 0) {
+                // There's an out animation
+                if (frameOutStart > frameInEnd) {
+                    param.keyframe.AddPoint(frameOutStart, animatedValue, CONSTANT);
                 }
-
-                if (!found) {
-                    AnimationParam param;
-                    param.name = key;
-
-                    double baseValue = getBaseValue(key, defaultStyle);
-                    int64_t wordStartFrame = msToFrame(wordStartMs, fps);
-                    int64_t outStartFrame = msToFrame(outStartMs, fps);
-                    int64_t outEndFrame = msToFrame(wordEndMs, fps);
-
-                    // Stay at base value until out animation starts
-                    param.keyframe.AddPoint(wordStartFrame, baseValue, animSettings.outInterpolation);
-                    if (outStartFrame > wordStartFrame) {
-                        param.keyframe.AddPoint(outStartFrame, baseValue, animSettings.outInterpolation);
-                    }
-                    param.keyframe.AddPoint(outEndFrame, targetValue, animSettings.outInterpolation);
-
-                    anim.params.push_back(param);
+                param.keyframe.AddPoint(frameEnd, finalValue, animSettings.outInterpolation);
+            } else {
+                // No out animation - stay highlighted until end, then snap back
+                // Add a keyframe just before the end to maintain the animated value
+                if (frameEnd > frameInEnd) {
+                    param.keyframe.AddPoint(frameEnd - 1, animatedValue, CONSTANT);
                 }
+                // Then return to initial value at the end
+                param.keyframe.AddPoint(frameEnd, finalValue, CONSTANT);
             }
 
-            // Handle color properties that only have out animation
-            for (const auto& [key, targetColor] : animSettings.outStylesColor) {
-                // Check if this color was already animated (check for .r component)
-                bool found = false;
-                for (const auto& param : anim.params) {
-                    if (param.name == key + ".r") {
-                        found = true;
-                        break;
-                    }
+            anim.params.push_back(param);
+        }
+
+        // Process color properties
+        std::set<std::string> animatedColorStyles;
+        for (const auto& [key, value] : animSettings.inStylesColor) {
+            animatedColorStyles.insert(key);
+        }
+        for (const auto& [key, value] : animSettings.outStylesColor) {
+            animatedColorStyles.insert(key);
+        }
+
+        for (const auto& colorName : animatedColorStyles) {
+            // Get color values
+            std::string initialColor = getBaseColor(colorName, defaultStyle);
+            std::string animatedColor = animSettings.inStylesColor.count(colorName) > 0 ? animSettings.inStylesColor.at(colorName) : initialColor;
+            std::string finalColor = animSettings.outStylesColor.count(colorName) > 0 ? animSettings.outStylesColor.at(colorName) : initialColor;
+
+            auto [initialR, initialG, initialB] = hexToRgb(initialColor);
+            auto [animatedR, animatedG, animatedB] = hexToRgb(animatedColor);
+            auto [finalR, finalG, finalB] = hexToRgb(finalColor);
+
+            // Create R, G, B animation params
+            AnimationParam paramR, paramG, paramB;
+            paramR.name = colorName + ".r";
+            paramG.name = colorName + ".g";
+            paramB.name = colorName + ".b";
+
+            // Convert times to frames
+            int64_t frame0 = msToFrame(0, fps);
+            int64_t frameStart = msToFrame(relativeStart, fps);
+            int64_t frameInEnd = msToFrame(relativeStart + inDuration, fps);
+            int64_t frameOutStart = msToFrame(relativeEnd - outDuration, fps);
+            int64_t frameEnd = msToFrame(relativeEnd, fps);
+
+            // R component
+            paramR.keyframe.AddPoint(frame0, initialR, CONSTANT);
+            paramR.keyframe.AddPoint(frameStart, initialR, CONSTANT);
+            paramR.keyframe.AddPoint(frameInEnd, animatedR, animSettings.inInterpolation);
+
+            if (outDuration > 0) {
+                if (frameOutStart > frameInEnd) {
+                    paramR.keyframe.AddPoint(frameOutStart, animatedR, CONSTANT);
                 }
-
-                if (!found) {
-                    std::string baseColor = getBaseColor(key, defaultStyle);
-                    auto [baseR, baseG, baseB] = hexToRgb(baseColor);
-                    auto [targetR, targetG, targetB] = hexToRgb(targetColor);
-
-                    AnimationParam paramR, paramG, paramB;
-                    paramR.name = key + ".r";
-                    paramG.name = key + ".g";
-                    paramB.name = key + ".b";
-
-                    int64_t wordStartFrame = msToFrame(wordStartMs, fps);
-                    int64_t outStartFrame = msToFrame(outStartMs, fps);
-                    int64_t outEndFrame = msToFrame(wordEndMs, fps);
-
-                    // Stay at base color until out animation starts
-                    paramR.keyframe.AddPoint(wordStartFrame, baseR, animSettings.outInterpolation);
-                    paramG.keyframe.AddPoint(wordStartFrame, baseG, animSettings.outInterpolation);
-                    paramB.keyframe.AddPoint(wordStartFrame, baseB, animSettings.outInterpolation);
-
-                    if (outStartFrame > wordStartFrame) {
-                        paramR.keyframe.AddPoint(outStartFrame, baseR, animSettings.outInterpolation);
-                        paramG.keyframe.AddPoint(outStartFrame, baseG, animSettings.outInterpolation);
-                        paramB.keyframe.AddPoint(outStartFrame, baseB, animSettings.outInterpolation);
-                    }
-
-                    paramR.keyframe.AddPoint(outEndFrame, targetR, animSettings.outInterpolation);
-                    paramG.keyframe.AddPoint(outEndFrame, targetG, animSettings.outInterpolation);
-                    paramB.keyframe.AddPoint(outEndFrame, targetB, animSettings.outInterpolation);
-
-                    anim.params.push_back(paramR);
-                    anim.params.push_back(paramG);
-                    anim.params.push_back(paramB);
+                paramR.keyframe.AddPoint(frameEnd, finalR, animSettings.outInterpolation);
+            } else {
+                if (frameEnd > frameInEnd) {
+                    paramR.keyframe.AddPoint(frameEnd - 1, animatedR, CONSTANT);
                 }
+                paramR.keyframe.AddPoint(frameEnd, finalR, CONSTANT);
             }
+
+            // G component
+            paramG.keyframe.AddPoint(frame0, initialG, CONSTANT);
+            paramG.keyframe.AddPoint(frameStart, initialG, CONSTANT);
+            paramG.keyframe.AddPoint(frameInEnd, animatedG, animSettings.inInterpolation);
+
+            if (outDuration > 0) {
+                if (frameOutStart > frameInEnd) {
+                    paramG.keyframe.AddPoint(frameOutStart, animatedG, CONSTANT);
+                }
+                paramG.keyframe.AddPoint(frameEnd, finalG, animSettings.outInterpolation);
+            } else {
+                if (frameEnd > frameInEnd) {
+                    paramG.keyframe.AddPoint(frameEnd - 1, animatedG, CONSTANT);
+                }
+                paramG.keyframe.AddPoint(frameEnd, finalG, CONSTANT);
+            }
+
+            // B component
+            paramB.keyframe.AddPoint(frame0, initialB, CONSTANT);
+            paramB.keyframe.AddPoint(frameStart, initialB, CONSTANT);
+            paramB.keyframe.AddPoint(frameInEnd, animatedB, animSettings.inInterpolation);
+
+            if (outDuration > 0) {
+                if (frameOutStart > frameInEnd) {
+                    paramB.keyframe.AddPoint(frameOutStart, animatedB, CONSTANT);
+                }
+                paramB.keyframe.AddPoint(frameEnd, finalB, animSettings.outInterpolation);
+            } else {
+                if (frameEnd > frameInEnd) {
+                    paramB.keyframe.AddPoint(frameEnd - 1, animatedB, CONSTANT);
+                }
+                paramB.keyframe.AddPoint(frameEnd, finalB, CONSTANT);
+            }
+
+            anim.params.push_back(paramR);
+            anim.params.push_back(paramG);
+            anim.params.push_back(paramB);
         }
 
         animations.push_back(anim);
