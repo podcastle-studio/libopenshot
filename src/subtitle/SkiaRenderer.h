@@ -78,7 +78,7 @@ public:
     }
 
 private:
-    sk_sp<SkTypeface> getTypeface(const std::string& fontFamily);
+    sk_sp<SkTypeface> getTypeface(const std::string& familyOrPath);
 
     static SkColor parseColorString(const std::string& colorStr, float opacity = 1.0f);
 

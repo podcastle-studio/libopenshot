@@ -5,6 +5,8 @@
 #include "skia/include/core/SkBlurTypes.h"
 #include "skia/include/ports/SkFontMgr_fontconfig.h"
 
+#include <filesystem>
+
 namespace openshot {
 namespace subtitle {
 
@@ -69,23 +71,24 @@ SkPaint* SkiaRenderer::getPaint(const PaintProps& paintProps) {
     return paintPtr;
 }
 
-sk_sp<SkTypeface> SkiaRenderer::getTypeface(const std::string& fontFamily) {
-    if (const auto it = typefaceCache.find(fontFamily); it != typefaceCache.end()) {
+sk_sp<SkTypeface> SkiaRenderer::getTypeface(const std::string& familyOrPath) {
+    if (const auto it = typefaceCache.find(familyOrPath); it != typefaceCache.end()) {
         return it->second;
     }
 
+    sk_sp<SkTypeface> typeface;
     constexpr SkFontStyle style(400, SkFontStyle::kNormal_Width, SkFontStyle::kUpright_Slant);
-    sk_sp<SkTypeface> typeface = fontMgr->matchFamilyStyle(fontFamily.c_str(), style);
-
-    if (!typeface) {
-        typeface = fontMgr->matchFamilyStyle((fontFamily + " Bold").c_str(), style);
+    if (std::filesystem::is_regular_file(familyOrPath)) {
+        typeface = fontMgr->makeFromFile(familyOrPath.c_str());
+    } else {
+        typeface = fontMgr->matchFamilyStyle(familyOrPath.c_str(), style);
     }
 
-    if (!typeface) {
+    if (!typeface) { // last‑chance fallback
         typeface = fontMgr->matchFamilyStyle(nullptr, style);
     }
 
-    typefaceCache[fontFamily] = typeface;
+    typefaceCache[familyOrPath] = typeface;
     return typeface;
 }
 
