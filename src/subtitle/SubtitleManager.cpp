@@ -293,8 +293,8 @@ void SubtitleManager::parseJSONRoot(const Json::Value& root) {
 
             // Fix field names to match JSON payload
             segment.id = seg.get("id", "").asString();
-            segment.startTimeMs = seg.get("startTime", 0).asFloat();  // Changed from start_ms
-            segment.endTimeMs = seg.get("endTime", 0).asFloat();      // Changed from end_ms
+            segment.startTimeMs = seg.get("startTime", 0).asFloat();
+            segment.endTimeMs = seg.get("endTime", 0).asFloat();
             segment.visible = seg.get("visible", true).asBool();
             segment.attached = seg.get("attached", true).asBool();
 
