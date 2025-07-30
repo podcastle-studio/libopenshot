@@ -23,6 +23,8 @@ public:
     void renderWord(const std::string& word, const SubtitleTextStyle& style,
                    const double x, const double y, const double deltaY = 0) const;
 
+    SkFont getFontForCharacter(const std::string& utf8Char, const SubtitleTextStyle& style) const;
+
     // Measurement methods
     float getTextWidth(const std::string& text, const SubtitleTextStyle& style) const;
     TextBounds getTextHeight(const std::string& text, const SubtitleTextStyle& style) const;

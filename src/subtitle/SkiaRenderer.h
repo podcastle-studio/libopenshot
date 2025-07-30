@@ -54,6 +54,9 @@ public:
     void scale(const float sx, const float sy) const { canvas->scale(sx, sy); }
 
     SkFont getFont(const FontProps& fontProps);
+    sk_sp<SkTypeface> getTypefaceForCharacter(const std::string& familyOrPath, const SkUnichar character);
+    SkFont getFontForCharacter(const FontProps& fontProps, const SkUnichar character);
+
     SkPaint* getPaint(const PaintProps& paintProps);
 
     // Skia-specific helpers

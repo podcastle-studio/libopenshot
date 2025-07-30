@@ -41,6 +41,78 @@ SkFont SkiaRenderer::getFont(const FontProps& fontProps) {
     return skFont;
 }
 
+sk_sp<SkTypeface> SkiaRenderer::getTypefaceForCharacter(const std::string& familyOrPath, const SkUnichar character) {
+    // Create a key for caching
+    const std::string cacheKey = familyOrPath + "_char_" + std::to_string(character);
+
+    if (const auto it = typefaceCache.find(cacheKey); it != typefaceCache.end()) {
+        return it->second;
+    }
+
+    sk_sp<SkTypeface> typeface;
+
+    // First try the requested font
+    constexpr SkFontStyle style(400, SkFontStyle::kNormal_Width, SkFontStyle::kUpright_Slant);
+    if (std::filesystem::is_regular_file(familyOrPath)) {
+        typeface = fontMgr->makeFromFile(familyOrPath.c_str());
+    } else {
+        typeface = fontMgr->matchFamilyStyle(familyOrPath.c_str(), style);
+    }
+
+    // Check if this typeface can render the character
+    if (typeface) {
+        const SkFont testFont(typeface);
+        const SkGlyphID glyphID = testFont.unicharToGlyph(character);
+        if (glyphID != 0) {
+            typefaceCache[cacheKey] = typeface;
+            return typeface;
+        }
+    }
+
+    // Fallback to DejaVu Serif for any unsupported character
+    typeface = fontMgr->matchFamilyStyle("DejaVu Serif", style);
+    if (typeface) {
+        // Verify it actually has the character
+        const SkFont testFont(typeface);
+        if (testFont.unicharToGlyph(character) != 0) {
+            typefaceCache[cacheKey] = typeface;
+            return typeface;
+        }
+    }
+
+    // Ultimate fallback to any available font
+    if (!typeface) {
+        typeface = fontMgr->matchFamilyStyle(nullptr, style);
+    }
+
+    typefaceCache[cacheKey] = typeface;
+    return typeface;
+}
+
+SkFont SkiaRenderer::getFontForCharacter(const FontProps& fontProps, const SkUnichar character) {
+    const std::string key = fontProps.getKey() + "_char_" + std::to_string(character);
+
+    if (const auto it = fontCache.find(key); it != fontCache.end()) {
+        return it->second;
+    }
+
+    const sk_sp<SkTypeface> typeface = getTypefaceForCharacter(fontProps.fontFamily, character);
+    SkFont skFont(typeface, fontProps.fontSize);
+
+    if (fontProps.italic) {
+        skFont.setSkewX(-0.25f);
+    }
+
+    if (fontProps.fontWeight >= 500) {
+        skFont.setEmbolden(true);
+    }
+
+    skFont.setEdging(SkFont::Edging::kAntiAlias);
+
+    fontCache[key] = skFont;
+    return skFont;
+}
+
 SkPaint* SkiaRenderer::getPaint(const PaintProps& paintProps) {
     const std::string key = paintProps.getKey();
     if (const auto it = paintCache.find(key); it != paintCache.end()) {
