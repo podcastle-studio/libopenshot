@@ -28,8 +28,7 @@ double SubtitleRenderer::getStartX(const float textWidth, const float containerW
 
 double SubtitleRenderer::getStartY(const int currentLine, const SubtitleTextStyle& textStyle, const SubtitleContainerStyle& containerStyle) {
     const int line = (containerStyle.appearance == TextAppearance::ONE_WORD) ? 0 : currentLine;
-
-    return containerStyle.paddingY + textStyle.fontSize * (line + 1) + line * (textStyle.lineHeight - 1) * textStyle.fontSize;
+    return containerStyle.paddingY + textStyle.fontSize * (line + 1) + line * (textStyle.lineHeight - textStyle.fontSize); // absolute, not ratio
 }
 
 std::vector<std::vector<size_t>> SubtitleRenderer::getLines(const std::vector<StyledWord>& styledWords,
@@ -73,172 +72,114 @@ std::vector<std::vector<size_t>> SubtitleRenderer::getLines(const std::vector<St
 }
 
 double SubtitleRenderer::getHeight(const SubtitleSegment& segment, const SegmentSettings& settings, const float maxWidth) const {
-    const SegmentSettings& segmentSettings = segment.attached ? settings :
-        (segment.settings.has_value() ? segment.settings.value() : settings);
+    const SegmentSettings &segSet = segment.attached ? settings : (segment.settings ? *segment.settings : settings);
 
-    const std::vector<WordAnimation> wordAnimations = processSegmentAnimation(segment.wordDetails, segmentSettings, fps);
+    const auto wordAnims = processSegmentAnimation(segment.wordDetails, segSet, fps);
+    const auto& defStyle   = segSet.defaultStyle;
+    const auto& contStyle  = segSet.containerStyle;
 
-    const auto& defaultStyle = segmentSettings.defaultStyle;
-    const auto& containerStyle = segmentSettings.containerStyle;
+    std::vector<StyledWord> lastFrame;
+    lastFrame.reserve(wordAnims.size());
 
-    // For height calculation, we need words at their final state
-    std::vector<StyledWord> lastFrameStyledWords;
-    for (size_t i = 0; i < wordAnimations.size(); ++i) {
-        const auto& wordAnim = wordAnimations[i];
-        const auto& wordDetail = segment.wordDetails[i];
+    for (size_t i = 0; i < wordAnims.size(); ++i) {
+      const auto &wa = wordAnims[i];
+      const auto &wd = segment.wordDetails[i];
 
-        StyledWord styledWord;
-        styledWord.word = transformText(wordAnim.word, defaultStyle);
-
-        // Apply animations at the end of this word's duration
-        const float wordElapsed = wordDetail.endMs - wordDetail.startMs;
-        styledWord.style = applyAnimationParams(wordAnim.params, wordDetail.startMs + wordElapsed, fps, defaultStyle);
-
-        lastFrameStyledWords.push_back(styledWord);
+      float dur = wd.endMs - wd.startMs;
+      StyledWord sw{wa.word, applyAnimationParams(wa.params, wd.startMs + dur,
+                                                  fps, defStyle)};
+      lastFrame.push_back(std::move(sw));
     }
 
-    const auto lines = getLines(lastFrameStyledWords, maxWidth, containerStyle);
-    return defaultStyle.fontSize * lines.size() + (lines.size() - 1) * (defaultStyle.lineHeight - 1) * defaultStyle.fontSize;
+    const auto lines = getLines(lastFrame, maxWidth, contStyle);
+    return defStyle.fontSize * lines.size() + (lines.size() - 1) * (defStyle.lineHeight - defStyle.fontSize);
 }
 
 void SubtitleRenderer::renderSegment(const SubtitleSegment& segment, const SegmentSettings& settings,
-                                   float segmentTimeMs, float canvasWidth, float canvasHeight) const {
-    const SegmentSettings& segmentSettings = segment.attached ? settings :
-        (segment.settings.has_value() ? segment.settings.value() : settings);
+    const float segmentTimeMs, const float canvasW, const float canvasH) const {
+    const SegmentSettings& segSet = segment.attached ? settings : (segment.settings ? *segment.settings : settings);
 
-    std::vector<WordAnimation> wordAnimations = processSegmentAnimation(
-        segment.wordDetails, segmentSettings, fps);
+    auto wordAnims = processSegmentAnimation(segment.wordDetails, segSet, fps);
 
-    const auto& defaultStyle = segmentSettings.defaultStyle;
-    const auto& transformation = segmentSettings.transformation;
-    const auto& containerStyle = segmentSettings.containerStyle;
-    float maxWidth = transformation.maxWidth;
+    const auto& defStyle   = segSet.defaultStyle;
+    const auto& trans      = segSet.transformation;
+    const auto& contStyle  = segSet.containerStyle;
+    const float maxWidth   = trans.maxWidth;
 
-    // Get styled words for current time
-    std::vector<StyledWord> frameStyledWords;
-    for (size_t i = 0; i < wordAnimations.size(); ++i) {
-        const auto& wordAnim = wordAnimations[i];
-        const auto& wordDetail = segment.wordDetails[i];
+    // ── build frameStyledWords ───────────────────────────────────────────────
+    std::vector<StyledWord> frameWords;
+    frameWords.reserve(wordAnims.size());
 
-        StyledWord styledWord;
-        styledWord.word = transformText(wordAnim.word, defaultStyle);
+    for (size_t i = 0; i < wordAnims.size(); ++i) {
+        const auto& wa = wordAnims[i];
+        const auto& wd = segment.wordDetails[i];
 
-        // Check if this word should be visible at current segment time
-        if (segmentTimeMs >= wordDetail.startMs && segmentTimeMs <= wordDetail.endMs) {
-            // Word is active - calculate elapsed time relative to word start
-            float wordElapsed = segmentTimeMs - wordDetail.startMs;
-            // Apply animations using absolute time (word start + elapsed)
-            styledWord.style = applyAnimationParams(wordAnim.params, wordDetail.startMs + wordElapsed, fps, defaultStyle);
-        } else if (segmentTimeMs > wordDetail.endMs) {
-            // Word has finished - show at final state
-            float wordDuration = wordDetail.endMs - wordDetail.startMs;
-            styledWord.style = applyAnimationParams(wordAnim.params, wordDetail.startMs + wordDuration, fps, defaultStyle);
-        } else {
-            // Word hasn't started yet - show at initial state
-            styledWord.style = applyAnimationParams(wordAnim.params, wordDetail.startMs, fps, defaultStyle);
+        StyledWord sw; sw.word = transformText(wa.word, defStyle);
+
+        if (segmentTimeMs >= wd.startMs && segmentTimeMs <= wd.endMs) {
+            sw.style = applyAnimationParams(wa.params,
+                                            wd.startMs + (segmentTimeMs - wd.startMs),
+                                            fps, defStyle);
+        } else if (segmentTimeMs > wd.endMs) {
+            sw.style = applyAnimationParams(wa.params, wd.endMs, fps, defStyle);
+        } else { // not started yet – evaluate at current segment time
+            sw.style = applyAnimationParams(wa.params, segmentTimeMs, fps, defStyle);
         }
-
-        frameStyledWords.push_back(styledWord);
+        frameWords.push_back(std::move(sw));
     }
 
-    // Get styled words for last frame (for layout calculation)
-    std::vector<StyledWord> lastFrameStyledWords;
-    for (size_t i = 0; i < wordAnimations.size(); ++i) {
-        const auto& wordAnim = wordAnimations[i];
-        const auto& wordDetail = segment.wordDetails[i];
+    // layout uses last‑frame styles
+    std::vector<StyledWord> lfWords;
+    lfWords.reserve(wordAnims.size());
+    for (size_t i = 0; i < wordAnims.size(); ++i) {
+        const auto& wa = wordAnims[i];
+        const auto& wd = segment.wordDetails[i];
 
-        StyledWord styledWord;
-        styledWord.word = transformText(wordAnim.word, defaultStyle);
-
-        // Apply animations at the end of this word's duration
-        float wordDuration = wordDetail.endMs - wordDetail.startMs;
-        styledWord.style = applyAnimationParams(wordAnim.params, wordDetail.startMs + wordDuration, fps, defaultStyle);
-
-        lastFrameStyledWords.push_back(styledWord);
+        float dur = wd.endMs - wd.startMs;
+        lfWords.push_back({ wa.word,
+            applyAnimationParams(wa.params, wd.startMs + dur, fps, defStyle) });
     }
 
-    auto lines = getLines(lastFrameStyledWords, maxWidth, containerStyle);
+    auto lines = getLines(lfWords, maxWidth, contStyle);
 
-    // Calculate total subtitle block dimensions
-    float totalHeight = defaultStyle.fontSize * lines.size() +
-                       (lines.size() - 1) * (defaultStyle.lineHeight - 1) * defaultStyle.fontSize;
+    float totalH = defStyle.fontSize * lines.size()
+                 + (lines.size() - 1) * (defStyle.lineHeight - defStyle.fontSize);
 
-    // Find the widest line
-    float maxLineWidth = 0;
-    for (const auto& line : lines) {
-        std::vector<StyledWord> lineWords;
-        for (size_t wordIdx : line) {
-            if (wordIdx < lastFrameStyledWords.size()) {
-                lineWords.push_back(lastFrameStyledWords[wordIdx]);
-            }
-        }
-        float lineWidth = textRenderer->measureTextWidth(lineWords);
-        maxLineWidth = std::max(maxLineWidth, lineWidth);
+    float maxLineW = 0;
+    for (const auto& ln : lines) {
+        std::vector<StyledWord> tmp;
+        for (auto idx : ln) tmp.push_back(lfWords[idx]);
+        maxLineW = std::max(maxLineW, textRenderer->measureTextWidth(tmp));
     }
 
-    // Calculate the center position based on transformation settings. center.x and center.y are percentages
-    float centerX = canvasWidth * transformation.center.x;
-    float centerY = canvasHeight * transformation.center.y;
+    // ── canvas transform ────────────────────────────────────────────────────
+    const float cx = canvasW * trans.center.x;
+    const float cy = canvasH * trans.center.y;
 
-    // Apply transformations
     renderer->save();
+    renderer->translate(cx, cy);
+    if (trans.rotation) renderer->rotate(trans.rotation);
+    if (trans.scale.horizontalScale != 1.0f || trans.scale.verticalScale != 1.0f)
+        renderer->scale(trans.scale.horizontalScale, trans.scale.verticalScale);
+    renderer->translate(-maxLineW / 2, -totalH / 2);
 
-    // Step 1: Translate to the desired center point
-    renderer->translate(centerX, centerY);
+    // ── draw lines ──────────────────────────────────────────────────────────
+    for (size_t li = 0; li < lines.size(); ++li) {
+        std::vector<StyledWord> lineWords;
+        for (auto idx : lines[li]) lineWords.push_back(frameWords[idx]);
 
-    // Step 2: Apply rotation around this center point
-    if (transformation.rotation != 0) {
-        renderer->rotate(transformation.rotation);
-    }
+        float lineW = textRenderer->measureTextWidth(lineWords);
 
-    // Step 3: Apply scale around this center point
-    if (transformation.scale.horizontalScale != 1.0f || transformation.scale.verticalScale != 1.0f) {
-        renderer->scale(transformation.scale.horizontalScale, transformation.scale.verticalScale);
-    }
-
-    // Step 4: Offset to position the content correctly
-    // The content should be centered horizontally around the center point
-    // For vertical, since center.y = 0.9 (90%), the text should be positioned
-    // so that its vertical center is at 90% of canvas height
-    float contentOffsetX = -maxLineWidth / 2;
-    float contentOffsetY = -totalHeight / 2;
-
-    renderer->translate(contentOffsetX, contentOffsetY);
-
-    // Render each line
-    for (size_t lineIdx = 0; lineIdx < lines.size(); ++lineIdx) {
-        const auto& line = lines[lineIdx];
-
-        // Get styled words for this line at current time
-        std::vector<StyledWord> lineStyledWords;
-        for (size_t wordIdx : line) {
-            if (wordIdx < frameStyledWords.size()) {
-                lineStyledWords.push_back(frameStyledWords[wordIdx]);
-            }
-        }
-
-        float totalLineWidth = textRenderer->measureTextWidth(lineStyledWords);
-
-        // Calculate x position for this line based on alignment
         double x = 0;
-        switch (containerStyle.textAlign) {
-            case TextAlignment::LEFT:
-                x = containerStyle.paddingX;
-                break;
-            case TextAlignment::CENTER:
-                x = (maxLineWidth - totalLineWidth) / 2;
-                break;
-            case TextAlignment::RIGHT:
-                x = maxLineWidth - totalLineWidth - containerStyle.paddingX;
-                break;
+        switch (contStyle.textAlign) {
+            case TextAlignment::LEFT:   x = contStyle.paddingX; break;
+            case TextAlignment::CENTER: x = (maxLineW - lineW) / 2; break;
+            case TextAlignment::RIGHT:  x = maxLineW - lineW - contStyle.paddingX; break;
         }
+        double y = getStartY(li, defStyle, contStyle);
 
-        // Calculate y position for this line
-        double y = getStartY(lineIdx, defaultStyle, containerStyle);
-
-        textRenderer->renderText(lineStyledWords, x, y);
+        textRenderer->renderText(lineWords, x, y);
     }
-
     renderer->restore();
 }
 

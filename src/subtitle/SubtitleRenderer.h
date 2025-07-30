@@ -16,18 +16,17 @@ public:
     ~SubtitleRenderer();
 
     // Height calculation for layout
-    double getHeight(const SubtitleSegment& segment, const SegmentSettings& settings, float maxWidth) const;
+    double getHeight(const SubtitleSegment& segment, const SegmentSettings& settings, const float maxWidth) const;
 
-    // Main rendering methods
     void renderSegment(const SubtitleSegment& segment, const SegmentSettings& settings,
-                    float segmentTimeMs, float canvasWidth, float canvasHeight) const;
+      const float segmentTimeMs, const float canvasW, const float canvasH) const;
 
     void renderSegmentAtFrame(const SubtitleSegment& segment, const SegmentSettings& settings,
                             int64_t frameNumber, float canvasWidth, float canvasHeight) const;
 
 private:
-    static double getStartX(float textWidth, float containerWidth, const SubtitleContainerStyle& containerStyles);
-    static double getStartY(int currentLine, const SubtitleTextStyle& textStyle, const SubtitleContainerStyle& containerStyle);
+    static double getStartX(const float textWidth, const float containerWidth, const SubtitleContainerStyle& containerStyles);
+    static double getStartY(const int currentLine, const SubtitleTextStyle& textStyle, const SubtitleContainerStyle& containerStyle);
 
     std::vector<std::vector<size_t>> getLines(const std::vector<StyledWord>& styledWords, float maxWidth, const SubtitleContainerStyle& containerStyles) const;
 

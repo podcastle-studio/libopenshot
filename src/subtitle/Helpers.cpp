@@ -173,45 +173,48 @@ float frameToMs(const int64_t frame, const float fps) {
 std::vector<WordAnimation> processSegmentAnimation(
         const std::vector<WordDetail>& wordDetails,
         const SegmentSettings&         settings,
-        float                          fps)
-{
+        float                          fps) {
     std::vector<WordAnimation> animations;
     if (wordDetails.empty())
         return animations;
 
-    const auto& animSet      = settings.animationSettings;
-    const auto& defaultStyle = settings.defaultStyle;
+    // ── ONE_WORD preset tweaks ───────────────────────────────────────────────
+    const bool oneWord = settings.containerStyle.appearance == TextAppearance::ONE_WORD;
 
-    // ──────────────────────────────────────────────────────────────
-    // 1.  Work on *copies* of the style maps – we will mutate them.
-    // ──────────────────────────────────────────────────────────────
-    auto inNumStyles   = animSet.inStyles;        // numeric (opacity, size, …)
-    auto outNumStyles  = animSet.outStyles;
-    auto inColStyles   = animSet.inStylesColor;   // colours  (#RRGGBB)
-    auto outColStyles  = animSet.outStylesColor;
+    // Work on a *copy* so we can safely mutate in/out styles
+    AnimationSettings animSet = settings.animationSettings;
 
-    // Animated‑key sets are frozen **before** we touch outNum/ColStyles.
+    const SubtitleTextStyle& defaultStyle = settings.defaultStyle;
+    SubtitleTextStyle baseStyle = oneWord ? oneWordBase(defaultStyle)
+                                          : defaultStyle;
+
+    if (oneWord) {
+        // Ensure the four opacities fade *in* from baseStyle, then *out* to zero
+        auto ensureIn = [&](const std::string& k, double v) {
+            if (!animSet.inStyles.count(k)) animSet.inStyles[k] = v;
+        };
+        ensureIn("opacity",            defaultStyle.opacity);
+        ensureIn("backgroundOpacity",  defaultStyle.backgroundOpacity.value_or(1.0));
+        ensureIn("shadowOpacity",      defaultStyle.shadowOpacity.value_or(1.0));
+        ensureIn("strokeOpacity",      defaultStyle.strokeOpacity.value_or(1.0));
+
+        animSet.outStyles["opacity"]           = 0.0;
+        animSet.outStyles["backgroundOpacity"] = 0.0;
+        animSet.outStyles["shadowOpacity"]     = 0.0;
+        animSet.outStyles["strokeOpacity"]     = 0.0;
+    }
+    // ─────────────────────────────────────────────────────────────────────────
+
+    // Build animated‑key sets **after** tweaks
     std::set<std::string> animatedNumKeys;
-    for (auto& [k, _] : inNumStyles)  animatedNumKeys.insert(k);
-    for (auto& [k, _] : outNumStyles) animatedNumKeys.insert(k);
+    for (auto& [k, _] : animSet.inStyles)  animatedNumKeys.insert(k);
+    for (auto& [k, _] : animSet.outStyles) animatedNumKeys.insert(k);
 
     std::set<std::string> animatedColKeys;
-    for (auto& [k, _] : inColStyles)  animatedColKeys.insert(k);
-    for (auto& [k, _] : outColStyles) animatedColKeys.insert(k);
+    for (auto& [k, _] : animSet.inStylesColor)  animatedColKeys.insert(k);
+    for (auto& [k, _] : animSet.outStylesColor) animatedColKeys.insert(k);
 
-    // ──────────────────────────────────────────────────────────────
-    // 2.  ONE_WORD appearance – force opacities to 0 in *out* maps,
-    //     but DON'T add them to animatedNumKeys
-    // ──────────────────────────────────────────────────────────────
-    if (settings.containerStyle.appearance == TextAppearance::ONE_WORD) {
-        outNumStyles["opacity"]            = 0.0;
-        outNumStyles["backgroundOpacity"]  = 0.0;
-        outNumStyles["shadowOpacity"]      = 0.0;
-        outNumStyles["strokeOpacity"]      = 0.0;
-    }
-
-    // ──────────────────────────────────────────────────────────────
-    float segmentStart = wordDetails.front().startMs;
+    const float segmentStart = wordDetails.front().startMs;
 
     for (const WordDetail& wd : wordDetails) {
         WordAnimation anim;
@@ -227,14 +230,11 @@ std::vector<WordAnimation> processSegmentAnimation(
             inDur = outDur = duration * 0.5f;
         }
 
-        // ----------------------------------------------------------
-        // Numeric properties (opacity, fontSize, …)
-        // ----------------------------------------------------------
+        // ── numeric properties ───────────────────────────────────────────────
         for (const std::string& key : animatedNumKeys) {
-
-            double initial  = getBaseValue(key, defaultStyle);
-            double animated = inNumStyles.count(key)  ? inNumStyles[key]  : initial;
-            double final    = outNumStyles.count(key) ? outNumStyles[key] : initial;
+            double initial  = getBaseValue(key, baseStyle);
+            double animated = animSet.inStyles.count(key)  ? animSet.inStyles[key]  : initial;
+            double final    = animSet.outStyles.count(key) ? animSet.outStyles[key] : initial;
 
             int64_t f0        = msToFrame(0, fps);
             int64_t fStart    = msToFrame(relStart, fps);
@@ -242,44 +242,27 @@ std::vector<WordAnimation> processSegmentAnimation(
             int64_t fOutStart = msToFrame(relEnd   - outDur, fps);
             int64_t fEnd      = msToFrame(relEnd, fps);
 
-            AnimationParam p;
-            p.name = key;
+            AnimationParam p;  p.name = key;
 
-            // 0) initial plateau until the word begins
             p.keyframe.AddPoint(f0,     initial, CONSTANT);
             p.keyframe.AddPoint(fStart, initial, CONSTANT);
-
-            // 1) in‑animation
             p.keyframe.AddPoint(fInEnd, animated, animSet.inInterpolation);
 
             if (outDur > 0) {
-                // 2a) constant plateau until out‑animation begins
-                if (fOutStart > fInEnd)
-                    p.keyframe.AddPoint(fOutStart, animated, CONSTANT);
-
-                // 3) out‑animation to final value
+                if (fOutStart > fInEnd) p.keyframe.AddPoint(fOutStart, animated, CONSTANT);
                 p.keyframe.AddPoint(fEnd, final, animSet.outInterpolation);
-            }
-            else {
-                // 2b) keep animated value until the frame just before the end…
-                if (fEnd - 1 > fInEnd)
-                    p.keyframe.AddPoint(fEnd - 1, animated, CONSTANT);
-
-                // 3) …then snap to final value on the very last frame
+            } else {
+                if (fEnd - 1 > fInEnd)   p.keyframe.AddPoint(fEnd - 1, animated, CONSTANT);
                 p.keyframe.AddPoint(fEnd, final, CONSTANT);
             }
-
             anim.params.emplace_back(std::move(p));
         }
 
-        // ----------------------------------------------------------
-        // Colour properties (split into .r/.g/.b channels)
-        // ----------------------------------------------------------
+        // ── colour properties (r/g/b split) ─────────────────────────────────
         for (const std::string& key : animatedColKeys) {
-
-            std::string initHex  = getBaseColor(key, defaultStyle);
-            std::string animHex  = inColStyles.count(key)  ? inColStyles[key]  : initHex;
-            std::string finalHex = outColStyles.count(key) ? outColStyles[key] : initHex;
+            std::string initHex  = getBaseColor(key, baseStyle);
+            std::string animHex  = animSet.inStylesColor.count(key)  ? animSet.inStylesColor[key]  : initHex;
+            std::string finalHex = animSet.outStylesColor.count(key) ? animSet.outStylesColor[key] : initHex;
 
             auto [ir, ig, ib] = hexToRgb(initHex);
             auto [ar, ag, ab] = hexToRgb(animHex);
@@ -291,24 +274,18 @@ std::vector<WordAnimation> processSegmentAnimation(
             int64_t fOutStart = msToFrame(relEnd   - outDur, fps);
             int64_t fEnd      = msToFrame(relEnd, fps);
 
-            auto addRGB = [&](const std::string& suffix,
-                              const double i, const double a, const double f)
-            {
-                AnimationParam p;
-                p.name = key + suffix;
+            auto addRGB = [&](const std::string& suf, double i, double a, double f) {
+                AnimationParam p; p.name = key + suf;
 
                 p.keyframe.AddPoint(f0,     i, CONSTANT);
                 p.keyframe.AddPoint(fStart, i, CONSTANT);
                 p.keyframe.AddPoint(fInEnd, a, animSet.inInterpolation);
 
                 if (outDur > 0) {
-                    if (fOutStart > fInEnd)
-                        p.keyframe.AddPoint(fOutStart, a, CONSTANT);
+                    if (fOutStart > fInEnd) p.keyframe.AddPoint(fOutStart, a, CONSTANT);
                     p.keyframe.AddPoint(fEnd, f, animSet.outInterpolation);
-                }
-                else {
-                    if (fEnd - 1 > fInEnd)
-                        p.keyframe.AddPoint(fEnd - 1, a, CONSTANT);
+                } else {
+                    if (fEnd - 1 > fInEnd)   p.keyframe.AddPoint(fEnd - 1, a, CONSTANT);
                     p.keyframe.AddPoint(fEnd, f, CONSTANT);
                 }
                 anim.params.emplace_back(std::move(p));
@@ -318,10 +295,8 @@ std::vector<WordAnimation> processSegmentAnimation(
             addRGB(".g", ig, ag, fg);
             addRGB(".b", ib, ab, fb);
         }
-
         animations.emplace_back(std::move(anim));
     }
-
     return animations;
 }
 

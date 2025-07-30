@@ -356,11 +356,11 @@ void SubtitleManager::renderAtFrame(std::shared_ptr<QImage> frameImage, int64_t 
     for (const auto& segment : segments) {
         if (segment.visible && timeMs >= segment.startTimeMs && timeMs <= segment.endTimeMs) {
             float segmentTimeMs = timeMs - segment.startTimeMs;
-            
+
             // Use the segment's maxWidth if it has custom settings, otherwise use default
             const SegmentSettings& settings = segment.attached ? defaultSettings :
                 (segment.settings.has_value() ? segment.settings.value() : defaultSettings);
-            
+
             subtitleRenderer.renderSegment(segment, settings, segmentTimeMs, canvasWidth, canvasHeight);
         }
     }
