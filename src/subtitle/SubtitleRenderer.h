@@ -19,7 +19,7 @@ public:
     double getHeight(const SubtitleSegment& segment, const SegmentSettings& settings, const float maxWidth) const;
 
     void renderSegment(const SubtitleSegment& segment, const SegmentSettings& settings,
-      const float segmentTimeMs, const float canvasW, const float canvasH) const;
+      const float segmentMs, const float canvasW, const float canvasH) const;
 
     void renderSegmentAtFrame(const SubtitleSegment& segment, const SegmentSettings& settings,
                             int64_t frameNumber, float canvasWidth, float canvasHeight) const;

@@ -25,7 +25,10 @@ SubtitleTextStyle applyAnimationParams(const std::vector<AnimationParam>& params
 float frameToMs(const int64_t frame, const float fps);
 
 // Process segment animation
-std::vector<WordAnimation> processSegmentAnimation(const std::vector<WordDetail>& wordDetails, const SegmentSettings& settings, const float fps);
+std::vector<WordAnimation> processSegmentAnimation(const std::vector<WordDetail>& wordDetails,
+        const SegmentSettings&         settings,
+        float                          fps,
+        const std::vector<std::vector<size_t>>& wordsPerLine = {});
 
 }
 

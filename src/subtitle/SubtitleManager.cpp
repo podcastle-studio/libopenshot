@@ -183,65 +183,52 @@ void SubtitleManager::parseTextStyle(const Json::Value& styleJson, SubtitleTextS
 }
 
 // Helper method to parse animation settings
-void SubtitleManager::parseAnimationSettings(const Json::Value& animJson, AnimationSettings& settings) {
-    // In animation
-    if (animJson.isMember("inInterpolation")) {
-        const Json::Value& inInterp = animJson["inInterpolation"];
-        if (inInterp.isMember("type")) {
-            std::string type = inInterp["type"].asString();
-            if (type == "LINEAR")
-                settings.inInterpolation = LINEAR;
-            else if (type == "BEZIER")
-                settings.inInterpolation = BEZIER;
-            else if (type == "CONSTANT")
-                settings.inInterpolation = CONSTANT;
-        }
+void SubtitleManager::parseAnimationSettings(const Json::Value& animJson,
+                                             AnimationSettings& settings)
+{
+    // ── level ──────────────────────────────────────────────────────────────
+    if (animJson.isMember("level")) {
+        const std::string lvl = animJson["level"].asString();
+        settings.level = (lvl == "LINE" || lvl == "SEGMENT")
+                       ? AnimationLevel::LINE
+                       : AnimationLevel::WORD;
     }
 
+    // ── in‑interpolation & duration ───────────────────────────────────────
+    if (animJson.isMember("inInterpolation")) {
+        const std::string type = animJson["inInterpolation"]["type"].asString();
+        settings.inInterpolation = (type == "BEZIER") ? BEZIER
+                                 : (type == "CONSTANT") ? CONSTANT
+                                 : LINEAR;
+    }
     if (animJson.isMember("inDuration"))
         settings.inDuration = animJson["inDuration"].asFloat();
 
-    // Parse inStyles
-    if (animJson.isMember("inStyles")) {
-        const Json::Value& inStyles = animJson["inStyles"];
-        for (const auto& key : inStyles.getMemberNames()) {
-            if (inStyles[key].isString()) {
-                // It's a color
-                settings.inStylesColor[key] = inStyles[key].asString();
-            } else if (inStyles[key].isNumeric()) {
-                // It's a numeric value
-                settings.inStyles[key] = inStyles[key].asFloat();
-            }
-        }
-    }
+    // ── inStyles ──────────────────────────────────────────────────────────
+    if (animJson.isMember("inStyles"))
+        for (const auto& k : animJson["inStyles"].getMemberNames())
+            if (animJson["inStyles"][k].isString())
+                settings.inStylesColor[k] = animJson["inStyles"][k].asString();
+            else
+                settings.inStyles[k] = animJson["inStyles"][k].asFloat();
 
-    // Out animation
+    // ── out‑interpolation & duration ──────────────────────────────────────
     if (animJson.isMember("outInterpolation")) {
-        const Json::Value& outInterp = animJson["outInterpolation"];
-        if (outInterp.isMember("type")) {
-            std::string type = outInterp["type"].asString();
-            if (type == "LINEAR")
-                settings.outInterpolation = LINEAR;
-            else if (type == "BEZIER")
-                settings.outInterpolation = BEZIER;
-            else if (type == "CONSTANT")
-                settings.outInterpolation = CONSTANT;
-        }
+        const std::string type = animJson["outInterpolation"]["type"].asString();
+        settings.outInterpolation = (type == "BEZIER") ? BEZIER
+                                  : (type == "CONSTANT") ? CONSTANT
+                                  : LINEAR;
     }
-
     if (animJson.isMember("outDuration"))
         settings.outDuration = animJson["outDuration"].asFloat();
 
-    if (animJson.isMember("outStyles")) {
-        const Json::Value& outStyles = animJson["outStyles"];
-        for (const auto& key : outStyles.getMemberNames()) {
-            if (outStyles[key].isString()) {
-                settings.outStylesColor[key] = outStyles[key].asString();
-            } else if (outStyles[key].isNumeric()) {
-                settings.outStyles[key] = outStyles[key].asFloat();
-            }
-        }
-    }
+    // ── outStyles ─────────────────────────────────────────────────────────
+    if (animJson.isMember("outStyles"))
+        for (const auto& k : animJson["outStyles"].getMemberNames())
+            if (animJson["outStyles"][k].isString())
+                settings.outStylesColor[k] = animJson["outStyles"][k].asString();
+            else
+                settings.outStyles[k] = animJson["outStyles"][k].asFloat();
 }
 
 // Helper method to parse global settings

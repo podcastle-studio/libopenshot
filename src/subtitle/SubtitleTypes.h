@@ -13,6 +13,7 @@ namespace subtitle {
 enum class TextAlignment { LEFT, CENTER, RIGHT };
 enum class TextTransform { NONE, UPPERCASE, LOWERCASE, CAPITALIZE };
 enum class TextAppearance { ONE_WORD, PER_TIME };
+enum class AnimationLevel { WORD, LINE };
 
 struct AnimationParam {
     std::string name;
@@ -73,6 +74,8 @@ struct StyledWord {
 };
 
 struct AnimationSettings {
+    AnimationLevel level = AnimationLevel::WORD;
+
     InterpolationType inInterpolation = LINEAR;
     float inDuration = 100;  // Duration in milliseconds
     std::map<std::string, double> inStyles;
