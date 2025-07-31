@@ -61,6 +61,7 @@ struct SubtitleContainerStyle {
     double paddingY = 0;
     double radius = 0;
     std::string color = "#000000";
+    bool punctuation = false;
 };
 
 struct WordAnimation {

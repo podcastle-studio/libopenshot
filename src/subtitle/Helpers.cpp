@@ -6,6 +6,7 @@
 #include <cctype>
 #include <set>
 #include <cmath>
+#include <regex>
 
 namespace {
 
@@ -78,7 +79,7 @@ std::string getBaseColor(const std::string& key, const openshot::subtitle::Subti
 namespace openshot {
 namespace subtitle {
 
-std::string transformText(const std::string& text, const SubtitleTextStyle& style) {
+std::string transformText(const std::string& text, const SubtitleTextStyle& style, SubtitleContainerStyle containerStyle) {
     std::string result = text;
     switch (style.textTransform) {
         case TextTransform::UPPERCASE:
@@ -101,6 +102,9 @@ std::string transformText(const std::string& text, const SubtitleTextStyle& styl
             break;
     }
 
+    if (!containerStyle.punctuation) {
+        result = std::regex_replace(text, std::regex("^[.,/!^;:\\-_`~]+|[.,/#!^;:\\-_`~]+$"), "");
+    }
     return result;
 }
 

@@ -56,6 +56,10 @@ SegmentSettings SubtitleManager::parseSegmentSettings(const Json::Value& setting
             }
         }
 
+        if (containerStyle.isMember("punctuation")) {
+            settings.containerStyle.punctuation = containerStyle["appearance"].asBool();
+        }
+
         if (containerStyle.isMember("opacity"))
             settings.containerStyle.opacity = containerStyle["opacity"].asFloat();
         if (containerStyle.isMember("paddingX"))

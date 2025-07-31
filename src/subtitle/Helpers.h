@@ -15,7 +15,7 @@ inline SubtitleTextStyle oneWordBase(const SubtitleTextStyle& s) {
 }
 
 // Transform text based on style
-std::string transformText(const std::string& text, const SubtitleTextStyle& style);
+std::string transformText(const std::string& text, const SubtitleTextStyle& style, SubtitleContainerStyle containerStyle);
 
 // Apply animation parameters to style
 SubtitleTextStyle applyAnimationParams(const std::vector<AnimationParam>& params,

@@ -128,7 +128,7 @@ void SubtitleRenderer::renderSegment(const SubtitleSegment& segment, const Segme
     for (size_t i=0;i<anim.size();++i){
         const auto& wa = anim[i];
         const auto& wd = segment.wordDetails[i];
-        StyledWord sw; sw.word = transformText(wa.word, segSet.defaultStyle);
+        StyledWord sw; sw.word = transformText(wa.word, segSet.defaultStyle, segSet.containerStyle);
 
         if (segmentMs >= wd.startMs && segmentMs <= wd.endMs)
             sw.style = applyAnimationParams(wa.params,
