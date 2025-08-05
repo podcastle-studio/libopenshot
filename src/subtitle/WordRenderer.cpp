@@ -177,12 +177,14 @@ void WordRenderer::drawBubbleBackground(const float wordWidth, const SubtitleTex
     const auto paddingY = style.backgroundPaddingY.value_or(0);
     const auto radius = style.backgroundRadius.value_or(0);
 
+    const auto strokeWidth = style.fontSize * 0.05;
+
     // Shadow path
     SkPath pathShadow;
     bubblePath(
         &pathShadow,
-        -wordWidth / 2 - paddingX - 6,
-        -style.fontSize - paddingY + deltaY + 6,
+        -wordWidth / 2 - paddingX - (2 * strokeWidth),
+        -style.fontSize - paddingY + deltaY + (2 * strokeWidth),
         2 * paddingX + wordWidth,
         2 * paddingY + style.fontSize,
         radius
@@ -205,10 +207,10 @@ void WordRenderer::drawBubbleBackground(const float wordWidth, const SubtitleTex
     SkPath path;
     bubblePath(
         &path,
-        -wordWidth / 2 - paddingX + 3,
-        -style.fontSize - paddingY + deltaY + 3,
-        2 * paddingX + wordWidth - 6,
-        2 * paddingY + style.fontSize - 6,
+        -wordWidth / 2 - paddingX + strokeWidth,
+        -style.fontSize - paddingY + deltaY + strokeWidth,
+        2 * paddingX + wordWidth - (2 * strokeWidth),
+        2 * paddingY + style.fontSize - (2 * strokeWidth),
         radius
     );
     renderer->drawPath(path, *bgPaint);
