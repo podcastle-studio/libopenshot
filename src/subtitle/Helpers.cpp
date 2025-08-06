@@ -103,7 +103,7 @@ std::string transformText(const std::string& text, const SubtitleTextStyle& styl
     }
 
     if (!containerStyle.punctuation) {
-        result = std::regex_replace(text, std::regex("^[.,/!^;:\\-_`~]+|[.,/#!^;:\\-_`~]+$"), "");
+        result = std::regex_replace(result, std::regex("^[.,/!^;:\\-_`~]+|[.,/#!^;:\\-_`~]+$"), "");
     }
     return result;
 }

@@ -15,7 +15,8 @@ SubtitleRenderer::~SubtitleRenderer() {
 
 double SubtitleRenderer::getStartY(const int currentLine, const SubtitleTextStyle& textStyle, const SubtitleContainerStyle& containerStyle) {
     const int line = (containerStyle.appearance == TextAppearance::ONE_WORD) ? 0 : currentLine;
-    return containerStyle.paddingY + textStyle.fontSize * (line + 1) + line * (textStyle.lineHeight - textStyle.fontSize); // absolute, not ratio
+    return textStyle.fontSize * (line + 1) + line * (textStyle.lineHeight - textStyle.fontSize);
+    // return containerStyle.paddingY + textStyle.fontSize * (line + 1) + line * (textStyle.lineHeight - textStyle.fontSize); // absolute, not ratio
 }
 
 std::vector<std::vector<size_t>> SubtitleRenderer::getLines(const std::vector<StyledWord>& styledWords,
@@ -58,6 +59,24 @@ std::vector<std::vector<size_t>> SubtitleRenderer::getLines(const std::vector<St
     return lines;
 }
 
+void SubtitleRenderer::drawContainer(const float blockW, const float blockH, const SubtitleContainerStyle& style) const {
+    if (!style.color.length() || style.opacity <= 0) return;
+
+    const PaintProps paintProps{ style.color, style.opacity };
+    const SkPaint* paint = renderer->getPaint(paintProps);
+
+    // NB: we are already translated so that the text block’s origin is (0,0)
+    const auto left   = -style.paddingX;
+    const auto top    = -style.paddingY;
+    const auto right  =  blockW + style.paddingX;
+    const auto bottom =  blockH + style.paddingY;
+
+    const SkRect rect = renderer->makeRect(left, top, right, bottom);
+    const SkRRect rr  = renderer->makeRRect(rect, style.radius, style.radius);
+
+    renderer->drawRRect(rr, *paint);
+}
+
 void SubtitleRenderer::renderSegment(const SubtitleSegment& segment, const SegmentSettings& settings,
       const float segmentMs, const float canvasW, const float canvasH) const {
     const SegmentSettings& segSet = segment.attached ? settings
@@ -91,7 +110,8 @@ void SubtitleRenderer::renderSegment(const SubtitleSegment& segment, const Segme
     for (size_t i=0;i<anim.size();++i){
         const auto& wa = anim[i];
         const auto& wd = segment.wordDetails[i];
-        StyledWord sw; sw.word = transformText(wa.word, segSet.defaultStyle, segSet.containerStyle);
+        StyledWord sw;
+        sw.word = transformText(wa.word, segSet.defaultStyle, segSet.containerStyle);
 
         if (segmentMs >= wd.startMs && segmentMs <= wd.endMs)
             sw.style = applyAnimationParams(wa.params,
@@ -130,14 +150,23 @@ void SubtitleRenderer::renderSegment(const SubtitleSegment& segment, const Segme
 
     renderer->save();
     renderer->translate(canvasW*tr.center.x, canvasH*tr.center.y);
-    if (tr.rotation) renderer->rotate(tr.rotation);
-    if (tr.scale.horizontalScale!=1.0f || tr.scale.verticalScale!=1.0f)
+    if (tr.rotation) {
+        renderer->rotate(tr.rotation);
+    }
+    if (tr.scale.horizontalScale!=1.0f || tr.scale.verticalScale!=1.0f) {
         renderer->scale(tr.scale.horizontalScale, tr.scale.verticalScale);
+    }
     renderer->translate(-viewportW/2, -blockH/2);
+
+    // ── background box (if enabled) ───────────────────────────────────────
+    drawContainer(viewportW, blockH, cont);
+
     // ── draw each visual line ─────────────────────────────────────────────
     for (size_t li=0; li<lines.size(); ++li) {
         std::vector<StyledWord> lineWords;
-        for(auto idx:lines[li]) lineWords.push_back(frameWords[idx]);
+        for(auto idx:lines[li]) {
+            lineWords.push_back(frameWords[idx]);
+        }
 
         float lineW = textRenderer->measureTextWidth(lineWords);
         double x = (cont.textAlign == TextAlignment::LEFT)   ? 0 :

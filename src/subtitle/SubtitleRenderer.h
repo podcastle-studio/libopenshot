@@ -26,6 +26,7 @@ private:
 
     std::vector<std::vector<size_t>> getLines(const std::vector<StyledWord>& styledWords, float maxWidth, const SubtitleContainerStyle& containerStyles) const;
 
+    void drawContainer(const float blockW, const float blockH, const SubtitleContainerStyle& style) const;
     SkiaRenderer* renderer;
     TextRenderer* textRenderer;
     float fps;
