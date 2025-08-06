@@ -16,11 +16,11 @@ SubtitleRenderer::~SubtitleRenderer() {
 double SubtitleRenderer::getStartX(const float textWidth, const float containerWidth, const SubtitleContainerStyle& containerStyles) {
     switch (containerStyles.textAlign) {
         case TextAlignment::LEFT:
-            return containerStyles.paddingX;
+            return 0;
         case TextAlignment::CENTER:
-            return containerWidth / 2 - textWidth / 2;
+            return (containerWidth - textWidth) / 2;
         case TextAlignment::RIGHT:
-            return containerWidth - textWidth - containerStyles.paddingX;
+            return containerWidth - textWidth;
         default:
             return 0;
     }
@@ -69,30 +69,6 @@ std::vector<std::vector<size_t>> SubtitleRenderer::getLines(const std::vector<St
     }
 
     return lines;
-}
-
-double SubtitleRenderer::getHeight(const SubtitleSegment& segment, const SegmentSettings& settings, const float maxWidth) const {
-    const SegmentSettings &segSet = segment.attached ? settings : (segment.settings ? *segment.settings : settings);
-
-    const auto wordAnims = processSegmentAnimation(segment.wordDetails, segSet, fps);
-    const auto& defStyle   = segSet.defaultStyle;
-    const auto& contStyle  = segSet.containerStyle;
-
-    std::vector<StyledWord> lastFrame;
-    lastFrame.reserve(wordAnims.size());
-
-    for (size_t i = 0; i < wordAnims.size(); ++i) {
-      const auto &wa = wordAnims[i];
-      const auto &wd = segment.wordDetails[i];
-
-      float dur = wd.endMs - wd.startMs;
-      StyledWord sw{wa.word, applyAnimationParams(wa.params, wd.startMs + dur,
-                                                  fps, defStyle)};
-      lastFrame.push_back(std::move(sw));
-    }
-
-    const auto lines = getLines(lastFrame, maxWidth, contStyle);
-    return defStyle.fontSize * lines.size() + (lines.size() - 1) * (defStyle.lineHeight - defStyle.fontSize);
 }
 
 void SubtitleRenderer::renderSegment(const SubtitleSegment& segment, const SegmentSettings& settings,
@@ -157,7 +133,9 @@ void SubtitleRenderer::renderSegment(const SubtitleSegment& segment, const Segme
         maxLineW = std::max(maxLineW, textRenderer->measureTextWidth(tmp));
     }
     const auto& s = segSet.defaultStyle;
-    float blockH = s.fontSize*lines.size() + (lines.size()-1)*(s.lineHeight - s.fontSize);
+    auto blockH = (cont.appearance == TextAppearance::ONE_WORD)
+         ? s.fontSize  // just one visual line
+         : s.fontSize * lines.size() + (lines.size()-1)*(s.lineHeight - s.fontSize);
 
     // ── transform canvas (unchanged logic) ────────────────────────────────
     const auto& tr = segSet.transformation;

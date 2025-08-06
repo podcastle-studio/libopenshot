@@ -18,8 +18,8 @@ TextBounds TextRenderer::getTextVerticalBounds(const std::vector<StyledWord>& st
     for (const auto& styledWord : styledWords) {
         TextBounds wordBounds = wordRenderer->getTextHeight(styledWord.word, styledWord.style);
         
-        bounds.top = std::min(bounds.top, wordBounds.top);
-        bounds.bottom = std::max(bounds.bottom, wordBounds.bottom);
+        bounds.top    = std::max(bounds.top,    wordBounds.top);
+        bounds.bottom = std::min(bounds.bottom, wordBounds.bottom);
     }
 
     return bounds;

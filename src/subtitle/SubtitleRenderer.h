@@ -15,9 +15,6 @@ public:
     SubtitleRenderer(SkiaRenderer* renderer, float fps);
     ~SubtitleRenderer();
 
-    // Height calculation for layout
-    double getHeight(const SubtitleSegment& segment, const SegmentSettings& settings, const float maxWidth) const;
-
     void renderSegment(const SubtitleSegment& segment, const SegmentSettings& settings,
       const float segmentMs, const float canvasW, const float canvasH) const;
 
