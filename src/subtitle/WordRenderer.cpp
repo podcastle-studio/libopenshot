@@ -152,8 +152,8 @@ TextBounds WordRenderer::getTextHeight(const std::string& text, const SubtitleTe
     skFont.getMetrics(&metrics);
 
     return {
-        -metrics.fAscent,         // top  ➜ positive
-        -metrics.fDescent         // bottom ➜ negative
+        metrics.fAscent,   // negative
+        metrics.fDescent   // positive
     };
 }
 

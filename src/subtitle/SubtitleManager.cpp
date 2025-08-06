@@ -134,7 +134,7 @@ void SubtitleManager::parseTextStyle(const Json::Value& styleJson, SubtitleTextS
 
     // Text transform
     if (styleJson.isMember("textTransform")) {
-        std::string transform = styleJson["textTransform"].asString();
+        const std::string transform = styleJson["textTransform"].asString();
         if (transform == "UPPERCASE")
             style.textTransform = TextTransform::UPPERCASE;
         else if (transform == "LOWERCASE")

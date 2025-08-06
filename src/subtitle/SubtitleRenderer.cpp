@@ -60,9 +60,9 @@ std::vector<std::vector<size_t>> SubtitleRenderer::getLines(const std::vector<St
 }
 
 void SubtitleRenderer::drawContainer(const float blockW, const float blockH, const SubtitleContainerStyle& style) const {
-    if (!style.color.length() || style.opacity <= 0) return;
+    if (!style.color.has_value() || style.opacity <= 0) return;
 
-    const PaintProps paintProps{ style.color, style.opacity };
+    const PaintProps paintProps{ *style.color, style.opacity };
     const SkPaint* paint = renderer->getPaint(paintProps);
 
     // NB: we are already translated so that the text block’s origin is (0,0)

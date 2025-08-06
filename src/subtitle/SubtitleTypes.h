@@ -60,7 +60,7 @@ struct SubtitleContainerStyle {
     double paddingX = 0;
     double paddingY = 0;
     double radius = 0;
-    std::string color = "#000000";
+    std::optional<std::string> color;
     bool punctuation = false;
 };
 
