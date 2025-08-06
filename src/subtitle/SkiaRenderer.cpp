@@ -41,50 +41,71 @@ SkFont SkiaRenderer::getFont(const FontProps& fontProps) {
     return skFont;
 }
 
-sk_sp<SkTypeface> SkiaRenderer::getTypefaceForCharacter(const std::string& familyOrPath, const SkUnichar character) {
-    // Create a key for caching
+sk_sp<SkTypeface> SkiaRenderer::getTypefaceForCharacter(const std::string& familyOrPath, const SkUnichar character)
+{
+    // ---- cache key ----------------------------------------------------
     const std::string cacheKey = familyOrPath + "_char_" + std::to_string(character);
-
     if (const auto it = typefaceCache.find(cacheKey); it != typefaceCache.end()) {
         return it->second;
     }
 
+    // The caller passed no explicit weight/slant for a glyph lookup, so we
+    // use a neutral style (Regular, Upright).  SkFont later emboldens /
+    // italicises if needed.
+    constexpr SkFontStyle regStyle(400, SkFontStyle::kNormal_Width, SkFontStyle::kUpright_Slant);
+
     sk_sp<SkTypeface> typeface;
 
-    // First try the requested font
-    constexpr SkFontStyle style(400, SkFontStyle::kNormal_Width, SkFontStyle::kUpright_Slant);
+    // ------------------------------------------------------------------
+    // 1) The requested family name or explicit file-path
+    // ------------------------------------------------------------------
     if (std::filesystem::is_regular_file(familyOrPath)) {
         typeface = fontMgr->makeFromFile(familyOrPath.c_str());
     } else {
-        typeface = fontMgr->matchFamilyStyle(familyOrPath.c_str(), style);
+        typeface = fontMgr->matchFamilyStyle(familyOrPath.c_str(), regStyle);
     }
 
-    // Check if this typeface can render the character
     if (typeface) {
-        const SkFont testFont(typeface);
-        const SkGlyphID glyphID = testFont.unicharToGlyph(character);
-        if (glyphID != 0) {
+        SkFont probe(typeface);
+        if (probe.unicharToGlyph(character) != 0) {
             typefaceCache[cacheKey] = typeface;
             return typeface;
         }
+        typeface.reset();
     }
 
-    // Fallback to DejaVu Serif for any unsupported character
-    typeface = fontMgr->matchFamilyStyle("DejaVu Serif", style);
+    // ------------------------------------------------------------------
+    // 2) Preferred fallback: Noto Sans Arabic
+    // ------------------------------------------------------------------
+    typeface = fontMgr->matchFamilyStyle("Noto Sans Arabic", regStyle);
     if (typeface) {
-        // Verify it actually has the character
-        const SkFont testFont(typeface);
-        if (testFont.unicharToGlyph(character) != 0) {
+        SkFont probe(typeface);
+        if (probe.unicharToGlyph(character) != 0) {
             typefaceCache[cacheKey] = typeface;
             return typeface;
         }
+        typeface.reset();
     }
 
-    // Ultimate fallback to any available font
-    if (!typeface) {
-        typeface = fontMgr->matchFamilyStyle(nullptr, style);
+    // ------------------------------------------------------------------
+    // 3) Secondary fallback: FreeSans
+    // ------------------------------------------------------------------
+    typeface = fontMgr->matchFamilyStyle("FreeSans", regStyle);
+    if (typeface) {
+        SkFont probe(typeface);
+        if (probe.unicharToGlyph(character) != 0) {
+            typefaceCache[cacheKey] = typeface;
+            return typeface;
+        }
+        typeface.reset();
     }
 
+    // ------------------------------------------------------------------
+    // 4) Last-chance fallback: whatever FontConfig thinks best
+    // ------------------------------------------------------------------
+    typeface = fontMgr->matchFamilyStyle(nullptr, regStyle);
+
+    // Cache even if null so we don’t repeat the work every call
     typefaceCache[cacheKey] = typeface;
     return typeface;
 }
