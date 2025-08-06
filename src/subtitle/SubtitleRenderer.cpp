@@ -13,19 +13,6 @@ SubtitleRenderer::~SubtitleRenderer() {
     delete textRenderer;
 }
 
-double SubtitleRenderer::getStartX(const float textWidth, const float containerWidth, const SubtitleContainerStyle& containerStyles) {
-    switch (containerStyles.textAlign) {
-        case TextAlignment::LEFT:
-            return 0;
-        case TextAlignment::CENTER:
-            return (containerWidth - textWidth) / 2;
-        case TextAlignment::RIGHT:
-            return containerWidth - textWidth;
-        default:
-            return 0;
-    }
-}
-
 double SubtitleRenderer::getStartY(const int currentLine, const SubtitleTextStyle& textStyle, const SubtitleContainerStyle& containerStyle) {
     const int line = (containerStyle.appearance == TextAppearance::ONE_WORD) ? 0 : currentLine;
     return containerStyle.paddingY + textStyle.fontSize * (line + 1) + line * (textStyle.lineHeight - textStyle.fontSize); // absolute, not ratio
@@ -138,23 +125,24 @@ void SubtitleRenderer::renderSegment(const SubtitleSegment& segment, const Segme
          : s.fontSize * lines.size() + (lines.size()-1)*(s.lineHeight - s.fontSize);
 
     // ── transform canvas (unchanged logic) ────────────────────────────────
+    const float viewportW = segSet.transformation.maxWidth;
     const auto& tr = segSet.transformation;
+
     renderer->save();
     renderer->translate(canvasW*tr.center.x, canvasH*tr.center.y);
     if (tr.rotation) renderer->rotate(tr.rotation);
     if (tr.scale.horizontalScale!=1.0f || tr.scale.verticalScale!=1.0f)
         renderer->scale(tr.scale.horizontalScale, tr.scale.verticalScale);
-    renderer->translate(-maxLineW/2, -blockH/2);
-
+    renderer->translate(-viewportW/2, -blockH/2);
     // ── draw each visual line ─────────────────────────────────────────────
     for (size_t li=0; li<lines.size(); ++li) {
         std::vector<StyledWord> lineWords;
         for(auto idx:lines[li]) lineWords.push_back(frameWords[idx]);
 
         float lineW = textRenderer->measureTextWidth(lineWords);
-        double x = (cont.textAlign == TextAlignment::LEFT)   ? cont.paddingX :
-                   (cont.textAlign == TextAlignment::RIGHT)  ? maxLineW - lineW - cont.paddingX :
-                                                              (maxLineW - lineW) / 2;
+        double x = (cont.textAlign == TextAlignment::LEFT)   ? 0 :
+                   (cont.textAlign == TextAlignment::RIGHT)  ? viewportW - lineW :
+                                                              (viewportW - lineW) / 2;
         double y = getStartY(li, segSet.defaultStyle, cont);
 
         textRenderer->renderText(lineWords, x, y);
