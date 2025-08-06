@@ -14,7 +14,7 @@ TextRenderer::~TextRenderer() {
 }
 
 TextBounds TextRenderer::getTextVerticalBounds(const std::vector<StyledWord>& styledWords) const {
-    TextBounds bounds{std::numeric_limits<double>::infinity(), -std::numeric_limits<double>::infinity()};
+    TextBounds bounds{ -std::numeric_limits<double>::infinity(),  std::numeric_limits<double>::infinity() };
     for (const auto& styledWord : styledWords) {
         TextBounds wordBounds = wordRenderer->getTextHeight(styledWord.word, styledWord.style);
         
@@ -31,14 +31,11 @@ float TextRenderer::measureTextWidth(const std::vector<StyledWord>& styledWords)
     }
 
     float totalWidth = 0;
-    for (const auto& styledWord : styledWords) {
-        totalWidth += wordRenderer->getTextWidth(styledWord.word, styledWord.style);
-    }
-
-    // Add space widths between words
-    const float spaceWidth = wordRenderer->getSpaceWidth(styledWords[0].style);
-    totalWidth += (styledWords.size() - 1) * spaceWidth;
-
+    for (size_t i = 0; i < styledWords.size(); ++i) {
+        totalWidth += wordRenderer->getTextWidth(styledWords[i].word, styledWords[i].style);
+        if (i + 1 < styledWords.size())
+            totalWidth += wordRenderer->getSpaceWidth(styledWords[i].style); // once
+        }
     return totalWidth;
 }
 

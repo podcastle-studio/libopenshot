@@ -88,13 +88,12 @@ void SubtitleRenderer::renderSegment(const SubtitleSegment& segment, const Segme
     // build last‑frame styles to discover line breaks
     std::vector<StyledWord> lastFrame;
     lastFrame.reserve(animPass1.size());
-    for (size_t i=0;i<animPass1.size();++i){
-        float dur = segment.wordDetails[i].endMs - segment.wordDetails[i].startMs;
-        lastFrame.push_back({ animPass1[i].word,
-            applyAnimationParams(animPass1[i].params,
-                                 segment.wordDetails[i].startMs + dur,
-                                 fps,
-                                 segSet.defaultStyle) });
+    const float segDuration = segment.endTimeMs - segment.startTimeMs;
+    for (size_t i = 0; i < animPass1.size(); ++i) {
+            lastFrame.push_back({ animPass1[i].word,
+                applyAnimationParams(animPass1[i].params,
+                                     segDuration,
+                                     fps, segSet.defaultStyle) });
     }
 
     const auto& cont = segSet.containerStyle;
@@ -113,21 +112,23 @@ void SubtitleRenderer::renderSegment(const SubtitleSegment& segment, const Segme
         StyledWord sw;
         sw.word = transformText(wa.word, segSet.defaultStyle, segSet.containerStyle);
 
-        if (segmentMs >= wd.startMs && segmentMs <= wd.endMs)
-            sw.style = applyAnimationParams(wa.params,
-                                            wd.startMs + (segmentMs - wd.startMs),
-                                            fps,
-                                            segSet.defaultStyle);
-        else if (segmentMs > wd.endMs)
-            sw.style = applyAnimationParams(wa.params,
-                                            wd.endMs,
-                                            fps,
-                                            segSet.defaultStyle);
-        else
-            sw.style = applyAnimationParams(wa.params,
-                                            segmentMs,
-                                            fps,
-                                            segSet.defaultStyle);
+        // if (segmentMs >= wd.startMs && segmentMs <= wd.endMs)
+        //     sw.style = applyAnimationParams(wa.params,
+        //                                     wd.startMs + (segmentMs - wd.startMs),
+        //                                     fps,
+        //                                     segSet.defaultStyle);
+        // else if (segmentMs > wd.endMs)
+        //     sw.style = applyAnimationParams(wa.params,
+        //                                     wd.endMs,
+        //                                     fps,
+        //                                     segSet.defaultStyle);
+        // else
+        //     sw.style = applyAnimationParams(wa.params,
+        //                                     segmentMs,
+        //                                     fps,
+        //                                     segSet.defaultStyle);
+
+        sw.style = applyAnimationParams(wa.params, segmentMs, fps, segSet.defaultStyle);
 
         frameWords.push_back(std::move(sw));
     }

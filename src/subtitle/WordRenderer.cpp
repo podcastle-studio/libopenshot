@@ -217,7 +217,7 @@ void WordRenderer::drawBubbleBackground(const float wordWidth, const SubtitleTex
 }
 
 void WordRenderer::drawWordBackground(const float wordWidth, const SubtitleTextStyle& style, const float deltaY) const {
-    if (!style.backgroundColor.has_value()) {
+    if (!style.backgroundColor.has_value() || style.backgroundOpacity.value_or(0.0) <= 0.0) {
         return;
     }
 
