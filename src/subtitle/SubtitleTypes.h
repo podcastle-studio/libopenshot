@@ -24,7 +24,7 @@ struct SubtitleTextStyle {
     double fontSize      = 64;
     double letterSpacing = 0;
     double lineHeight    = 1.2f;
-    int bold            = 400;
+    int fontWeight       = 400;
     std::string color   = "#FFFFFF";
     double opacity       = 1.0f;
 

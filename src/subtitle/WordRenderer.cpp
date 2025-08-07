@@ -109,7 +109,7 @@ SkFont WordRenderer::getFontForCharacter(const std::string& utf8Char, const Subt
 
     // Now we have the Unicode codepoint, get a font that can render it
     return renderer->getFontForCharacter(
-        {style.fontFamily, style.fontSize, style.bold, style.italic},
+        {style.fontFamily, style.fontSize, style.fontWeight, style.italic},
         unichar  // Pass the Unicode codepoint (e.g., 0x0531 for Ա)
     );
 }
@@ -146,7 +146,7 @@ float WordRenderer::getTextWidth(const std::string& text, const SubtitleTextStyl
 }
 
 TextBounds WordRenderer::getTextHeight(const std::string& text, const SubtitleTextStyle& style) const {
-    const SkFont skFont = renderer->getFont({style.fontFamily, style.fontSize, style.bold, style.italic});
+    const SkFont skFont = renderer->getFont({style.fontFamily, style.fontSize, style.fontWeight, style.italic});
 
     SkFontMetrics metrics{};
     skFont.getMetrics(&metrics);
@@ -158,7 +158,7 @@ TextBounds WordRenderer::getTextHeight(const std::string& text, const SubtitleTe
 }
 
 float WordRenderer::getSpaceWidth(const SubtitleTextStyle& style) const {
-    const SkFont skFont = renderer->getFont({ style.fontFamily, style.fontSize, style.bold, style.italic});
+    const SkFont skFont = renderer->getFont({ style.fontFamily, style.fontSize, style.fontWeight, style.italic});
 
     const float spaceWidth = skFont.measureText(" ", 1, SkTextEncoding::kUTF8, nullptr);
     return spaceWidth + style.letterSpacing;

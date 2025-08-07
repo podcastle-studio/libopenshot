@@ -119,8 +119,8 @@ void SubtitleManager::parseTextStyle(const Json::Value& styleJson, SubtitleTextS
         style.fontFamily = styleJson["fontFamily"].asString();
     if (styleJson.isMember("fontSize"))
         style.fontSize = styleJson["fontSize"].asFloat();
-    if (styleJson.isMember("bold"))
-        style.bold = styleJson["bold"].asInt();
+    if (styleJson.isMember("fontWeight"))
+        style.fontWeight = styleJson["fontWeight"].asInt();
     if (styleJson.isMember("italic"))
         style.italic = styleJson["italic"].asBool();
     if (styleJson.isMember("color"))

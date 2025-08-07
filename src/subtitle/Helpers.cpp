@@ -51,7 +51,7 @@ double getBaseValue(const std::string& key, const openshot::subtitle::SubtitleTe
     if (key == "opacity") return style.opacity;
     if (key == "letterSpacing") return style.letterSpacing;
     if (key == "lineHeight") return style.lineHeight;
-    if (key == "bold") return style.bold;
+    if (key == "fontWeight") return style.fontWeight;
     if (key == "translateX") return style.translateX.value_or(0);
     if (key == "translateY") return style.translateY.value_or(0);
     if (key == "strokeWidth") return style.strokeWidth.value_or(0);
@@ -140,7 +140,7 @@ SubtitleTextStyle applyAnimationParams(const std::vector<AnimationParam>& params
             else if (param.name == "opacity") result.opacity = value;
             else if (param.name == "letterSpacing") result.letterSpacing = value;
             else if (param.name == "lineHeight") result.lineHeight = value;
-            else if (param.name == "bold") result.bold = static_cast<int>(value);
+            else if (param.name == "fontWeight") result.fontWeight = static_cast<int>(value);
             else if (param.name == "translateX") result.translateX = value;
             else if (param.name == "translateY") result.translateY = value;
             else if (param.name == "strokeWidth") result.strokeWidth = value;
@@ -251,8 +251,8 @@ std::vector<openshot::subtitle::WordAnimation> processSegmentAnimation(
             double final = animSet.outStyles.count(key) ? animSet.outStyles[key] : init;
 
             int64_t f0        = msToFrame(0, fps);
-            int64_t fS        = msToFrame(relStart, fps);
-            int64_t fInEnd    = msToFrame(relStart + inDur, fps);
+            int64_t fS        = msToFrame(relStart - inDur / 2, fps);
+            int64_t fInEnd    = msToFrame(relStart + inDur / 2, fps);
             int64_t fOutStart = msToFrame(relEnd   - outDur, fps);
             int64_t fEnd      = msToFrame(relEnd, fps);
 
