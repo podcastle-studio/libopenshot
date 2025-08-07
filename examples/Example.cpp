@@ -1,4 +1,3 @@
-
 #include "Timeline.h"
 #include "Clip.h"
 #include "FFmpegReader.h"
@@ -10,7 +9,6 @@ int main() {
     openshot::Timeline timeLine(1920, 1080, openshot::Fraction(30, 1), 48000, 2, openshot::ChannelLayout::LAYOUT_STEREO);
 
     timeLine.Open();
-
 
     const auto clip = new openshot::Clip("img.jpeg");
     timeLine.AddClip(clip);
