@@ -14,14 +14,10 @@ inline SubtitleTextStyle oneWordBase(const SubtitleTextStyle& s) {
     return r;
 }
 
-// Transform text based on style
-std::string transformText(const std::string& text, const SubtitleTextStyle& style, SubtitleContainerStyle containerStyle);
+std::string transformText(const std::string& text, const SubtitleTextStyle& style, const SubtitleContainerStyle& containerStyle);
 
-// Apply animation parameters to style
-SubtitleTextStyle applyAnimationParams(const std::vector<AnimationParam>& params,
-    const float timeMs, const float fps, const SubtitleTextStyle& baseStyle);
+SubtitleTextStyle applyAnimationParams(const std::vector<AnimationParam>& params, const float timeMs, const float fps, const SubtitleTextStyle& baseStyle);
 
-// Convert frame number to milliseconds
 float frameToMs(const int64_t frame, const float fps);
 
 // Process segment animation

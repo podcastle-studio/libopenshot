@@ -6,7 +6,7 @@
 namespace openshot {
 namespace subtitle {
 
-SubtitleRenderer::SubtitleRenderer(SkiaRenderer* renderer, float fps)
+SubtitleRenderer::SubtitleRenderer(SkiaRenderer* renderer, const float fps)
     : renderer(renderer), textRenderer(new TextRenderer(renderer)), fps(fps) {}
 
 SubtitleRenderer::~SubtitleRenderer() {
@@ -16,7 +16,6 @@ SubtitleRenderer::~SubtitleRenderer() {
 double SubtitleRenderer::getStartY(const int currentLine, const SubtitleTextStyle& textStyle, const SubtitleContainerStyle& containerStyle) {
     const int line = (containerStyle.appearance == TextAppearance::ONE_WORD) ? 0 : currentLine;
     return textStyle.fontSize * (line + 1) + line * (textStyle.lineHeight - textStyle.fontSize);
-    // return containerStyle.paddingY + textStyle.fontSize * (line + 1) + line * (textStyle.lineHeight - textStyle.fontSize); // absolute, not ratio
 }
 
 std::vector<std::vector<size_t>> SubtitleRenderer::getLines(const std::vector<StyledWord>& styledWords,
@@ -79,8 +78,7 @@ void SubtitleRenderer::drawContainer(const float blockW, const float blockH, con
 
 void SubtitleRenderer::renderSegment(const SubtitleSegment& segment, const SegmentSettings& settings,
       const float segmentMs, const float canvasW, const float canvasH) const {
-    const SegmentSettings& segSet = segment.attached ? settings
-                              : (segment.settings ? *segment.settings : settings);
+    const SegmentSettings& segSet = segment.attached ? settings : (segment.settings ? *segment.settings : settings);
 
     // ── PASS 1 : animations without line info ──────────────────────────────
     auto animPass1 = processSegmentAnimation(segment.wordDetails, segSet, fps);
@@ -89,11 +87,8 @@ void SubtitleRenderer::renderSegment(const SubtitleSegment& segment, const Segme
     std::vector<StyledWord> lastFrame;
     lastFrame.reserve(animPass1.size());
     const float segDuration = segment.endTimeMs - segment.startTimeMs;
-    for (size_t i = 0; i < animPass1.size(); ++i) {
-            lastFrame.push_back({ animPass1[i].word,
-                applyAnimationParams(animPass1[i].params,
-                                     segDuration,
-                                     fps, segSet.defaultStyle) });
+    for (const auto &i : animPass1) {
+        lastFrame.push_back({ i.word, applyAnimationParams(i.params, segDuration, fps, segSet.defaultStyle) });
     }
 
     const auto& cont = segSet.containerStyle;
@@ -106,7 +101,7 @@ void SubtitleRenderer::renderSegment(const SubtitleSegment& segment, const Segme
     // styled words for *current* frame
     std::vector<StyledWord> frameWords;
     frameWords.reserve(anim.size());
-    for (size_t i=0;i<anim.size();++i){
+    for (size_t i=0;i<anim.size();++i) {
         const auto& wa = anim[i];
         const auto& wd = segment.wordDetails[i];
         StyledWord sw;
@@ -118,9 +113,11 @@ void SubtitleRenderer::renderSegment(const SubtitleSegment& segment, const Segme
 
     // width / height of the block
     float maxLineW = 0;
-    for (const auto& ln:lines){
+    for (const auto& ln:lines) {
         std::vector<StyledWord> tmp;
-        for(auto idx:ln) tmp.push_back(lastFrame[idx]);
+        for(auto idx:ln) {
+            tmp.push_back(lastFrame[idx]);
+        }
         maxLineW = std::max(maxLineW, textRenderer->measureTextWidth(tmp));
     }
     const auto& s = segSet.defaultStyle;
@@ -128,7 +125,7 @@ void SubtitleRenderer::renderSegment(const SubtitleSegment& segment, const Segme
          ? s.fontSize  // just one visual line
          : s.fontSize * lines.size() + (lines.size()-1)*(s.lineHeight - s.fontSize);
 
-    // ── transform canvas (unchanged logic) ────────────────────────────────
+    // ── transform canvas ────────────────────────────────────────────────
     const float viewportW = segSet.transformation.maxWidth;
     const auto& tr = segSet.transformation;
 
@@ -142,7 +139,7 @@ void SubtitleRenderer::renderSegment(const SubtitleSegment& segment, const Segme
     }
     renderer->translate(-viewportW/2, -blockH/2);
 
-    // ── background box (if enabled) ───────────────────────────────────────
+    // ── background box  ───────────────────────────────────────────────────
     drawContainer(viewportW, blockH, cont);
 
     // ── draw each visual line ─────────────────────────────────────────────
@@ -152,10 +149,16 @@ void SubtitleRenderer::renderSegment(const SubtitleSegment& segment, const Segme
             lineWords.push_back(frameWords[idx]);
         }
 
-        float lineW = textRenderer->measureTextWidth(lineWords);
-        double x = (cont.textAlign == TextAlignment::LEFT)   ? 0 :
-                   (cont.textAlign == TextAlignment::RIGHT)  ? viewportW - lineW :
-                                                              (viewportW - lineW) / 2;
+        const float lineW = textRenderer->measureTextWidth(lineWords);
+        double x;
+        if (cont.textAlign == TextAlignment::LEFT) {
+            x = 0;
+        } else if (cont.textAlign == TextAlignment::RIGHT) {
+            x = viewportW - lineW;
+        } else { // CENTER
+           x = (viewportW - lineW) / 2;
+        }
+
         double y = getStartY(li, segSet.defaultStyle, cont);
 
         textRenderer->renderText(lineWords, x, y);

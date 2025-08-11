@@ -26,7 +26,7 @@ int main() {
     w.SetOption(openshot::VIDEO_STREAM, "x264-params", "colorprim=bt709:transfer=bt709:colormatrix=bt709");
     w.Open();
 
-    w.WriteFrame(&timeLine, 1, 15*30);
+    w.WriteFrame(&timeLine, 1, 10*30);
     timeLine.Close();
     w.Close();
     return 0;

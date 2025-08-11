@@ -49,9 +49,8 @@ sk_sp<SkTypeface> SkiaRenderer::getTypefaceForCharacter(const std::string& famil
         return it->second;
     }
 
-    // The caller passed no explicit weight/slant for a glyph lookup, so we
-    // use a neutral style (Regular, Upright).  SkFont later emboldens /
-    // italicises if needed.
+    // The caller passed no explicit weight/slant for a glyph lookup, so we use a neutral
+    // style (Regular, Upright).  SkFont later emboldens / italicises if needed.
     constexpr SkFontStyle regStyle(400, SkFontStyle::kNormal_Width, SkFontStyle::kUpright_Slant);
 
     sk_sp<SkTypeface> typeface;
@@ -66,7 +65,7 @@ sk_sp<SkTypeface> SkiaRenderer::getTypefaceForCharacter(const std::string& famil
     }
 
     if (typeface) {
-        SkFont probe(typeface);
+        const SkFont probe(typeface);
         if (probe.unicharToGlyph(character) != 0) {
             typefaceCache[cacheKey] = typeface;
             return typeface;
@@ -79,7 +78,7 @@ sk_sp<SkTypeface> SkiaRenderer::getTypefaceForCharacter(const std::string& famil
     // ------------------------------------------------------------------
     typeface = fontMgr->matchFamilyStyle("Noto Sans Arabic", regStyle);
     if (typeface) {
-        SkFont probe(typeface);
+        const SkFont probe(typeface);
         if (probe.unicharToGlyph(character) != 0) {
             typefaceCache[cacheKey] = typeface;
             return typeface;
@@ -92,7 +91,7 @@ sk_sp<SkTypeface> SkiaRenderer::getTypefaceForCharacter(const std::string& famil
     // ------------------------------------------------------------------
     typeface = fontMgr->matchFamilyStyle("FreeSans", regStyle);
     if (typeface) {
-        SkFont probe(typeface);
+        const SkFont probe(typeface);
         if (probe.unicharToGlyph(character) != 0) {
             typefaceCache[cacheKey] = typeface;
             return typeface;
@@ -152,11 +151,7 @@ SkPaint* SkiaRenderer::getPaint(const PaintProps& paintProps) {
     }
 
     if (paintProps.maskBlur.has_value()) {
-        paint->setMaskFilter(SkMaskFilter::MakeBlur(
-            kNormal_SkBlurStyle,
-            paintProps.maskBlur.value(),
-            false
-        ));
+        paint->setMaskFilter(SkMaskFilter::MakeBlur(kNormal_SkBlurStyle, paintProps.maskBlur.value(), false));
     }
 
     SkPaint* paintPtr = paint.get();
@@ -185,7 +180,7 @@ sk_sp<SkTypeface> SkiaRenderer::getTypeface(const std::string& familyOrPath) {
     return typeface;
 }
 
-SkColor SkiaRenderer::parseColorString(const std::string& colorStr, float opacity) {
+SkColor SkiaRenderer::parseColorString(const std::string& colorStr, const float opacity) {
     if (colorStr.empty() || colorStr[0] != '#') {
         return SkColorSetARGB(255 * opacity, 255, 255, 255);
     }
@@ -197,7 +192,6 @@ SkColor SkiaRenderer::parseColorString(const std::string& colorStr, float opacit
     // Platform-specific: This build/platform expects BGR order instead of RGB
     // Despite the function name suggesting RGB order, we need to swap R and B
     return SkColorSetARGB(255 * opacity, b, g, r);
-
 }
 
 } // namespace subtitle

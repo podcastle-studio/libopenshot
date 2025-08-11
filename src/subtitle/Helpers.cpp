@@ -79,7 +79,7 @@ std::string getBaseColor(const std::string& key, const openshot::subtitle::Subti
 namespace openshot {
 namespace subtitle {
 
-std::string transformText(const std::string& text, const SubtitleTextStyle& style, SubtitleContainerStyle containerStyle) {
+std::string transformText(const std::string& text, const SubtitleTextStyle& style, const SubtitleContainerStyle& containerStyle) {
     std::string result = text;
     switch (style.textTransform) {
         case TextTransform::UPPERCASE:
@@ -108,8 +108,7 @@ std::string transformText(const std::string& text, const SubtitleTextStyle& styl
     return result;
 }
 
-SubtitleTextStyle applyAnimationParams(const std::vector<AnimationParam>& params,
-    const float timeMs, const float fps, const SubtitleTextStyle& baseStyle) {
+SubtitleTextStyle applyAnimationParams(const std::vector<AnimationParam>& params, const float timeMs, const float fps, const SubtitleTextStyle& baseStyle) {
     SubtitleTextStyle result = baseStyle;
 
     // Store RGB components for color properties
@@ -120,12 +119,12 @@ SubtitleTextStyle applyAnimationParams(const std::vector<AnimationParam>& params
         double value = getAnimatedValue(param.keyframe, timeMs, fps);
 
         // Check if this is a color component (e.g., "color.r", "strokeColor.g", etc.)
-        size_t dotPos = param.name.find('.');
+        const size_t dotPos = param.name.find('.');
         if (dotPos != std::string::npos) {
             std::string colorName = param.name.substr(0, dotPos);
-            char component = param.name[dotPos + 1];
+            const char component = param.name[dotPos + 1];
 
-            int componentValue = static_cast<int>(std::clamp(value, 0.0, 255.0));
+            const int componentValue = static_cast<int>(std::clamp(value, 0.0, 255.0));
 
             if (component == 'r') {
                 colorComponents[colorName][0] = componentValue;
@@ -170,12 +169,11 @@ SubtitleTextStyle applyAnimationParams(const std::vector<AnimationParam>& params
 }
 
 float frameToMs(const int64_t frame, const float fps) {
-    // OpenShot uses 1-based frame indexing
-    return ((frame - 1) * 1000.0f) / fps;
+    return (frame - 1) * 1000.0f / fps;
 }
 
-std::vector<WordAnimation> processSegmentAnimation(const std::vector<WordDetail>& wordDetails,
-    const SegmentSettings& settings, float fps, const std::vector<std::vector<size_t>>& wordsPerLine /* may be empty */) {
+std::vector<WordAnimation> processSegmentAnimation(const std::vector<WordDetail>& wordDetails, const SegmentSettings& settings,
+    float fps, const std::vector<std::vector<size_t>>& wordsPerLine /* may be empty */) {
     std::vector<WordAnimation> animations;
     if (wordDetails.empty()) {
         return animations;
@@ -191,9 +189,7 @@ std::vector<WordAnimation> processSegmentAnimation(const std::vector<WordDetail>
 
     if (oneWord) {
         auto ensureIn = [&](const std::string& k, const double v){
-            if (!animSet.inStyles.count(k)) {
-                animSet.inStyles[k] = v;
-            }
+            if (!animSet.inStyles.count(k)) animSet.inStyles[k] = v;
         };
         ensureIn("opacity",            defaultStyle.opacity);
         ensureIn("backgroundOpacity",  defaultStyle.backgroundOpacity.value_or(1.0));
@@ -208,17 +204,16 @@ std::vector<WordAnimation> processSegmentAnimation(const std::vector<WordDetail>
 
     // collect animated keys after tweaks
     std::set<std::string> numKeys, colKeys;
-    for (auto& [k,_]:animSet.inStyles)      numKeys.insert(k);
-    for (auto& [k,_]:animSet.outStyles)     numKeys.insert(k);
-    for (auto& [k,_]:animSet.inStylesColor)  colKeys.insert(k);
-    for (auto& [k,_]:animSet.outStylesColor) colKeys.insert(k);
+    for (auto& [k,_]:animSet.inStyles)       numKeys.insert(k);
+    for (auto& [k,_]:animSet.outStyles)      numKeys.insert(k);
+    for (auto& [k,_]:animSet.inStylesColor)   colKeys.insert(k);
+    for (auto& [k,_]:animSet.outStylesColor)  colKeys.insert(k);
 
     const float segStart = wordDetails.front().startMs;
 
     for (size_t idx = 0; idx < wordDetails.size(); ++idx) {
         const WordDetail& wd = wordDetails[idx];
-        WordAnimation anim;
-        anim.word = wd.word;
+        WordAnimation anim;  anim.word = wd.word;
 
         float wStart = wd.startMs;
         float wEnd   = wd.endMs;
@@ -233,16 +228,17 @@ std::vector<WordAnimation> processSegmentAnimation(const std::vector<WordDetail>
                 }
         }
         // ────────────────────────────────────────────────────────────────
+
         float relStart = wStart - segStart;
         float relEnd   = wEnd   - segStart;
         float duration = relEnd - relStart;
 
         float inDur  = animSet.inDuration;
         float outDur = animSet.outDuration;
-        if (duration < inDur + outDur)
+        if (duration < inDur + outDur) {
             inDur = outDur = duration * 0.5f;
+        }
 
-        // numeric props --------------------------------------------------
         for (const std::string& key : numKeys) {
             double init  = getBaseValue(key, baseStyle);
             double animV = animSet.inStyles.count(key)  ? animSet.inStyles[key]  : init;
@@ -254,22 +250,26 @@ std::vector<WordAnimation> processSegmentAnimation(const std::vector<WordDetail>
             int64_t fOutStart = msToFrame(relEnd   - outDur, fps);
             int64_t fEnd      = msToFrame(relEnd, fps);
 
-            AnimationParam p;  p.name = key;
+            AnimationParam p;
+            p.name = key;
             p.keyframe.AddPoint(f0, init, CONSTANT);
             p.keyframe.AddPoint(fS, init, CONSTANT);
             p.keyframe.AddPoint(fInEnd, animV, animSet.inInterpolation);
 
             if (outDur > 0) {
-                if (fOutStart > fInEnd) p.keyframe.AddPoint(fOutStart, animV, CONSTANT);
+                if (fOutStart > fInEnd) {
+                    p.keyframe.AddPoint(fOutStart, animV, CONSTANT);
+                }
                 p.keyframe.AddPoint(fEnd, final, animSet.outInterpolation);
             } else {
-                if (fEnd-1 > fInEnd)    p.keyframe.AddPoint(fEnd-1, animV, CONSTANT);
+                if (fEnd-1 > fInEnd) {
+                    p.keyframe.AddPoint(fEnd-1, animV, CONSTANT);
+                }
                 p.keyframe.AddPoint(fEnd, final, CONSTANT);
             }
             anim.params.emplace_back(std::move(p));
         }
 
-        // colour props ---------------------------------------------------
         for (const std::string& key : colKeys) {
             std::string iHex = getBaseColor(key, baseStyle);
             std::string aHex = animSet.inStylesColor.count(key)  ? animSet.inStylesColor[key]  : iHex;
@@ -285,26 +285,31 @@ std::vector<WordAnimation> processSegmentAnimation(const std::vector<WordDetail>
             int64_t fOutStart = msToFrame(relEnd   - outDur, fps);
             int64_t fEnd      = msToFrame(relEnd, fps);
 
-            auto add = [&](const char* suf, const double i, const double a, const double f){
+            auto add = [&](const char* suf, double i, double a, double f){
                 AnimationParam p; p.name = key + suf;
                 p.keyframe.AddPoint(f0, i, CONSTANT);
                 p.keyframe.AddPoint(fS, i, CONSTANT);
                 p.keyframe.AddPoint(fInEnd, a, animSet.inInterpolation);
-                if (outDur>0){
-                    if (fOutStart>fInEnd) p.keyframe.AddPoint(fOutStart, a, CONSTANT);
+                if (outDur>0) {
+                    if (fOutStart>fInEnd) {
+                        p.keyframe.AddPoint(fOutStart, a, CONSTANT);
+                    }
                     p.keyframe.AddPoint(fEnd, f, animSet.outInterpolation);
                 } else {
-                    if (fEnd-1>fInEnd) p.keyframe.AddPoint(fEnd-1, a, CONSTANT);
+                    if (fEnd-1>fInEnd) {
+                        p.keyframe.AddPoint(fEnd-1, a, CONSTANT);
+                    }
                     p.keyframe.AddPoint(fEnd, f, CONSTANT);
                 }
                 anim.params.emplace_back(std::move(p));
             };
-            add(".r", ir, ar, fr); add(".g", ig, ag, fg); add(".b", ib, ab, fb);
+            add(".r", ir, ar, fr);
+            add(".g", ig, ag, fg);
+            add(".b", ib, ab, fb);
         }
         animations.emplace_back(std::move(anim));
     }
     return animations;
 }
-
 } // namespace subtitle
 } // namespace openshot

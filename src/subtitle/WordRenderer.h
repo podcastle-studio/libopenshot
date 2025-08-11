@@ -38,7 +38,7 @@ public:
     void drawWordStroke(const std::string& word, float wordWidth, const SubtitleTextStyle& style) const;
 
 private:
-    static void bubblePath(SkPath* path, float x, float y, float width, float height, float radius);
+    static void bubblePath(SkPath* path, const float x, const float y, const float width, const float height, const float radius);
 
     SkiaRenderer* renderer;
 };

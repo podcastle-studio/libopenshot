@@ -21,14 +21,6 @@ void SubtitleManager::addSegment(const SubtitleSegment& segment) {
     segments.push_back(segment);
 }
 
-void SubtitleManager::clearSegments() {
-    segments.clear();
-}
-
-std::vector<SubtitleSegment>& SubtitleManager::getSegments() {
-    return segments;
-}
-
 SegmentSettings SubtitleManager::parseSegmentSettings(const Json::Value& settingsJson) const {
     SegmentSettings settings = defaultSettings; // Start with defaults
 
@@ -273,8 +265,6 @@ void SubtitleManager::loadFromJSONString(const std::string& jsonString) {
 }
 
 void SubtitleManager::parseJSONRoot(const Json::Value& root) {
-    clearSegments();
-
     // Load segments - Fix field names to match JSON structure
     if (root.isMember("segments") && root["segments"].isArray()) {
         const Json::Value& segments = root["segments"];
@@ -349,15 +339,16 @@ void SubtitleManager::renderAtFrame(std::shared_ptr<QImage> frameImage, int64_t 
             float segmentTimeMs = timeMs - segment.startTimeMs;
 
             // Use the segment's maxWidth if it has custom settings, otherwise use default
-            const SegmentSettings& settings = segment.attached ? defaultSettings :
-                (segment.settings.has_value() ? segment.settings.value() : defaultSettings);
+            const SegmentSettings& settings = segment.attached
+                ? defaultSettings
+                : (segment.settings.has_value() ? segment.settings.value() : defaultSettings);
 
             subtitleRenderer.renderSegment(segment, settings, segmentTimeMs, canvasWidth, canvasHeight);
         }
     }
 }
 
-bool SubtitleManager::hasActiveSubtitlesAtFrame(int64_t frameNumber) const {
+bool SubtitleManager::hasActiveSubtitlesAtFrame(const int64_t frameNumber) const {
     // No need to check enabled flag - just check if we have segments
     if (segments.empty()) return false;
 

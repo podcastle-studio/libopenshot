@@ -47,7 +47,7 @@ struct SubtitleTextStyle {
     std::optional<double> translateX;
     std::optional<double> translateY;
 
-    std::string fontFamily = "Arial";
+    std::string fontFamily;
     bool italic = false;
     std::optional<bool> bubble;
     TextTransform textTransform = TextTransform::NONE;

@@ -17,7 +17,7 @@ namespace subtitle {
 
 WordRenderer::WordRenderer(SkiaRenderer* renderer) : renderer(renderer) {}
 
-void WordRenderer::bubblePath(SkPath* path, float x, float y, float width, float height, float radius) {
+void WordRenderer::bubblePath(SkPath* path, const float x, const float y, const float width, const float height, const float radius) {
     const float left = x;
     const float top = y;
     const float right = x + width;
@@ -295,7 +295,7 @@ void WordRenderer::drawWordShadow(const std::string& word, const float wordWidth
     while (i < word.length()) {
         // Extract UTF-8 character
         size_t charLen = 1;
-        unsigned char firstByte = word[i];
+        const unsigned char firstByte = word[i];
         if ((firstByte & 0x80) == 0) charLen = 1;
         else if ((firstByte & 0xE0) == 0xC0) charLen = 2;
         else if ((firstByte & 0xF0) == 0xE0) charLen = 3;
@@ -315,8 +315,7 @@ void WordRenderer::drawWordShadow(const std::string& word, const float wordWidth
 }
 
 void WordRenderer::drawWordStroke(const std::string& word, float wordWidth, const SubtitleTextStyle& style) const {
-    if (!style.strokeWidth.has_value() || style.strokeWidth.value() <= 0 ||
-        !style.strokeColor.has_value()) return;
+    if (!style.strokeWidth.has_value() || style.strokeWidth.value() <= 0 || !style.strokeColor.has_value()) return;
 
     const PaintProps strokePaintProps{ style.strokeColor.value(), style.strokeOpacity.value_or(1.0f), style.strokeWidth };
     const SkPaint* strokePaint = renderer->getPaint(strokePaintProps);
@@ -336,7 +335,7 @@ void WordRenderer::drawWordStroke(const std::string& word, float wordWidth, cons
         std::string utf8Char = word.substr(i, charLen);
         SkFont charFont = getFontForCharacter(utf8Char, style);
 
-        float letterWidth = charFont.measureText(utf8Char.c_str(), utf8Char.length(), SkTextEncoding::kUTF8, nullptr);
+        const float letterWidth = charFont.measureText(utf8Char.c_str(), utf8Char.length(), SkTextEncoding::kUTF8, nullptr);
 
         renderer->drawText(utf8Char, currentX, 0, *strokePaint, charFont);
         currentX += letterWidth + style.letterSpacing;

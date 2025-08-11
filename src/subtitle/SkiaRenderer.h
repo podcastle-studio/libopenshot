@@ -83,7 +83,7 @@ public:
 private:
     sk_sp<SkTypeface> getTypeface(const std::string& familyOrPath);
 
-    static SkColor parseColorString(const std::string& colorStr, float opacity = 1.0f);
+    SkColor parseColorString(const std::string& colorStr, const float opacity = 1.0f);
 
 private:
     SkCanvas* canvas;

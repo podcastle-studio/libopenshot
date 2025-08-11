@@ -25,10 +25,7 @@ public:
     explicit SubtitleManager(float fps);
     ~SubtitleManager();
 
-    // Segment management
     void addSegment(const SubtitleSegment& segment);
-    void clearSegments();
-    std::vector<SubtitleSegment>& getSegments();
 
     // Load from JSON
     void loadFromJSON(const std::string& jsonPath);
@@ -37,8 +34,7 @@ public:
     // Rendering
     void renderAtFrame(std::shared_ptr<QImage> frameImage, int64_t frameNumber) const;
 
-    // Utility
-    bool hasActiveSubtitlesAtFrame(int64_t frameNumber) const;
+    bool hasActiveSubtitlesAtFrame(const int64_t frameNumber) const;
 
 private:
     std::vector<SubtitleSegment> segments;
