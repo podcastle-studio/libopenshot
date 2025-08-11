@@ -111,23 +111,6 @@ void SubtitleRenderer::renderSegment(const SubtitleSegment& segment, const Segme
         const auto& wd = segment.wordDetails[i];
         StyledWord sw;
         sw.word = transformText(wa.word, segSet.defaultStyle, segSet.containerStyle);
-
-        // if (segmentMs >= wd.startMs && segmentMs <= wd.endMs)
-        //     sw.style = applyAnimationParams(wa.params,
-        //                                     wd.startMs + (segmentMs - wd.startMs),
-        //                                     fps,
-        //                                     segSet.defaultStyle);
-        // else if (segmentMs > wd.endMs)
-        //     sw.style = applyAnimationParams(wa.params,
-        //                                     wd.endMs,
-        //                                     fps,
-        //                                     segSet.defaultStyle);
-        // else
-        //     sw.style = applyAnimationParams(wa.params,
-        //                                     segmentMs,
-        //                                     fps,
-        //                                     segSet.defaultStyle);
-
         sw.style = applyAnimationParams(wa.params, segmentMs, fps, segSet.defaultStyle);
 
         frameWords.push_back(std::move(sw));

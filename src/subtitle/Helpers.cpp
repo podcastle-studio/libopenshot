@@ -174,14 +174,12 @@ float frameToMs(const int64_t frame, const float fps) {
     return ((frame - 1) * 1000.0f) / fps;
 }
 
-std::vector<openshot::subtitle::WordAnimation> processSegmentAnimation(
-        const std::vector<WordDetail>& wordDetails,
-        const SegmentSettings&         settings,
-        float                          fps,
-        const std::vector<std::vector<size_t>>& wordsPerLine /* may be empty */) {
+std::vector<WordAnimation> processSegmentAnimation(const std::vector<WordDetail>& wordDetails,
+    const SegmentSettings& settings, float fps, const std::vector<std::vector<size_t>>& wordsPerLine /* may be empty */) {
     std::vector<WordAnimation> animations;
-    if (wordDetails.empty())
+    if (wordDetails.empty()) {
         return animations;
+    }
 
     const bool oneWord = settings.containerStyle.appearance == TextAppearance::ONE_WORD;
 
@@ -189,13 +187,13 @@ std::vector<openshot::subtitle::WordAnimation> processSegmentAnimation(
     AnimationSettings animSet = settings.animationSettings;
 
     const SubtitleTextStyle& defaultStyle = settings.defaultStyle;
-    SubtitleTextStyle baseStyle = oneWord ? oneWordBase(defaultStyle)
-                                          : defaultStyle;
+    SubtitleTextStyle baseStyle = oneWord ? oneWordBase(defaultStyle) : defaultStyle;
 
-    // ── ONE_WORD opacity fix (kept from previous answer) ────────────────
     if (oneWord) {
-        auto ensureIn = [&](const std::string& k, double v){
-            if (!animSet.inStyles.count(k)) animSet.inStyles[k] = v;
+        auto ensureIn = [&](const std::string& k, const double v){
+            if (!animSet.inStyles.count(k)) {
+                animSet.inStyles[k] = v;
+            }
         };
         ensureIn("opacity",            defaultStyle.opacity);
         ensureIn("backgroundOpacity",  defaultStyle.backgroundOpacity.value_or(1.0));
@@ -207,20 +205,20 @@ std::vector<openshot::subtitle::WordAnimation> processSegmentAnimation(
         animSet.outStyles["shadowOpacity"]     = 0;
         animSet.outStyles["strokeOpacity"]     = 0;
     }
-    // ────────────────────────────────────────────────────────────────────
 
     // collect animated keys after tweaks
     std::set<std::string> numKeys, colKeys;
-    for (auto& [k,_]:animSet.inStyles)        numKeys.insert(k);
-    for (auto& [k,_]:animSet.outStyles)       numKeys.insert(k);
-    for (auto& [k,_]:animSet.inStylesColor)   colKeys.insert(k);
-    for (auto& [k,_]:animSet.outStylesColor)  colKeys.insert(k);
+    for (auto& [k,_]:animSet.inStyles)      numKeys.insert(k);
+    for (auto& [k,_]:animSet.outStyles)     numKeys.insert(k);
+    for (auto& [k,_]:animSet.inStylesColor)  colKeys.insert(k);
+    for (auto& [k,_]:animSet.outStylesColor) colKeys.insert(k);
 
     const float segStart = wordDetails.front().startMs;
 
     for (size_t idx = 0; idx < wordDetails.size(); ++idx) {
         const WordDetail& wd = wordDetails[idx];
-        WordAnimation anim;  anim.word = wd.word;
+        WordAnimation anim;
+        anim.word = wd.word;
 
         float wStart = wd.startMs;
         float wEnd   = wd.endMs;
@@ -287,7 +285,7 @@ std::vector<openshot::subtitle::WordAnimation> processSegmentAnimation(
             int64_t fOutStart = msToFrame(relEnd   - outDur, fps);
             int64_t fEnd      = msToFrame(relEnd, fps);
 
-            auto add = [&](const char* suf, double i, double a, double f){
+            auto add = [&](const char* suf, const double i, const double a, const double f){
                 AnimationParam p; p.name = key + suf;
                 p.keyframe.AddPoint(f0, i, CONSTANT);
                 p.keyframe.AddPoint(fS, i, CONSTANT);
