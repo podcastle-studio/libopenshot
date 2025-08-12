@@ -240,12 +240,6 @@ void Timeline::LoadSubtitlesFromJsonString(const std::string& jsonString) const 
 	subtitleManager->loadFromJSONString(jsonString);
 }
 
-void Timeline::ClearSubtitles() const {
-	if (subtitleManager) {
-		subtitleManager->clearSegments();
-	}
-}
-
 // Add to the tracked_objects map a pointer to a tracked object (TrackedObjectBBox)
 void Timeline::AddTrackedObject(std::shared_ptr<openshot::TrackedObjectBase> trackedObject){
 

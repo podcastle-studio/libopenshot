@@ -91,9 +91,9 @@ void SubtitleRenderer::renderSegment(const SubtitleSegment& segment, const Segme
         lastFrame.push_back({ i.word, applyAnimationParams(i.params, segDuration, fps, segSet.defaultStyle) });
     }
 
-    const auto& cont = segSet.containerStyle;
-    const float maxWidth = segSet.transformation.maxWidth;
-    auto lines = getLines(lastFrame, maxWidth, cont);
+    const auto& contStyle = segSet.containerStyle;
+    const float maxWidth = segSet.transformation.maxWidth / segSet.transformation.scale.horizontalScale;
+    auto lines = getLines(lastFrame, maxWidth, contStyle);
 
     // ── PASS 2 : real animations with line info ───────────────────────────
     auto anim = processSegmentAnimation(segment.wordDetails, segSet, fps, lines);
@@ -121,7 +121,7 @@ void SubtitleRenderer::renderSegment(const SubtitleSegment& segment, const Segme
         maxLineW = std::max(maxLineW, textRenderer->measureTextWidth(tmp));
     }
     const auto& s = segSet.defaultStyle;
-    auto blockH = (cont.appearance == TextAppearance::ONE_WORD)
+    auto blockH = (contStyle.appearance == TextAppearance::ONE_WORD)
          ? s.fontSize  // just one visual line
          : s.fontSize * lines.size() + (lines.size()-1)*(s.lineHeight - s.fontSize);
 
@@ -140,7 +140,7 @@ void SubtitleRenderer::renderSegment(const SubtitleSegment& segment, const Segme
     renderer->translate(-viewportW/2, -blockH/2);
 
     // ── background box  ───────────────────────────────────────────────────
-    drawContainer(viewportW, blockH, cont);
+    drawContainer(viewportW, blockH, contStyle);
 
     // ── draw each visual line ─────────────────────────────────────────────
     for (size_t li=0; li<lines.size(); ++li) {
@@ -151,15 +151,15 @@ void SubtitleRenderer::renderSegment(const SubtitleSegment& segment, const Segme
 
         const float lineW = textRenderer->measureTextWidth(lineWords);
         double x;
-        if (cont.textAlign == TextAlignment::LEFT) {
+        if (contStyle.textAlign == TextAlignment::LEFT) {
             x = 0;
-        } else if (cont.textAlign == TextAlignment::RIGHT) {
+        } else if (contStyle.textAlign == TextAlignment::RIGHT) {
             x = viewportW - lineW;
         } else { // CENTER
            x = (viewportW - lineW) / 2;
         }
 
-        double y = getStartY(li, segSet.defaultStyle, cont);
+        double y = getStartY(li, segSet.defaultStyle, contStyle);
 
         textRenderer->renderText(lineWords, x, y);
     }

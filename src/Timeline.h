@@ -257,9 +257,6 @@ namespace openshot {
 		/// Load subtitles from JSON string
 		void LoadSubtitlesFromJsonString(const std::string& jsonPath) const;
 
-		/// Clear all subtitles
-		void ClearSubtitles() const;
-
 		/// Apply global/timeline effects to the source frame (if any)
 		std::shared_ptr<openshot::Frame> apply_effects(std::shared_ptr<openshot::Frame> frame, int64_t timeline_frame_number, int layer, TimelineInfoStruct* options);
 
