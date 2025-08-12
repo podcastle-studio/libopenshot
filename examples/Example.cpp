@@ -6,7 +6,7 @@
 
 int main() {
 
-    openshot::Timeline timeLine(1920, 1080, openshot::Fraction(30, 1), 48000, 2, openshot::ChannelLayout::LAYOUT_STEREO);
+    openshot::Timeline timeLine(1280, 720, openshot::Fraction(30, 1), 48000, 2, openshot::ChannelLayout::LAYOUT_STEREO);
 
     timeLine.Open();
 
@@ -26,7 +26,7 @@ int main() {
     w.SetOption(openshot::VIDEO_STREAM, "x264-params", "colorprim=bt709:transfer=bt709:colormatrix=bt709");
     w.Open();
 
-    w.WriteFrame(&timeLine, 1, 10*30);
+    w.WriteFrame(&timeLine, 1, 6*30);
     timeLine.Close();
     w.Close();
     return 0;
