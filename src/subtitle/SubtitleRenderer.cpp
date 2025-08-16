@@ -80,86 +80,104 @@ void SubtitleRenderer::renderSegment(const SubtitleSegment& segment, const Segme
       const float segmentMs, const float canvasW, const float canvasH) const {
     const SegmentSettings& segSet = segment.attached ? settings : (segment.settings ? *segment.settings : settings);
 
-    // ── PASS 1 : animations without line info ──────────────────────────────
+    // ── PASS 1 : animations without line info (used to discover line breaks) ─────
     auto animPass1 = processSegmentAnimation(segment.wordDetails, segSet, fps);
 
-    // build last‑frame styles to discover line breaks
+    // build last-frame styles + TRANSFORMED text to discover line breaks correctly
     std::vector<StyledWord> lastFrame;
     lastFrame.reserve(animPass1.size());
     const float segDuration = segment.endTimeMs - segment.startTimeMs;
-    for (const auto &i : animPass1) {
-        lastFrame.push_back({ i.word, applyAnimationParams(i.params, segDuration, fps, segSet.defaultStyle) });
+    for (const auto& i : animPass1) {
+        // style at the end of segment (what we used before for line discovery)
+        auto styleAtEnd = applyAnimationParams(i.params, segDuration, fps, segSet.defaultStyle);
+
+        // IMPORTANT: transform BEFORE measuring/line breaking
+        // If transformText doesn't need the style, passing it is still harmless.
+        const auto transformedWord = transformText(i.word, styleAtEnd, segSet.containerStyle);
+
+        lastFrame.push_back({ transformedWord, std::move(styleAtEnd) });
     }
 
     const auto& contStyle = segSet.containerStyle;
-    const float maxWidth = segSet.transformation.maxWidth / segSet.transformation.scale.horizontalScale;
-    auto lines = getLines(lastFrame, maxWidth, contStyle);
 
-    // ── PASS 2 : real animations with line info ───────────────────────────
+    // compute line breaks using TRANSFORMED last-frame words
+    auto lines = getLines(lastFrame, segSet.transformation.maxWidth, contStyle);
+
+    // ── PASS 2 : real animations WITH line info ───────────────────────────
     auto anim = processSegmentAnimation(segment.wordDetails, segSet, fps, lines);
 
-    // styled words for *current* frame
+    // styled + TRANSFORMED words for *current* frame
     std::vector<StyledWord> frameWords;
     frameWords.reserve(anim.size());
-    for (size_t i=0;i<anim.size();++i) {
+    for (size_t i = 0; i < anim.size(); ++i) {
         const auto& wa = anim[i];
-        const auto& wd = segment.wordDetails[i];
         StyledWord sw;
-        sw.word = transformText(wa.word, segSet.defaultStyle, segSet.containerStyle);
-        sw.style = applyAnimationParams(wa.params, segmentMs, fps, segSet.defaultStyle);
+
+        // style for this frame
+        auto styleNow = applyAnimationParams(wa.params, segmentMs, fps, segSet.defaultStyle);
+
+        // transform BEFORE any width/height calculations
+        sw.word  = transformText(wa.word, styleNow, segSet.containerStyle);
+        sw.style = std::move(styleNow);
 
         frameWords.push_back(std::move(sw));
     }
 
-    // width / height of the block
-    float maxLineW = 0;
-    for (const auto& ln:lines) {
+    // width / height of the block (all sizing now based on transformed content)
+    float maxLineW = 0.0f;
+    for (const auto& ln : lines) {
         std::vector<StyledWord> tmp;
-        for(auto idx:ln) {
-            tmp.push_back(lastFrame[idx]);
+        tmp.reserve(ln.size());
+        for (auto idx : ln) {
+            tmp.push_back(lastFrame[idx]); // already transformed
         }
         maxLineW = std::max(maxLineW, textRenderer->measureTextWidth(tmp));
     }
+
+    // block height: based on number of visual lines (transform affects width/lines;
+    // lineHeight is style-driven, not letter case-driven)
     const auto& s = segSet.defaultStyle;
-    auto blockH = (contStyle.appearance == TextAppearance::ONE_WORD)
-         ? s.fontSize  // just one visual line
-         : s.fontSize * lines.size() + (lines.size()-1)*(s.lineHeight - s.fontSize);
+    const auto  blockH = (contStyle.appearance == TextAppearance::ONE_WORD)
+        ? s.fontSize
+        : s.fontSize * lines.size() + (lines.size() - 1) * (s.lineHeight - s.fontSize);
 
     // ── transform canvas ────────────────────────────────────────────────
     const float viewportW = segSet.transformation.maxWidth;
     const auto& tr = segSet.transformation;
 
     renderer->save();
-    renderer->translate(canvasW*tr.center.x, canvasH*tr.center.y);
+    renderer->translate(canvasW * tr.center.x, canvasH * tr.center.y);
     if (tr.rotation) {
         renderer->rotate(tr.rotation);
     }
-    if (tr.scale.horizontalScale!=1.0f || tr.scale.verticalScale!=1.0f) {
+    if (tr.scale.horizontalScale != 1.0f || tr.scale.verticalScale != 1.0f) {
         renderer->scale(tr.scale.horizontalScale, tr.scale.verticalScale);
     }
-    renderer->translate(-viewportW/2, -blockH/2);
+    renderer->translate(-viewportW / 2, -blockH / 2);
 
     // ── background box  ───────────────────────────────────────────────────
     drawContainer(viewportW, blockH, contStyle);
 
     // ── draw each visual line ─────────────────────────────────────────────
-    for (size_t li=0; li<lines.size(); ++li) {
+    for (size_t li = 0; li < lines.size(); ++li) {
         std::vector<StyledWord> lineWords;
-        for(auto idx:lines[li]) {
-            lineWords.push_back(frameWords[idx]);
+        lineWords.reserve(lines[li].size());
+        for (auto idx : lines[li]) {
+            lineWords.push_back(frameWords[idx]); // transformed current-frame words
         }
 
         const float lineW = textRenderer->measureTextWidth(lineWords);
+
         double x;
         if (contStyle.textAlign == TextAlignment::LEFT) {
             x = 0;
         } else if (contStyle.textAlign == TextAlignment::RIGHT) {
             x = viewportW - lineW;
         } else { // CENTER
-           x = (viewportW - lineW) / 2;
+            x = (viewportW - lineW) / 2.0;
         }
 
-        double y = getStartY(li, segSet.defaultStyle, contStyle);
+        const double y = getStartY(li, segSet.defaultStyle, contStyle);
 
         textRenderer->renderText(lineWords, x, y);
     }

@@ -2,6 +2,8 @@
 
 #include "SubtitleTypes.h"
 #include <string>
+#include <vector>
+#include <skia/include/core/SkFont.h>
 
 // Forward declarations
 class SkPath;
@@ -39,6 +41,17 @@ public:
 
 private:
     static void bubblePath(SkPath* path, const float x, const float y, const float width, const float height, const float radius);
+
+    // Helper struct to store character rendering information
+    struct CharRenderInfo {
+        std::string utf8Char;
+        SkFont font;
+        float x;           // X position
+        float advance;     // Advance width
+    };
+
+    // Build rendering info for all characters in the text
+    std::vector<CharRenderInfo> buildCharRenderInfo(const std::string& text, const SubtitleTextStyle& style) const;
 
     SkiaRenderer* renderer;
 };

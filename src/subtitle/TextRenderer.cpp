@@ -33,9 +33,12 @@ float TextRenderer::measureTextWidth(const std::vector<StyledWord>& styledWords)
     float totalWidth = 0;
     for (size_t i = 0; i < styledWords.size(); ++i) {
         totalWidth += wordRenderer->getTextWidth(styledWords[i].word, styledWords[i].style);
-        if (i + 1 < styledWords.size())
-            totalWidth += wordRenderer->getSpaceWidth(styledWords[i].style); // once
+
+        // Add space width between words (not after the last word)
+        if (i + 1 < styledWords.size()) {
+            totalWidth += wordRenderer->getSpaceWidth(styledWords[i].style);
         }
+    }
     return totalWidth;
 }
 
@@ -51,7 +54,6 @@ void TextRenderer::renderText(const std::vector<StyledWord>& styledWords, const 
         wordWidths.push_back(wordRenderer->getTextWidth(styledWord.word, styledWord.style));
     }
 
-    const float spaceWidth = wordRenderer->getSpaceWidth(styledWords[0].style);
     const TextBounds bounds = getTextVerticalBounds(styledWords);
 
     auto currentX = x;
@@ -69,7 +71,12 @@ void TextRenderer::renderText(const std::vector<StyledWord>& styledWords, const 
 
         wordRenderer->renderWord(styledWord.word, wordStyle, currentX + wordWidth / 2 + dx, y + dy, deltaY);
 
-        currentX += wordWidth + spaceWidth;
+        currentX += wordWidth;
+
+        // Add space width between words (not after the last word)
+        if (i + 1 < styledWords.size()) {
+            currentX += wordRenderer->getSpaceWidth(styledWord.style);
+        }
     }
 }
 

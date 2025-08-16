@@ -7,6 +7,7 @@
 #include <skia/include/core/SkTypeface.h>
 #include <algorithm>
 #include <cmath>
+#include <vector>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -70,79 +71,147 @@ void WordRenderer::renderWord(const std::string& word, const SubtitleTextStyle& 
 }
 
 SkFont WordRenderer::getFontForCharacter(const std::string& utf8Char, const SubtitleTextStyle& style) const {
-    SkUnichar unichar = 0; // Will hold the Unicode codepoint (e.g., U+0531 for Ա)
+    SkUnichar unichar = 0;
     const char *ptr = utf8Char.c_str();
     const size_t len = utf8Char.length();
 
     if (len > 0) {
-        const unsigned char firstByte = ptr[0];
+        const unsigned char firstByte = static_cast<unsigned char>(ptr[0]);
 
         // 1-byte character (ASCII): 0xxxxxxx
-        if ((firstByte & 0x80) == 0) {  // Check if first bit is 0
-            unichar = firstByte;  // Just use the byte as-is
+        if ((firstByte & 0x80) == 0) {
+            unichar = firstByte;
         }
         // 2-byte character: 110xxxxx 10xxxxxx
-        else if ((firstByte & 0xE0) == 0xC0 && len >= 2) {  // Check if starts with 110
-            // Extract 5 bits from first byte and 6 bits from second byte
-            unichar = ((firstByte & 0x1F) << 6) | (ptr[1] & 0x3F);
-            // Example: Armenian Ա (U+0531) = [0xD4, 0xB1]
-            // = ((0xD4 & 0x1F) << 6) | (0xB1 & 0x3F)
-            // = (0x14 << 6) | 0x31
-            // = 0x500 | 0x31 = 0x531
+        else if ((firstByte & 0xE0) == 0xC0 && len >= 2) {
+            unichar = ((firstByte & 0x1F) << 6) | (static_cast<unsigned char>(ptr[1]) & 0x3F);
         }
         // 3-byte character: 1110xxxx 10xxxxxx 10xxxxxx
-        else if ((firstByte & 0xF0) == 0xE0 && len >= 3) {  // Check if starts with 1110
-            // Extract 4 bits from first, 6 from second, 6 from third
-            unichar = ((firstByte & 0x0F) << 12) |    // 4 bits shifted by 12
-                      ((ptr[1] & 0x3F) << 6) |         // 6 bits shifted by 6
-                      (ptr[2] & 0x3F);                 // 6 bits
+        else if ((firstByte & 0xF0) == 0xE0 && len >= 3) {
+            unichar = ((firstByte & 0x0F) << 12) |
+                      ((static_cast<unsigned char>(ptr[1]) & 0x3F) << 6) |
+                      (static_cast<unsigned char>(ptr[2]) & 0x3F);
         }
         // 4-byte character: 11110xxx 10xxxxxx 10xxxxxx 10xxxxxx
-        else if ((firstByte & 0xF8) == 0xF0 && len >= 4) {  // Check if starts with 11110
-            // Extract 3 bits from first, 6 from second, 6 from third, 6 from fourth
-            unichar = ((firstByte & 0x07) << 18) |    // 3 bits shifted by 18
-                      ((ptr[1] & 0x3F) << 12) |        // 6 bits shifted by 12
-                      ((ptr[2] & 0x3F) << 6) |         // 6 bits shifted by 6
-                      (ptr[3] & 0x3F);                 // 6 bits
+        else if ((firstByte & 0xF8) == 0xF0 && len >= 4) {
+            unichar = ((firstByte & 0x07) << 18) |
+                      ((static_cast<unsigned char>(ptr[1]) & 0x3F) << 12) |
+                      ((static_cast<unsigned char>(ptr[2]) & 0x3F) << 6) |
+                      (static_cast<unsigned char>(ptr[3]) & 0x3F);
         }
     }
 
-    // Now we have the Unicode codepoint, get a font that can render it
     return renderer->getFontForCharacter(
         {style.fontFamily, style.fontSize, style.fontWeight, style.italic},
-        unichar  // Pass the Unicode codepoint (e.g., 0x0531 for Ա)
+        unichar
     );
 }
 
-float WordRenderer::getTextWidth(const std::string& text, const SubtitleTextStyle& style) const {
-    // Calculate width letter by letter with proper font fallback
-    float totalWidth = 0;
+// Helper structure to store character rendering information
+struct CharRenderInfo {
+    std::string utf8Char;
+    SkFont font;
+    float x;           // X position
+    float advance;     // Advance width
+};
+
+// Build rendering info for all characters in the text
+std::vector<WordRenderer::CharRenderInfo> WordRenderer::buildCharRenderInfo(
+    const std::string& text, const SubtitleTextStyle& style) const {
+    std::vector<CharRenderInfo> charInfos;
+
+    float currentX = 0;
     size_t i = 0;
 
     while (i < text.length()) {
         // Extract UTF-8 character
         size_t charLen = 1;
-        const unsigned char firstByte = text[i];
-        if ((firstByte & 0x80) == 0)            charLen = 1;
-        else if ((firstByte & 0xE0) == 0xC0)    charLen = 2;
-        else if ((firstByte & 0xF0) == 0xE0)    charLen = 3;
-        else if ((firstByte & 0xF8) == 0xF0)    charLen = 4;
+        const unsigned char firstByte = static_cast<unsigned char>(text[i]);
 
-        std::string utf8Char = text.substr(i, charLen);
-        SkFont charFont = getFontForCharacter(utf8Char, style);
+        if ((firstByte & 0x80) == 0) {
+            charLen = 1;
+        } else if ((firstByte & 0xE0) == 0xC0) {
+            charLen = 2;
+        } else if ((firstByte & 0xF0) == 0xE0) {
+            charLen = 3;
+        } else if ((firstByte & 0xF8) == 0xF0) {
+            charLen = 4;
+        } else {
+            // Invalid UTF-8 sequence
+            i++;
+            continue;
+        }
 
-        const float letterWidth = charFont.measureText(utf8Char.c_str(), utf8Char.length(), SkTextEncoding::kUTF8, nullptr);
-        totalWidth += letterWidth;
+        // Validate we have enough bytes
+        if (i + charLen > text.length()) {
+            break;
+        }
+
+        // Validate continuation bytes
+        bool validUtf8 = true;
+        for (size_t j = 1; j < charLen; j++) {
+            unsigned char byte = static_cast<unsigned char>(text[i + j]);
+            if ((byte & 0xC0) != 0x80) {
+                validUtf8 = false;
+                break;
+            }
+        }
+
+        if (!validUtf8) {
+            i++;
+            continue;
+        }
+
+        CharRenderInfo info;
+        info.utf8Char = text.substr(i, charLen);
+        info.font = getFontForCharacter(info.utf8Char, style);
+        info.x = currentX;
+
+        // Get the glyph and its width
+        SkGlyphID glyphs[10]; // Support for complex scripts that might produce multiple glyphs
+        int glyphCount = info.font.textToGlyphs(info.utf8Char.c_str(), info.utf8Char.length(),
+                                                SkTextEncoding::kUTF8, glyphs, 10);
+
+        if (glyphCount > 0) {
+            // Get widths for all glyphs
+            std::vector<SkScalar> widths(glyphCount);
+            info.font.getWidths(glyphs, glyphCount, widths.data());
+
+            // Sum up all glyph widths (for complex scripts)
+            info.advance = 0;
+            for (int g = 0; g < glyphCount; g++) {
+                info.advance += widths[g];
+            }
+        } else {
+            // Fallback to measureText if glyph conversion fails
+            info.advance = info.font.measureText(info.utf8Char.c_str(), info.utf8Char.length(),
+                                                SkTextEncoding::kUTF8, nullptr);
+        }
+
+        charInfos.push_back(info);
+
+        currentX += info.advance;
 
         // Add letter spacing except after last character
         if (i + charLen < text.length()) {
-            totalWidth += style.letterSpacing;
+            currentX += style.letterSpacing;
         }
 
         i += charLen;
     }
 
-    return totalWidth;
+    return charInfos;
+}
+
+float WordRenderer::getTextWidth(const std::string& text, const SubtitleTextStyle& style) const {
+    if (text.empty()) return 0.0f;
+
+    const auto charInfos = buildCharRenderInfo(text, style);
+    if (charInfos.empty()) return 0.0f;
+
+    // Total width is the x position of the last character plus its advance
+    const auto& lastChar = charInfos.back();
+    return lastChar.x + lastChar.advance;
 }
 
 TextBounds WordRenderer::getTextHeight(const std::string& text, const SubtitleTextStyle& style) const {
@@ -160,7 +229,14 @@ TextBounds WordRenderer::getTextHeight(const std::string& text, const SubtitleTe
 float WordRenderer::getSpaceWidth(const SubtitleTextStyle& style) const {
     const SkFont skFont = renderer->getFont({ style.fontFamily, style.fontSize, style.fontWeight, style.italic});
 
-    const float spaceWidth = skFont.measureText(" ", 1, SkTextEncoding::kUTF8, nullptr);
+    // Get the glyph for space
+    SkGlyphID spaceGlyph;
+    skFont.textToGlyphs(" ", 1, SkTextEncoding::kUTF8, &spaceGlyph, 1);
+
+    // Get the width of the space glyph
+    SkScalar spaceWidth;
+    skFont.getWidths(&spaceGlyph, 1, &spaceWidth);
+
     return spaceWidth + style.letterSpacing;
 }
 
@@ -248,27 +324,12 @@ void WordRenderer::drawWordText(const std::string& word, float wordWidth, const 
     const PaintProps textPaintProps{style.color, style.opacity};
     const SkPaint* textPaint = renderer->getPaint(textPaintProps);
 
-    // Render character by character with font fallback
-    float currentX = -wordWidth / 2;
-    size_t i = 0;
+    // Use the same character rendering info that was used for measurement
+    const auto charInfos = buildCharRenderInfo(word, style);
+    const float startX = -wordWidth / 2;
 
-    while (i < word.length()) {
-        // Extract UTF-8 character
-        size_t charLen = 1;
-        const unsigned char firstByte = word[i];
-        if ((firstByte & 0x80) == 0)         charLen = 1;
-        else if ((firstByte & 0xE0) == 0xC0) charLen = 2;
-        else if ((firstByte & 0xF0) == 0xE0) charLen = 3;
-        else if ((firstByte & 0xF8) == 0xF0) charLen = 4;
-
-        std::string utf8Char = word.substr(i, charLen);
-        SkFont charFont = getFontForCharacter(utf8Char, style);
-
-        const float letterWidth = charFont.measureText(utf8Char.c_str(), utf8Char.length(), SkTextEncoding::kUTF8, nullptr);
-        renderer->drawText(utf8Char, currentX, 0, *textPaint, charFont);
-
-        currentX += letterWidth + style.letterSpacing;
-        i += charLen;
+    for (const auto& info : charInfos) {
+        renderer->drawText(info.utf8Char, startX + info.x, 0, *textPaint, info.font);
     }
 }
 
@@ -289,28 +350,13 @@ void WordRenderer::drawWordShadow(const std::string& word, const float wordWidth
     const float shadowX = cos(angle) * style.shadowDistance.value_or(0);
     const float shadowY = sin(angle) * style.shadowDistance.value_or(0);
 
-    float currentX = -wordWidth / 2 + shadowX;
-    size_t i = 0;
+    // Use the same character rendering info
+    const auto charInfos = buildCharRenderInfo(word, style);
+    const float startX = -wordWidth / 2 + shadowX;
 
-    while (i < word.length()) {
-        // Extract UTF-8 character
-        size_t charLen = 1;
-        const unsigned char firstByte = word[i];
-        if ((firstByte & 0x80) == 0) charLen = 1;
-        else if ((firstByte & 0xE0) == 0xC0) charLen = 2;
-        else if ((firstByte & 0xF0) == 0xE0) charLen = 3;
-        else if ((firstByte & 0xF8) == 0xF0) charLen = 4;
-
-        std::string utf8Char = word.substr(i, charLen);
-        SkFont charFont = getFontForCharacter(utf8Char, style);
-
-        const float letterWidth = charFont.measureText(utf8Char.c_str(), utf8Char.length(), SkTextEncoding::kUTF8, nullptr);
-
-        renderer->drawText(utf8Char, currentX, shadowY, *strokePaint, charFont);
-        renderer->drawText(utf8Char, currentX, shadowY, *shadowPaint, charFont);
-
-        currentX += letterWidth + style.letterSpacing;
-        i += charLen;
+    for (const auto& info : charInfos) {
+        renderer->drawText(info.utf8Char, startX + info.x, shadowY, *strokePaint, info.font);
+        renderer->drawText(info.utf8Char, startX + info.x, shadowY, *shadowPaint, info.font);
     }
 }
 
@@ -320,26 +366,12 @@ void WordRenderer::drawWordStroke(const std::string& word, float wordWidth, cons
     const PaintProps strokePaintProps{ style.strokeColor.value(), style.strokeOpacity.value_or(1.0f), style.strokeWidth };
     const SkPaint* strokePaint = renderer->getPaint(strokePaintProps);
 
-    float currentX = -wordWidth / 2;
-    size_t i = 0;
+    // Use the same character rendering info
+    const auto charInfos = buildCharRenderInfo(word, style);
+    const float startX = -wordWidth / 2;
 
-    while (i < word.length()) {
-        // Extract UTF-8 character
-        size_t charLen = 1;
-        unsigned char firstByte = word[i];
-        if ((firstByte & 0x80) == 0) charLen = 1;
-        else if ((firstByte & 0xE0) == 0xC0) charLen = 2;
-        else if ((firstByte & 0xF0) == 0xE0) charLen = 3;
-        else if ((firstByte & 0xF8) == 0xF0) charLen = 4;
-
-        std::string utf8Char = word.substr(i, charLen);
-        SkFont charFont = getFontForCharacter(utf8Char, style);
-
-        const float letterWidth = charFont.measureText(utf8Char.c_str(), utf8Char.length(), SkTextEncoding::kUTF8, nullptr);
-
-        renderer->drawText(utf8Char, currentX, 0, *strokePaint, charFont);
-        currentX += letterWidth + style.letterSpacing;
-        i += charLen;
+    for (const auto& info : charInfos) {
+        renderer->drawText(info.utf8Char, startX + info.x, 0, *strokePaint, info.font);
     }
 }
 
