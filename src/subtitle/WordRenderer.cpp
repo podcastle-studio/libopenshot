@@ -76,7 +76,7 @@ SkFont WordRenderer::getFontForCharacter(const std::string& utf8Char, const Subt
     const size_t len = utf8Char.length();
 
     if (len > 0) {
-        const unsigned char firstByte = static_cast<unsigned char>(ptr[0]);
+        const auto firstByte = static_cast<unsigned char>(ptr[0]);
 
         // 1-byte character (ASCII): 0xxxxxxx
         if ((firstByte & 0x80) == 0) {

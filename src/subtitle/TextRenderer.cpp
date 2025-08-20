@@ -56,20 +56,28 @@ void TextRenderer::renderText(const std::vector<StyledWord>& styledWords, const 
 
     const TextBounds bounds = getTextVerticalBounds(styledWords);
 
+    // Precompute per-word positions and vertical offsets
+    std::vector<double> posX;
+    std::vector<double> posY;
+    std::vector<double> deltaYs;
+    posX.reserve(styledWords.size());
+    posY.reserve(styledWords.size());
+    deltaYs.reserve(styledWords.size());
+
     auto currentX = x;
     for (size_t i = 0; i < styledWords.size(); ++i) {
         const auto& styledWord = styledWords[i];
         const auto& wordStyle = styledWord.style;
         const auto& wordWidth = wordWidths[i];
 
-        // Calculate vertical offset
         const auto deltaY = (wordStyle.fontSize - (bounds.bottom - bounds.top)) / 2 + bounds.bottom;
 
-        // Calculate translation offsets (as percentage of font size)
         const auto dx = (wordStyle.translateX.value_or(0) * wordStyle.fontSize) / 100;
         const auto dy = (wordStyle.translateY.value_or(0) * wordStyle.fontSize) / 100;
 
-        wordRenderer->renderWord(styledWord.word, wordStyle, currentX + wordWidth / 2 + dx, y + dy, deltaY);
+        posX.push_back(currentX + wordWidth / 2 + dx);
+        posY.push_back(y + dy);
+        deltaYs.push_back(deltaY);
 
         currentX += wordWidth;
 
@@ -77,6 +85,42 @@ void TextRenderer::renderText(const std::vector<StyledWord>& styledWords, const 
         if (i + 1 < styledWords.size()) {
             currentX += wordRenderer->getSpaceWidth(styledWord.style);
         }
+    }
+
+    // Pass 1: backgrounds
+    for (size_t i = 0; i < styledWords.size(); ++i) {
+        const auto& styledWord = styledWords[i];
+        renderer->save();
+        renderer->translate(posX[i], posY[i]);
+        wordRenderer->drawWordBackground(static_cast<float>(wordWidths[i]), styledWord.style, static_cast<float>(deltaYs[i]));
+        renderer->restore();
+    }
+
+    // Pass 2: shadows
+    for (size_t i = 0; i < styledWords.size(); ++i) {
+        const auto& styledWord = styledWords[i];
+        renderer->save();
+        renderer->translate(posX[i], posY[i]);
+        wordRenderer->drawWordShadow(styledWord.word, static_cast<float>(wordWidths[i]), styledWord.style);
+        renderer->restore();
+    }
+
+    // Pass 3: strokes
+    for (size_t i = 0; i < styledWords.size(); ++i) {
+        const auto& styledWord = styledWords[i];
+        renderer->save();
+        renderer->translate(posX[i], posY[i]);
+        wordRenderer->drawWordStroke(styledWord.word, static_cast<float>(wordWidths[i]), styledWord.style);
+        renderer->restore();
+    }
+
+    // Pass 4: text
+    for (size_t i = 0; i < styledWords.size(); ++i) {
+        const auto& styledWord = styledWords[i];
+        renderer->save();
+        renderer->translate(posX[i], posY[i]);
+        wordRenderer->drawWordText(styledWord.word, static_cast<float>(wordWidths[i]), styledWord.style);
+        renderer->restore();
     }
 }
 
