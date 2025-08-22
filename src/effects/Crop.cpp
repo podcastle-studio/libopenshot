@@ -28,9 +28,9 @@ Crop::Crop() : Crop::Crop(0.0, 0.0, 0.0, 0.0, 0.0, 0.0) {}
 
 Crop::Crop(
 	Keyframe left, Keyframe top,
-	Keyframe right, Keyframe bottom,
+	Keyframe right, Keyframe bottom, Keyframe radius,
 	Keyframe x, Keyframe y) :
-		left(left), top(top), right(right), bottom(bottom), x(x), y(y), resize(true)
+		left(left), top(top), right(right), bottom(bottom), radius(radius), x(x), y(y), resize(true)
 {
 	// Init effect properties
 	init_effect_details();
@@ -52,28 +52,40 @@ void Crop::init_effect_details()
 
 // This method is required for all derived classes of EffectBase, and returns a
 // modified openshot::Frame object
+#include <QPainter>
+#include <QPainterPath>
+
+#include <QPainter>
+#include <QPainterPath>
+#include <algorithm> // std::clamp, std::min
+
 std::shared_ptr<openshot::Frame> Crop::GetFrame(std::shared_ptr<openshot::Frame> frame, int64_t frame_number)
 {
-	// Get the frame's image
-	std::shared_ptr<QImage> frame_image = frame->GetImage();
+    // Get the frame's image
+    std::shared_ptr<QImage> frame_image = frame->GetImage();
 
-	// Get current keyframe values
-	double left_value = left.GetValue(frame_number);
-	double top_value = top.GetValue(frame_number);
-	double right_value = right.GetValue(frame_number);
-	double bottom_value = bottom.GetValue(frame_number);
+    // Get current keyframe values
+    double left_value   = left.GetValue(frame_number);
+    double top_value    = top.GetValue(frame_number);
+    double right_value  = right.GetValue(frame_number);
+    double bottom_value = bottom.GetValue(frame_number);
+    double radius_value = radius.GetValue(frame_number);   // 0..1 normalized
 
-	// Get the current shift amount
-	double x_shift = x.GetValue(frame_number);
-	double y_shift = y.GetValue(frame_number);
+    // Get the current shift amount
+    double x_shift = x.GetValue(frame_number);
+    double y_shift = y.GetValue(frame_number);
 
-	QSize sz = frame_image->size();
+    QSize sz = frame_image->size();
 
     // Compute destination rectangle to paint into
     QRectF paint_r(
-            left_value * sz.width(), top_value * sz.height(),
-            std::max(0.0, 1.0 - left_value - right_value) * sz.width(),
-            std::max(0.0, 1.0 - top_value - bottom_value) * sz.height());
+        left_value * sz.width(), top_value * sz.height(),
+        std::max(0.0, 1.0 - left_value - right_value) * sz.width(),
+        std::max(0.0, 1.0 - top_value - bottom_value) * sz.height());
+
+    if (paint_r.width() <= 0.0 || paint_r.height() <= 0.0) {
+        return frame; // nothing to draw
+    }
 
     // Copy rectangle is destination translated by offsets
     QRectF copy_r = paint_r;
@@ -101,18 +113,33 @@ std::shared_ptr<openshot::Frame> Crop::GetFrame(std::shared_ptr<openshot::Frame>
     cropped.fill(Qt::transparent);
 
     QPainter p(&cropped);
+    p.setRenderHint(QPainter::Antialiasing, true);
+    p.setRenderHint(QPainter::SmoothPixmapTransform, true);
+
+    // ---- Rounded-rect clip with uniform radius from min(width, height) ----
+    const qreal min_dim = std::min(paint_r.width(), paint_r.height());
+    const qreal r_norm  = std::clamp(static_cast<qreal>(radius_value), static_cast<qreal>(0.0), static_cast<qreal>(1.0));
+    const qreal r_px    = r_norm * (min_dim * 0.5); // max corner radius = min_dim/2
+
+    if (r_px > 0.0) {
+        QPainterPath clip;
+        clip.addRoundedRect(paint_r, r_px, r_px); // rx == ry
+        p.setClipPath(clip);
+    }
+
+    // Draw the source image portion into the (possibly rounded) destination rect
     p.drawImage(paint_r, *frame_image, copy_r);
     p.end();
 
     if (resize) {
-        // Resize image to match cropped QRect (reduce frame size)
+        // Resize image to match cropped QRect (transparent rounded corners)
         frame->AddImage(std::make_shared<QImage>(cropped.copy(paint_r.toRect())));
     } else {
-        // Copy cropped image into transparent frame image (maintain frame size)
+        // Maintain frame size; rounded crop sits on transparent background
         frame->AddImage(std::make_shared<QImage>(cropped.copy()));
     }
-	// return the modified frame
-	return frame;
+
+    return frame;
 }
 
 // Generate JSON string of this object
