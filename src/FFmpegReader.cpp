@@ -217,8 +217,25 @@ void FFmpegReader::Open() {
 			ZmqLogger::Instance()->AppendDebugMethod("Decode hardware acceleration settings", "hw_de_on", hw_de_on, "HARDWARE_DECODER", openshot::Settings::Instance()->HARDWARE_DECODER);
 		}
 
-		// Open video file
-		if (avformat_open_input(&pFormatCtx, path.c_str(), NULL, NULL) != 0)
+		// Open video file (retry up to 3 times with short backoff for transient FS issues)
+		int open_ret = 0;
+		for (int attempt = 0; attempt < 3; ++attempt) {
+			open_ret = avformat_open_input(&pFormatCtx, path.c_str(), NULL, NULL);
+			if (open_ret == 0)
+				break; // success
+
+			// Clean up before retry
+			if (pFormatCtx) {
+				avformat_close_input(&pFormatCtx);
+				pFormatCtx = NULL;
+			}
+
+			// Backoff between attempts (~100ms then ~300ms)
+			if (attempt < 2) {
+				std::this_thread::sleep_for(std::chrono::milliseconds(attempt == 0 ? 100 : 300));
+			}
+		}
+		if (open_ret != 0)
 			throw InvalidFile("File could not be opened.", path);
 
 		// Retrieve stream information

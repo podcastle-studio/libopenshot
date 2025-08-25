@@ -17,6 +17,7 @@
 #include "Exceptions.h"
 #include "Timeline.h"
 
+#include <thread>
 #include <QString>
 #include <QImage>
 #include <QPainter>
@@ -48,29 +49,41 @@ void QtImageReader::Open()
         bool loaded = false;
         QSize default_svg_size;
 
-        // Check for SVG files and rasterizing them to QImages
-        if (path.toLower().endsWith(".svg") || path.toLower().endsWith(".svgz")) {
-            #if RESVG_VERSION_MIN(0, 11)
-                // Initialize the Resvg options
-                resvg_options.loadSystemFonts();
-            #endif
-            
-            // Parse SVG file
-            default_svg_size = load_svg_path(path);
-            if (!default_svg_size.isEmpty()) {
-                loaded = true;
-            }
-        }
+        // Retry up to 3 times with short backoff (helps with transient NFS hiccups)
+        int open_ret = 0; // unused, mirrors style from FFmpegReader change
+        for (int attempt = 0; attempt < 3 && !loaded; ++attempt) {
+            default_svg_size = QSize(); // reset between attempts
 
-        if (!loaded) {
-            // Attempt to open file using Qt's build in image processing capabilities
-            // AutoTransform enables exif data to be parsed and auto transform the image
-            // to the correct orientation
-            image = std::make_shared<QImage>();
-            QImageReader imgReader( path );
-            imgReader.setAutoTransform( true );
-            imgReader.setDecideFormatFromContent( true );
-            loaded = imgReader.read(image.get());
+            // Check for SVG files and rasterizing them to QImages
+            if (path.toLower().endsWith(".svg") || path.toLower().endsWith(".svgz")) {
+                #if RESVG_VERSION_MIN(0, 11)
+                    // Initialize the Resvg options
+                    resvg_options.loadSystemFonts();
+                #endif
+
+                // Parse SVG file
+                default_svg_size = load_svg_path(path);
+                if (!default_svg_size.isEmpty()) {
+                    loaded = true;
+                }
+            }
+
+            if (!loaded) {
+                // Attempt to open file using Qt's built-in image processing capabilities
+                // AutoTransform enables exif data to be parsed and auto transform the image
+                // to the correct orientation
+                image = std::make_shared<QImage>();
+                QImageReader imgReader(path);
+                imgReader.setAutoTransform(true);
+                imgReader.setDecideFormatFromContent(true);
+                loaded = imgReader.read(image.get());
+            }
+
+            // Backoff between attempts (≈100ms then ≈300ms)
+            if (!loaded && attempt < 2) {
+                // Use standard C++ sleep to avoid adding Qt thread helpers or platform headers
+                std::this_thread::sleep_for(std::chrono::milliseconds(attempt == 0 ? 100 : 300));
+            }
         }
 
         if (!loaded) {
