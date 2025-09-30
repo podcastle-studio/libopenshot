@@ -24,7 +24,6 @@ For more information, please visit <http://www.openshot.org/>.
 set(CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake/Modules")
 
 ################ PROJECT VERSION ####################
-
 set(PROJECT_VERSION_FULL "0.4.0")
 set(PROJECT_SO_VERSION 27)
 
