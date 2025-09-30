@@ -33,7 +33,6 @@
 
 using namespace openshot;
 
-
 // Init default settings for a clip
 void Clip::init_settings()
 {

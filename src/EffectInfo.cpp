@@ -113,6 +113,7 @@ EffectBase* EffectInfo::CreateEffect(std::string effect_type) {
 	#ifdef USE_OPENCV_EFFECTS
 	else if (effect_type == "Outline")
 		return new Outline();
+
 	else if(effect_type == "Stabilizer")
 		return new Stabilizer();
 

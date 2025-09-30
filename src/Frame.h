@@ -267,7 +267,7 @@ namespace openshot
 
 #ifdef USE_OPENCV
 		/// Convert Qimage to Mat
-		cv::Mat Qimage2mat(std::shared_ptr<QImage> qimage);
+		cv::Mat Qimage2mat( std::shared_ptr<QImage> qimage);
 
 		/// Convert OpenCV Mat to QImage
 		std::shared_ptr<QImage> Mat2Qimage(cv::Mat img);

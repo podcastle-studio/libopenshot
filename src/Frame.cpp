@@ -874,8 +874,9 @@ std::shared_ptr<QImage> Frame::GetImage()
 //	return mat2;
 //}
 
-cv::Mat Frame::Qimage2mat(std::shared_ptr<QImage> qimage) {
-    cv::Mat mat = cv::Mat(qimage->height(), qimage->width(), CV_8UC4, (uchar*)qimage->constBits(), qimage->bytesPerLine()).clone();
+cv::Mat Frame::Qimage2mat(std::shared_ptr<QImage> qimage)
+{
+    cv::Mat mat(qimage->height(), qimage->width(), CV_8UC4, (uchar*)qimage->constBits(), qimage->bytesPerLine());
     // Ensure the color channels are in the correct order
     cv::cvtColor(mat, mat, cv::COLOR_BGRA2RGBA);
     return mat;
@@ -886,9 +887,14 @@ cv::Mat Frame::GetImageCV()
 {
 	// Check for blank image
 	if (!image)
-		AddColor(width, height, color); // Fill with black
+		// Fill with black
+		AddColor(width, height, color);
 
-	return Qimage2mat(image);
+	// if (imagecv.empty())
+	// Convert Qimage to Mat
+	imagecv = Qimage2mat(image);
+
+	return imagecv;
 }
 
 std::shared_ptr<QImage> Frame::Mat2Qimage(cv::Mat img){
