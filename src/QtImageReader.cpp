@@ -17,6 +17,7 @@
 #include "Exceptions.h"
 #include "Timeline.h"
 
+#include <thread>
 #include <QString>
 #include <QImage>
 #include <QPainter>
@@ -48,29 +49,41 @@ void QtImageReader::Open()
         bool loaded = false;
         QSize default_svg_size;
 
-        // Check for SVG files and rasterizing them to QImages
-        if (path.toLower().endsWith(".svg") || path.toLower().endsWith(".svgz")) {
-            #if RESVG_VERSION_MIN(0, 11)
-                // Initialize the Resvg options
-                resvg_options.loadSystemFonts();
-            #endif
-            
-            // Parse SVG file
-            default_svg_size = load_svg_path(path);
-            if (!default_svg_size.isEmpty()) {
-                loaded = true;
-            }
-        }
+        // Retry up to 3 times with short backoff (helps with transient NFS hiccups)
+        int open_ret = 0; // unused, mirrors style from FFmpegReader change
+        for (int attempt = 0; attempt < 3 && !loaded; ++attempt) {
+            default_svg_size = QSize(); // reset between attempts
 
-        if (!loaded) {
-            // Attempt to open file using Qt's build in image processing capabilities
-            // AutoTransform enables exif data to be parsed and auto transform the image
-            // to the correct orientation
-            image = std::make_shared<QImage>();
-            QImageReader imgReader( path );
-            imgReader.setAutoTransform( true );
-            imgReader.setDecideFormatFromContent( true );
-            loaded = imgReader.read(image.get());
+            // Check for SVG files and rasterizing them to QImages
+            if (path.toLower().endsWith(".svg") || path.toLower().endsWith(".svgz")) {
+                #if RESVG_VERSION_MIN(0, 11)
+                    // Initialize the Resvg options
+                    resvg_options.loadSystemFonts();
+                #endif
+
+                // Parse SVG file
+                default_svg_size = load_svg_path(path);
+                if (!default_svg_size.isEmpty()) {
+                    loaded = true;
+                }
+            }
+
+            if (!loaded) {
+                // Attempt to open file using Qt's built-in image processing capabilities
+                // AutoTransform enables exif data to be parsed and auto transform the image
+                // to the correct orientation
+                image = std::make_shared<QImage>();
+                QImageReader imgReader(path);
+                imgReader.setAutoTransform(true);
+                imgReader.setDecideFormatFromContent(true);
+                loaded = imgReader.read(image.get());
+            }
+
+            // Backoff between attempts (≈100ms then ≈300ms)
+            if (!loaded && attempt < 2) {
+                // Use standard C++ sleep to avoid adding Qt thread helpers or platform headers
+                std::this_thread::sleep_for(std::chrono::milliseconds(attempt == 0 ? 100 : 300));
+            }
         }
 
         if (!loaded) {
@@ -164,11 +177,23 @@ std::shared_ptr<Frame> QtImageReader::GetFrame(int64_t requested_frame)
             load_svg_path(path);
         }
 
-        // We need to resize the original image to a smaller image (for performance reasons)
-        // Only do this once, to prevent tons of unneeded scaling operations
-        cached_image = std::make_shared<QImage>(image->scaled(
-                       current_max_size,
-                       Qt::KeepAspectRatio, Qt::SmoothTransformation));
+        // Determine if we need to scale the image
+        bool scale_image = true;
+        Clip* parent = (Clip*) ParentClip();
+        if (parent && parent->scale == SCALE_NONE) {
+            // Do not scale the image in SCALE_NONE mode
+            scale_image = false;
+        }
+
+        if (scale_image) {
+            // Resize the original image
+            cached_image = std::make_shared<QImage>(image->scaled(
+                               current_max_size,
+                               Qt::KeepAspectRatio, Qt::SmoothTransformation));
+        } else {
+            // Use the original image without scaling
+            cached_image = image;
+        }
 
         // Set max size (to later determine if max_size is changed)
         max_size = current_max_size;
@@ -233,15 +258,18 @@ QSize QtImageReader::calculate_max_size() {
             // Scale images to equivalent unscaled size
             // Since the preview window can change sizes, we want to always
             // scale against the ratio of original image size to timeline size
-            float preview_ratio = 1.0;
-            if (parent->ParentTimeline()) {
-                Timeline *t = (Timeline *) parent->ParentTimeline();
-                preview_ratio = t->preview_width / float(t->info.width);
-            }
-            float max_scale_x = parent->scale_x.GetMaxPoint().co.Y;
-            float max_scale_y = parent->scale_y.GetMaxPoint().co.Y;
-            max_width = info.width * max_scale_x * preview_ratio;
-            max_height = info.height * max_scale_y * preview_ratio;
+            // float preview_ratio = 1.0;
+            // if (parent->ParentTimeline()) {
+            //     Timeline *t = (Timeline *) parent->ParentTimeline();
+            //     preview_ratio = t->preview_width / float(t->info.width);
+            // }
+            // float max_scale_x = parent->scale_x.GetMaxPoint().co.Y;
+            // float max_scale_y = parent->scale_y.GetMaxPoint().co.Y;
+            // max_width = info.width * max_scale_x * preview_ratio;
+            // max_height = info.height * max_scale_y * preview_ratio;
+
+            max_width = info.width;
+            max_height = info.height;
         }
     }
 

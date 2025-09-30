@@ -46,6 +46,12 @@ add_feature_info("IWYU (include-what-you-use)" ENABLE_IWYU "Scan all source file
 
 # Main library sources
 set(OPENSHOT_SOURCES
+  subtitle/Helpers.cpp
+  subtitle/SkiaRenderer.cpp
+  subtitle/SubtitleManager.cpp
+  subtitle/SubtitleRenderer.cpp
+  subtitle/TextRenderer.cpp
+  subtitle/WordRenderer.cpp
   AudioBufferSource.cpp
   AudioDevices.cpp
   AudioReaderSource.cpp
@@ -106,6 +112,19 @@ set(OPENSHOT_CV_SOURCES
 
 # Video effects
 set(EFFECTS_SOURCES
+  effects/image-processing-lib/src/Effects/effects.cpp
+  effects/Alpha.cpp
+  effects/CameraMovement.cpp
+  effects/BorderReflectedRotation.cpp
+  effects/BorderReflectedMove.cpp
+  effects/Zoom.cpp
+  effects/ColorAdjustment.cpp
+  effects/LightAdjustment.cpp
+  effects/Enhancement.cpp
+  effects/CircleMask.cpp
+  effects/Wipe.cpp
+  effects/Exposure.cpp
+  effects/SplitShift.cpp
   effects/Bars.cpp
   effects/Blur.cpp
   effects/Brightness.cpp
@@ -450,8 +469,17 @@ if (TARGET babl_lib)
   target_link_libraries(openshot PUBLIC babl_lib)
 endif ()
 
+find_package(OpenCV 4)
+target_link_libraries(openshot PUBLIC
+        opencv_core
+        opencv_video
+        opencv_highgui
+        opencv_dnn
+        opencv_tracking
+)
+target_compile_definitions(openshot PUBLIC USE_OPENCV=1)
 ################## OPENCV ###################
-if(ENABLE_OPENCV)
+if(ENABLE_OPENCV_EFFECTS)
   find_package(OpenCV 4)
   if(NOT OpenCV_FOUND)
     set(ENABLE_OPENCV FALSE CACHE BOOL
@@ -497,7 +525,7 @@ See https://github.com/opencv/opencv/issues/19260]])
     target_sources(openshot PRIVATE
       ${OPENSHOT_CV_SOURCES}
     )
-    target_compile_definitions(openshot PUBLIC USE_OPENCV=1)
+    target_compile_definitions(openshot PUBLIC USE_OPENCV_EFFECTS=1)
     target_link_libraries(openshot PUBLIC
       opencv_core
       opencv_video
@@ -520,6 +548,20 @@ See https://github.com/opencv/opencv/issues/19260]])
   endif()
 endif()  # ENABLE_OPENCV
 add_feature_info("OpenCV algorithms" ENABLE_OPENCV "Use OpenCV algorithms")
+
+
+###############  SKIA LIBRARY  #################
+
+find_package(Skia REQUIRED)
+if(SKIA_FOUND)
+  message(STATUS "Found Skia: ${SKIA_LIBRARIES}")
+  message(STATUS "Skia includes: ${SKIA_INCLUDE_DIRS}")
+else()
+  message(WARNING "Skia not found, subtitle support will be disabled")
+endif()
+
+target_include_directories(openshot PUBLIC ${SKIA_INCLUDE_DIRS})
+target_link_libraries(openshot PUBLIC ${SKIA_LIBRARIES})
 
 ###############  LINK LIBRARY  #################
 # Link remaining dependency libraries

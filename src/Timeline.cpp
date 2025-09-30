@@ -22,6 +22,8 @@
 #include <QDir>
 #include <QFileInfo>
 
+#include "subtitle/SubtitleTypes.h"
+
 using namespace openshot;
 
 // Default Constructor for the timeline (which sets the canvas width and height)
@@ -31,6 +33,9 @@ Timeline::Timeline(int width, int height, Fraction fps, int sample_rate, int cha
 {
 	// Create CrashHandler and Attach (incase of errors)
 	CrashHandler::Instance();
+
+	// Initialize subtitle manager with timeline's frame rate
+	subtitleManager = std::make_unique<subtitle::SubtitleManager>(fps.ToFloat());
 
 	// Init viewport size (curve based, because it can be animated)
 	viewport_scale = Keyframe(100.0);
@@ -67,7 +72,7 @@ Timeline::Timeline(int width, int height, Fraction fps, int sample_rate, int cha
 
 	// Init cache
 	final_cache = new CacheMemory();
-	final_cache->SetMaxBytesFromInfo(max_concurrent_frames * 4, info.width, info.height, info.sample_rate, info.channels);
+	final_cache->SetMaxBytesFromInfo(1/* max_concurrent_frames * 4 */, info.width, info.height, info.sample_rate, info.channels);
 }
 
 // Delegating constructor that copies parameters from a provided ReaderInfo
@@ -200,7 +205,7 @@ Timeline::Timeline(const std::string& projectPath, bool convert_absolute_paths) 
 
 	// Init cache
 	final_cache = new CacheMemory();
-	final_cache->SetMaxBytesFromInfo(max_concurrent_frames * 4, info.width, info.height, info.sample_rate, info.channels);
+	final_cache->SetMaxBytesFromInfo(1/*max_concurrent_frames * 4*/, info.width, info.height, info.sample_rate, info.channels);
 }
 
 Timeline::~Timeline() {
@@ -217,6 +222,22 @@ Timeline::~Timeline() {
 		delete final_cache;
 		final_cache = NULL;
 	}
+}
+
+void Timeline::LoadSubtitlesFromJsonFile(const std::string& jsonPath) const {
+	if (!subtitleManager) {
+		throw InvalidFile("Subtitle manager not initialized", jsonPath);
+	}
+
+	subtitleManager->loadFromJSON(jsonPath);
+}
+
+void Timeline::LoadSubtitlesFromJsonString(const std::string& jsonString) const {
+	if (!subtitleManager) {
+		throw InvalidFile("Subtitle manager not initialized", jsonString);
+	}
+
+	subtitleManager->loadFromJSONString(jsonString);
 }
 
 // Add to the tracked_objects map a pointer to a tracked object (TrackedObjectBBox)
@@ -269,7 +290,7 @@ std::list<std::string> Timeline::GetTrackedObjectsIds() const{
 	return trackedObjects_ids;
 }
 
-#ifdef USE_OPENCV
+#ifdef USE_OPENCV_EFFECTS
 // Return the trackedObject's properties as a JSON string
 std::string Timeline::GetTrackedObjectValues(std::string id, int64_t frame_number) const {
 
@@ -329,7 +350,7 @@ std::string Timeline::GetTrackedObjectValues(std::string id, int64_t frame_numbe
 #endif
 
 // Add an openshot::Clip to the timeline
-void Timeline::AddClip(Clip* clip)
+void Timeline::AddClip(Clip* clip, bool sortClips)
 {
 	// Get lock (prevent getting frames while this happens)
 	const std::lock_guard<std::recursive_mutex> guard(getFrameMutex);
@@ -350,8 +371,10 @@ void Timeline::AddClip(Clip* clip)
 	// Add clip to list
 	clips.push_back(clip);
 
-	// Sort clips
-	sort_clips();
+	if (sortClips) {
+		// Sort clips
+		sort_clips();
+	}
 }
 
 // Add an effect to the timeline
@@ -1067,6 +1090,18 @@ std::shared_ptr<Frame> Timeline::GetFrame(int64_t requested_frame)
 				}
 
 			} // end clip loop
+
+			// ===========================================================================
+			// SUBTITLE INTEGRATION POINT - Apply subtitles AFTER all clips are processed
+			// ===========================================================================
+			if (subtitleManager->hasActiveSubtitlesAtFrame(requested_frame)) {
+				// Get the frame's QImage
+				std::shared_ptr<QImage> frameImage = new_frame->GetImage();
+				if (frameImage && !frameImage->isNull()) {
+					// Render subtitles directly onto the frame
+					subtitleManager->renderAtFrame(frameImage, requested_frame);
+				}
+			}
 
 			// Debug output
 			ZmqLogger::Instance()->AppendDebugMethod(

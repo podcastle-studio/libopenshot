@@ -12,19 +12,92 @@
 
 #include "Blur.h"
 #include "Exceptions.h"
+#include "MagickUtilities.h"
+#include "./image-processing-lib/src/Effects/effects.h"
 
 using namespace openshot;
 
+namespace
+{
+
+// Credit: http://blog.ivank.net/fastest-gaussian-blur.html (MIT License)
+// Modified to process all four channels in a pixel array
+void boxBlurH(const unsigned char *scl, unsigned char *tcl, int w, int h, int r) {
+    float iarr = 1.0 / (r + r + 1);
+
+    #pragma omp parallel for shared (scl, tcl)
+    for (int i = 0; i < h; ++i) {
+        for (int ch = 0; ch < 4; ++ch) {
+            int ti = i * w, li = ti, ri = ti + r;
+            int fv = scl[ti * 4 + ch], lv = scl[(ti + w - 1) * 4 + ch], val = (r + 1) * fv;
+            for (int j = 0; j < r; ++j) {
+                val += scl[(ti + j) * 4 + ch];
+            }
+            for (int j = 0; j <= r; ++j) {
+                val += scl[ri++ * 4 + ch] - fv;
+                tcl[ti++ * 4 + ch] = round(val * iarr);
+            }
+            for (int j = r + 1; j < w - r; ++j) {
+                val += scl[ri++ * 4 + ch] - scl[li++ * 4 + ch];
+                tcl[ti++ * 4 + ch] = round(val * iarr);
+            }
+            for (int j = w - r; j < w; ++j) {
+                val += lv - scl[li++ * 4 + ch];
+                tcl[ti++ * 4 + ch] = round(val * iarr);
+            }
+        }
+    }
+}
+
+void boxBlurT(const unsigned char *scl, unsigned char *tcl, int w, int h, int r) {
+    float iarr = 1.0 / (r + r + 1);
+
+    #pragma omp parallel for shared (scl, tcl)
+    for (int i = 0; i < w; i++) {
+        for (int ch = 0; ch < 4; ++ch) {
+            int ti = i, li = ti, ri = ti + r * w;
+            int fv = scl[ti * 4 + ch], lv = scl[(ti + w * (h - 1)) * 4 + ch], val = (r + 1) * fv;
+            for (int j = 0; j < r; j++) val += scl[(ti + j * w) * 4 + ch];
+            for (int j = 0; j <= r; j++) {
+                val += scl[ri * 4 + ch] - fv;
+                tcl[ti * 4 + ch] = round(val * iarr);
+                ri += w;
+                ti += w;
+            }
+            for (int j = r + 1; j < h - r; j++) {
+                val += scl[ri * 4 + ch] - scl[li * 4 + ch];
+                tcl[ti * 4 + ch] = round(val * iarr);
+                li += w;
+                ri += w;
+                ti += w;
+            }
+            for (int j = h - r; j < h; j++) {
+                val += lv - scl[li * 4 + ch];
+                tcl[ti * 4 + ch] = round(val * iarr);
+                li += w;
+                ti += w;
+            }
+        }
+    }
+}
+
+}
+
 /// Blank constructor, useful when using Json to load the effect properties
-Blur::Blur() : horizontal_radius(6.0), vertical_radius(6.0), sigma(3.0), iterations(3.0) {
+Blur::Blur()
+    : horizontal_radius(6.0), vertical_radius(6.0), diagonal_radius(0)
+    , radial_blur_angle(0), sigma(3.0), iterations(3.0) {
 	// Init effect properties
 	init_effect_details();
 }
 
 // Default constructor
-Blur::Blur(Keyframe new_horizontal_radius, Keyframe new_vertical_radius, Keyframe new_sigma, Keyframe new_iterations) :
-		horizontal_radius(new_horizontal_radius), vertical_radius(new_vertical_radius),
-		sigma(new_sigma), iterations(new_iterations)
+Blur::Blur(const Keyframe& new_horizontal_radius, const Keyframe& new_vertical_radius, const Keyframe& new_diagonal_radius, const Keyframe& new_radial_blur_angle,
+           const Keyframe& new_zoom_blur_radius, const Keyframe& new_zoomBlurCenterX, const Keyframe& new_zoomBlurCenterY,
+           const Keyframe& new_sigma, const Keyframe& new_iterations) :
+		horizontal_radius(new_horizontal_radius), vertical_radius(new_vertical_radius), radial_blur_angle(new_radial_blur_angle),
+        diagonal_radius(new_diagonal_radius), zoom_blur_radius(new_zoom_blur_radius), sigma(new_sigma), iterations(new_iterations),
+        zoomBlurCenterX(new_zoomBlurCenterX), zoomBlurCenterY(new_zoomBlurCenterY)
 {
 	// Init effect properties
 	init_effect_details();
@@ -48,107 +121,43 @@ void Blur::init_effect_details()
 // modified openshot::Frame object
 std::shared_ptr<openshot::Frame> Blur::GetFrame(std::shared_ptr<openshot::Frame> frame, int64_t frame_number)
 {
-	// Get the frame's image
-	std::shared_ptr<QImage> frame_image = frame->GetImage();
-
 	// Get the current blur radius
-	int horizontal_radius_value = horizontal_radius.GetValue(frame_number);
-	int vertical_radius_value = vertical_radius.GetValue(frame_number);
-	float sigma_value = sigma.GetValue(frame_number);
-	int iteration_value = iterations.GetInt(frame_number);
+	const auto horizontal_radius_value = horizontal_radius.GetValue(frame_number);
+	const auto vertical_radius_value = vertical_radius.GetValue(frame_number);
+	const auto diagonal_radius_value = diagonal_radius.GetValue(frame_number);
+	const auto zoom_blur_radius_value = zoom_blur_radius.GetValue(frame_number);
+	const auto radial_blur_angle_value = radial_blur_angle.GetValue(frame_number);
 
-	int w = frame_image->width();
-	int h = frame_image->height();
+    // diagonal blur (if any)
+    if (diagonal_radius_value > 0) {
+        auto imageCv = frame->GetImageCV();
+        Podcastle::Effects::applyDiagonalBlurEffect(imageCv, diagonal_radius_value);
+        frame->SetImageCV(imageCv);
+    }
 
-	// Grab two copies of the image pixel data
-	QImage image_copy = frame_image->copy();
-	std::shared_ptr<QImage> frame_image_2 = std::make_shared<QImage>(image_copy);
+    // radial blur (if any)
+    if (radial_blur_angle_value > 0) {
+        auto imageCv = frame->GetImageCV();
+        Podcastle::Effects::applyRotationalBlur(imageCv, radial_blur_angle_value);
+        frame->SetImageCV(imageCv);
+    }
 
-	// Loop through each iteration
-	for (int iteration = 0; iteration < iteration_value; ++iteration)
-	{
-		// HORIZONTAL BLUR (if any)
-		if (horizontal_radius_value > 0.0) {
-			// Apply horizontal blur to target RGBA channels
-			boxBlurH(frame_image->bits(), frame_image_2->bits(), w, h, horizontal_radius_value);
+    // zoom blur (if any)
+    if (zoom_blur_radius_value > 0) {
+        const auto centerPoint = std::make_pair(zoomBlurCenterX.GetValue(frame_number), zoomBlurCenterY.GetValue(frame_number));
+        auto imageCv = frame->GetImageCV();
+        Podcastle::Effects::applyZoomBlurEffect(imageCv, zoom_blur_radius_value, centerPoint);
+        frame->SetImageCV(imageCv);
+    }
 
-			// Swap output image back to input
-			frame_image.swap(frame_image_2);
-		}
-
-		// VERTICAL BLUR (if any)
-		if (vertical_radius_value > 0.0) {
-			// Apply vertical blur to target RGBA channels
-			boxBlurT(frame_image->bits(), frame_image_2->bits(), w, h, vertical_radius_value);
-
-			// Swap output image back to input
-			frame_image.swap(frame_image_2);
-		}
-	}
+    if (horizontal_radius_value > 0 || vertical_radius_value > 0) {
+        auto imageCv = frame->GetImageCV();
+        Podcastle::Effects::applyBlurEffect(imageCv, horizontal_radius_value, vertical_radius_value);
+        frame->SetImageCV(imageCv);
+    }
 
 	// return the modified frame
 	return frame;
-}
-
-// Credit: http://blog.ivank.net/fastest-gaussian-blur.html (MIT License)
-// Modified to process all four channels in a pixel array
-void Blur::boxBlurH(unsigned char *scl, unsigned char *tcl, int w, int h, int r) {
-	float iarr = 1.0 / (r + r + 1);
-
-	#pragma omp parallel for shared (scl, tcl)
-	for (int i = 0; i < h; ++i) {
-		for (int ch = 0; ch < 4; ++ch) {
-			int ti = i * w, li = ti, ri = ti + r;
-			int fv = scl[ti * 4 + ch], lv = scl[(ti + w - 1) * 4 + ch], val = (r + 1) * fv;
-			for (int j = 0; j < r; ++j) {
-				val += scl[(ti + j) * 4 + ch];
-			}
-			for (int j = 0; j <= r; ++j) {
-				val += scl[ri++ * 4 + ch] - fv;
-				tcl[ti++ * 4 + ch] = round(val * iarr);
-			}
-			for (int j = r + 1; j < w - r; ++j) {
-				val += scl[ri++ * 4 + ch] - scl[li++ * 4 + ch];
-				tcl[ti++ * 4 + ch] = round(val * iarr);
-			}
-			for (int j = w - r; j < w; ++j) {
-				val += lv - scl[li++ * 4 + ch];
-				tcl[ti++ * 4 + ch] = round(val * iarr);
-			}
-		}
-	}
-}
-
-void Blur::boxBlurT(unsigned char *scl, unsigned char *tcl, int w, int h, int r) {
-	float iarr = 1.0 / (r + r + 1);
-
-	#pragma omp parallel for shared (scl, tcl)
-	for (int i = 0; i < w; i++) {
-		for (int ch = 0; ch < 4; ++ch) {
-			int ti = i, li = ti, ri = ti + r * w;
-			int fv = scl[ti * 4 + ch], lv = scl[(ti + w * (h - 1)) * 4 + ch], val = (r + 1) * fv;
-			for (int j = 0; j < r; j++) val += scl[(ti + j * w) * 4 + ch];
-			for (int j = 0; j <= r; j++) {
-				val += scl[ri * 4 + ch] - fv;
-				tcl[ti * 4 + ch] = round(val * iarr);
-				ri += w;
-				ti += w;
-			}
-			for (int j = r + 1; j < h - r; j++) {
-				val += scl[ri * 4 + ch] - scl[li * 4 + ch];
-				tcl[ti * 4 + ch] = round(val * iarr);
-				li += w;
-				ri += w;
-				ti += w;
-			}
-			for (int j = h - r; j < h; j++) {
-				val += lv - scl[li * 4 + ch];
-				tcl[ti * 4 + ch] = round(val * iarr);
-				li += w;
-				ti += w;
-			}
-		}
-	}
 }
 
 // Generate JSON string of this object
@@ -160,12 +169,12 @@ std::string Blur::Json() const {
 
 // Generate Json::Value for this object
 Json::Value Blur::JsonValue() const {
-
 	// Create root json object
 	Json::Value root = EffectBase::JsonValue(); // get parent properties
 	root["type"] = info.class_name;
 	root["horizontal_radius"] = horizontal_radius.JsonValue();
 	root["vertical_radius"] = vertical_radius.JsonValue();
+	root["diagonal_radius"] = diagonal_radius.JsonValue();
 	root["sigma"] = sigma.JsonValue();
 	root["iterations"] = iterations.JsonValue();
 
@@ -201,6 +210,8 @@ void Blur::SetJsonValue(const Json::Value root) {
 		horizontal_radius.SetJsonValue(root["horizontal_radius"]);
 	if (!root["vertical_radius"].isNull())
 		vertical_radius.SetJsonValue(root["vertical_radius"]);
+    if (!root["diagonal_radius"].isNull())
+        diagonal_radius.SetJsonValue(root["diagonal_radius"]);
 	if (!root["sigma"].isNull())
 		sigma.SetJsonValue(root["sigma"]);
 	if (!root["iterations"].isNull())
@@ -216,6 +227,7 @@ std::string Blur::PropertiesJSON(int64_t requested_frame) const {
 	// Keyframes
 	root["horizontal_radius"] = add_property_json("Horizontal Radius", horizontal_radius.GetValue(requested_frame), "float", "", &horizontal_radius, 0, 100, false, requested_frame);
 	root["vertical_radius"] = add_property_json("Vertical Radius", vertical_radius.GetValue(requested_frame), "float", "", &vertical_radius, 0, 100, false, requested_frame);
+	root["diagonal_radius"] = add_property_json("Diagonal Radius", diagonal_radius.GetValue(requested_frame), "float", "", &diagonal_radius, 0, 100, false, requested_frame);
 	root["sigma"] = add_property_json("Sigma", sigma.GetValue(requested_frame), "float", "", &sigma, 0, 100, false, requested_frame);
 	root["iterations"] = add_property_json("Iterations", iterations.GetValue(requested_frame), "float", "", &iterations, 0, 100, false, requested_frame);
 

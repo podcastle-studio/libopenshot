@@ -25,7 +25,7 @@ linux-builder:
   artifacts:
     expire_in: 6 months
     paths:
-    - build/install-x64/*
+      - build/install-x64/*
   script:
     - "curl -O -J -L --header PRIVATE-TOKEN:$ACCESS_TOKEN http://gitlab.openshot.org/OpenShot/libopenshot-audio/-/jobs/artifacts/$CI_COMMIT_REF_NAME/download?job=linux-builder"
     - if [ ! -f artifacts.zip ]; then
@@ -45,7 +45,7 @@ linux-builder:
     - git log $(git describe --tags --abbrev=0 @^)..@ --oneline --pretty=format:"- %C(auto,yellow)%h%C(auto,magenta)% %C(auto,blue)%>(12,trunc)%ad %C(auto,green)%<(25,trunc)%aN%C(auto,reset)%s%C(auto,red)% gD% D" --date=short > "install-x64/share/$CI_PROJECT_NAME.log"
   when: always
   except:
-  - tags
+    - tags
   tags:
     - linux-focal
 
@@ -54,7 +54,7 @@ mac-builder:
   artifacts:
     expire_in: 6 months
     paths:
-    - build/install-x64/*
+      - build/install-x64/*
   script:
     - "curl -O -J -L --header PRIVATE-TOKEN:$ACCESS_TOKEN http://gitlab.openshot.org/OpenShot/libopenshot-audio/-/jobs/artifacts/$CI_COMMIT_REF_NAME/download?job=mac-builder"
     - if [ ! -f artifacts.zip ]; then
@@ -73,7 +73,7 @@ mac-builder:
     - git log $(git describe --tags --abbrev=0 @^)..@ --oneline --pretty=format:"- %C(auto,yellow)%h%C(auto,magenta)% %C(auto,blue)%>(12,trunc)%ad %C(auto,green)%<(25,trunc)%aN%C(auto,reset)%s%C(auto,red)% gD% D" --date=short > "install-x64/share/$CI_PROJECT_NAME.log"
   when: always
   except:
-  - tags
+    - tags
   tags:
     - mac
 
@@ -82,7 +82,7 @@ windows-builder-x64:
   artifacts:
     expire_in: 6 months
     paths:
-    - build\install-x64\*
+      - build\install-x64\*
   script:
     - try { Invoke-WebRequest -Uri "http://gitlab.openshot.org/OpenShot/libopenshot-audio/-/jobs/artifacts/$CI_COMMIT_REF_NAME/download?job=windows-builder-x64" -Headers @{"PRIVATE-TOKEN"="$ACCESS_TOKEN"} -OutFile "artifacts.zip" } catch { $_.Exception.Response.StatusCode.Value__ }
     - if (-not (Test-Path "artifacts.zip")) { Invoke-WebRequest -Uri "http://gitlab.openshot.org/OpenShot/libopenshot-audio/-/jobs/artifacts/develop/download?job=windows-builder-x64" -Headers @{"PRIVATE-TOKEN"="$ACCESS_TOKEN"} -OutFile "artifacts.zip" }
@@ -100,7 +100,7 @@ windows-builder-x64:
     - git log "$PREV_GIT_LABEL..@" --oneline --pretty=format:"- %C(auto,yellow)%h%C(auto,magenta)% %C(auto,blue)%>(12,trunc)%ad %C(auto,green)%<(25,trunc)%aN%C(auto,reset)%s%C(auto,red)% gD% D" --date=short > "build/install-x64/share/$CI_PROJECT_NAME.log"
   when: always
   except:
-  - tags
+    - tags
   tags:
     - windows
 
@@ -109,7 +109,7 @@ windows-builder-x86:
   artifacts:
     expire_in: 6 months
     paths:
-    - build\install-x86\*
+      - build\install-x86\*
   script:
     - try { Invoke-WebRequest -Uri "http://gitlab.openshot.org/OpenShot/libopenshot-audio/-/jobs/artifacts/$CI_COMMIT_REF_NAME/download?job=windows-builder-x86" -Headers @{"PRIVATE-TOKEN"="$ACCESS_TOKEN"} -OutFile "artifacts.zip" } catch { $_.Exception.Response.StatusCode.Value__ }
     - if (-not (Test-Path "artifacts.zip")) { Invoke-WebRequest -Uri "http://gitlab.openshot.org/OpenShot/libopenshot-audio/-/jobs/artifacts/develop/download?job=windows-builder-x86" -Headers @{"PRIVATE-TOKEN"="$ACCESS_TOKEN"} -OutFile "artifacts.zip" }
@@ -126,7 +126,7 @@ windows-builder-x86:
     - git log "$PREV_GIT_LABEL..@" --oneline --pretty=format:"- %C(auto,yellow)%h%C(auto,magenta)% %C(auto,blue)%>(12,trunc)%ad %C(auto,green)%<(25,trunc)%aN%C(auto,reset)%s%C(auto,red)% gD% D" --date=short > "build/install-x86/share/$CI_PROJECT_NAME.log"
   when: always
   except:
-  - tags
+    - tags
   tags:
     - windows
 
@@ -137,6 +137,6 @@ trigger-pipeline:
   when: on_success
   dependencies: []
   except:
-  - tags
+    - tags
   tags:
     - gitlab

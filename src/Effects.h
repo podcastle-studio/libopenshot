@@ -46,7 +46,7 @@
 #include "audio_effects/Whisperization.h"
 
 /* OpenCV Effects */
-#ifdef USE_OPENCV
+#ifdef USE_OPENCV_EFFECTS
 #include "effects/Outline.h"
 #include "effects/ObjectDetection.h"
 #include "effects/Tracker.h"

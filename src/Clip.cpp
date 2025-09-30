@@ -21,6 +21,7 @@
 #include "DummyReader.h"
 #include "Timeline.h"
 #include "ZmqLogger.h"
+#include "effects/image-processing-lib/src/Effects/effects.h"
 
 #ifdef USE_IMAGEMAGICK
 	#include "MagickUtilities.h"
@@ -31,6 +32,7 @@
 #include <Qt>
 
 using namespace openshot;
+
 
 // Init default settings for a clip
 void Clip::init_settings()
@@ -95,6 +97,8 @@ void Clip::init_settings()
 
 	// Init reader info struct
 	init_reader_settings();
+
+	isOverlay = false;
 }
 
 // Init reader info details
@@ -154,14 +158,16 @@ Clip::Clip() : resampler(NULL), reader(NULL), allocated_reader(NULL), is_open(fa
 }
 
 // Constructor with reader
-Clip::Clip(ReaderBase* new_reader) : resampler(NULL), reader(new_reader), allocated_reader(NULL), is_open(false)
+Clip::Clip(ReaderBase* new_reader, bool inspect_reader) : resampler(NULL), reader(new_reader), allocated_reader(NULL), is_open(false)
 {
 	// Init all default settings
 	init_settings();
 
 	// Open and Close the reader (to set the duration of the clip)
-	Open();
-	Close();
+	if (inspect_reader) {
+		Open();
+		Close();
+	}
 
 	// Update duration and set parent
 	if (reader) {
@@ -246,6 +252,10 @@ Clip::~Clip()
 	if (resampler) {
 		delete resampler;
 		resampler = NULL;
+	}
+
+	for (const auto effect : effects) {
+		delete effect;
 	}
 
 	// Close clip
@@ -418,8 +428,8 @@ std::shared_ptr<Frame> Clip::GetFrame(std::shared_ptr<openshot::Frame> backgroun
 }
 
 // Use an existing openshot::Frame object and draw this Clip's frame onto it
-std::shared_ptr<Frame> Clip::GetFrame(std::shared_ptr<openshot::Frame> background_frame, int64_t clip_frame_number, openshot::TimelineInfoStruct* options)
-{
+std::shared_ptr<Frame> Clip::GetFrame(std::shared_ptr<openshot::Frame> background_frame, int64_t requested_clip_frame_number, openshot::TimelineInfoStruct* options) {
+	int64_t actual_clip_frame_number = std::max((int64_t)1, requested_clip_frame_number - mFreezeFramesCountAtBeginning);
 	// Check for open reader (or throw exception)
 	if (!is_open)
 		throw ReaderClosed("The Clip is closed.  Call Open() before calling this method.");
@@ -429,14 +439,30 @@ std::shared_ptr<Frame> Clip::GetFrame(std::shared_ptr<openshot::Frame> backgroun
 		// Get frame object
 		std::shared_ptr<Frame> frame = NULL;
 
-		// Check cache
-		frame = final_cache.GetFrame(clip_frame_number);
+		if (requested_clip_frame_number > mFreezeFramesCountAtBeginning) {
+			// Check cache
+			frame = final_cache.GetFrame(requested_clip_frame_number);
+		}
+
 		if (!frame) {
             // Generate clip frame
-            frame = GetOrCreateFrame(clip_frame_number);
+            frame = GetOrCreateFrame(actual_clip_frame_number);
+			frame->number = requested_clip_frame_number;
+
+			if (!openshot::Settings::Instance()->ENABLE_LEGACY_MODE) {
+				/// TODO: Make sure background frame is not null vvvv
+				/* vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
+				if (!background_frame) {
+					// Create missing background_frame w/ transparent color (if needed)
+					background_frame = std::make_shared<Frame>(frame->number, frame->GetWidth(), frame->GetHeight(),
+															   "#00000000",  frame->GetAudioSamplesCount(),
+															   frame->GetAudioChannelsCount());
+				}
+				*/
+			}
 
             // Get frame size and frame #
-            int64_t timeline_frame_number = clip_frame_number;
+            int64_t timeline_frame_number = requested_clip_frame_number;
             QSize timeline_size(frame->GetWidth(), frame->GetHeight());
             if (background_frame) {
                 // If a background frame is provided, use it instead
@@ -454,6 +480,45 @@ std::shared_ptr<Frame> Clip::GetFrame(std::shared_ptr<openshot::Frame> backgroun
             // Apply effects BEFORE applying keyframes (if any local or global effects are used)
             apply_effects(frame, timeline_frame_number, options, true);
 
+			if (!overlayClips.empty()) {
+				for (const auto& overlayClipData : overlayClips) {
+					const auto overlayedClip = overlayClipData.clipPtr;
+					const auto isOverlayAtEnd = overlayClipData.isOverlayAtEnd;
+					const auto overlayType = overlayClipData.overlayType;
+
+					const auto currentClipFps = reader->info.fps.ToFloat();
+					const auto overlayedClipFps = overlayedClip->info.fps.ToFloat();
+					const auto overlayClipDuration = overlayedClip->end - overlayedClip->start;
+					const int64_t transitionClipStartFrame = isOverlayAtEnd ? (end - overlayClipDuration) * currentClipFps : 1;
+					const int64_t transitionClipEndFrame = (isOverlayAtEnd ? end : overlayClipDuration) * currentClipFps;
+
+					// Check if the requested main clip frame falls inside the transition region.
+					if (requested_clip_frame_number > transitionClipStartFrame && requested_clip_frame_number < transitionClipEndFrame) {
+						const int64_t overlayClipFrameNum = (overlayedClip->start + (requested_clip_frame_number - transitionClipStartFrame) / currentClipFps) * overlayedClipFps;
+						const auto overlayedFrame = overlayedClip->GetFrame(overlayClipFrameNum);
+						auto mainImageCv = frame->GetImageCV();
+
+						switch (overlayType) {
+						case OverlayType::ADDITIVE_BLEND:
+							{
+								Podcastle::Effects::additiveBlend(mainImageCv, overlayedFrame->GetImageCV());
+								frame->SetImageCV(mainImageCv);
+								break;
+							}
+						case OverlayType::DISPLACEMENT_MAP:
+							{
+								Podcastle::Effects::applyDisplacementMapEffect(mainImageCv, overlayedFrame->GetImageCV(),
+								overlayedClip->horizontal_displacement.GetValue(overlayClipFrameNum),
+								overlayedClip->vertical_displacement.GetValue(overlayClipFrameNum));
+								frame->SetImageCV(mainImageCv);
+								break;
+							}
+						default: break;
+						}
+					}
+				}
+			}
+
             // Apply keyframe / transforms to current clip image
             apply_keyframes(frame, timeline_size);
 
@@ -464,15 +529,17 @@ std::shared_ptr<Frame> Clip::GetFrame(std::shared_ptr<openshot::Frame> backgroun
             final_cache.Add(frame);
         }
 
-        if (!background_frame) {
+
+        if (!background_frame && !isOverlay) {
             // Create missing background_frame w/ transparent color (if needed)
-            background_frame = std::make_shared<Frame>(frame->number, frame->GetWidth(), frame->GetHeight(),
-                                                       "#00000000",  frame->GetAudioSamplesCount(),
-                                                       frame->GetAudioChannelsCount());
+            background_frame = std::make_shared<Frame>(actual_clip_frame_number, frame->GetWidth(), frame->GetHeight(),
+                                                       "#00000000",  frame->GetAudioSamplesCount(), frame->GetAudioChannelsCount());
         }
 
 		// Apply background canvas (i.e. flatten this image onto previous layer image)
-		apply_background(frame, background_frame);
+		if (!isOverlay) {
+			apply_background(frame, background_frame);
+		}
 
 		// Return processed 'frame'
 		return frame;
@@ -480,6 +547,7 @@ std::shared_ptr<Frame> Clip::GetFrame(std::shared_ptr<openshot::Frame> backgroun
 	else
 		// Throw error if reader not initialized
 		throw ReaderClosed("No Reader has been initialized for this Clip.  Call Reader(*reader) before calling this method.");
+
 }
 
 // Look up an effect by ID
@@ -501,6 +569,18 @@ openshot::Clip* Clip::GetParentClip() {
         AttachToObject(parentObjectId);
     }
     return parentClipObject;
+}
+
+void Clip::AddOverlayClip(Clip* clip, const OverlayType oType, const bool isAtEnd) {
+	OverlayClipData overlayClipData{};
+	overlayClipData.clipPtr = clip;
+	overlayClipData.overlayType = oType;
+	overlayClipData.isOverlayAtEnd = isAtEnd;
+	overlayClips.emplace_back(overlayClipData);
+}
+
+std::vector<Clip::OverlayClipData> Clip::GetOverlayClips() const {
+	return overlayClips;
 }
 
 // Return the associated Parent Tracked Object (if any)
@@ -1146,7 +1226,7 @@ void Clip::AddEffect(EffectBase* effect)
 	if (parentTimeline)
 		effect->ParentTimeline(parentTimeline);
 
-	#ifdef USE_OPENCV
+	#ifdef USE_OPENCV_EFFECTS
 	// Add Tracked Object to Timeline
 	if (effect->info.has_tracked_object){
 
@@ -1184,20 +1264,20 @@ void Clip::RemoveEffect(EffectBase* effect)
 	final_cache.Clear();
 }
 
+
 // Apply background image to the current clip image (i.e. flatten this image onto previous layer)
 void Clip::apply_background(std::shared_ptr<openshot::Frame> frame, std::shared_ptr<openshot::Frame> background_frame) {
-	// Add background canvas
-	std::shared_ptr<QImage> background_canvas = background_frame->GetImage();
-	QPainter painter(background_canvas.get());
-	painter.setRenderHints(QPainter::Antialiasing | QPainter::SmoothPixmapTransform | QPainter::TextAntialiasing, true);
+	// Retrieve the background image
+    const std::shared_ptr<QImage> background_canvas = background_frame->GetImage();
 
-	// Composite a new layer onto the image
-	painter.setCompositionMode(QPainter::CompositionMode_SourceOver);
-	painter.drawImage(0, 0, *frame->GetImage());
-	painter.end();
-
-	// Add new QImage to frame
-	frame->AddImage(background_canvas);
+    // Standard procedure for drawing the frame's image onto the background
+    QPainter painter(background_canvas.get());
+    painter.setRenderHints(QPainter::Antialiasing | QPainter::SmoothPixmapTransform | QPainter::TextAntialiasing, true);
+    painter.setCompositionMode(composition_mode);
+    painter.drawImage(0, 0, *frame->GetImage());
+    painter.end();
+    // Add the modified image back to the frame
+    frame->AddImage(background_canvas);
 }
 
 // Apply effects to the source frame (if any)
@@ -1289,6 +1369,40 @@ void Clip::apply_keyframes(std::shared_ptr<Frame> frame, QSize timeline_size) {
 
 	// Add new QImage to frame
 	frame->AddImage(background_canvas);
+}
+
+void Clip::apply_scale_options(std::shared_ptr<Frame> frame, std::shared_ptr<openshot::Frame> background_frame)
+{
+    std::shared_ptr<QImage> source_image = frame->GetImage();
+    QSize source_size = source_image->size();
+
+    switch (scale)
+    {
+        case (SCALE_FIT): {
+            source_size.scale(background_frame->GetWidth(), background_frame->GetHeight(), Qt::KeepAspectRatio);
+            break;
+        }
+        case (SCALE_STRETCH): {
+            source_size.scale(background_frame->GetWidth(), background_frame->GetHeight(), Qt::IgnoreAspectRatio);
+            break;
+        }
+        case (SCALE_CROP): {
+            source_size.scale(background_frame->GetWidth(), background_frame->GetHeight(), Qt::KeepAspectRatioByExpanding);
+        }
+        case (SCALE_NONE): {
+            break;
+        }
+    }
+
+    // Adjust size for scale x and scale y
+    const float sx = scale_x.GetValue(frame->number); // percentage X scale
+    const float sy = scale_y.GetValue(frame->number); // percentage Y scale
+
+    const float scaled_source_width = source_size.width() * sx;
+    const float scaled_source_height = source_size.height() * sy;
+
+    QImage scaledImg = source_image->scaled(scaled_source_width, scaled_source_height, Qt::KeepAspectRatioByExpanding, Qt::SmoothTransformation);
+    frame->AddImage(std::make_shared<QImage>(scaledImg));
 }
 
 // Apply apply_waveform image to the source frame (if any)
@@ -1525,6 +1639,7 @@ QTransform Clip::get_transform(std::shared_ptr<Frame> frame, int width, int heig
 		transform.shear(shear_x_value, shear_y_value);
 		transform.translate(-origin_x_offset,-origin_y_offset);
 	}
+
 	// SCALE CLIP (if needed)
 	float source_width_scale = (float(source_size.width()) / float(source_image->width())) * sx;
 	float source_height_scale = (float(source_size.height()) / float(source_image->height())) * sy;

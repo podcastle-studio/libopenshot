@@ -109,10 +109,10 @@ EffectBase* EffectInfo::CreateEffect(std::string effect_type) {
 	else if(effect_type == "Whisperization")
 		return new Whisperization();
 
-	#ifdef USE_OPENCV
+
+	#ifdef USE_OPENCV_EFFECTS
 	else if (effect_type == "Outline")
 		return new Outline();
-	
 	else if(effect_type == "Stabilizer")
 		return new Stabilizer();
 
@@ -163,7 +163,8 @@ Json::Value EffectInfo::JsonValue() {
 	root.append(Robotization().JsonInfo());
 	root.append(Whisperization().JsonInfo());
 
-	#ifdef USE_OPENCV
+
+	#ifdef USE_OPENCV_EFFECTS
 	root.append(Outline().JsonInfo());
 	root.append(Stabilizer().JsonInfo());	
 	root.append(Tracker().JsonInfo());

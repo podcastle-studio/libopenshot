@@ -1,0 +1,315 @@
+#include "Helpers.h"
+#include "SubtitleTypes.h"
+#include "../KeyFrame.h"
+
+#include <algorithm>
+#include <cctype>
+#include <set>
+#include <cmath>
+#include <regex>
+
+namespace {
+
+std::string rgbToHex(const int r, const int g, const int b) {
+    char buffer[8];
+    snprintf(buffer, sizeof(buffer), "#%02X%02X%02X",
+        std::clamp(r, 0, 255),
+        std::clamp(g, 0, 255),
+        std::clamp(b, 0, 255));
+    return buffer;
+}
+
+std::tuple<int, int, int> hexToRgb(const std::string& hex) {
+    if (hex.empty() || hex[0] != '#' || hex.length() < 7) {
+        return {255, 255, 255};
+    }
+
+    try {
+        int r = std::stoi(hex.substr(1, 2), nullptr, 16);
+        int g = std::stoi(hex.substr(3, 2), nullptr, 16);
+        int b = std::stoi(hex.substr(5, 2), nullptr, 16);
+        return {r, g, b};
+    } catch (...) {
+        return {255, 255, 255};
+    }
+}
+
+int64_t msToFrame(const float ms, const float fps) {
+    // OpenShot uses 1-based frame indexing
+    return static_cast<int64_t>((ms / 1000.0f) * fps) + 1;
+}
+
+// Get animated value using OpenShot's Keyframe at millisecond time
+double getAnimatedValue(const openshot::Keyframe& keyframe, const float timeMs, const float fps) {
+    // Convert milliseconds to frame number (OpenShot uses 1-based frame indexing)
+    const int64_t frame = msToFrame(timeMs, fps);
+    return keyframe.GetValue(frame);
+}
+
+double getBaseValue(const std::string& key, const openshot::subtitle::SubtitleTextStyle& style) {
+    if (key == "fontSize") return style.fontSize;
+    if (key == "opacity") return style.opacity;
+    if (key == "letterSpacing") return style.letterSpacing;
+    if (key == "lineHeight") return style.lineHeight;
+    if (key == "fontWeight") return style.fontWeight;
+    if (key == "translateX") return style.translateX.value_or(0);
+    if (key == "translateY") return style.translateY.value_or(0);
+    if (key == "strokeWidth") return style.strokeWidth.value_or(0);
+    if (key == "strokeOpacity") return style.strokeOpacity.value_or(1);
+    if (key == "shadowBlur") return style.shadowBlur.value_or(0);
+    if (key == "shadowDistance") return style.shadowDistance.value_or(0);
+    if (key == "shadowAngle") return style.shadowAngle.value_or(0);
+    if (key == "shadowOpacity") return style.shadowOpacity.value_or(1);
+    if (key == "backgroundOpacity") return style.backgroundOpacity.value_or(0);
+    if (key == "backgroundRadius") return style.backgroundRadius.value_or(0);
+    if (key == "backgroundPaddingX") return style.backgroundPaddingX.value_or(0);
+    if (key == "backgroundPaddingY") return style.backgroundPaddingY.value_or(0);
+    return 0;
+}
+
+std::string getBaseColor(const std::string& key, const openshot::subtitle::SubtitleTextStyle& style) {
+    if (key == "color") return style.color;
+    if (key == "strokeColor") return style.strokeColor.value_or("#000000");
+    if (key == "shadowColor") return style.shadowColor.value_or("#000000");
+    if (key == "backgroundColor") return style.backgroundColor.value_or("#000000");
+    return "#FFFFFF";
+}
+}
+
+namespace openshot {
+namespace subtitle {
+
+std::string transformText(const std::string& text, const SubtitleTextStyle& style, const SubtitleContainerStyle& containerStyle) {
+    std::string result = text;
+    switch (style.textTransform) {
+        case TextTransform::UPPERCASE:
+            std::transform(result.begin(), result.end(), result.begin(), ::toupper);
+            break;
+        case TextTransform::LOWERCASE:
+            std::transform(result.begin(), result.end(), result.begin(), ::tolower);
+            break;
+        case TextTransform::CAPITALIZE:
+            if (!result.empty()) {
+                result[0] = std::toupper(result[0]);
+                for (size_t i = 1; i < result.length(); ++i) {
+                    if (std::isspace(result[i-1])) {
+                        result[i] = std::toupper(result[i]);
+                    }
+                }
+            }
+            break;
+        default:
+            break;
+    }
+
+    if (!containerStyle.punctuation) {
+        result = std::regex_replace(result, std::regex("^[.,/!^;:\\-_`~]+|[.,/#!^;:\\-_`~]+$"), "");
+    }
+    return result;
+}
+
+SubtitleTextStyle applyAnimationParams(const std::vector<AnimationParam>& params, const float timeMs, const float fps, const SubtitleTextStyle& baseStyle) {
+    SubtitleTextStyle result = baseStyle;
+
+    // Store RGB components for color properties
+    std::map<std::string, std::array<int, 3>> colorComponents;
+
+    // Apply all animation parameters
+    for (const auto& param : params) {
+        double value = getAnimatedValue(param.keyframe, timeMs, fps);
+
+        // Check if this is a color component (e.g., "color.r", "strokeColor.g", etc.)
+        const size_t dotPos = param.name.find('.');
+        if (dotPos != std::string::npos) {
+            std::string colorName = param.name.substr(0, dotPos);
+            const char component = param.name[dotPos + 1];
+
+            const int componentValue = static_cast<int>(std::clamp(value, 0.0, 255.0));
+
+            if (component == 'r') {
+                colorComponents[colorName][0] = componentValue;
+            } else if (component == 'g') {
+                colorComponents[colorName][1] = componentValue;
+            } else if (component == 'b') {
+                colorComponents[colorName][2] = componentValue;
+            }
+        } else {
+            // Regular numeric properties
+            if (param.name == "fontSize") result.fontSize = value;
+            else if (param.name == "opacity") result.opacity = value;
+            else if (param.name == "letterSpacing") result.letterSpacing = value;
+            else if (param.name == "lineHeight") result.lineHeight = value;
+            else if (param.name == "fontWeight") result.fontWeight = static_cast<int>(value);
+            else if (param.name == "translateX") result.translateX = value;
+            else if (param.name == "translateY") result.translateY = value;
+            else if (param.name == "strokeWidth") result.strokeWidth = value;
+            else if (param.name == "strokeOpacity") result.strokeOpacity = value;
+            else if (param.name == "shadowBlur") result.shadowBlur = value;
+            else if (param.name == "shadowDistance") result.shadowDistance = value;
+            else if (param.name == "shadowAngle") result.shadowAngle = value;
+            else if (param.name == "shadowOpacity") result.shadowOpacity = value;
+            else if (param.name == "backgroundOpacity") result.backgroundOpacity = value;
+            else if (param.name == "backgroundRadius") result.backgroundRadius = value;
+            else if (param.name == "backgroundPaddingX") result.backgroundPaddingX = value;
+            else if (param.name == "backgroundPaddingY") result.backgroundPaddingY = value;
+        }
+    }
+
+    // Apply assembled color values
+    for (const auto& [colorName, rgb] : colorComponents) {
+        std::string hexColor = rgbToHex(rgb[0], rgb[1], rgb[2]);
+
+        if (colorName == "color") result.color = hexColor;
+        else if (colorName == "strokeColor") result.strokeColor = hexColor;
+        else if (colorName == "shadowColor") result.shadowColor = hexColor;
+        else if (colorName == "backgroundColor") result.backgroundColor = hexColor;
+    }
+
+    return result;
+}
+
+float frameToMs(const int64_t frame, const float fps) {
+    return (frame - 1) * 1000.0f / fps;
+}
+
+std::vector<WordAnimation> processSegmentAnimation(const std::vector<WordDetail>& wordDetails, const SegmentSettings& settings,
+    float fps, const std::vector<std::vector<size_t>>& wordsPerLine /* may be empty */) {
+    std::vector<WordAnimation> animations;
+    if (wordDetails.empty()) {
+        return animations;
+    }
+
+    const bool oneWord = settings.containerStyle.appearance == TextAppearance::ONE_WORD;
+
+    // copy so we can tweak
+    AnimationSettings animSet = settings.animationSettings;
+
+    const SubtitleTextStyle& defaultStyle = settings.defaultStyle;
+    SubtitleTextStyle baseStyle = oneWord ? oneWordBase(defaultStyle) : defaultStyle;
+
+    if (oneWord) {
+        auto ensureIn = [&](const std::string& k, const double v){
+            if (!animSet.inStyles.count(k)) animSet.inStyles[k] = v;
+        };
+        ensureIn("opacity",            defaultStyle.opacity);
+        ensureIn("backgroundOpacity",  defaultStyle.backgroundOpacity.value_or(1.0));
+        ensureIn("shadowOpacity",      defaultStyle.shadowOpacity.value_or(1.0));
+        ensureIn("strokeOpacity",      defaultStyle.strokeOpacity.value_or(1.0));
+
+        animSet.outStyles["opacity"]           = 0;
+        animSet.outStyles["backgroundOpacity"] = 0;
+        animSet.outStyles["shadowOpacity"]     = 0;
+        animSet.outStyles["strokeOpacity"]     = 0;
+    }
+
+    // collect animated keys after tweaks
+    std::set<std::string> numKeys, colKeys;
+    for (auto& [k,_]:animSet.inStyles)       numKeys.insert(k);
+    for (auto& [k,_]:animSet.outStyles)      numKeys.insert(k);
+    for (auto& [k,_]:animSet.inStylesColor)   colKeys.insert(k);
+    for (auto& [k,_]:animSet.outStylesColor)  colKeys.insert(k);
+
+    const float segStart = wordDetails.front().startMs;
+
+    for (size_t idx = 0; idx < wordDetails.size(); ++idx) {
+        const WordDetail& wd = wordDetails[idx];
+        WordAnimation anim;  anim.word = wd.word;
+
+        float wStart = wd.startMs;
+        float wEnd   = wd.endMs;
+
+        // ── LINE‑level: stretch timings to cover the whole visual line ──
+        if (animSet.level == AnimationLevel::LINE && !wordsPerLine.empty()) {
+            for (const auto& line : wordsPerLine)
+                if (std::find(line.begin(), line.end(), idx) != line.end()) {
+                    wStart = wordDetails[line.front()].startMs;
+                    wEnd   = wordDetails[line.back()].endMs;
+                    break;
+                }
+        }
+        // ────────────────────────────────────────────────────────────────
+
+        float relStart = wStart - segStart;
+        float relEnd   = wEnd   - segStart;
+        float duration = relEnd - relStart;
+
+        float inDur  = animSet.inDuration;
+        float outDur = animSet.outDuration;
+        if (duration < inDur + outDur) {
+            inDur = outDur = duration * 0.5f;
+        }
+
+        for (const std::string& key : numKeys) {
+            double init  = getBaseValue(key, baseStyle);
+            double animV = animSet.inStyles.count(key)  ? animSet.inStyles[key]  : init;
+            double final = animSet.outStyles.count(key) ? animSet.outStyles[key] : init;
+
+            int64_t f0        = msToFrame(0, fps);
+            int64_t fS        = msToFrame(relStart - inDur / 2, fps);
+            int64_t fInEnd    = msToFrame(relStart + inDur / 2, fps);
+            int64_t fOutStart = msToFrame(relEnd   - outDur, fps);
+            int64_t fEnd      = msToFrame(relEnd, fps);
+
+            AnimationParam p;
+            p.name = key;
+            p.keyframe.AddPoint(f0, init, CONSTANT);
+            p.keyframe.AddPoint(fS, init, CONSTANT);
+            p.keyframe.AddPoint(fInEnd, animV, animSet.inInterpolation);
+
+            if (outDur > 0) {
+                if (fOutStart > fInEnd) {
+                    p.keyframe.AddPoint(fOutStart, animV, CONSTANT);
+                }
+                p.keyframe.AddPoint(fEnd, final, animSet.outInterpolation);
+            } else {
+                if (fEnd-1 > fInEnd) {
+                    p.keyframe.AddPoint(fEnd-1, animV, CONSTANT);
+                }
+                p.keyframe.AddPoint(fEnd, final, CONSTANT);
+            }
+            anim.params.emplace_back(std::move(p));
+        }
+
+        for (const std::string& key : colKeys) {
+            std::string iHex = getBaseColor(key, baseStyle);
+            std::string aHex = animSet.inStylesColor.count(key)  ? animSet.inStylesColor[key]  : iHex;
+            std::string fHex = animSet.outStylesColor.count(key) ? animSet.outStylesColor[key] : iHex;
+
+            auto [ir,ig,ib] = hexToRgb(iHex);
+            auto [ar,ag,ab] = hexToRgb(aHex);
+            auto [fr,fg,fb] = hexToRgb(fHex);
+
+            int64_t f0        = msToFrame(0, fps);
+            int64_t fS        = msToFrame(relStart, fps);
+            int64_t fInEnd    = msToFrame(relStart + inDur, fps);
+            int64_t fOutStart = msToFrame(relEnd   - outDur, fps);
+            int64_t fEnd      = msToFrame(relEnd, fps);
+
+            auto add = [&](const char* suf, double i, double a, double f){
+                AnimationParam p; p.name = key + suf;
+                p.keyframe.AddPoint(f0, i, CONSTANT);
+                p.keyframe.AddPoint(fS, i, CONSTANT);
+                p.keyframe.AddPoint(fInEnd, a, animSet.inInterpolation);
+                if (outDur>0) {
+                    if (fOutStart>fInEnd) {
+                        p.keyframe.AddPoint(fOutStart, a, CONSTANT);
+                    }
+                    p.keyframe.AddPoint(fEnd, f, animSet.outInterpolation);
+                } else {
+                    if (fEnd-1>fInEnd) {
+                        p.keyframe.AddPoint(fEnd-1, a, CONSTANT);
+                    }
+                    p.keyframe.AddPoint(fEnd, f, CONSTANT);
+                }
+                anim.params.emplace_back(std::move(p));
+            };
+            add(".r", ir, ar, fr);
+            add(".g", ig, ag, fg);
+            add(".b", ib, ab, fb);
+        }
+        animations.emplace_back(std::move(anim));
+    }
+    return animations;
+}
+} // namespace subtitle
+} // namespace openshot

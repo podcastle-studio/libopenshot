@@ -112,7 +112,7 @@
     %}
 #endif
 
-#ifdef USE_OPENCV
+#ifdef USE_OPENCV_EFFECTS
     %{
         #include "ClipProcessingJobs.h"
         #include "effects/Stabilizer.h"
@@ -325,7 +325,7 @@
 %include "Timeline.h"
 %include "ZmqLogger.h"
 
-#ifdef USE_OPENCV
+#ifdef USE_OPENCV_EFFECTS
     %include "ClipProcessingJobs.h"
     %include "TrackedObjectBase.h"
     %include "TrackedObjectBBox.h"
@@ -357,7 +357,7 @@
 %include "effects/Shift.h"
 %include "effects/SphericalProjection.cpp"
 %include "effects/Wave.h"
-#ifdef USE_OPENCV
+#ifdef USE_OPENCV_EFFECTS
     %include "effects/Stabilizer.h"
     %include "effects/Tracker.h"
     %include "effects/ObjectDetection.h"

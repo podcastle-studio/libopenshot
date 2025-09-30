@@ -36,6 +36,7 @@
 #include "EffectInfo.h"
 #include "KeyFrame.h"
 #include "TrackedObjectBase.h"
+#include "QPainter"
 
 namespace openshot {
 	class AudioResampler;
@@ -87,6 +88,17 @@ namespace openshot {
 	 * @endcode
 	 */
 	class Clip : public openshot::ClipBase, public openshot::ReaderBase {
+	public:
+		enum OverlayType {
+			OVERLAY_NONE,
+			ADDITIVE_BLEND,
+			DISPLACEMENT_MAP
+		};
+		struct OverlayClipData {
+			Clip* clipPtr{nullptr};
+			OverlayType overlayType; ///< Clip object this clip is attached to
+			bool isOverlayAtEnd{false}; ///< Clip object this clip is attached to
+		};
 	protected:
 		/// Mutex for multiple threads
 		std::recursive_mutex getFrameMutex;
@@ -110,6 +122,8 @@ namespace openshot {
 		std::string parentObjectId; ///< Id of the bounding box that this clip is attached to
 		std::shared_ptr<openshot::TrackedObjectBase> parentTrackedObject; ///< Tracked object this clip is attached to
 		openshot::Clip* parentClipObject; ///< Clip object this clip is attached to
+
+		std::vector<OverlayClipData> overlayClips;
 
 		/// Final cache object used to hold final frames
 		CacheMemory final_cache;
@@ -135,6 +149,8 @@ namespace openshot {
 
 		/// Apply keyframes to an openshot::Frame and use an existing background frame (if any)
 		void apply_keyframes(std::shared_ptr<Frame> frame, QSize timeline_size);
+
+        void apply_scale_options(std::shared_ptr<Frame> frame, std::shared_ptr<openshot::Frame> background_frame);
 
 		/// Apply waveform image to an openshot::Frame and use an existing background frame (if any)
 		void apply_waveform(std::shared_ptr<Frame> frame, QSize timeline_size);
@@ -164,11 +180,14 @@ namespace openshot {
 		QSize scale_size(QSize source_size, ScaleType source_scale, int target_width, int target_height);
 
 	public:
+		bool isOverlay; ///< Whether clip is overlay itslef
 		openshot::GravityType gravity;   ///< The gravity of a clip determines where it snaps to its parent
 		openshot::ScaleType scale;		 ///< The scale determines how a clip should be resized to fit its parent
 		openshot::AnchorType anchor;	 ///< The anchor determines what parent a clip should snap to
 		openshot::FrameDisplayType display; ///< The format to display the frame number (if any)
 		openshot::VolumeMixType mixing;  ///< What strategy should be followed when mixing audio with other clips
+
+        long mFreezeFramesCountAtBeginning = 0;
 
 		#ifdef USE_OPENCV
 			bool COMPILED_WITH_CV = true;
@@ -185,7 +204,7 @@ namespace openshot {
 
 		/// @brief Constructor with reader
 		/// @param new_reader The reader to be used by this clip
-		Clip(openshot::ReaderBase* new_reader);
+		Clip(openshot::ReaderBase* new_reader, bool inspect_reader = true);
 
 		/// Destructor
 		virtual ~Clip();
@@ -225,6 +244,10 @@ namespace openshot {
 
 		/// Return the associated ParentClip (if any)
 		openshot::Clip* GetParentClip();
+
+		void AddOverlayClip(openshot::Clip* clip, OverlayType oType, bool isAtEnd);
+
+		std::vector<OverlayClipData> GetOverlayClips() const;
 
 		/// Return the associated Parent Tracked Object (if any)
 		std::shared_ptr<openshot::TrackedObjectBase> GetParentTrackedObject();
@@ -315,6 +338,11 @@ namespace openshot {
 		openshot::Keyframe shear_y; ///< Curve representing Y shear angle in degrees (-45.0=down, 45.0=up)
 		openshot::Keyframe origin_x; ///< Curve representing X origin point (0.0=0% (left), 1.0=100% (right))
 		openshot::Keyframe origin_y; ///< Curve representing Y origin point (0.0=0% (top), 1.0=100% (bottom))
+
+        QPainter::CompositionMode composition_mode = QPainter::CompositionMode_SourceOver; ///< Composition mode for blending this clip with the background
+
+        openshot::Keyframe horizontal_displacement; ///< Horizontal displacement for displacement map
+        openshot::Keyframe vertical_displacement; ///< Vertical displacement for displacement map
 
 		// Time and Volume curves
 		openshot::Keyframe time; ///< Curve representing the frames over time to play (used for speed and direction of video)

@@ -35,19 +35,29 @@ namespace openshot
 	 */
 	class Mask : public EffectBase
 	{
-	private:
 		ReaderBase *reader;
 		std::shared_ptr<QImage> original_mask;
 		bool needs_refresh;
-
+        int roundedRadiusX;
+        int roundedRadiusY;
 		/// Init effect settings
 		void init_effect_details();
 
 	public:
+        enum MaskType
+        {
+            INVALID = -1,
+            ROUNDED_CORNERS,
+            CUSTOM
+        };
+
+        MaskType maskType;
 		bool replace_image;		///< Replace the frame image with a grayscale image representing the mask. Great for debugging a mask.
 		Keyframe brightness;	///< Brightness keyframe to control the wipe / mask effect. A constant value here will prevent animation.
 		Keyframe contrast;		///< Contrast keyframe to control the hardness of the wipe effect / mask.
 
+		Keyframe startFrame;
+		Keyframe endFrame;
 		/// Blank constructor, useful when using Json to load the effect properties
 		Mask();
 
@@ -58,9 +68,15 @@ namespace openshot
 		/// @param mask_reader The reader of a grayscale mask image or video, to be used by the wipe transition
 		/// @param mask_brightness The curve to adjust the brightness of the wipe's mask (between 100 and -100)
 		/// @param mask_contrast The curve to adjust the contrast of the wipe's mask (3 is typical, 20 is a lot, 0 is invalid)
-		Mask(ReaderBase *mask_reader, Keyframe mask_brightness, Keyframe mask_contrast);
+		/// @param start_frame
+		/// @param end_frame
+		Mask(ReaderBase *mask_reader, const Keyframe& mask_brightness, const Keyframe& mask_contrast,
+			const Keyframe& start_frame = 1, const Keyframe& end_frame = std::numeric_limits<int>::max());
 
-		/// @brief This method is required for all derived classes of ClipBase, and returns a
+		Mask(MaskType _maskType, const Keyframe& mask_brightness, const Keyframe& mask_contrast,
+			const Keyframe& start_frame = 1, const Keyframe& end_frame = std::numeric_limits<int>::max());
+
+        /// @brief This method is required for all derived classes of ClipBase, and returns a
 		/// new openshot::Frame object. All Clip keyframes and effects are resolved into
 		/// pixels.
 		///
@@ -84,6 +100,8 @@ namespace openshot
 		void SetJson(const std::string value) override; ///< Load JSON string into this object
 		Json::Value JsonValue() const override; ///< Generate Json::Value for this object
 		void SetJsonValue(const Json::Value root) override; ///< Load Json::Value into this object
+
+        void SetRoundedCornersMaskRadius(int x, int y);
 
 		/// Get all properties for a specific frame (perfect for a UI to display the current state
 		/// of all properties at any time)

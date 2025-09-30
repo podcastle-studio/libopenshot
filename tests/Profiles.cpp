@@ -71,6 +71,21 @@ TEST_CASE( "constructor with example profiles", "[libopenshot][profile]" )
     CHECK(p1_json.info.interlaced_frame == false);
     CHECK(p1_json.info.spherical == false);
 
+    // Export to JSON
+    openshot::Profile p1_json = openshot::Profile();
+    p1_json.SetJson(p1.Json());
+
+    CHECK(p1_json.info.description == "HD 720p 24 fps");
+    CHECK(p1_json.info.width == 1280);
+    CHECK(p1_json.info.height == 720);
+    CHECK(p1_json.info.fps.num == 24);
+    CHECK(p1_json.info.fps.den == 1);
+    CHECK(p1_json.info.display_ratio.num == 16);
+    CHECK(p1_json.info.display_ratio.den == 9);
+    CHECK(p1_json.info.pixel_ratio.num == 1);
+    CHECK(p1_json.info.pixel_ratio.den == 1);
+    CHECK(p1_json.info.interlaced_frame == false);
+
     std::stringstream profile2;
     profile2 << TEST_MEDIA_PATH << "example_profile2";
 

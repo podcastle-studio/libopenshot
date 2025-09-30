@@ -18,7 +18,8 @@
 #include "ChunkReader.h"
 #include "FFmpegReader.h"
 #include "QtImageReader.h"
-#include <omp.h>
+#include "QPainter"
+#include "QPainterPath"
 
 #ifdef USE_IMAGEMAGICK
 	#include "ImageReader.h"
@@ -27,17 +28,32 @@
 using namespace openshot;
 
 /// Blank constructor, useful when using Json to load the effect properties
-Mask::Mask() : reader(NULL), replace_image(false), needs_refresh(true) {
+Mask::Mask() : maskType(MaskType::INVALID), reader(NULL), replace_image(false), needs_refresh(true) {
 	// Init effect properties
 	init_effect_details();
 }
 
 // Default constructor
-Mask::Mask(ReaderBase *mask_reader, Keyframe mask_brightness, Keyframe mask_contrast) :
-		reader(mask_reader), brightness(mask_brightness), contrast(mask_contrast), replace_image(false), needs_refresh(true)
+Mask::Mask(ReaderBase *mask_reader, const Keyframe& mask_brightness, const Keyframe& mask_contrast,
+			const Keyframe& start_frame, const Keyframe& end_frame)
+		: reader(mask_reader), needs_refresh(true), maskType(MaskType::CUSTOM), replace_image(false)
+		, brightness(mask_brightness), contrast(mask_contrast), startFrame(start_frame), endFrame(end_frame)
 {
 	// Init effect properties
 	init_effect_details();
+}
+
+Mask::Mask(MaskType _maskType, const Keyframe& mask_brightness, const Keyframe& mask_contrast,
+			const Keyframe& start_frame, const Keyframe& end_frame) :
+		maskType(_maskType), reader(NULL), brightness(mask_brightness), contrast(mask_contrast), replace_image(false), needs_refresh(true),
+        roundedRadiusX(0), roundedRadiusY(0), startFrame(start_frame), endFrame(end_frame)
+{
+	// Init effect properties
+	init_effect_details();
+    if (maskType == MaskType::ROUNDED_CORNERS)
+    {
+        SetRoundedCornersMaskRadius(15, 15);
+    }
 }
 
 // Init effect settings
@@ -60,92 +76,96 @@ std::shared_ptr<openshot::Frame> Mask::GetFrame(std::shared_ptr<openshot::Frame>
 	// Get the mask image (from the mask reader)
 	std::shared_ptr<QImage> frame_image = frame->GetImage();
 
-	// Check if mask reader is open
-	#pragma omp critical (open_mask_reader)
-	{
-		if (reader && !reader->IsOpen())
-			reader->Open();
-	}
-
-	// No reader (bail on applying the mask)
-	if (!reader)
+	if (frame_number < startFrame.GetValue(frame_number) || frame_number > endFrame.GetValue(frame_number)) {
 		return frame;
-
-	// Get mask image (if missing or different size than frame image)
-	#pragma omp critical (open_mask_reader)
-	{
-		if (!original_mask || !reader->info.has_single_image || needs_refresh ||
-			(original_mask && original_mask->size() != frame_image->size())) {
-
-			// Only get mask if needed
-			auto mask_without_sizing = std::make_shared<QImage>(
-				*reader->GetFrame(frame_number)->GetImage());
-
-			// Resize mask image to match frame size
-			original_mask = std::make_shared<QImage>(
-				mask_without_sizing->scaled(
-					frame_image->width(), frame_image->height(),
-					Qt::IgnoreAspectRatio, Qt::SmoothTransformation));
-		}
 	}
 
-	// Once we've done the necessary resizing, we no longer need to refresh again
+	if (maskType == CUSTOM) {
+		// Check if mask reader is open
+		#pragma omp critical (open_mask_reader)
+		{
+			if (reader && !reader->IsOpen()) reader->Open();
+		}
+
+		// No reader (bail on applying the mask)
+		if (!reader) return frame;
+
+		// Get mask image (if missing or different size than frame image)
+		#pragma omp critical (open_mask_reader)
+		{
+			if (!original_mask || !reader->info.has_single_image || needs_refresh ||
+				(original_mask && original_mask->size() != frame_image->size())) {
+
+				// Only get mask if needed
+				const auto mask_without_sizing = std::make_shared<QImage>(*reader->GetFrame(frame_number)->GetImage());
+
+				// Resize mask image to match frame size
+				original_mask = std::make_shared<QImage>(mask_without_sizing->scaled(
+								frame_image->width(), frame_image->height(),
+								Qt::IgnoreAspectRatio, Qt::SmoothTransformation));
+			}
+		}
+	} else if (maskType == ROUNDED_CORNERS) {
+		QImage mask(frame_image->width(),frame_image->height(),QImage::Format_RGBA8888_Premultiplied);
+		mask.fill(Qt::white);
+		QPainter p(&mask);
+		p.setRenderHint(QPainter::Antialiasing);
+		QPainterPath path;
+		path.addRoundedRect(QRectF(0, 0, frame_image->width(), frame_image->height()), roundedRadiusX, roundedRadiusY);
+		QPen pen(Qt::black, 0);
+		p.setPen(pen);
+		p.fillPath(path, Qt::black);
+		p.drawPath(path);
+		p.end();
+		original_mask = std::make_shared<QImage>(mask);
+	}
+
+    // Refresh no longer needed
 	needs_refresh = false;
 
-	// Grab raw pointers and dimensions one time
-	unsigned char* pixels      = reinterpret_cast<unsigned char*>(frame_image->bits());
-	unsigned char* mask_pixels = reinterpret_cast<unsigned char*>(original_mask->bits());
-	int width                   = original_mask->width();
-	int height                  = original_mask->height();
-	int num_pixels              = width * height;  // total pixel count
+	// Get pixel arrays
+	unsigned char *pixels = frame_image->bits();
+	const unsigned char *mask_pixels = original_mask->bits();
 
-	// Evaluate brightness and contrast keyframes just once
-	double contrast_value   = contrast.GetValue(frame_number);
-	double brightness_value = brightness.GetValue(frame_number);
+	const double contrast_value = (contrast.GetValue(frame_number));
+	const double brightness_value = (brightness.GetValue(frame_number));
 
-	int brightness_adj = static_cast<int>(255 * brightness_value);
-	float contrast_factor = 20.0f / std::max(0.00001f, 20.0f - static_cast<float>(contrast_value));
+	// Loop through mask pixels, and apply average gray value to frame alpha channel
+	for (int pixel = 0, byte_index=0; pixel < original_mask->width() * original_mask->height(); pixel++, byte_index+=4) {
+		// Get the RGB values from the pixel
+		const int R = mask_pixels[byte_index];
+		const int G = mask_pixels[byte_index + 1];
+		const int B = mask_pixels[byte_index + 2];
+		const int A = mask_pixels[byte_index + 3];
 
-	// Iterate over every pixel in parallel
-#pragma omp parallel for schedule(static)
-	for (int i = 0; i < num_pixels; ++i)
-	{
-		int idx = i * 4;
+		// Get the average luminosity
+		int gray_value = qGray(R, G, B);
 
-		int R = mask_pixels[idx + 0];
-		int G = mask_pixels[idx + 1];
-		int B = mask_pixels[idx + 2];
-		int A = mask_pixels[idx + 3];
+		// Adjust the brightness
+		gray_value += (255 * brightness_value);
 
-		// Compute base gray, then apply brightness + contrast
-		int gray = qGray(R, G, B);
-		gray += brightness_adj;
-		gray = static_cast<int>(contrast_factor * (gray - 128) + 128);
-
-		// Clamp (A - gray) into [0, 255]
-		int diff = A - gray;
-		if (diff < 0) diff = 0;
-		else if (diff > 255) diff = 255;
+		// Adjust the contrast
+		const float factor = (20 / std::fmax(0.00001, 20.0 - contrast_value));
+		gray_value = (factor * (gray_value - 128) + 128);
 
 		// Calculate the % change in alpha
-		float alpha_percent = static_cast<float>(diff) / 255.0f;
+		const float alpha_percent = float(constrain(A - gray_value)) / 255.0;
 
 		// Set the alpha channel to the gray value
 		if (replace_image) {
 			// Replace frame pixels with gray value (including alpha channel)
-			auto new_val = static_cast<unsigned char>(diff);
-			pixels[idx + 0] = new_val;
-			pixels[idx + 1] = new_val;
-			pixels[idx + 2] = new_val;
-			pixels[idx + 3] = new_val;
+			pixels[byte_index + 0] = constrain(255 * alpha_percent);
+			pixels[byte_index + 1] = constrain(255 * alpha_percent);
+			pixels[byte_index + 2] = constrain(255 * alpha_percent);
+			pixels[byte_index + 3] = constrain(255 * alpha_percent);
 		} else {
-			// Premultiplied RGBA → multiply each channel by alpha_percent
-			pixels[idx + 0] = static_cast<unsigned char>(pixels[idx + 0] * alpha_percent);
-			pixels[idx + 1] = static_cast<unsigned char>(pixels[idx + 1] * alpha_percent);
-			pixels[idx + 2] = static_cast<unsigned char>(pixels[idx + 2] * alpha_percent);
-			pixels[idx + 3] = static_cast<unsigned char>(pixels[idx + 3] * alpha_percent);
+			// Multiply new alpha value with all the colors (since we are using a premultiplied
+			// alpha format)
+			pixels[byte_index + 0] *= alpha_percent;
+			pixels[byte_index + 1] *= alpha_percent;
+			pixels[byte_index + 2] *= alpha_percent;
+			pixels[byte_index + 3] *= alpha_percent;
 		}
-
 	}
 
 	// return the modified frame
@@ -172,7 +192,8 @@ Json::Value Mask::JsonValue() const {
 	else
 		root["reader"] = Json::objectValue;
 	root["replace_image"] = replace_image;
-
+	root["start_frame"] = startFrame.JsonValue();
+	root["end_frame"]   = endFrame.JsonValue();
 	// return JsonValue
 	return root;
 }
@@ -207,6 +228,8 @@ void Mask::SetJsonValue(const Json::Value root) {
 		brightness.SetJsonValue(root["brightness"]);
 	if (!root["contrast"].isNull())
 		contrast.SetJsonValue(root["contrast"]);
+	if (!root["start_frame"].isNull()) startFrame = root["start_frame"].asInt();
+	if (!root["end_frame"].isNull())   endFrame   = root["end_frame"].asInt();
 	if (!root["reader"].isNull()) // does Json contain a reader?
 	{
 		#pragma omp critical (open_mask_reader)
@@ -260,6 +283,13 @@ void Mask::SetJsonValue(const Json::Value root) {
 	}
 
 }
+
+void Mask::SetRoundedCornersMaskRadius(int x, int y)
+{
+    roundedRadiusX = x;
+    roundedRadiusY = y;
+}
+
 
 // Get all properties for a specific frame
 std::string Mask::PropertiesJSON(int64_t requested_frame) const {

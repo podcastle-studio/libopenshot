@@ -123,9 +123,19 @@ inline static const std::string av_err2string(int errnum)
 #endif
 
 // Does ffmpeg pixel format contain an alpha channel?
-inline static bool ffmpeg_has_alpha(PixelFormat pix_fmt) {
+inline static bool ffmpeg_has_alpha(PixelFormat pix_fmt, AVStream* stream = nullptr) {
+    // Check regular alpha flag in pixel format
     const AVPixFmtDescriptor *fmt_desc = av_pix_fmt_desc_get(pix_fmt);
-    return bool(fmt_desc->flags & AV_PIX_FMT_FLAG_ALPHA);
+    bool has_alpha = bool(fmt_desc->flags & AV_PIX_FMT_FLAG_ALPHA);
+
+    // Also check for WebM/VP8/VP9 alpha metadata if stream is provided
+    if (!has_alpha && stream && stream->metadata) {
+        AVDictionaryEntry *tag = av_dict_get(stream->metadata, "alpha_mode", NULL, 0);
+        if (tag && tag->value && strcmp(tag->value, "1") == 0)
+            return true;
+    }
+
+    return has_alpha;
 }
 
 // FFmpeg's libavutil/common.h defines an RSHIFT incompatible with Ruby's

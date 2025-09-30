@@ -30,12 +30,12 @@
 #include "Fraction.h"
 #include "Frame.h"
 #include "KeyFrame.h"
-#ifdef USE_OPENCV
+#ifdef USE_OPENCV_EFFECTS
 #include "TrackedObjectBBox.h"
 #endif
 #include "TrackedObjectBase.h"
 
-
+#include "subtitle/SubtitleManager.h"
 
 namespace openshot {
 
@@ -163,6 +163,8 @@ namespace openshot {
 		double max_time; ///> The max duration (in seconds) of the timeline, based on the furthest clip (right edge)
 		double min_time; ///> The min duration (in seconds) of the timeline, based on the position of the first clip (left edge)
 
+		std::unique_ptr<subtitle::SubtitleManager> subtitleManager;
+
 		std::map<std::string, std::shared_ptr<openshot::TrackedObjectBase>> tracked_objects; ///< map of TrackedObjectBBoxes and their IDs
 
 		/// Process a new layer of video or audio
@@ -197,9 +199,6 @@ namespace openshot {
 		/// Compare 2 floating point numbers for equality
 		bool isEqual(double a, double b);
 
-		/// Sort clips by position on the timeline
-		void sort_clips();
-
 		/// Sort effects by position on the timeline
 		void sort_effects();
 
@@ -207,6 +206,8 @@ namespace openshot {
 		void update_open_clips(openshot::Clip *clip, bool does_clip_intersect);
 
 	public:
+		/// Sort clips by position on the timeline
+		void sort_clips();
 
 		/// @brief Constructor for the timeline (which configures the default frame properties)
 		/// @param width The image width of generated openshot::Frame objects
@@ -239,17 +240,22 @@ namespace openshot {
 		/// Return the ID's of the tracked objects as a list of strings
 		std::list<std::string> GetTrackedObjectsIds() const;
 		/// Return the trackedObject's properties as a JSON string
-		#ifdef USE_OPENCV
+		#ifdef USE_OPENCV_EFFECTS
 		std::string GetTrackedObjectValues(std::string id, int64_t frame_number) const;
 		#endif
 
 		/// @brief Add an openshot::Clip to the timeline
 		/// @param clip Add an openshot::Clip to the timeline. A clip can contain any type of Reader.
-		void AddClip(openshot::Clip* clip);
+		void AddClip(openshot::Clip* clip, bool sortClips = true);
 
 		/// @brief Add an effect to the timeline
 		/// @param effect Add an effect to the timeline. An effect can modify the audio or video of an openshot::Frame.
 		void AddEffect(openshot::EffectBase* effect);
+
+		/// Load subtitles from JSON file
+		void LoadSubtitlesFromJsonFile(const std::string& jsonPath) const;
+		/// Load subtitles from JSON string
+		void LoadSubtitlesFromJsonString(const std::string& jsonPath) const;
 
 		/// Apply global/timeline effects to the source frame (if any)
 		std::shared_ptr<openshot::Frame> apply_effects(std::shared_ptr<openshot::Frame> frame, int64_t timeline_frame_number, int layer, TimelineInfoStruct* options);

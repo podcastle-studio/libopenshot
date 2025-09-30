@@ -587,7 +587,19 @@ void FFmpegWriter::SetOption(StreamType stream, std::string name, std::string va
 			av_dict_set(&mux_dict, "movflags", "frag_keyframe", 0);
 			av_dict_set(&mux_dict, "min_frag_duration", "8000000", 0);
 		}
-	} else {
+	} else if (name == "movflags" || name == "use_editlist" ||
+		name == "frag_keyframe" || name == "min_frag_duration") {
+		// Muxer options for mov/mp4
+		av_dict_set(&mux_dict, name.c_str(), value.c_str(), 0);
+   } else if (name == "muxing_preset") {
+		if (value == "mp4_faststart") {
+			av_dict_set(&mux_dict, "movflags", "faststart", 0);
+		} else if (value == "mp4_fragmented") {
+			av_dict_set(&mux_dict, "movflags", "frag_keyframe", 0);
+			av_dict_set(&mux_dict, "min_frag_duration", "8000000", 0);
+		}
+   }
+	else {
 		throw InvalidOptions("The option is not valid for this codec.", path);
 	}
 

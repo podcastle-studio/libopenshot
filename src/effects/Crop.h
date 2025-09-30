@@ -46,6 +46,7 @@ namespace openshot
 		Keyframe top;		///< Size of top bar
 		Keyframe right;		///< Size of right bar
 		Keyframe bottom;	///< Size of bottom bar
+		Keyframe radius;	///<
 		Keyframe x;			///< X-offset
 		Keyframe y;			///< Y-offset
 		bool resize;		///< Auto-resize image after crop operation
@@ -61,7 +62,7 @@ namespace openshot
 		/// @param bottom The curve to adjust the bottom bar size (between 0 and 1)
 		/// @param x x-offset of original image in output frame (-1.0 - 1.0)
 		/// @param y y-offset of original image in output frame (-1.0 - 1.0)
-		Crop(Keyframe left, Keyframe top, Keyframe right, Keyframe bottom,
+		Crop(Keyframe left, Keyframe top, Keyframe right, Keyframe bottom, Keyframe radius = 0,
 			 Keyframe x=0.0, Keyframe y=0.0);
 
 		/// @brief This method is required for all derived classes of ClipBase, and returns a
