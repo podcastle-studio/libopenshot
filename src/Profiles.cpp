@@ -259,28 +259,6 @@ void Profile::Save(const std::string& file_path) const {
 	file.close();
 }
 
-// Save profile to file system
-void Profile::Save(const std::string& file_path) const {
-	std::ofstream file(file_path);
-	if (!file.is_open()) {
-		throw std::ios_base::failure("Failed to save profile.");
-	}
-
-	file << "description=" << info.description << "\n";
-	file << "frame_rate_num=" << info.fps.num << "\n";
-	file << "frame_rate_den=" << info.fps.den << "\n";
-	file << "width=" << info.width << "\n";
-	file << "height=" << info.height << "\n";
-	file << "progressive=" << !info.interlaced_frame << "\n";  // Correct the boolean value for progressive/interlaced
-	file << "sample_aspect_num=" << info.pixel_ratio.num << "\n";
-	file << "sample_aspect_den=" << info.pixel_ratio.den << "\n";
-	file << "display_aspect_num=" << info.display_ratio.num << "\n";
-	file << "display_aspect_den=" << info.display_ratio.den << "\n";
-	file << "pixel_format=" << info.pixel_format;
-
-	file.close();
-}
-
 // Generate JSON string of this object
 std::string Profile::Json() const {
 
