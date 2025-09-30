@@ -134,9 +134,10 @@ namespace openshot {
 		uint8_t *audio_outbuf;
 		uint8_t *audio_encoder_buffer;
 
-		int num_of_rescalers;
-		int rescaler_position;
-		std::vector<SwsContext *> image_rescalers;
+		AVFrame *persistent_src_frame = nullptr;
+		AVFrame *persistent_dst_frame = nullptr;
+		uint8_t *persistent_dst_buffer = nullptr;
+		int persistent_dst_size = 0;
 
 		int audio_outbuf_size;
 		int audio_input_frame_size;
@@ -179,11 +180,6 @@ namespace openshot {
 
 		/// initialize streams
 		void initialize_streams();
-
-		/// @brief Init a collection of software rescalers (thread safe)
-		/// @param source_width The source width of the image scalers (used to cache a bunch of scalers)
-		/// @param source_height The source height of the image scalers (used to cache a bunch of scalers)
-		void InitScalers(int source_width, int source_height);
 
 		/// open audio codec
 		void open_audio(AVFormatContext *oc, AVStream *st);
@@ -229,9 +225,6 @@ namespace openshot {
 		/// @brief Prepare & initialize streams and open codecs. This method is called automatically
 		/// by the Open() method if this method has not yet been called.
 		void PrepareStreams();
-
-		/// Remove & deallocate all software scalers
-		void RemoveScalers();
 
 		/// @brief Set audio resample options
 		/// @param sample_rate The number of samples per second of the audio
@@ -318,8 +311,15 @@ namespace openshot {
 		/// by the Close() method if this method has not yet been called.
 		void WriteTrailer();
 
+		/// @brief Add spherical (360°) video metadata to the video stream
+		/// @param projection The projection type (e.g., "equirectangular", "cubemap")
+		/// @param yaw_deg The yaw angle in degrees (horizontal orientation, default 0)
+		/// @param pitch_deg The pitch angle in degrees (vertical orientation, default 0)
+		/// @param roll_deg The roll angle in degrees (tilt orientation, default 0)
+		void AddSphericalMetadata(const std::string& projection="equirectangular", float yaw_deg=0.0f, float pitch_deg=0.0f, float roll_deg=0.0f);
+
 	};
 
-}
+} // namespace openshot
 
 #endif

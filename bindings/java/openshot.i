@@ -32,14 +32,14 @@
 %include <std_except.i>
 
 /* Include shared pointer code */
-#%include <std_shared_ptr.i>
+%include <std_shared_ptr.i>
 
 /* Mark these classes as shared_ptr classes */
 #ifdef USE_IMAGEMAGICK
-	#%shared_ptr(Magick::Image)
+	%shared_ptr(Magick::Image)
 #endif
-#%shared_ptr(juce::AudioBuffer<float>)
-#%shared_ptr(openshot::Frame)
+%shared_ptr(juce::AudioBuffer<float>)
+%shared_ptr(openshot::Frame)
 
 /* Instantiate the required template specializations */
 %template() std::map<std::string, int>;
@@ -91,8 +91,12 @@
 #include "Settings.h"
 #include "TimelineBase.h"
 #include "Timeline.h"
+#include "Qt/VideoCacheThread.h"
 #include "ZmqLogger.h"
 %}
+
+// Prevent SWIG from ever generating a wrapper for juce::Thread’s constructor (or run())
+%ignore juce::Thread::Thread;
 
 #ifdef USE_IMAGEMAGICK
 	%{
@@ -151,6 +155,7 @@
 %include "RendererBase.h"
 %include "Settings.h"
 %include "TimelineBase.h"
+%include "Qt/VideoCacheThread.h"
 %include "Timeline.h"
 %include "ZmqLogger.h"
 
@@ -166,15 +171,23 @@
 %include "effects/Brightness.h"
 %include "effects/Caption.h"
 %include "effects/ChromaKey.h"
+%include "effects/ColorMap.h"
 %include "effects/ColorShift.h"
 %include "effects/Crop.h"
 %include "effects/Deinterlace.h"
 %include "effects/Hue.h"
+%include "effects/LensFlare.h"
 %include "effects/Mask.h"
 %include "effects/Negate.h"
 %include "effects/Pixelate.h"
 %include "effects/Saturation.h"
+%include "effects/Sharpen.h"
 %include "effects/Shift.h"
+%include "effects/SphericalProjection.cpp"
 %include "effects/Wave.h"
-
-
+#ifdef USE_OPENCV
+    %include "effects/Stabilizer.h"
+    %include "effects/Tracker.h"
+    %include "effects/ObjectDetection.h"
+    %include "effects/Outline.h"
+#endif

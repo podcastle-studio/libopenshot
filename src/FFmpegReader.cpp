@@ -74,8 +74,8 @@ FFmpegReader::FFmpegReader(const std::string &path, bool inspect_reader)
 		  seek_audio_frame_found(0), seek_video_frame_found(0),is_duration_known(false), largest_frame_processed(0),
 		  current_video_frame(0), packet(NULL), max_concurrent_frames(OPEN_MP_NUM_PROCESSORS), audio_pts(0),
 		  video_pts(0), pFormatCtx(NULL), videoStream(-1), audioStream(-1), pCodecCtx(NULL), aCodecCtx(NULL),
-		  pStream(NULL), aStream(NULL), pFrame(NULL), previous_packet_location{-1,0},
-		  hold_packet(false) {
+		pStream(NULL), aStream(NULL), pFrame(NULL), previous_packet_location{-1,0},
+		hold_packet(false) {
 
 	// Initialize FFMpeg, and register all formats and codecs
 	AV_REGISTER_ALL
@@ -315,7 +315,7 @@ void FFmpegReader::Open() {
 				retry_decode_open = 0;
 
 				// Set number of threads equal to number of processors (not to exceed 16)
-				pCodecCtx->thread_count = std::min(FF_NUM_PROCESSORS, 16);
+				pCodecCtx->thread_count = std::min(FF_VIDEO_NUM_PROCESSORS, 16);
 
 				if (pCodec == NULL) {
 					throw InvalidCodec("A valid video codec could not be found for this file.", path);
@@ -590,8 +590,8 @@ void FFmpegReader::Open() {
 			const AVCodec *aCodec = avcodec_find_decoder(codecId);
 			aCodecCtx = AV_GET_CODEC_CONTEXT(aStream, aCodec);
 
-			// Set number of threads equal to number of processors (not to exceed 16)
-			aCodecCtx->thread_count = std::min(FF_NUM_PROCESSORS, 16);
+			// Audio encoding does not typically use more than 2 threads (most codecs use 1 thread)
+			aCodecCtx->thread_count = std::min(FF_AUDIO_NUM_PROCESSORS, 2);
 
 			if (aCodec == NULL) {
 				throw InvalidCodec("A valid audio codec could not be found for this file.", path);
@@ -618,6 +618,52 @@ void FFmpegReader::Open() {
 			QString str_key = tag->key;
 			QString str_value = tag->value;
 			info.metadata[str_key.toStdString()] = str_value.trimmed().toStdString();
+		}
+
+		// Process video stream side data (rotation, spherical metadata, etc)
+		for (unsigned int i = 0; i < pFormatCtx->nb_streams; i++) {
+			AVStream* st = pFormatCtx->streams[i];
+			if (st->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
+				// Only inspect the first video stream
+				for (int j = 0; j < st->nb_side_data; j++) {
+					AVPacketSideData *sd = &st->side_data[j];
+
+					// Handle rotation metadata (unchanged)
+					if (sd->type == AV_PKT_DATA_DISPLAYMATRIX &&
+						sd->size >= 9 * sizeof(int32_t) &&
+						!info.metadata.count("rotate"))
+					{
+						double rotation = -av_display_rotation_get(
+							reinterpret_cast<int32_t *>(sd->data));
+						if (std::isnan(rotation)) rotation = 0;
+						info.metadata["rotate"] = std::to_string(rotation);
+					}
+					// Handle spherical video metadata
+					else if (sd->type == AV_PKT_DATA_SPHERICAL) {
+						// Always mark as spherical
+						info.metadata["spherical"] = "1";
+
+						// Cast the raw bytes to an AVSphericalMapping
+						const AVSphericalMapping* map =
+							reinterpret_cast<const AVSphericalMapping*>(sd->data);
+
+						// Projection enum → string
+						const char* proj_name = av_spherical_projection_name(map->projection);
+						info.metadata["spherical_projection"] = proj_name
+							? proj_name
+							: "unknown";
+
+						// Convert 16.16 fixed-point to float degrees
+						auto to_deg = [](int32_t v){
+							return (double)v / 65536.0;
+						};
+						info.metadata["spherical_yaw"]   = std::to_string(to_deg(map->yaw));
+						info.metadata["spherical_pitch"] = std::to_string(to_deg(map->pitch));
+						info.metadata["spherical_roll"]  = std::to_string(to_deg(map->roll));
+					}
+				}
+				break;
+			}
 		}
 
 		// Init previous audio location to zero
@@ -698,6 +744,13 @@ void FFmpegReader::Close() {
 				}
 			}
 #endif // USE_HW_ACCEL
+			if (img_convert_ctx) {
+				sws_freeContext(img_convert_ctx);
+				img_convert_ctx = nullptr;
+			}
+			if (pFrameRGB_cached) {
+				AV_FREE_FRAME(&pFrameRGB_cached);
+			}
 		}
 
 		// Close the audio codec
@@ -706,6 +759,11 @@ void FFmpegReader::Close() {
 				avcodec_flush_buffers(aCodecCtx);
 			}
 			AV_FREE_CONTEXT(aCodecCtx);
+			if (avr_ctx) {
+				SWR_CLOSE(avr_ctx);
+				SWR_FREE(&avr_ctx);
+				avr_ctx = nullptr;
+			}
 		}
 
 		// Clear final cache
@@ -944,8 +1002,21 @@ void FFmpegReader::UpdateVideoInfo() {
 
 	// Get the # of video frames (if found in stream)
 	// Only set this 1 time (this method can be called multiple times)
-	if (pStream->nb_frames > 0 && info.video_length <= 0) {
+	if (pStream->nb_frames > 0 && info.video_length <= 0)
+	{
 		info.video_length = pStream->nb_frames;
+
+		// If the file format is animated GIF, override the video_length to be (duration * fps) rounded.
+		if (pFormatCtx && pFormatCtx->iformat && strcmp(pFormatCtx->iformat->name, "gif") == 0)
+		{
+			if (pStream->nb_frames > 1) {
+				// Animated gif (nb_frames does not take into delays and gaps)
+				info.video_length = round(info.duration * info.fps.ToDouble());
+			} else {
+				// Static non-animated gif (set a default duration)
+				info.duration = 10.0;
+			}
+		}
 	}
 
 	// No duration found in stream of file
@@ -1348,7 +1419,10 @@ bool FFmpegReader::GetAVFrame() {
 			frameFinished = 1;
 			packet_status.video_decoded++;
 
-			av_image_alloc(pFrame->data, pFrame->linesize, info.width, info.height, pCodecCtx->pix_fmt, 1);
+			// Allocate image (align 32 for simd)
+			if (AV_ALLOCATE_IMAGE(pFrame, pCodecCtx->pix_fmt, info.width, info.height) <= 0) {
+				throw OutOfMemory("Failed to allocate image buffer", path);
+			}
 			av_image_copy(pFrame->data, pFrame->linesize, (const uint8_t**)next_frame->data, next_frame->linesize,
 										pCodecCtx->pix_fmt, info.width, info.height);
 
@@ -1775,11 +1849,12 @@ void FFmpegReader::ProcessAudioPacket(int64_t requested_frame) {
 	audio_converted->nb_samples = audio_frame->nb_samples;
 	av_samples_alloc(audio_converted->data, audio_converted->linesize, info.channels, audio_frame->nb_samples, AV_SAMPLE_FMT_FLTP, 0);
 
-	SWRCONTEXT *avr = NULL;
+	SWRCONTEXT *avr = avr_ctx;
+	// setup resample context if needed
+	if (!avr) {
+		avr = SWR_ALLOC();
 
-	// setup resample context
-	avr = SWR_ALLOC();
-#if HAVE_CH_LAYOUT
+		#if HAVE_CH_LAYOUT
 	av_opt_set_chlayout(avr, "in_chlayout", &AV_GET_CODEC_ATTRIBUTES(aStream, aCodecCtx)->ch_layout, 0);
 	av_opt_set_chlayout(avr, "out_chlayout", &AV_GET_CODEC_ATTRIBUTES(aStream, aCodecCtx)->ch_layout, 0);
 #else
@@ -1793,6 +1868,8 @@ void FFmpegReader::ProcessAudioPacket(int64_t requested_frame) {
 	av_opt_set_int(avr, "in_sample_rate", info.sample_rate, 0);
 	av_opt_set_int(avr, "out_sample_rate", info.sample_rate, 0);
 	SWR_INIT(avr);
+	avr_ctx = avr;
+	}
 
 	// Convert audio samples
 	int nb_samples = SWR_CONVERT(avr,	// audio resample context
@@ -1802,11 +1879,6 @@ void FFmpegReader::ProcessAudioPacket(int64_t requested_frame) {
 							 audio_frame->data,			  // input data pointers
 							 audio_frame->linesize[0],	   // input plane size, in bytes (0 if unknown)
 							 audio_frame->nb_samples);	   // number of input samples to convert
-
-	// Deallocate resample buffer
-	SWR_CLOSE(avr);
-	SWR_FREE(&avr);
-	avr = NULL;
 
 	int64_t starting_frame_number = -1;
 	for (int channel_filter = 0; channel_filter < info.channels; channel_filter++) {

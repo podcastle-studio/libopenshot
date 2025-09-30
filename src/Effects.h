@@ -19,14 +19,18 @@
 #include "effects/Brightness.h"
 #include "effects/Caption.h"
 #include "effects/ChromaKey.h"
+#include "effects/ColorMap.h"
 #include "effects/ColorShift.h"
 #include "effects/Crop.h"
 #include "effects/Deinterlace.h"
 #include "effects/Hue.h"
+#include "effects/LensFlare.h"
 #include "effects/Mask.h"
 #include "effects/Negate.h"
 #include "effects/Pixelate.h"
 #include "effects/Saturation.h"
+#include "effects/Sharpen.h"
+#include "effects/SphericalProjection.h"
 #include "effects/Shift.h"
 #include "effects/Wave.h"
 
@@ -43,6 +47,7 @@
 
 /* OpenCV Effects */
 #ifdef USE_OPENCV_EFFECTS
+#include "effects/Outline.h"
 #include "effects/ObjectDetection.h"
 #include "effects/Tracker.h"
 #include "effects/Stabilizer.h"

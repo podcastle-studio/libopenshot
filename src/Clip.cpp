@@ -115,24 +115,39 @@ void Clip::init_reader_settings() {
 	}
 }
 
-// Init reader's rotation (if any)
 void Clip::init_reader_rotation() {
-	// Dont init rotation if clip has keyframes
+	// Don't init rotation if clip already has keyframes.
 	if (rotation.GetCount() > 0)
 		return;
 
-	// Init rotation
+	// Get rotation from metadata (if any)
+	float rotate_angle = 0.0f;
 	if (reader && reader->info.metadata.count("rotate") > 0) {
-		// Use reader metadata rotation (if any)
-		// This is typical with cell phone videos filmed in different orientations
 		try {
-			float rotate_metadata = strtof(reader->info.metadata["rotate"].c_str(), 0);
-			rotation = Keyframe(rotate_metadata);
-		} catch (const std::exception& e) {}
+			rotate_angle = strtof(reader->info.metadata["rotate"].c_str(), nullptr);
+		} catch (const std::exception& e) {
+			// Leave rotate_angle at default 0.0f
+		}
 	}
-	else
-		// Default no rotation
-		rotation = Keyframe(0.0);
+	rotation = Keyframe(rotate_angle);
+
+	// Compute uniform scale factors for rotated video.
+	// Assume reader->info.width and reader->info.height are the clip's natural dimensions.
+	float w = static_cast<float>(reader->info.width);
+	float h = static_cast<float>(reader->info.height);
+	float rad = rotate_angle * M_PI / 180.0f;
+
+	// Calculate the dimensions of the bounding box for the rotated clip.
+	float new_width  = fabs(w * cos(rad)) + fabs(h * sin(rad));
+	float new_height = fabs(w * sin(rad)) + fabs(h * cos(rad));
+
+	// To have the rotated clip appear the same size as the unrotated clip,
+	// compute a uniform scale factor S that brings the bounding box back to (w, h).
+	float uniform_scale = std::min(w / new_width, h / new_height);
+
+	// Set scale keyframes uniformly.
+	scale_x = Keyframe(uniform_scale);
+	scale_y = Keyframe(uniform_scale);
 }
 
 // Default Constructor for a clip
@@ -175,7 +190,7 @@ Clip::Clip(std::string path) : resampler(NULL), reader(NULL), allocated_reader(N
 
 	// Determine if common video formats (or image sequences)
 	if (ext=="avi" || ext=="mov" || ext=="mkv" ||  ext=="mpg" || ext=="mpeg" || ext=="mp3" || ext=="mp4" || ext=="mts" ||
-		ext=="ogg" || ext=="wav" || ext=="wmv" || ext=="webm" || ext=="vob" || path.find("%") != std::string::npos)
+		ext=="ogg" || ext=="wav" || ext=="wmv" || ext=="webm" || ext=="vob" || ext=="gif" || path.find("%") != std::string::npos)
 	{
 		try
 		{
@@ -518,8 +533,7 @@ std::shared_ptr<Frame> Clip::GetFrame(std::shared_ptr<openshot::Frame> backgroun
         if (!background_frame && !isOverlay) {
             // Create missing background_frame w/ transparent color (if needed)
             background_frame = std::make_shared<Frame>(actual_clip_frame_number, frame->GetWidth(), frame->GetHeight(),
-                                                       "#00000000",  frame->GetAudioSamplesCount(),
-                                                       frame->GetAudioChannelsCount());
+                                                       "#00000000",  frame->GetAudioSamplesCount(), frame->GetAudioChannelsCount());
         }
 
 		// Apply background canvas (i.e. flatten this image onto previous layer image)
@@ -922,7 +936,7 @@ std::string Clip::PropertiesJSON(int64_t requested_frame) const {
 	root["wave_color"]["red"] = add_property_json("Red", wave_color.red.GetValue(requested_frame), "float", "", &wave_color.red, 0, 255, false, requested_frame);
 	root["wave_color"]["blue"] = add_property_json("Blue", wave_color.blue.GetValue(requested_frame), "float", "", &wave_color.blue, 0, 255, false, requested_frame);
 	root["wave_color"]["green"] = add_property_json("Green", wave_color.green.GetValue(requested_frame), "float", "", &wave_color.green, 0, 255, false, requested_frame);
-
+	root["wave_color"]["alpha"] = add_property_json("Alpha", wave_color.alpha.GetValue(requested_frame), "float", "", &wave_color.alpha, 0, 255, false, requested_frame);
 
 	// Return formatted string
 	return root.toStyledString();
@@ -1501,7 +1515,7 @@ QTransform Clip::get_transform(std::shared_ptr<Frame> frame, int width, int heig
 	}
 
     // Get the parentTrackedObject properties
-    if (GetParentTrackedObject()) {
+    if (GetParentTrackedObject()){
         // Get the attached object's parent clip's properties
         Clip* parentClip = (Clip*) parentTrackedObject->ParentClip();
         if (parentClip)

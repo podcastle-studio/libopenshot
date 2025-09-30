@@ -99,6 +99,7 @@
 #include "Settings.h"
 #include "TimelineBase.h"
 #include "Timeline.h"
+#include "Qt/VideoCacheThread.h"
 #include "ZmqLogger.h"
 
 /* Move FFmpeg's RSHIFT to FF_RSHIFT, if present */
@@ -111,6 +112,9 @@
   #define RSHIFT(a, b) RB_RSHIFT(a, b)
 #endif
 %}
+
+// Prevent SWIG from ever generating a wrapper for juce::Thread’s constructor (or run())
+%ignore juce::Thread::Thread;
 
 #ifdef USE_IMAGEMAGICK
 	%{
@@ -190,6 +194,7 @@
 %include "RendererBase.h"
 %include "Settings.h"
 %include "TimelineBase.h"
+%include "Qt/VideoCacheThread.h"
 %include "Timeline.h"
 %include "ZmqLogger.h"
 
@@ -209,6 +214,7 @@
 %include "effects/Crop.h"
 %include "effects/Deinterlace.h"
 %include "effects/Hue.h"
+%include "effects/LensFlare.h"
 %include "effects/Mask.h"
 %include "effects/Negate.h"
 %include "effects/Pixelate.h"

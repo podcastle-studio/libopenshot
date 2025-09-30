@@ -40,6 +40,9 @@ EffectBase* EffectInfo::CreateEffect(std::string effect_type) {
 	else if (effect_type == "ChromaKey")
 		return new ChromaKey();
 
+	else if (effect_type == "ColorMap")
+		return new ColorMap();
+
 	else if (effect_type == "ColorShift")
 		return new ColorShift();
 
@@ -51,6 +54,9 @@ EffectBase* EffectInfo::CreateEffect(std::string effect_type) {
 
 	else if (effect_type == "Hue")
 		return new Hue();
+
+	else if (effect_type == "LensFlare")
+		return new LensFlare();
 
 	else if (effect_type == "Mask")
 		return new Mask();
@@ -64,8 +70,14 @@ EffectBase* EffectInfo::CreateEffect(std::string effect_type) {
 	else if (effect_type == "Saturation")
 		return new Saturation();
 
+	else if (effect_type == "Sharpen")
+		return new Sharpen();
+
 	else if (effect_type == "Shift")
 		return new Shift();
+
+	else if (effect_type == "SphericalProjection")
+		return new SphericalProjection();
 
 	else if (effect_type == "Wave")
 		return new Wave();
@@ -97,7 +109,10 @@ EffectBase* EffectInfo::CreateEffect(std::string effect_type) {
 	else if(effect_type == "Whisperization")
 		return new Whisperization();
 
+
 	#ifdef USE_OPENCV_EFFECTS
+	else if (effect_type == "Outline")
+		return new Outline();
 	else if(effect_type == "Stabilizer")
 		return new Stabilizer();
 
@@ -123,15 +138,19 @@ Json::Value EffectInfo::JsonValue() {
 	root.append(Brightness().JsonInfo());
 	root.append(Caption().JsonInfo());
 	root.append(ChromaKey().JsonInfo());
+	root.append(ColorMap().JsonInfo());
 	root.append(ColorShift().JsonInfo());
 	root.append(Crop().JsonInfo());
 	root.append(Deinterlace().JsonInfo());
 	root.append(Hue().JsonInfo());
+	root.append(LensFlare().JsonInfo());
 	root.append(Mask().JsonInfo());
 	root.append(Negate().JsonInfo());
 	root.append(Pixelate().JsonInfo());
 	root.append(Saturation().JsonInfo());
+	root.append(Sharpen().JsonInfo());
 	root.append(Shift().JsonInfo());
+	root.append(SphericalProjection().JsonInfo());
 	root.append(Wave().JsonInfo());
 	/* Audio */
 	root.append(Noise().JsonInfo());
@@ -144,8 +163,10 @@ Json::Value EffectInfo::JsonValue() {
 	root.append(Robotization().JsonInfo());
 	root.append(Whisperization().JsonInfo());
 
+
 	#ifdef USE_OPENCV_EFFECTS
-	root.append(Stabilizer().JsonInfo());
+	root.append(Outline().JsonInfo());
+	root.append(Stabilizer().JsonInfo());	
 	root.append(Tracker().JsonInfo());
 	root.append(ObjectDetection().JsonInfo());
 	#endif

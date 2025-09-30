@@ -40,10 +40,16 @@ set(OPENSHOT_TESTS
   QtImageReader
   ReaderBase
   Settings
+  SphericalMetadata
   Timeline
+  VideoCacheThread
   # Effects
+  ColorMap
   ChromaKey
   Crop
+  LensFlare
+  Sharpen
+  SphericalEffect
 )
 
 # ImageMagick related test files
@@ -58,6 +64,7 @@ if($CACHE{HAVE_OPENCV})
   list(APPEND OPENSHOT_TESTS
     CVTracker
     CVStabilizer
+    CVOutline
     # CVObjectDetection
   )
 endif()

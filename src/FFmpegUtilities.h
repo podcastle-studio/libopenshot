@@ -39,6 +39,7 @@
 extern "C" {
     #include <libavcodec/avcodec.h>
     #include <libavformat/avformat.h>
+    #include <libavutil/display.h>
 
 #if (LIBAVFORMAT_VERSION_MAJOR >= 57)
     #include <libavutil/hwcontext.h> //PM
@@ -65,6 +66,10 @@ extern "C" {
     // channel header refactored
 #if LIBAVFORMAT_VERSION_MAJOR >= 54
     #include <libavutil/channel_layout.h>
+#endif
+
+#if LIBAVUTIL_VERSION_INT >= AV_VERSION_INT(55, 0, 0)
+    #include <libavutil/spherical.h>
 #endif
 
 #if IS_FFMPEG_3_2
@@ -169,7 +174,7 @@ inline static bool ffmpeg_has_alpha(PixelFormat pix_fmt, AVStream* stream = null
     #define MY_INPUT_BUFFER_PADDING_SIZE AV_INPUT_BUFFER_PADDING_SIZE
     #define AV_ALLOCATE_FRAME() av_frame_alloc()
     #define AV_ALLOCATE_IMAGE(av_frame, pix_fmt, width, height) \
-            av_image_alloc(av_frame->data, av_frame->linesize, width, height, pix_fmt, 1)
+            av_image_alloc(av_frame->data, av_frame->linesize, width, height, pix_fmt, 32)
     #define AV_RESET_FRAME(av_frame) av_frame_unref(av_frame)
     #define AV_FREE_FRAME(av_frame) av_frame_free(av_frame)
     #define AV_FREE_PACKET(av_packet) av_packet_unref(av_packet)
@@ -207,7 +212,7 @@ inline static bool ffmpeg_has_alpha(PixelFormat pix_fmt, AVStream* stream = null
     #define MY_INPUT_BUFFER_PADDING_SIZE FF_INPUT_BUFFER_PADDING_SIZE
     #define AV_ALLOCATE_FRAME() av_frame_alloc()
     #define AV_ALLOCATE_IMAGE(av_frame, pix_fmt, width, height) \
-            av_image_alloc(av_frame->data, av_frame->linesize, width, height, pix_fmt, 1)
+            av_image_alloc(av_frame->data, av_frame->linesize, width, height, pix_fmt, 32)
     #define AV_RESET_FRAME(av_frame) av_frame_unref(av_frame)
     #define AV_FREE_FRAME(av_frame) av_frame_free(av_frame)
     #define AV_FREE_PACKET(av_packet) av_packet_unref(av_packet)
@@ -303,5 +308,23 @@ inline static bool ffmpeg_has_alpha(PixelFormat pix_fmt, AVStream* stream = null
     #define AV_COPY_PARAMS_FROM_CONTEXT(av_stream, av_codec)
 #endif
 
+// Aligned memory allocation helpers (cross-platform)
+#if defined(_WIN32)
+#include <malloc.h>
+#endif
+
+inline static void* aligned_malloc(size_t size, size_t alignment = 32)
+{
+#if defined(_WIN32)
+    return _aligned_malloc(size, alignment);
+#elif defined(__APPLE__) || defined(__linux__)
+    void* ptr = nullptr;
+    if (posix_memalign(&ptr, alignment, size) != 0)
+        return nullptr;
+    return ptr;
+#else
+#error "aligned_malloc not implemented on this platform"
+#endif
+}
 
 #endif  // OPENSHOT_FFMPEG_UTILITIES_H

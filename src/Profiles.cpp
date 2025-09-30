@@ -30,6 +30,7 @@ Profile::Profile() {
 	info.display_ratio.num = 0;
 	info.display_ratio.den = 0;
 	info.interlaced_frame = false;
+	info.spherical = false; // Default to non-spherical (regular) video
 }
 
 // @brief Constructor for Profile.
@@ -38,8 +39,19 @@ Profile::Profile(std::string path) {
 
 	bool read_file = false;
 
-	// Call default constructor
-	Profile();
+	// Initialize all values to defaults (same as default constructor)
+	info.description = "";
+	info.height = 0;
+	info.width = 0;
+	info.pixel_format = 0;
+	info.fps.num = 0;
+	info.fps.den = 0;
+	info.pixel_ratio.num = 0;
+	info.pixel_ratio.den = 0;
+	info.display_ratio.num = 0;
+	info.display_ratio.den = 0;
+	info.interlaced_frame = false;
+	info.spherical = false;  // Default to non-spherical (regular) video
 
 	try
 	{
@@ -65,44 +77,48 @@ Profile::Profile(std::string path) {
 					info.description = value;
 				}
 				else if (setting == "frame_rate_num") {
-					std::stringstream(value) >> value_int;
+					value_int = std::stoi(value);
 					info.fps.num = value_int;
 				}
 				else if (setting == "frame_rate_den") {
-					std::stringstream(value) >> value_int;
+					value_int = std::stoi(value);
 					info.fps.den = value_int;
 				}
 				else if (setting == "width") {
-					std::stringstream(value) >> value_int;
+					value_int = std::stoi(value);
 					info.width = value_int;
 				}
 				else if (setting == "height") {
-					std::stringstream(value) >> value_int;
+					value_int = std::stoi(value);
 					info.height = value_int;
 				}
 				else if (setting == "progressive") {
-					std::stringstream(value) >> value_int;
+					value_int = std::stoi(value);
 					info.interlaced_frame = !(bool)value_int;
 				}
 				else if (setting == "sample_aspect_num") {
-					std::stringstream(value) >> value_int;
+					value_int = std::stoi(value);
 					info.pixel_ratio.num = value_int;
 				}
 				else if (setting == "sample_aspect_den") {
-					std::stringstream(value) >> value_int;
+					value_int = std::stoi(value);
 					info.pixel_ratio.den = value_int;
 				}
 				else if (setting == "display_aspect_num") {
-					std::stringstream(value) >> value_int;
+					value_int = std::stoi(value);
 					info.display_ratio.num = value_int;
 				}
 				else if (setting == "display_aspect_den") {
-					std::stringstream(value) >> value_int;
+					value_int = std::stoi(value);
 					info.display_ratio.den = value_int;
 				}
 				else if (setting == "colorspace") {
-					std::stringstream(value) >> value_int;
+					value_int = std::stoi(value);
 					info.pixel_format = value_int;
+				}
+				else if (setting == "spherical") {
+					value_int = std::stoi(value);
+					info.spherical = (bool)value_int;
 				}
 			}
 			read_file = true;
@@ -125,76 +141,122 @@ Profile::Profile(std::string path) {
 // Return a formatted FPS
 std::string Profile::formattedFPS(bool include_decimal) {
 	// Format FPS to use 2 decimals (if needed)
-	float fps = info.fps.ToFloat();
-	std::stringstream fps_string;
-	if (info.fps.den == 1) {
-		// For example: 24.0 will become 24
-		fps_string << std::fixed << std::setprecision(0) << fps;
-	} else {
-		// For example: 29.97002997 will become 29.97
-		fps_string << std::fixed << std::setprecision(2) << fps;
-		// Remove decimal place using QString (for convenience)
-		if (!include_decimal) {
-			QString fps_qstring = QString::fromStdString(fps_string.str());
-			fps_qstring.replace(".", "");
-			fps_string.str(fps_qstring.toStdString());
+	if (!include_decimal) {
+		int fps_code = 0;
+
+		if (info.fps.den == 1) {
+			// Exact integer FPS (e.g. 24 → 0024)
+			fps_code = info.fps.num;
+		} else {
+			// Fractional FPS, scale by 100 (e.g. 29.97 → 2997)
+			fps_code = static_cast<int>((info.fps.num * 100.0) / info.fps.den + 0.5);
 		}
+
+		char buffer[5];
+		std::snprintf(buffer, sizeof(buffer), "%04d", fps_code);
+		return std::string(buffer);
 	}
-	return fps_string.str();
+
+	// Human-readable version for display
+	float fps = info.fps.ToFloat();
+
+	if (std::fabs(fps - std::round(fps)) < 0.01) {
+		return std::to_string(static_cast<int>(std::round(fps)));
+	}
+
+	char buffer[16];
+	std::snprintf(buffer, sizeof(buffer), "%.2f", fps);
+	return std::string(buffer);
 }
 
 // Return a unique key of this profile (01920x1080i2997_16-09)
 std::string Profile::Key() {
-	std::stringstream output;
-	std::string progressive_str = "p";
-	if (info.interlaced_frame) {
-		progressive_str = "i";
-	}
-	std::string fps_string = formattedFPS(false);
-	output << std::setfill('0') << std::setw(5) << info.width << std::setfill('\0') << "x";
-	output << std::setfill('0') << std::setw(4) << info.height << std::setfill('\0') << progressive_str;
-	output << std::setfill('0') << std::setw(4) << fps_string << std::setfill('\0') << "_";
-	output << std::setfill('0') << std::setw(2) << info.display_ratio.num << std::setfill('\0') << "-";
-	output << std::setfill('0') << std::setw(2) << info.display_ratio.den << std::setfill('\0');
-	return output.str();
+	std::string raw_fps = formattedFPS(false);
+
+	// Pad FPS string to 4 characters with leading zeros
+	std::string fps_padded = std::string(4 - raw_fps.length(), '0') + raw_fps;
+
+	char buffer[64];
+	std::snprintf(buffer, sizeof(buffer), "%05dx%04d%s%s_%02d-%02d",
+		info.width,
+		info.height,
+		info.interlaced_frame ? "i" : "p",
+		fps_padded.c_str(),
+		info.display_ratio.num,
+		info.display_ratio.den
+	);
+
+	std::string result(buffer);
+	if (info.spherical)
+		result += "_360";
+	return result;
 }
 
 // Return the name of this profile (1920x1080p29.97)
 std::string Profile::ShortName() {
-	std::stringstream output;
-	std::string progressive_str = "p";
-	if (info.interlaced_frame) {
-		progressive_str = "i";
-	}
+	std::string progressive_str = info.interlaced_frame ? "i" : "p";
 	std::string fps_string = formattedFPS(true);
-	output << info.width << "x" << info.height << progressive_str << fps_string;
-	return output.str();
+	std::string result = std::to_string(info.width) + "x" + std::to_string(info.height) + progressive_str + fps_string;
+
+	if (info.spherical)
+		result += " 360°";
+	return result;
 }
 
 // Return a longer format name (1920x1080p @ 29.97 fps (16:9))
 std::string Profile::LongName() {
-	std::stringstream output;
-	std::string progressive_str = "p";
-	if (info.interlaced_frame) {
-		progressive_str = "i";
-	}
+	std::string progressive_str = info.interlaced_frame ? "i" : "p";
 	std::string fps_string = formattedFPS(true);
-	output << info.width << "x" << info.height << progressive_str << " @ " << fps_string
-		   << " fps (" << info.display_ratio.num << ":" << info.display_ratio.den << ")";
-	return output.str();
+	std::string result = std::to_string(info.width) + "x" + std::to_string(info.height) +
+		progressive_str + " @ " + fps_string +
+		" fps (" + std::to_string(info.display_ratio.num) + ":" +
+		std::to_string(info.display_ratio.den) + ")";
+
+	if (info.spherical)
+		result += " 360°";
+	return result;
 }
 
 // Return a longer format name (1920x1080p @ 29.97 fps (16:9) HD 1080i 29.97 fps)
 std::string Profile::LongNameWithDesc() {
-	std::stringstream output;
-	std::string progressive_str = "p";
-	if (info.interlaced_frame) {
-		progressive_str = "i";
-	}
+	std::string progressive_str = info.interlaced_frame ? "i" : "p";
 	std::string fps_string = formattedFPS(true);
-	output << info.width << "x" << info.height << progressive_str << " @ " << fps_string
-		   << " fps (" << info.display_ratio.num << ":" << info.display_ratio.den << ") " << info.description;
-	return output.str();
+
+	std::string result = std::to_string(info.width) + "x" + std::to_string(info.height) +
+		progressive_str + " @ " + fps_string +
+		" fps (" + std::to_string(info.display_ratio.num) + ":" +
+		std::to_string(info.display_ratio.den) + ")";
+
+	if (info.spherical)
+		result += " 360°";
+
+	if (!info.description.empty())
+		result += " " + info.description;
+
+	return result;
+}
+
+// Save profile to file system
+void Profile::Save(const std::string& file_path) const {
+	std::ofstream file(file_path);
+	if (!file.is_open()) {
+		throw std::ios_base::failure("Failed to save profile.");
+	}
+
+	file << "description=" << info.description << "\n";
+	file << "frame_rate_num=" << info.fps.num << "\n";
+	file << "frame_rate_den=" << info.fps.den << "\n";
+	file << "width=" << info.width << "\n";
+	file << "height=" << info.height << "\n";
+	file << "progressive=" << !info.interlaced_frame << "\n";  // Correct the boolean value for progressive/interlaced
+	file << "sample_aspect_num=" << info.pixel_ratio.num << "\n";
+	file << "sample_aspect_den=" << info.pixel_ratio.den << "\n";
+	file << "display_aspect_num=" << info.display_ratio.num << "\n";
+	file << "display_aspect_den=" << info.display_ratio.den << "\n";
+	file << "pixel_format=" << info.pixel_format << "\n";
+	file << "spherical=" << info.spherical;
+
+	file.close();
 }
 
 // Save profile to file system
@@ -245,6 +307,7 @@ Json::Value Profile::JsonValue() const {
 	root["display_ratio"]["num"] = info.display_ratio.num;
 	root["display_ratio"]["den"] = info.display_ratio.den;
 	root["progressive"] = !info.interlaced_frame;
+	root["spherical"] = info.spherical;
 
 	// return JsonValue
 	return root;
@@ -294,5 +357,7 @@ void Profile::SetJsonValue(const Json::Value root) {
 	}
 	if (!root["progressive"].isNull())
 		info.interlaced_frame = !root["progressive"].asBool();
+	if (!root["spherical"].isNull())
+		info.spherical = root["spherical"].asBool();
 
 }

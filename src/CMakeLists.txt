@@ -105,6 +105,7 @@ set(OPENSHOT_CV_SOURCES
   effects/Stabilizer.cpp
   effects/Tracker.cpp
   effects/ObjectDetection.cpp
+  effects/Outline.cpp
   ./sort_filter/sort.cpp
   ./sort_filter/Hungarian.cpp
   ./sort_filter/KalmanTracker.cpp)
@@ -129,15 +130,19 @@ set(EFFECTS_SOURCES
   effects/Brightness.cpp
   effects/Caption.cpp
   effects/ChromaKey.cpp
+  effects/ColorMap.cpp
   effects/ColorShift.cpp
   effects/Crop.cpp
   effects/Deinterlace.cpp
   effects/Hue.cpp
+  effects/LensFlare.cpp
   effects/Mask.cpp
   effects/Negate.cpp
   effects/Pixelate.cpp
   effects/Saturation.cpp
+  effects/Sharpen.cpp
   effects/Shift.cpp
+  effects/SphericalProjection.cpp
   effects/Wave.cpp
   audio_effects/STFT.cpp
   audio_effects/Noise.cpp

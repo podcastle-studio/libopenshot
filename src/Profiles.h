@@ -15,7 +15,6 @@
 
 #include <iostream>
 #include <string>
-#include <sstream>
 #include <math.h>
 #include <fstream>
 #include <QtCore/QString>
@@ -45,7 +44,8 @@ namespace openshot
 		Fraction fps;		///< Frames per second, as a fraction (i.e. 24/1 = 24 fps)
 		Fraction pixel_ratio;	///< The pixel ratio of the video stream as a fraction (i.e. some pixels are not square)
 		Fraction display_ratio;	///< The ratio of width to height of the video stream (i.e. 640x480 has a ratio of 4/3)
-		bool interlaced_frame;	// Are the contents of this frame interlaced
+		bool interlaced_frame;	///< Are the contents of this frame interlaced
+		bool spherical;		///< Is this video a spherical/360° video
 	};
 
 	/**
@@ -127,8 +127,8 @@ namespace openshot
 		/// Equality operator (compare profile objects)
 		friend bool operator==(const Profile& l, const Profile& r)
 		{
-			return std::tie(l.info.width, l.info.height, l.info.fps.num, l.info.fps.den, l.info.display_ratio.num, l.info.display_ratio.den, l.info.interlaced_frame)
-				   == std::tie(r.info.width, r.info.height, r.info.fps.num, r.info.fps.den, r.info.display_ratio.num, r.info.display_ratio.den, r.info.interlaced_frame);
+			return std::tie(l.info.width, l.info.height, l.info.fps.num, l.info.fps.den, l.info.display_ratio.num, l.info.display_ratio.den, l.info.interlaced_frame, l.info.spherical)
+				   == std::tie(r.info.width, r.info.height, r.info.fps.num, r.info.fps.den, r.info.display_ratio.num, r.info.display_ratio.den, r.info.interlaced_frame, r.info.spherical);
 		}
 
 	public:

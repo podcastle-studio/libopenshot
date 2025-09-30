@@ -96,9 +96,13 @@
 #include "Settings.h"
 #include "TimelineBase.h"
 #include "Timeline.h"
+#include "Qt/VideoCacheThread.h"
 #include "ZmqLogger.h"
 
 %}
+
+// Prevent SWIG from ever generating a wrapper for juce::Thread’s constructor (or run())
+%ignore juce::Thread::Thread;
 
 #ifdef USE_IMAGEMAGICK
     %{
@@ -114,6 +118,7 @@
         #include "effects/Stabilizer.h"
         #include "effects/Tracker.h"
         #include "effects/ObjectDetection.h"
+        #include "effects/Outline.h"
         #include "TrackedObjectBase.h"
         #include "TrackedObjectBBox.h"
     %}
@@ -316,6 +321,7 @@
 %include "RendererBase.h"
 %include "Settings.h"
 %include "TimelineBase.h"
+%include "Qt/VideoCacheThread.h"
 %include "Timeline.h"
 %include "ZmqLogger.h"
 
@@ -337,18 +343,23 @@
 %include "effects/Brightness.h"
 %include "effects/Caption.h"
 %include "effects/ChromaKey.h"
+%include "effects/ColorMap.h"
 %include "effects/ColorShift.h"
 %include "effects/Crop.h"
 %include "effects/Deinterlace.h"
 %include "effects/Hue.h"
+%include "effects/LensFlare.h"
 %include "effects/Mask.h"
 %include "effects/Negate.h"
 %include "effects/Pixelate.h"
 %include "effects/Saturation.h"
+%include "effects/Sharpen.h"
 %include "effects/Shift.h"
+%include "effects/SphericalProjection.cpp"
 %include "effects/Wave.h"
 #ifdef USE_OPENCV_EFFECTS
     %include "effects/Stabilizer.h"
     %include "effects/Tracker.h"
     %include "effects/ObjectDetection.h"
+    %include "effects/Outline.h"
 #endif

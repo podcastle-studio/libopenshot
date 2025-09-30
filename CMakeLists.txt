@@ -24,8 +24,9 @@ For more information, please visit <http://www.openshot.org/>.
 set(CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake/Modules")
 
 ################ PROJECT VERSION ####################
-set(PROJECT_VERSION_FULL "0.3.3")
-set(PROJECT_SO_VERSION 26)
+
+set(PROJECT_VERSION_FULL "0.4.0")
+set(PROJECT_SO_VERSION 27)
 
 # Remove the dash and anything following, to get the #.#.# version for project()
 STRING(REGEX REPLACE "\-.*$" "" VERSION_NUM "${PROJECT_VERSION_FULL}")
@@ -258,7 +259,7 @@ if (ENABLE_COVERAGE AND DEFINED UNIT_TEST_TARGETS)
   )
   setup_target_for_coverage_lcov(
     NAME coverage
-    LCOV_ARGS "--no-external"
+    LCOV_ARGS ""
     EXECUTABLE ctest
     EXECUTABLE_ARGS ${CTEST_OPTIONS}
     DEPENDENCIES openshot ${UNIT_TEST_TARGETS}
@@ -267,7 +268,7 @@ if (ENABLE_COVERAGE AND DEFINED UNIT_TEST_TARGETS)
   foreach(_t IN LISTS UNIT_TEST_NAMES)
     setup_target_for_coverage_lcov(
       NAME "${_t}_coverage"
-      LCOV_ARGS "--no-external"
+      LCOV_ARGS ""
       EXECUTABLE ctest
       EXECUTABLE_ARGS ${CTEST_OPTIONS} -L "^${_t}$"
       DEPENDENCIES openshot openshot-${_t}-test
