@@ -48,7 +48,7 @@ FrameMapper::FrameMapper(ReaderBase *reader, Fraction target, PulldownType targe
 	field_toggle = true;
 
 	// Adjust cache size based on size of frame and audio
-	final_cache.SetMaxBytesFromInfo(/* max_concurrent_frames */ 1, info.width, info.height, info.sample_rate, info.channels);
+	final_cache.SetMaxBytesFromInfo(Settings::Instance()->DISABLE_CACHING ? 1 : OPEN_MP_NUM_PROCESSORS, info.width, info.height, info.sample_rate, info.channels);
 }
 
 // Destructor
@@ -818,7 +818,7 @@ void FrameMapper::ChangeMapping(Fraction target_fps, PulldownType target_pulldow
 	final_cache.Clear();
 
 	// Adjust cache size based on size of frame and audio
-	final_cache.SetMaxBytesFromInfo(/* max_concurrent_frames */ 1, info.width, info.height, info.sample_rate, info.channels);
+	final_cache.SetMaxBytesFromInfo(Settings::Instance()->DISABLE_CACHING ? 1 : OPEN_MP_NUM_PROCESSORS, info.width, info.height, info.sample_rate, info.channels);
 
 	// Deallocate resample buffer
 	if (avr) {

@@ -251,7 +251,7 @@ void CacheMemory::CleanUp()
 		// Create a scoped lock, to protect the cache from multiple threads
 		const std::lock_guard<std::recursive_mutex> lock(*cacheMutex);
 
-		auto cleanupFramesNum = openshot::Settings::Instance()->DISABLE_CACHING ? 1 : 20;
+		auto cleanupFramesNum = Settings::Instance()->DISABLE_CACHING ? 1 : 20;
 		while (GetBytes() > max_bytes && frame_numbers.size() > cleanupFramesNum)
 		{
 			// Get the oldest frame number.
