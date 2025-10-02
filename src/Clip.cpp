@@ -546,7 +546,6 @@ std::shared_ptr<Frame> Clip::GetFrame(std::shared_ptr<openshot::Frame> backgroun
 	else
 		// Throw error if reader not initialized
 		throw ReaderClosed("No Reader has been initialized for this Clip.  Call Reader(*reader) before calling this method.");
-
 }
 
 // Look up an effect by ID
