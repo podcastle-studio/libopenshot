@@ -267,9 +267,13 @@ QSize QtImageReader::calculate_max_size() {
             // float max_scale_y = parent->scale_y.GetMaxPoint().co.Y;
             // max_width = info.width * max_scale_x * preview_ratio;
             // max_height = info.height * max_scale_y * preview_ratio;
-
-            max_width = info.width;
-            max_height = info.height;
+            if (parent->ParentTimeline()) {
+                Timeline *t = (Timeline *) parent->ParentTimeline();
+                max_width = t->preview_width;
+                max_height = t->preview_height;
+            }
+            // max_width = info.width;
+            // max_height = info.height;
         }
     }
 

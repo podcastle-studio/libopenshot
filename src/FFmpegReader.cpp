@@ -1592,16 +1592,11 @@ void FFmpegReader::ProcessVideoPacket(int64_t requested_frame) {
                 }
 
             } else {
-                // Equivalent unscaled size (preview ratio)
-                float preview_ratio = 1.0f;
-                if (parent->ParentTimeline()) {
-                    Timeline *t = (Timeline *) parent->ParentTimeline();
-                    preview_ratio = t->preview_width / float(t->info.width);
-                }
-                const float sx = parent->scale_x.GetMaxPoint().co.Y;
-                const float sy = parent->scale_y.GetMaxPoint().co.Y;
-                max_w = int(src_w * sx * preview_ratio);
-                max_h = int(src_h * sy * preview_ratio);
+            	// Don't use scale_x/scale_y for prescaling decision
+            	if (parent->ParentTimeline()) {
+            		max_w = parent->ParentTimeline()->preview_width;
+            		max_h = parent->ParentTimeline()->preview_height;
+            	}
             }
         }
 
@@ -2337,9 +2332,9 @@ void FFmpegReader::CheckWorkingFrames(int64_t requested_frame) {
 			// OR video stream is too far behind, missing, or end-of-file
 			is_video_ready = true;
 			ZmqLogger::Instance()->AppendDebugMethod("FFmpegReader::CheckWorkingFrames (video ready)",
-											"frame_number", f->number, 
-											"frame_pts_seconds", frame_pts_seconds, 
-											"video_pts_seconds", video_pts_seconds, 
+											"frame_number", f->number,
+											"frame_pts_seconds", frame_pts_seconds,
+											"video_pts_seconds", video_pts_seconds,
 											"recent_pts_diff", recent_pts_diff);
 			if (info.has_video && !f->has_image_data) {
 				// Frame has no image data (copy from previous frame)
@@ -2352,7 +2347,7 @@ void FFmpegReader::CheckWorkingFrames(int64_t requested_frame) {
 						break;
 					}
 				}
-				
+
 				if (last_video_frame && !f->has_image_data) {
 					// Copy image from last decoded frame
 					f->AddImage(std::make_shared<QImage>(last_video_frame->GetImage()->copy()));
@@ -2371,10 +2366,10 @@ void FFmpegReader::CheckWorkingFrames(int64_t requested_frame) {
 			// Adding a bit of margin here, to allow for partial audio packets
 			is_audio_ready = true;
 			ZmqLogger::Instance()->AppendDebugMethod("FFmpegReader::CheckWorkingFrames (audio ready)",
-											"frame_number", f->number, 
-											"frame_pts_seconds", frame_pts_seconds, 
-											"audio_pts_seconds", audio_pts_seconds, 
-											"audio_pts_diff", audio_pts_diff, 
+											"frame_number", f->number,
+											"frame_pts_seconds", frame_pts_seconds,
+											"audio_pts_seconds", audio_pts_seconds,
+											"audio_pts_diff", audio_pts_diff,
 											"recent_pts_diff", recent_pts_diff);
 		}
 		bool is_seek_trash = IsPartialFrame(f->number);
@@ -2385,9 +2380,9 @@ void FFmpegReader::CheckWorkingFrames(int64_t requested_frame) {
 
 		// Debug output
 		ZmqLogger::Instance()->AppendDebugMethod("FFmpegReader::CheckWorkingFrames",
-										   "frame_number", f->number, 
-										   "is_video_ready", is_video_ready, 
-										   "is_audio_ready", is_audio_ready, 
+										   "frame_number", f->number,
+										   "is_video_ready", is_video_ready,
+										   "is_audio_ready", is_audio_ready,
 										   "video_eof", packet_status.video_eof,
 										   "audio_eof", packet_status.audio_eof,
 										   "end_of_file", packet_status.end_of_file);
@@ -2395,12 +2390,12 @@ void FFmpegReader::CheckWorkingFrames(int64_t requested_frame) {
 		// Check if working frame is final
 		if ((!packet_status.end_of_file && is_video_ready && is_audio_ready) || packet_status.end_of_file || is_seek_trash) {
 			// Debug output
-			ZmqLogger::Instance()->AppendDebugMethod("FFmpegReader::CheckWorkingFrames (mark frame as final)", 
-											"requested_frame", requested_frame, 
-											"f->number", f->number, 
-											"is_seek_trash", is_seek_trash, 
-											"Working Cache Count", working_cache.Count(), 
-											"Final Cache Count", final_cache.Count(), 
+			ZmqLogger::Instance()->AppendDebugMethod("FFmpegReader::CheckWorkingFrames (mark frame as final)",
+											"requested_frame", requested_frame,
+											"f->number", f->number,
+											"is_seek_trash", is_seek_trash,
+											"Working Cache Count", working_cache.Count(),
+											"Final Cache Count", final_cache.Count(),
 											"end_of_file", packet_status.end_of_file);
 
 			if (!is_seek_trash) {
