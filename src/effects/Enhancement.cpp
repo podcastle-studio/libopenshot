@@ -109,28 +109,35 @@ void applyClarityPass(QImage &img, double strength)
     QImage orig = img.copy();
     const int w = img.width(), h = img.height();
 
+    img.bits(); // <-- ensure detachment before multi-threaded writes
+
+    #pragma omp parallel for schedule(static)
     for (int y = 1; y < h - 1; ++y) {
         QRgb *out = reinterpret_cast<QRgb *>(img.scanLine(y));
+
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC ivdep
+#endif
         for (int x = 1; x < w - 1; ++x) {
-            Pixel base = fetchSRGB(orig.pixel(x, y));
+            const QRgb pc = orig.pixel(x, y);                // cache
+            Pixel base = fetchSRGB(pc);
             Pixel blur = blur3x3(orig, x, y);
 
-            // Direct shader implementation: color += (baseColor - blurColor) * (uClarity * 3.0)
             Pixel color = {
                 base.r + (base.r - blur.r) * k,
                 base.g + (base.g - blur.g) * k,
                 base.b + (base.b - blur.b) * k
             };
 
-            // Clamp to [0,1] as shader does
             color.r = std::max(0.0, std::min(1.0, color.r));
             color.g = std::max(0.0, std::min(1.0, color.g));
             color.b = std::max(0.0, std::min(1.0, color.b));
 
+            const int a = qAlpha(pc); // reuse cached pixel
             out[x] = qRgba(clamp255(color.r * 255.0),
                            clamp255(color.g * 255.0),
                            clamp255(color.b * 255.0),
-                           qAlpha(orig.pixel(x, y)));
+                           a);
         }
     }
 }
@@ -143,12 +150,21 @@ void applySharpnessPass(QImage &img, double value)
     QImage orig = img.copy();
     const int w = img.width(), h = img.height();
 
+    img.bits(); // <-- ensure detachment
+
     if (value > 0.0) {                       // sharpen
         const double k = value * 3.0;        // 0-3
+
+        #pragma omp parallel for schedule(static)
         for (int y = 1; y < h - 1; ++y) {
             QRgb *out = reinterpret_cast<QRgb *>(img.scanLine(y));
+
+            #if defined(__GNUC__) || defined(__clang__)
+            #pragma GCC ivdep
+            #endif
             for (int x = 1; x < w - 1; ++x) {
-                Pixel base = fetchSRGB(orig.pixel(x, y));
+                const QRgb pc = orig.pixel(x, y);            // cache
+                Pixel base = fetchSRGB(pc);
                 Pixel edge = highPass4(orig, x, y);
 
                 // Direct shader implementation: color += edge * uSharpness * 3.0
@@ -163,57 +179,75 @@ void applySharpnessPass(QImage &img, double value)
                 color.g = std::max(0.0, std::min(1.0, color.g));
                 color.b = std::max(0.0, std::min(1.0, color.b));
 
+                const int a = qAlpha(pc); // reuse cached pixel
                 out[x] = qRgba(clamp255(color.r * 255.0),
                                clamp255(color.g * 255.0),
                                clamp255(color.b * 255.0),
-                               qAlpha(orig.pixel(x, y)));
+                               a);
             }
         }
-    }
-    else {                                   // blur (mix)
-        const double t = -value;             // 0 … 1
+    } else {                                 // blur (mix)
+        const double t = -value;
+
+        #pragma omp parallel for schedule(static)
         for (int y = 1; y < h - 1; ++y) {
             QRgb *out = reinterpret_cast<QRgb *>(img.scanLine(y));
+
+            #if defined(__GNUC__) || defined(__clang__)
+            #pragma GCC ivdep
+            #endif
             for (int x = 1; x < w - 1; ++x) {
-                Pixel base = fetchSRGB(orig.pixel(x, y));
+                const QRgb pc = orig.pixel(x, y);            // cache
+                Pixel base = fetchSRGB(pc);
                 Pixel blur = blur3x3(orig, x, y);
 
-                // Shader: color = mix(color, blurColor, -uSharpness)
                 Pixel color = mix(base, blur, t);
 
+                const int a = qAlpha(pc);                    // reuse cached pixel
                 out[x] = qRgba(clamp255(color.r * 255.0),
                                clamp255(color.g * 255.0),
                                clamp255(color.b * 255.0),
-                               qAlpha(orig.pixel(x, y)));
+                               a);
             }
         }
     }
 }
 
-// ----- Film-grain – matches shader exactly -----
+// ----- Film-grain ? matches shader exactly -----
 void applyNoisePass(QImage &img, double amount)
 {
     if (amount <= 0.0) return;
 
     const int w = img.width(), h = img.height();
 
+    img.bits(); // <-- ensure detachment
+
+#pragma omp parallel for schedule(static)
     for (int y = 0; y < h; ++y) {
         QRgb *out = reinterpret_cast<QRgb *>(img.scanLine(y));
-        for (int x = 0; x < w; ++x) {
-            QRgb base = out[x];
 
-            // frameSeed function from shader
-            double seed = fract((qRed(base) * 0.123 +
-                                 qGreen(base) * 0.456 +
-                                 qBlue(base)  * 0.789) / 255.0);
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC ivdep
+#endif
+        for (int x = 0; x < w; ++x) {
+            const QRgb base = out[x];
+
+            const int r8 = qRed(base);                        // cache channels
+            const int g8 = qGreen(base);
+            const int b8 = qBlue(base);
+            const int a8 = qAlpha(base);
+
+            double seed = fract((r8 * 0.123 +
+                                 g8 * 0.456 +
+                                 b8 * 0.789) / 255.0);
 
             // hash with gl_FragCoord.xy equivalent
             double n = hash(x + seed * 437.0, y + seed * 437.0) - 0.5;
 
             // Luma calculation
-            double luma = (0.299 * qRed(base) +
-                           0.587 * qGreen(base) +
-                           0.114 * qBlue(base)) / 255.0;
+            double luma = (0.299 * r8 +
+                           0.587 * g8 +
+                           0.114 * b8) / 255.0;
 
             // Amplitude: mix(1.4, 0.5, luma)
             double amp = 1.4 * (1.0 - luma) + 0.5 * luma;
@@ -221,10 +255,10 @@ void applyNoisePass(QImage &img, double amount)
             // Final noise delta
             double delta = n * amount * 0.4 * amp * 255.0;
 
-            out[x] = qRgba(clamp255(qRed(base)   + delta),
-                           clamp255(qGreen(base) + delta),
-                           clamp255(qBlue(base)  + delta),
-                           qAlpha(base));
+            out[x] = qRgba(clamp255(r8 + delta),
+                           clamp255(g8 + delta),
+                           clamp255(b8 + delta),
+                           a8);
         }
     }
 }

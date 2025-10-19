@@ -44,12 +44,14 @@ void applyVibrance(double& r, double& g, double& b, const double vibrance_value)
     if (vibrance_value == 0) return;
 
     const double amount = vibrance_value;
-    double gray = (r + g + b) / 3.0;
-    double maxRGB = std::max({r, g, b});
-    double minRGB = std::min({r, g, b});
-    double saturation = maxRGB == 0 ? 0 : (maxRGB - minRGB) / maxRGB;
+    const double gray = (r + g + b) / 3.0;
 
-    double boostFactor = amount * (1.0 - saturation * saturation);
+    // Avoid initializer_list overhead
+    double maxRGB = r > g ? (r > b ? r : b) : (g > b ? g : b);
+    double minRGB = r < g ? (r < b ? r : b) : (g < b ? g : b);
+
+    const double saturation = maxRGB == 0 ? 0 : (maxRGB - minRGB) / maxRGB;
+    const double boostFactor = amount * (1.0 - saturation * saturation);
 
     r = gray + (r - gray) * (1.0 + boostFactor);
     g = gray + (g - gray) * (1.0 + boostFactor);
@@ -61,7 +63,7 @@ void applySaturation(double& r, double& g, double& b, const double saturation_va
     if (saturation_value == 0) return;
 
     const double amount = saturation_value;
-    double gray = (r * 0.299 + g * 0.587 + b * 0.114);
+    const double gray = (r * 0.299 + g * 0.587 + b * 0.114);
 
     r = gray + (r - gray) * (1.0 + amount);
     g = gray + (g - gray) * (1.0 + amount);
@@ -127,10 +129,23 @@ std::shared_ptr<openshot::Frame> ColorAdjustment::GetFrame(std::shared_ptr<opens
     const int width = frame_image->width();
     const int height = frame_image->height();
 
-    // Process each pixel
-    for (int y = 0; y < height; ++y) {
-        QRgb* line = reinterpret_cast<QRgb*>(frame_image->scanLine(y));
+    // Precompute frame-constant flags (skip repeated comparisons)
+    const bool doTT  = (temperature_value != 0 || tint_value != 0);
+    const bool doSat = (saturation_value  != 0);
+    const bool doVib = (vibrance_value    != 0);
 
+    // Detach once and use base pointer + stride
+    uchar* base   = frame_image->bits();
+    const int bpl = frame_image->bytesPerLine();
+
+    // Parallelize rows only; inner loop remains identical math/order
+    #pragma omp parallel for schedule(static)
+    for (int y = 0; y < height; ++y) {
+        QRgb* line = reinterpret_cast<QRgb*>(base + y * bpl);
+
+        #if defined(__GNUC__) || defined(__clang__)
+        #pragma GCC ivdep
+        #endif
         for (int x = 0; x < width; ++x) {
             QRgb pixel = line[x];
             double r = qRed(pixel);
@@ -138,18 +153,16 @@ std::shared_ptr<openshot::Frame> ColorAdjustment::GetFrame(std::shared_ptr<opens
             double b = qBlue(pixel);
             int a = qAlpha(pixel);
 
-            // Apply color adjustments
-
-            // 1. Temperature & Tint (color balance)
-            if (temperature_value != 0 || tint_value != 0)
+            // 1. Temperature & Tint
+            if (doTT)
                 applyTemperatureTint(r, g, b, temperature_value, tint_value);
 
-            // 2. Saturation (traditional saturation)
-            if (saturation_value != 0)
+            // 2. Saturation
+            if (doSat)
                 applySaturation(r, g, b, saturation_value);
 
-            // 3. Vibrance (smart saturation)
-            if (vibrance_value != 0)
+            // 3. Vibrance
+            if (doVib)
                 applyVibrance(r, g, b, vibrance_value);
 
             // Final clamping and assignment

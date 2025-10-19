@@ -242,10 +242,22 @@ std::shared_ptr<openshot::Frame> LightAdjustment::GetFrame(std::shared_ptr<opens
         contrastLUT = createContrastLUT(contrast_value);
     }
 
-    // Process each pixel
+    // *** Minimal perf tweak: precompute brightness factor once ***
+    const bool doBrightness = (brightness_value != 0.0);
+    const bool brightPos    = (brightness_value > 0.0);
+    const double brightFactorPos = brightPos && doBrightness ? std::pow(2.0, brightness_value) : 1.0;
+    const double brightFactorNeg = (!brightPos && doBrightness) ? (1.0 + brightness_value * 0.7) : 1.0;
+
+    // Detach QImage once before multi-thread writes
+    frame_image->bits();
+
+    #pragma omp parallel for schedule(static)
     for (int y = 0; y < height; ++y) {
         QRgb* line = reinterpret_cast<QRgb*>(frame_image->scanLine(y));
 
+        #if defined(__GNUC__) || defined(__clang__)
+        #pragma GCC ivdep
+        #endif
         for (int x = 0; x < width; ++x) {
             QRgb pixel = line[x];
             double r = qRed(pixel);
@@ -253,11 +265,11 @@ std::shared_ptr<openshot::Frame> LightAdjustment::GetFrame(std::shared_ptr<opens
             double b = qBlue(pixel);
             int a = qAlpha(pixel);
 
-            // Apply adjustments in the correct order for best results
-
-            // 1. Brightness adjustment
-            if (brightness_value != 0)
-                applyBrightness(r, g, b, brightness_value);
+            // 1) Brightness — identical behavior, but no per-pixel pow()
+            if (doBrightness) {
+                const double f = brightPos ? brightFactorPos : brightFactorNeg;
+                r *= f; g *= f; b *= f;
+            }
 
             // 2. Apply contrast using LUT
             if (useContrastLUT) {
