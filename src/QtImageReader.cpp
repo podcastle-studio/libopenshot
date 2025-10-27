@@ -177,26 +177,28 @@ std::shared_ptr<Frame> QtImageReader::GetFrame(int64_t requested_frame)
             load_svg_path(path);
         }
 
-        // Determine if we need to scale the image
-        bool scale_image = true;
-        Clip* parent = (Clip*) ParentClip();
-        if (parent && parent->scale == SCALE_NONE) {
-            // Do not scale the image in SCALE_NONE mode
-            scale_image = false;
+        // Decide if we should pre-scale the image for preview.
+        // We ONLY downscale (never upscale).
+        bool scale_image = false;
+
+        // Only scale if BOTH preview dims are smaller than the source image.
+        if (current_max_size.width() < image->width() && current_max_size.height() < image->height()) {
+            scale_image = true;
         }
 
         if (scale_image) {
-            // Resize the original image
+            // Downscale to preview box, keep aspect ratio
             cached_image = std::make_shared<QImage>(image->scaled(
                                current_max_size,
-                               Qt::KeepAspectRatio, Qt::SmoothTransformation));
+                               Qt::KeepAspectRatio,
+                               Qt::SmoothTransformation));
         } else {
-            // Use the original image without scaling
+            // Use original image (no upscaling)
             cached_image = image;
         }
 
-        // Set max size (to later determine if max_size is changed)
-        max_size = current_max_size;
+        // Track the actual cached size for invalidation
+        max_size = cached_image->size();
     }
 
     auto sample_count = Frame::GetSamplesPerFrame(
