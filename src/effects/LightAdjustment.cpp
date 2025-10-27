@@ -213,10 +213,8 @@ std::shared_ptr<openshot::Frame> LightAdjustment::GetFrame(std::shared_ptr<opens
     // Get the frame's image
     std::shared_ptr<QImage> frame_image = frame->GetImage();
 
-    // Convert to ARGB32 format if needed
-    if (frame_image->format() != QImage::Format_ARGB32) {
-        *frame_image = frame_image->convertToFormat(QImage::Format_ARGB32);
-    }
+    // Assume incoming frame is already RGBA (e.g. QImage::Format_RGBA8888)
+    // and do not convert formats.
 
     // Get keyframe values for this frame
     double brightness_value = brightness.GetValue(frame_number);
@@ -251,21 +249,25 @@ std::shared_ptr<openshot::Frame> LightAdjustment::GetFrame(std::shared_ptr<opens
     // Detach QImage once before multi-thread writes
     frame_image->bits();
 
+    const int bpl = frame_image->bytesPerLine();
+    uchar* base = frame_image->bits();
+
     #pragma omp parallel for schedule(static)
     for (int y = 0; y < height; ++y) {
-        QRgb* line = reinterpret_cast<QRgb*>(frame_image->scanLine(y));
+        uchar* line = base + y * bpl;
 
         #if defined(__GNUC__) || defined(__clang__)
         #pragma GCC ivdep
         #endif
         for (int x = 0; x < width; ++x) {
-            QRgb pixel = line[x];
-            double r = qRed(pixel);
-            double g = qGreen(pixel);
-            double b = qBlue(pixel);
-            int a = qAlpha(pixel);
+            uchar* px = line + x * 4;
 
-            // 1) Brightness — identical behavior, but no per-pixel pow()
+            double r = px[0]; // R
+            double g = px[1]; // G
+            double b = px[2]; // B
+            int a = px[3];    // A
+
+            // 1) Brightness ? identical behavior, but no per-pixel pow()
             if (doBrightness) {
                 const double f = brightPos ? brightFactorPos : brightFactorNeg;
                 r *= f; g *= f; b *= f;
@@ -295,7 +297,10 @@ std::shared_ptr<openshot::Frame> LightAdjustment::GetFrame(std::shared_ptr<opens
                 applyHighlights(r, g, b, highlights_value);
 
             // Final clamping and assignment
-            line[x] = qRgba(clamp(r), clamp(g), clamp(b), a);
+            px[0] = clamp(r);
+            px[1] = clamp(g);
+            px[2] = clamp(b);
+            px[3] = a;
         }
     }
 
