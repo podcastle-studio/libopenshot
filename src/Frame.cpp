@@ -865,21 +865,26 @@ std::shared_ptr<QImage> Frame::GetImage()
 #ifdef USE_OPENCV
 
 // Convert Qimage to Mat
-//cv::Mat Frame::Qimage2mat(std::shared_ptr<QImage>& qimage) {
-//	cv::Mat mat = cv::Mat(qimage->height(), qimage->width(), CV_8UC4, (uchar*)qimage->constBits(), qimage->bytesPerLine()).clone();
-//	cv::Mat mat2 = cv::Mat(mat.rows, mat.cols, CV_8UC3 );
-//	int from_to[] = { 0,0,  1,1,  2,2 };
-//	cv::mixChannels( &mat, 1, &mat2, 1, from_to, 3 );
-//	cv::cvtColor(mat2, mat2, cv::COLOR_RGB2BGR);
-//	return mat2;
-//}
+// cv::Mat Frame::Qimage2mat(std::shared_ptr<QImage> qimage) {
+// 	cv::Mat mat = cv::Mat(qimage->height(), qimage->width(), CV_8UC4, (uchar*)qimage->constBits(), qimage->bytesPerLine()).clone();
+// 	cv::Mat mat2 = cv::Mat(mat.rows, mat.cols, CV_8UC3 );
+// 	int from_to[] = { 0,0,  1,1,  2,2 };
+// 	cv::mixChannels( &mat, 1, &mat2, 1, from_to, 3 );
+// 	cv::cvtColor(mat2, mat2, cv::COLOR_RGBA2BGRA);
+// 	return mat2;
+// }
 
-cv::Mat Frame::Qimage2mat(std::shared_ptr<QImage> qimage)
-{
-    cv::Mat mat(qimage->height(), qimage->width(), CV_8UC4, (uchar*)qimage->constBits(), qimage->bytesPerLine());
-    // Ensure the color channels are in the correct order
-    cv::cvtColor(mat, mat, cv::COLOR_BGRA2RGBA);
-    return mat;
+cv::Mat Frame::Qimage2mat(std::shared_ptr<QImage> qimage) {
+	// 1. Wrap QImage memory as RGBA (4 channels). No copy yet.
+	cv::Mat matRGBA(qimage->height(), qimage->width(), CV_8UC4, const_cast<uchar*>(qimage->constBits()), qimage->bytesPerLine());
+
+	// 2. Convert channel order RGBA -> BGRA for OpenCV/effects.
+	// This allocates a NEW cv::Mat with tightly packed BGRA data (step = width*4).
+	cv::Mat matBGRA;
+	cv::cvtColor(matRGBA, matBGRA, cv::COLOR_RGBA2BGRA);
+
+	// 3. Return BGRA mat that is independent of QImage memory
+	return matBGRA;
 }
 
 // Get pointer to OpenCV image object
@@ -897,37 +902,72 @@ cv::Mat Frame::GetImageCV()
 	return imagecv;
 }
 
-std::shared_ptr<QImage> Frame::Mat2Qimage(cv::Mat img){
-    // Check if the input image has an alpha channel (4 channels in total)
-    if (img.channels() == 4) {
-        cv::cvtColor(img, img, cv::COLOR_BGRA2RGBA);
-    } else {
-        cv::cvtColor(img, img, cv::COLOR_BGR2RGB);
-    }
+std::shared_ptr<QImage> Frame::Mat2Qimage(const cv::Mat& srcMat) {
+	cv::Mat rgbaMat;
 
-    QImage::Format format = (img.channels() == 4) ? QImage::Format_RGBA8888 : QImage::Format_RGB888;
-    QImage qimg((uchar*) img.data, img.cols, img.rows, img.step, format);
+	if (srcMat.channels() == 4) {
+		// BGRA (OpenCV) -> RGBA (Qt), still premultiplied
+		cv::cvtColor(srcMat, rgbaMat, cv::COLOR_BGRA2RGBA);
+	} else if (srcMat.channels() == 3) {
+		// BGR -> RGB
+		cv::cvtColor(srcMat, rgbaMat, cv::COLOR_BGR2RGB);
 
-    std::shared_ptr<QImage> imgIn = std::make_shared<QImage>(qimg.copy());
+		// Add opaque alpha so we can produce RGBA8888_Premultiplied
+		cv::Mat alpha(srcMat.rows, srcMat.cols, CV_8UC1, cv::Scalar(255));
+		std::vector<cv::Mat> rgb;
+		cv::split(rgbaMat, rgb);   // R,G,B
+		rgb.push_back(alpha);      // A=255
+		cv::merge(rgb, rgbaMat);   // now RGBA
+	} else {
+		// fallback: force opaque black
+		rgbaMat = cv::Mat(srcMat.rows, srcMat.cols, CV_8UC4,
+						  cv::Scalar(0,0,0,255));
+	}
 
-    // Convert to RGBA8888 if it's not already in that format and if there's no alpha channel to be preserved
-    if (img.channels() != 4 && imgIn->format() != QImage::Format_RGBA8888_Premultiplied) {
-        *imgIn = imgIn->convertToFormat(QImage::Format_RGBA8888_Premultiplied);
-    }
+	// Now rgbaMat is RGBA, and we are *treating it as premultiplied*.
+	// Construct QImage using premultiplied format.
+	QImage qimg(
+		(uchar*)rgbaMat.data,
+		rgbaMat.cols,
+		rgbaMat.rows,
+		rgbaMat.step,
+		QImage::Format_RGBA8888_Premultiplied
+	);
 
-    return imgIn;
-
-//    cv::cvtColor(img, img, cv::COLOR_BGR2RGB);
-//    QImage qimg((uchar*) img.data, img.cols, img.rows, img.step, QImage::Format_RGB888);
-//
-//    std::shared_ptr<QImage> imgIn = std::make_shared<QImage>(qimg.copy());
-//
-//    // Always convert to RGBA8888 (if different)
-//    if (imgIn->format() != QImage::Format_RGBA8888_Premultiplied)
-//        *imgIn = imgIn->convertToFormat(QImage::Format_RGBA8888_Premultiplied);
-//
-//    return imgIn;
+	return std::make_shared<QImage>(qimg.copy());
 }
+
+// std::shared_ptr<QImage> Frame::Mat2Qimage(cv::Mat f){
+//     // Check if the input image has an alpha channel (4 channels in total)
+//     if (img.channels() == 4) {
+//         cv::cvtColor(img, img, cv::COLOR_BGRA2RGBA);
+//     } else {
+//         cv::cvtColor(img, img, cv::COLOR_BGR2RGB);
+//     }
+//
+//     QImage::Format format = (img.channels() == 4) ? QImage::Format_RGBA8888 : QImage::Format_RGB888;
+//     QImage qimg((uchar*) img.data, img.cols, img.rows, img.step, format);
+//
+//     std::shared_ptr<QImage> imgIn = std::make_shared<QImage>(qimg.copy());
+//
+//     // Convert to RGBA8888 if it's not already in that format and if there's no alpha channel to be preserved
+//     if (img.channels() != 4 && imgIn->format() != QImage::Format_RGBA8888_Premultiplied) {
+//         *imgIn = imgIn->convertToFormat(QImage::Format_RGBA8888_Premultiplied);
+//     }
+//
+//     return imgIn;
+//
+// //    cv::cvtColor(img, img, cv::COLOR_BGR2RGB);
+// //    QImage qimg((uchar*) img.data, img.cols, img.rows, img.step, QImage::Format_RGB888);
+// //
+// //    std::shared_ptr<QImage> imgIn = std::make_shared<QImage>(qimg.copy());
+// //
+// //    // Always convert to RGBA8888 (if different)
+// //    if (imgIn->format() != QImage::Format_RGBA8888_Premultiplied)
+// //        *imgIn = imgIn->convertToFormat(QImage::Format_RGBA8888_Premultiplied);
+// //
+// //    return imgIn;
+// }
 
 // Set pointer to OpenCV image object
 void Frame::SetImageCV(const cv::Mat& imageCv)

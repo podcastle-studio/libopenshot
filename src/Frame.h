@@ -270,7 +270,7 @@ namespace openshot
 		cv::Mat Qimage2mat( std::shared_ptr<QImage> qimage);
 
 		/// Convert OpenCV Mat to QImage
-		std::shared_ptr<QImage> Mat2Qimage(cv::Mat img);
+		std::shared_ptr<QImage> Mat2Qimage(const cv::Mat&);
 
 		/// Get pointer to OpenCV Mat image object
 		cv::Mat GetImageCV();
