@@ -34,7 +34,7 @@ void BorderReflectedRotation::init_effect_details()
 // modified openshot::Frame object
 std::shared_ptr<openshot::Frame> BorderReflectedRotation::GetFrame(std::shared_ptr<openshot::Frame> frame, int64_t frame_number)
 {
-    const auto angle_value = -angle.GetValue(frame_number);
+    const auto angle_value = angle.GetValue(frame_number);
 
     if (angle_value == 0) {
         return frame;
