@@ -1528,14 +1528,14 @@ bool FFmpegReader::CheckSeek(bool is_video) {
 
 // Process a video packet
 void FFmpegReader::ProcessVideoPacket(int64_t requested_frame) {
-    // ---- 1) Decode next frame (sets video_pts) -------------------
+    // 1. Decode next frame (sets video_pts)
     int frame_finished = GetAVFrame();
     if (!frame_finished) {
         if (pFrame) { RemoveAVFrame(pFrame); }
         return;
     }
 
-    // ---- 2) Compute current frame number from PTS ----------------
+    // 2. Compute current frame number from PTS
     int64_t current_frame = ConvertVideoPTStoFrame(video_pts);
 
     if (!seek_video_frame_found && is_seeking)
@@ -1550,7 +1550,7 @@ void FFmpegReader::ProcessVideoPacket(int64_t requested_frame) {
         "current_frame",   (float)current_frame
     );
 
-    // ---- 3) Sizes / formats --------------------------------------
+    // 3. Sizes / formats
     const PixelFormat src_pix_fmt = pCodecCtx->pix_fmt; // accurate src fmt
     const int src_w = info.width;
     const int src_h = info.height;
@@ -1615,7 +1615,7 @@ void FFmpegReader::ProcessVideoPacket(int64_t requested_frame) {
         }
     } // else: keep original size (no downscale)
 
-    // ---- 4) Compensate non-square pixels (SAR) -------------------
+    // 4. Compensate non-square pixels (SAR)
     if (info.pixel_ratio.num != info.pixel_ratio.den) {
         // Expand/shrink width so storage AR becomes 1:1 display AR
         output_width = std::max(
@@ -1624,13 +1624,21 @@ void FFmpegReader::ProcessVideoPacket(int64_t requested_frame) {
         );
     }
 
-    // ---- 5) Allocate aligned RGBA buffer and cached RGB frame ----
+    // 5. Allocate aligned RGBA buffer and cached RGB frame
     const int bytes_per_pixel = 4;
-    const int raw_size = (output_width * output_height * bytes_per_pixel) + 128;
+
+    // Force a tight bytes-per-line (no hidden alignment that can truncate the effective width).
+    const int bytes_per_line = output_width * bytes_per_pixel;
+    const int buf_size = bytes_per_line * output_height;
+
     constexpr size_t ALIGN = 32;
-    const int aligned_size = ((raw_size + int(ALIGN) - 1) / int(ALIGN)) * int(ALIGN);
+    const int aligned_size = ((buf_size + int(ALIGN) - 1) / int(ALIGN)) * int(ALIGN);
+
     uint8_t *buffer = (uint8_t*) aligned_malloc(aligned_size, ALIGN);
     if (!buffer) throw OutOfMemory("Failed to allocate image buffer", path);
+
+    // Defensive: avoid visible garbage if anything is left unwritten
+    memset(buffer, 0, buf_size);
 
     AVFrame *pFrameRGB = pFrameRGB_cached;
     if (!pFrameRGB) {
@@ -1639,9 +1647,13 @@ void FFmpegReader::ProcessVideoPacket(int64_t requested_frame) {
         pFrameRGB_cached = pFrameRGB;
     }
     AV_RESET_FRAME(pFrameRGB);
-    AV_COPY_PICTURE_DATA(pFrameRGB, buffer, PIX_FMT_RGBA, output_width, output_height);
 
-    // ---- 6) Reuse sws context; convert to RGBA -------------------
+    pFrameRGB->format = PIX_FMT_RGBA;
+    pFrameRGB->width  = output_width;
+    pFrameRGB->height = output_height;
+    av_image_fill_arrays(pFrameRGB->data, pFrameRGB->linesize, buffer, (AVPixelFormat) AV_PIX_FMT_RGBA, output_width, output_height, 1);
+
+    // 6. Reuse sws context; convert to RGBA
     int sws_flags = openshot::Settings::Instance()->HIGH_QUALITY_SCALING ? SWS_BICUBIC : SWS_FAST_BILINEAR;
     img_convert_ctx = sws_getCachedContext(
         img_convert_ctx,
@@ -1655,7 +1667,7 @@ void FFmpegReader::ProcessVideoPacket(int64_t requested_frame) {
     sws_scale(img_convert_ctx, pFrame->data, pFrame->linesize, 0, src_h,
               pFrameRGB->data, pFrameRGB->linesize);
 
-    // ---- 7) Wrap in Frame and cache ------------------------------
+    // 7. Wrap in Frame and cache
     std::shared_ptr<Frame> f = CreateFrame(current_frame);
     if (!info.has_alpha) {
         f->AddImage(output_width, output_height, bytes_per_pixel,
@@ -1667,7 +1679,7 @@ void FFmpegReader::ProcessVideoPacket(int64_t requested_frame) {
     working_cache.Add(f);
     last_video_frame = f;
 
-    // ---- 8) Cleanup packet, update PTS secs, debug ---------------
+    // 8. Cleanup packet, update PTS secs, debug
     RemoveAVFrame(pFrame); // keep caches alive
 
     video_pts_seconds = (double(video_pts) * info.video_timebase.ToDouble()) + pts_offset_seconds;

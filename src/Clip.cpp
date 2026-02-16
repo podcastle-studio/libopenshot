@@ -398,6 +398,11 @@ float Clip::End() const
 		return end;
 }
 
+float Clip::EndRaw() const
+{
+	return end;
+}
+
 // Override End() position
 void Clip::End(float value) {
 	ClipBase::End(value);

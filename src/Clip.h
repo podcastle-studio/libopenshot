@@ -303,6 +303,7 @@ namespace openshot {
 
 		// Override End() position (in seconds) of clip (trim end of video)
 		float End() const override; ///< Get end position (in seconds) of clip (trim end of video), which can be affected by the time curve.
+		float EndRaw() const;
 		void End(float value) override; ///< Set end position (in seconds) of clip (trim end of video)
 		openshot::TimelineBase* ParentTimeline() override { return timeline; } ///< Get the associated Timeline pointer (if any)
 		void ParentTimeline(openshot::TimelineBase* new_timeline) override; ///< Set associated Timeline pointer
