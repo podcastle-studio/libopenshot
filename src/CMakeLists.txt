@@ -113,6 +113,7 @@ set(OPENSHOT_CV_SOURCES
 # Video effects
 set(EFFECTS_SOURCES
   effects/image-processing-lib/src/Effects/effects.cpp
+  effects/image-processing-lib/src/ColorGrading/ColorGradingCore.cpp
   effects/Alpha.cpp
   effects/CameraMovement.cpp
   effects/BorderReflectedRotation.cpp
@@ -191,6 +192,7 @@ target_include_directories(openshot
   PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_BINARY_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/effects/image-processing-lib/src/ColorGrading
   PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
     $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}>

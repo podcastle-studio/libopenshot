@@ -193,7 +193,7 @@ void ColorMap::load_cube_file()
     std::vector<float> parsed_data;
     int parsed_size = 0;
 
-    if (!cg::parseCubeText(content.c_str(), (int)content.size(), parsed_data, parsed_size)) {
+    if (!ColorGrading::parseCubeText(content.c_str(), (int)content.size(), parsed_data, parsed_size)) {
         lut_data.clear();
         lut_size = 0;
         needs_lut_refresh = false;
@@ -205,7 +205,7 @@ void ColorMap::load_cube_file()
     if (parsed_size > TARGET_LUT_SIZE) {
         int total = TARGET_LUT_SIZE * TARGET_LUT_SIZE * TARGET_LUT_SIZE;
         lut_data.resize(total * 3);
-        cg::resampleLut3D(parsed_data.data(), parsed_size,
+        ColorGrading::resampleLut3D(parsed_data.data(), parsed_size,
                           lut_data.data(), TARGET_LUT_SIZE);
         lut_size = TARGET_LUT_SIZE;
     } else {
@@ -229,7 +229,7 @@ void ColorMap::load_ref_image()
 
     if (ref_image_path.empty()) return;
 
-    cg::initLookupTables();
+    ColorGrading::initLookupTables();
 
     QImage img(QString::fromStdString(ref_image_path));
     if (img.isNull()) return;
@@ -240,7 +240,7 @@ void ColorMap::load_ref_image()
     const unsigned char* pixels = rgba.constBits();
 
     int step = (w * h > 500000) ? 2 : 1;
-    ref_stats = cg::computeLabStats(pixels, w, h, step);
+    ref_stats = ColorGrading::computeLabStats(pixels, w, h, step);
     has_ref_stats = true;
 }
 
@@ -268,7 +268,7 @@ ColorMap::ColorMap()
       cm_saturation_boost(1.1), cm_contrast_boost(1.1)
 {
     init_effect_details();
-    cg::initLookupTables();
+    ColorGrading::initLookupTables();
 }
 
 ColorMap::ColorMap(const std::string &path,
@@ -284,7 +284,7 @@ ColorMap::ColorMap(const std::string &path,
       cm_saturation_boost(1.1), cm_contrast_boost(1.1)
 {
     init_effect_details();
-    cg::initLookupTables();
+    ColorGrading::initLookupTables();
     load_cube_file();
 }
 
@@ -344,19 +344,19 @@ ColorMap::GetFrame(std::shared_ptr<openshot::Frame> frame, int64_t frame_number)
 
         if (should_check_stats) {
             int step = std::max(1, (w * h) / 10000);
-            cg::LabStats srcStats = cg::computeLabStats(pixels, w, h, step);
+            ColorGrading::LabStats srcStats = ColorGrading::computeLabStats(pixels, w, h, step);
 
             std::lock_guard<std::mutex> lock(bake_mutex);
-            if (!has_cached_stats || !cg::statsAreSimilar(srcStats, cached_src_stats)) {
+            if (!has_cached_stats || !ColorGrading::statsAreSimilar(srcStats, cached_src_stats)) {
                 // Bake via shared core
                 baked_lut_data.resize(BAKED_LUT_SIZE * BAKED_LUT_SIZE * BAKED_LUT_SIZE * 3);
-                cg::ColorMatchParams params;
+                ColorGrading::ColorMatchParams params;
                 params.preserve        = (float)cm_preserve.GetValue(frame_number);
                 params.luminanceBlend  = (float)cm_luminance_blend.GetValue(frame_number);
                 params.saturationBoost = (float)cm_saturation_boost.GetValue(frame_number);
                 params.contrastBoost   = (float)cm_contrast_boost.GetValue(frame_number);
 
-                cg::bakeColorMatchLut(baked_lut_data.data(), BAKED_LUT_SIZE,
+                ColorGrading::bakeColorMatchLut(baked_lut_data.data(), BAKED_LUT_SIZE,
                                       srcStats, ref_stats, params);
                 cached_src_stats = srcStats;
                 has_cached_stats = true;

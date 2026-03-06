@@ -16,7 +16,7 @@
 #include "../EffectBase.h"
 #include "../Json.h"
 #include "../KeyFrame.h"
-#include "color_grading_core.h"
+#include "image-processing-lib/src/ColorGrading/ColorGradingCore.h"
 
 #include <vector>
 #include <string>
@@ -54,13 +54,13 @@ namespace openshot
         std::string ref_image_path;
         bool needs_ref_refresh;
 
-        cg::LabStats ref_stats;
+        ColorGrading::LabStats ref_stats;
         bool has_ref_stats;
 
         std::vector<float> baked_lut_data; ///< Stride-3 [17³ × 3]
         static constexpr int BAKED_LUT_SIZE = 17;
 
-        cg::LabStats cached_src_stats;
+        ColorGrading::LabStats cached_src_stats;
         bool has_cached_stats;
 
         std::mutex bake_mutex;
