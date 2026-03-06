@@ -1,6 +1,6 @@
 /**
  * @file
- * @brief Source file for ColorMap (LUT) effect
+ * @brief Source file for ColorMap (LUT + Color Match) effect
  * @author Jonathan Thomas <jonathan@openshot.org>
  *
  * @ref License
@@ -12,100 +12,263 @@
 
 #include "ColorMap.h"
 #include "Exceptions.h"
+
 #include <omp.h>
-#include <QRegularExpression>
+#include <cmath>
+#include <algorithm>
+#include <fstream>
+#include <sstream>
+#include <QImage>
 
 using namespace openshot;
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// OpenMP trilinear LUT apply (platform-specific optimization)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+void ColorMap::applyTrilinearLut(const float* lut, int size,
+                                  unsigned char* pixels, int pixel_count,
+                                  float tR, float tG, float tB) {
+
+    // Precompute byte→LUT coordinate table (256 entries, ~1μs)
+    struct LutCoord {
+        int i0, i1;
+        float frac, ifrac;
+    };
+    LutCoord coord[256];
+    {
+        const float sizeM1 = (float)(size - 1);
+        const float inv255 = 1.0f / 255.0f;
+        for (int i = 0; i < 256; i++) {
+            float f = (float)i * inv255 * sizeM1;
+            int i0 = (int)f;
+            coord[i].i0    = i0;
+            coord[i].i1    = std::min(i0 + 1, size - 1);
+            coord[i].frac  = f - (float)i0;
+            coord[i].ifrac = 1.0f - (f - (float)i0);
+        }
+    }
+
+    const int strideR = 3;
+    const int strideG = size * 3;
+    const int strideB = size * size * 3;
+    const bool full_intensity = (tR >= 0.999f && tG >= 0.999f && tB >= 0.999f);
+
+    #pragma omp parallel for schedule(static)
+    for (int i = 0; i < pixel_count; ++i) {
+        const int idx = i * 4;
+        const int A = pixels[idx + 3];
+        if (A == 0) continue;
+
+        const LutCoord& rc = coord[pixels[idx + 0]];
+        const LutCoord& gc = coord[pixels[idx + 1]];
+        const LutCoord& bc = coord[pixels[idx + 2]];
+
+        if (A != 255) {
+            // Slow path: semi-transparent pixel — demultiply first
+            const float inv255 = 1.0f / 255.0f;
+            const float alpha = A * inv255;
+            const float invAlpha = 1.0f / alpha;
+
+            int trueR = std::min((int)(pixels[idx + 0] * invAlpha + 0.5f), 255);
+            int trueG = std::min((int)(pixels[idx + 1] * invAlpha + 0.5f), 255);
+            int trueB = std::min((int)(pixels[idx + 2] * invAlpha + 0.5f), 255);
+
+            const LutCoord& rc2 = coord[trueR];
+            const LutCoord& gc2 = coord[trueG];
+            const LutCoord& bc2 = coord[trueB];
+
+            const int base = bc2.i0 * strideB + gc2.i0 * strideG + rc2.i0 * strideR;
+            const float* p000 = lut + base;
+            const float* p100 = p000 + (rc2.i1 - rc2.i0) * strideR;
+            const float* p010 = p000 + (gc2.i1 - gc2.i0) * strideG;
+            const float* p110 = p010 + (rc2.i1 - rc2.i0) * strideR;
+            const float* p001 = p000 + (bc2.i1 - bc2.i0) * strideB;
+            const float* p101 = p001 + (rc2.i1 - rc2.i0) * strideR;
+            const float* p011 = p001 + (gc2.i1 - gc2.i0) * strideG;
+            const float* p111 = p011 + (rc2.i1 - rc2.i0) * strideR;
+
+            const float dr = rc2.frac, idr = rc2.ifrac;
+            const float dg = gc2.frac, idg = gc2.ifrac;
+            const float db = bc2.frac, idb = bc2.ifrac;
+
+            float c0, c1;
+            c0 = (p000[0]*idr+p100[0]*dr)*idg+(p010[0]*idr+p110[0]*dr)*dg;
+            c1 = (p001[0]*idr+p101[0]*dr)*idg+(p011[0]*idr+p111[0]*dr)*dg;
+            float lr = c0*idb + c1*db;
+            c0 = (p000[1]*idr+p100[1]*dr)*idg+(p010[1]*idr+p110[1]*dr)*dg;
+            c1 = (p001[1]*idr+p101[1]*dr)*idg+(p011[1]*idr+p111[1]*dr)*dg;
+            float lg = c0*idb + c1*db;
+            c0 = (p000[2]*idr+p100[2]*dr)*idg+(p010[2]*idr+p110[2]*dr)*dg;
+            c1 = (p001[2]*idr+p101[2]*dr)*idg+(p011[2]*idr+p111[2]*dr)*dg;
+            float lb = c0*idb + c1*db;
+
+            float Rn = trueR * (1.0f / 255.0f);
+            float Gn = trueG * (1.0f / 255.0f);
+            float Bn = trueB * (1.0f / 255.0f);
+            float outR = (lr * tR + Rn * (1.0f - tR)) * alpha;
+            float outG = (lg * tG + Gn * (1.0f - tG)) * alpha;
+            float outB = (lb * tB + Bn * (1.0f - tB)) * alpha;
+
+            pixels[idx + 0] = (unsigned char)std::clamp((int)(outR * 255.0f + 0.5f), 0, 255);
+            pixels[idx + 1] = (unsigned char)std::clamp((int)(outG * 255.0f + 0.5f), 0, 255);
+            pixels[idx + 2] = (unsigned char)std::clamp((int)(outB * 255.0f + 0.5f), 0, 255);
+            continue;
+        }
+
+        // Fast path: opaque pixel (A == 255)
+        const int base = bc.i0 * strideB + gc.i0 * strideG + rc.i0 * strideR;
+        const float* p000 = lut + base;
+        const float* p100 = p000 + (rc.i1 - rc.i0) * strideR;
+        const float* p010 = p000 + (gc.i1 - gc.i0) * strideG;
+        const float* p110 = p010 + (rc.i1 - rc.i0) * strideR;
+        const float* p001 = p000 + (bc.i1 - bc.i0) * strideB;
+        const float* p101 = p001 + (rc.i1 - rc.i0) * strideR;
+        const float* p011 = p001 + (gc.i1 - gc.i0) * strideG;
+        const float* p111 = p011 + (rc.i1 - rc.i0) * strideR;
+
+        const float dr = rc.frac, idr = rc.ifrac;
+        const float dg = gc.frac, idg = gc.ifrac;
+        const float db = bc.frac, idb = bc.ifrac;
+
+        float c0, c1;
+        c0 = (p000[0]*idr+p100[0]*dr)*idg+(p010[0]*idr+p110[0]*dr)*dg;
+        c1 = (p001[0]*idr+p101[0]*dr)*idg+(p011[0]*idr+p111[0]*dr)*dg;
+        float lr = c0*idb + c1*db;
+        c0 = (p000[1]*idr+p100[1]*dr)*idg+(p010[1]*idr+p110[1]*dr)*dg;
+        c1 = (p001[1]*idr+p101[1]*dr)*idg+(p011[1]*idr+p111[1]*dr)*dg;
+        float lg = c0*idb + c1*db;
+        c0 = (p000[2]*idr+p100[2]*dr)*idg+(p010[2]*idr+p110[2]*dr)*dg;
+        c1 = (p001[2]*idr+p101[2]*dr)*idg+(p011[2]*idr+p111[2]*dr)*dg;
+        float lb = c0*idb + c1*db;
+
+        if (full_intensity) {
+            pixels[idx + 0] = (unsigned char)std::clamp((int)(lr * 255.0f + 0.5f), 0, 255);
+            pixels[idx + 1] = (unsigned char)std::clamp((int)(lg * 255.0f + 0.5f), 0, 255);
+            pixels[idx + 2] = (unsigned char)std::clamp((int)(lb * 255.0f + 0.5f), 0, 255);
+        } else {
+            const float inv255 = 1.0f / 255.0f;
+            float Rn = pixels[idx + 0] * inv255;
+            float Gn = pixels[idx + 1] * inv255;
+            float Bn = pixels[idx + 2] * inv255;
+            float outR = lr * tR + Rn * (1.0f - tR);
+            float outG = lg * tG + Gn * (1.0f - tG);
+            float outB = lb * tB + Bn * (1.0f - tB);
+            pixels[idx + 0] = (unsigned char)std::clamp((int)(outR * 255.0f + 0.5f), 0, 255);
+            pixels[idx + 1] = (unsigned char)std::clamp((int)(outG * 255.0f + 0.5f), 0, 255);
+            pixels[idx + 2] = (unsigned char)std::clamp((int)(outB * 255.0f + 0.5f), 0, 255);
+        }
+    }
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// .cube file loading — uses shared core parser + resampler
+// ═══════════════════════════════════════════════════════════════════════════════
 
 void ColorMap::load_cube_file()
 {
     if (lut_path.empty()) {
         lut_data.clear();
         lut_size = 0;
-        needs_refresh = false;
+        needs_lut_refresh = false;
         return;
     }
 
-    int parsed_size = 0;
-    std::vector<float> parsed_data;
-
-    #pragma omp critical(load_lut)
-    {
-        QFile file(QString::fromStdString(lut_path));
-        if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-            // leave parsed_size == 0
-        } else {
-            QTextStream in(&file);
-            QString line;
-            QRegularExpression ws_re("\\s+");
-
-            // 1) Find LUT_3D_SIZE
-            while (!in.atEnd()) {
-                line = in.readLine().trimmed();
-                if (line.startsWith("LUT_3D_SIZE")) {
-                    auto parts = line.split(ws_re);
-                    if (parts.size() >= 2) {
-                        parsed_size = parts[1].toInt();
-                    }
-                    break;
-                }
-            }
-
-            // 2) Read N³ lines of R G B floats
-            if (parsed_size > 0) {
-                int total = parsed_size * parsed_size * parsed_size;
-                parsed_data.reserve(size_t(total * 3));
-                while (!in.atEnd() && int(parsed_data.size()) < total * 3) {
-                    line = in.readLine().trimmed();
-                    if (line.isEmpty() ||
-                        line.startsWith("#") ||
-                        line.startsWith("TITLE") ||
-                        line.startsWith("DOMAIN"))
-                    {
-                        continue;
-                    }
-                    auto vals = line.split(ws_re);
-                    if (vals.size() >= 3) {
-                        // .cube file is R G B
-                        parsed_data.push_back(vals[0].toFloat());
-                        parsed_data.push_back(vals[1].toFloat());
-                        parsed_data.push_back(vals[2].toFloat());
-                    }
-                }
-                if (int(parsed_data.size()) != total * 3) {
-                    parsed_data.clear();
-                    parsed_size = 0;
-                }
-            }
-        }
-    }
-
-    if (parsed_size > 0) {
-        lut_size = parsed_size;
-        lut_data.swap(parsed_data);
-    } else {
+    // Read file into string
+    std::ifstream file(lut_path);
+    if (!file.is_open()) {
         lut_data.clear();
         lut_size = 0;
+        needs_lut_refresh = false;
+        return;
     }
-    needs_refresh = false;
+
+    std::ostringstream ss;
+    ss << file.rdbuf();
+    std::string content = ss.str();
+
+    // Parse using shared core
+    std::vector<float> parsed_data;
+    int parsed_size = 0;
+
+    if (!cg::parseCubeText(content.c_str(), (int)content.size(), parsed_data, parsed_size)) {
+        lut_data.clear();
+        lut_size = 0;
+        needs_lut_refresh = false;
+        return;
+    }
+
+    // Resample large LUTs to 17³ for L1 cache friendliness
+    constexpr int TARGET_LUT_SIZE = 17;
+    if (parsed_size > TARGET_LUT_SIZE) {
+        int total = TARGET_LUT_SIZE * TARGET_LUT_SIZE * TARGET_LUT_SIZE;
+        lut_data.resize(total * 3);
+        cg::resampleLut3D(parsed_data.data(), parsed_size,
+                          lut_data.data(), TARGET_LUT_SIZE);
+        lut_size = TARGET_LUT_SIZE;
+    } else {
+        lut_size = parsed_size;
+        lut_data.swap(parsed_data);
+    }
+
+    needs_lut_refresh = false;
 }
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Reference image loading — uses shared core for stats
+// ═══════════════════════════════════════════════════════════════════════════════
+
+void ColorMap::load_ref_image()
+{
+    has_ref_stats = false;
+    has_cached_stats = false;
+    needs_ref_refresh = false;
+
+    if (ref_image_path.empty()) return;
+
+    cg::initLookupTables();
+
+    QImage img(QString::fromStdString(ref_image_path));
+    if (img.isNull()) return;
+
+    QImage rgba = img.convertToFormat(QImage::Format_RGBA8888);
+    int w = rgba.width();
+    int h = rgba.height();
+    const unsigned char* pixels = rgba.constBits();
+
+    int step = (w * h > 500000) ? 2 : 1;
+    ref_stats = cg::computeLabStats(pixels, w, h, step);
+    has_ref_stats = true;
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Constructors
+// ═══════════════════════════════════════════════════════════════════════════════
 
 void ColorMap::init_effect_details()
 {
     InitEffectInfo();
-    info.class_name = "ColorMap";
-    info.name       = "Color Map / Lookup";
-    info.description = "Adjust colors using 3D LUT lookup tables (.cube format)";
-    info.has_video  = true;
-    info.has_audio  = false;
+    info.class_name  = "ColorMap";
+    info.name        = "Color Map / Lookup";
+    info.description = "Adjust colors using 3D LUT (.cube) or reference image color matching";
+    info.has_video   = true;
+    info.has_audio   = false;
 }
 
 ColorMap::ColorMap()
-    : lut_path(""), lut_size(0), needs_refresh(true),
-      intensity(1.0), intensity_r(1.0), intensity_g(1.0), intensity_b(1.0)
+    : lut_path(""), lut_size(0), needs_lut_refresh(true),
+      ref_image_path(""), needs_ref_refresh(false), has_ref_stats(false),
+      has_cached_stats(false),
+      intensity(1.0), intensity_r(1.0), intensity_g(1.0), intensity_b(1.0),
+      cm_preserve(0.3), cm_luminance_blend(0.5),
+      cm_saturation_boost(1.1), cm_contrast_boost(1.1)
 {
     init_effect_details();
-    load_cube_file();
+    cg::initLookupTables();
 }
 
 ColorMap::ColorMap(const std::string &path,
@@ -113,142 +276,125 @@ ColorMap::ColorMap(const std::string &path,
                    const Keyframe &iR,
                    const Keyframe &iG,
                    const Keyframe &iB)
-    : lut_path(path),
-      lut_size(0),
-      needs_refresh(true),
-      intensity(i),
-      intensity_r(iR),
-      intensity_g(iG),
-      intensity_b(iB)
+    : lut_path(path), lut_size(0), needs_lut_refresh(true),
+      ref_image_path(""), needs_ref_refresh(false), has_ref_stats(false),
+      has_cached_stats(false),
+      intensity(i), intensity_r(iR), intensity_g(iG), intensity_b(iB),
+      cm_preserve(0.3), cm_luminance_blend(0.5),
+      cm_saturation_boost(1.1), cm_contrast_boost(1.1)
 {
     init_effect_details();
+    cg::initLookupTables();
     load_cube_file();
 }
+
+void ColorMap::SetRefImagePath(const std::string& path) {
+    ref_image_path = path;
+    needs_ref_refresh = true;
+    has_cached_stats = false;
+    if (!path.empty()) {
+        lut_path.clear();
+        lut_data.clear();
+        lut_size = 0;
+    }
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// GetFrame — main entry point
+// ═══════════════════════════════════════════════════════════════════════════════
 
 std::shared_ptr<openshot::Frame>
 ColorMap::GetFrame(std::shared_ptr<openshot::Frame> frame, int64_t frame_number)
 {
-    // Reload LUT when its path changed; no locking here
-    if (needs_refresh) {
+    if (needs_lut_refresh && !lut_path.empty()) {
         load_cube_file();
-        needs_refresh = false;
+    }
+    if (needs_ref_refresh && !ref_image_path.empty()) {
+        load_ref_image();
     }
 
-    if (lut_data.empty())
+    bool is_lut_mode = (!lut_data.empty() && lut_size > 0);
+    bool is_cm_mode  = (has_ref_stats && !ref_image_path.empty());
+
+    if (!is_lut_mode && !is_cm_mode)
         return frame;
 
     auto image = frame->GetImage();
     int w = image->width(), h = image->height();
-    unsigned char *pixels = image->bits();
-
-    float overall = float(intensity.GetValue(frame_number));
-    float tR = float(intensity_r.GetValue(frame_number)) * overall;
-    float tG = float(intensity_g.GetValue(frame_number)) * overall;
-    float tB = float(intensity_b.GetValue(frame_number)) * overall;
-
+    unsigned char* pixels = image->bits();
     int pixel_count = w * h;
-    #pragma omp parallel for
-    for (int i = 0; i < pixel_count; ++i) {
-        int idx = i * 4;
-        int A = pixels[idx + 3];
-        float alpha = A / 255.0f;
-        if (alpha == 0.0f) continue;
 
-        // demultiply premultiplied RGBA
-        float R = pixels[idx + 0] / alpha;
-        float G = pixels[idx + 1] / alpha;
-        float B = pixels[idx + 2] / alpha;
+    if (is_lut_mode) {
+        // ── LUT mode ────────────────────────────────────────────────────
+        float overall = (float)intensity.GetValue(frame_number);
+        float tR = (float)intensity_r.GetValue(frame_number) * overall;
+        float tG = (float)intensity_g.GetValue(frame_number) * overall;
+        float tB = (float)intensity_b.GetValue(frame_number) * overall;
 
-        // normalize to [0,1]
-        float Rn = R * (1.0f / 255.0f);
-        float Gn = G * (1.0f / 255.0f);
-        float Bn = B * (1.0f / 255.0f);
+        applyTrilinearLut(lut_data.data(), lut_size, pixels, pixel_count, tR, tG, tB);
 
-        // map into LUT space [0 .. size-1]
-        float rf = Rn * (lut_size - 1);
-        float gf = Gn * (lut_size - 1);
-        float bf = Bn * (lut_size - 1);
+    } else {
+        // ── Color match mode ────────────────────────────────────────────
 
-        int r0 = int(floor(rf)), r1 = std::min(r0 + 1, lut_size - 1);
-        int g0 = int(floor(gf)), g1 = std::min(g0 + 1, lut_size - 1);
-        int b0 = int(floor(bf)), b1 = std::min(b0 + 1, lut_size - 1);
+        // Only recompute stats every N frames for speed
+        constexpr int STATS_INTERVAL = 4;
+        bool should_check_stats = !has_cached_stats
+                                  || (frame_number % STATS_INTERVAL == 0);
 
-        float dr = rf - r0;
-        float dg = gf - g0;
-        float db = bf - b0;
+        if (should_check_stats) {
+            int step = std::max(1, (w * h) / 10000);
+            cg::LabStats srcStats = cg::computeLabStats(pixels, w, h, step);
 
-        // compute base offsets with red fastest, then green, then blue
-        int base000 = ((b0 * lut_size + g0) * lut_size + r0) * 3;
-        int base100 = ((b0 * lut_size + g0) * lut_size + r1) * 3;
-        int base010 = ((b0 * lut_size + g1) * lut_size + r0) * 3;
-        int base110 = ((b0 * lut_size + g1) * lut_size + r1) * 3;
-        int base001 = ((b1 * lut_size + g0) * lut_size + r0) * 3;
-        int base101 = ((b1 * lut_size + g0) * lut_size + r1) * 3;
-        int base011 = ((b1 * lut_size + g1) * lut_size + r0) * 3;
-        int base111 = ((b1 * lut_size + g1) * lut_size + r1) * 3;
+            std::lock_guard<std::mutex> lock(bake_mutex);
+            if (!has_cached_stats || !cg::statsAreSimilar(srcStats, cached_src_stats)) {
+                // Bake via shared core
+                baked_lut_data.resize(BAKED_LUT_SIZE * BAKED_LUT_SIZE * BAKED_LUT_SIZE * 3);
+                cg::ColorMatchParams params;
+                params.preserve        = (float)cm_preserve.GetValue(frame_number);
+                params.luminanceBlend  = (float)cm_luminance_blend.GetValue(frame_number);
+                params.saturationBoost = (float)cm_saturation_boost.GetValue(frame_number);
+                params.contrastBoost   = (float)cm_contrast_boost.GetValue(frame_number);
 
-        // trilinear interpolation
-        // red
-        float c00 = lut_data[base000 + 0] * (1 - dr) + lut_data[base100 + 0] * dr;
-        float c01 = lut_data[base001 + 0] * (1 - dr) + lut_data[base101 + 0] * dr;
-        float c10 = lut_data[base010 + 0] * (1 - dr) + lut_data[base110 + 0] * dr;
-        float c11 = lut_data[base011 + 0] * (1 - dr) + lut_data[base111 + 0] * dr;
-        float c0  = c00 * (1 - dg) + c10 * dg;
-        float c1  = c01 * (1 - dg) + c11 * dg;
-        float lr = c0 * (1 - db) + c1 * db;
+                cg::bakeColorMatchLut(baked_lut_data.data(), BAKED_LUT_SIZE,
+                                      srcStats, ref_stats, params);
+                cached_src_stats = srcStats;
+                has_cached_stats = true;
+            }
+        }
 
-        // green
-        c00 = lut_data[base000 + 1] * (1 - dr) + lut_data[base100 + 1] * dr;
-        c01 = lut_data[base001 + 1] * (1 - dr) + lut_data[base101 + 1] * dr;
-        c10 = lut_data[base010 + 1] * (1 - dr) + lut_data[base110 + 1] * dr;
-        c11 = lut_data[base011 + 1] * (1 - dr) + lut_data[base111 + 1] * dr;
-        c0  = c00 * (1 - dg) + c10 * dg;
-        c1  = c01 * (1 - dg) + c11 * dg;
-        float lg = c0 * (1 - db) + c1 * db;
-
-        // blue
-        c00 = lut_data[base000 + 2] * (1 - dr) + lut_data[base100 + 2] * dr;
-        c01 = lut_data[base001 + 2] * (1 - dr) + lut_data[base101 + 2] * dr;
-        c10 = lut_data[base010 + 2] * (1 - dr) + lut_data[base110 + 2] * dr;
-        c11 = lut_data[base011 + 2] * (1 - dr) + lut_data[base111 + 2] * dr;
-        c0  = c00 * (1 - dg) + c10 * dg;
-        c1  = c01 * (1 - dg) + c11 * dg;
-        float lb = c0 * (1 - db) + c1 * db;
-
-        // blend per-channel, re-premultiply alpha
-        float outR = (lr * tR + Rn * (1 - tR)) * alpha;
-        float outG = (lg * tG + Gn * (1 - tG)) * alpha;
-        float outB = (lb * tB + Bn * (1 - tB)) * alpha;
-
-        pixels[idx + 0] = constrain(outR * 255.0f);
-        pixels[idx + 1] = constrain(outG * 255.0f);
-        pixels[idx + 2] = constrain(outB * 255.0f);
-        // alpha left unchanged
+        applyTrilinearLut(baked_lut_data.data(), BAKED_LUT_SIZE, pixels, pixel_count, 1.0f, 1.0f, 1.0f);
     }
 
     return frame;
 }
 
 
-std::string ColorMap::Json() const
-{
+// ═══════════════════════════════════════════════════════════════════════════════
+// JSON serialization
+// ═══════════════════════════════════════════════════════════════════════════════
+
+std::string ColorMap::Json() const {
     return JsonValue().toStyledString();
 }
 
-Json::Value ColorMap::JsonValue() const
-{
+Json::Value ColorMap::JsonValue() const {
     Json::Value root = EffectBase::JsonValue();
-    root["type"]         = info.class_name;
-    root["lut_path"]     = lut_path;
-    root["intensity"] = intensity.JsonValue();
+    root["type"]           = info.class_name;
+    root["lut_path"]       = lut_path;
+    root["ref_image_path"] = ref_image_path;
+    root["intensity"]   = intensity.JsonValue();
     root["intensity_r"] = intensity_r.JsonValue();
     root["intensity_g"] = intensity_g.JsonValue();
     root["intensity_b"] = intensity_b.JsonValue();
+    root["cm_preserve"]         = cm_preserve.JsonValue();
+    root["cm_luminance_blend"]  = cm_luminance_blend.JsonValue();
+    root["cm_saturation_boost"] = cm_saturation_boost.JsonValue();
+    root["cm_contrast_boost"]   = cm_contrast_boost.JsonValue();
     return root;
 }
 
-void ColorMap::SetJson(const std::string value)
-{
+void ColorMap::SetJson(const std::string value) {
     try {
         const Json::Value root = openshot::stringToJson(value);
         SetJsonValue(root);
@@ -258,13 +404,16 @@ void ColorMap::SetJson(const std::string value)
     }
 }
 
-void ColorMap::SetJsonValue(const Json::Value root)
-{
+void ColorMap::SetJsonValue(const Json::Value root) {
     EffectBase::SetJsonValue(root);
-    if (!root["lut_path"].isNull())
-    {
+
+    if (!root["lut_path"].isNull()) {
         lut_path = root["lut_path"].asString();
-        needs_refresh = true;
+        needs_lut_refresh = true;
+    }
+    if (!root["ref_image_path"].isNull()) {
+        ref_image_path = root["ref_image_path"].asString();
+        needs_ref_refresh = true;
     }
     if (!root["intensity"].isNull())
         intensity.SetJsonValue(root["intensity"]);
@@ -274,34 +423,49 @@ void ColorMap::SetJsonValue(const Json::Value root)
         intensity_g.SetJsonValue(root["intensity_g"]);
     if (!root["intensity_b"].isNull())
         intensity_b.SetJsonValue(root["intensity_b"]);
+    if (!root["cm_preserve"].isNull())
+        cm_preserve.SetJsonValue(root["cm_preserve"]);
+    if (!root["cm_luminance_blend"].isNull())
+        cm_luminance_blend.SetJsonValue(root["cm_luminance_blend"]);
+    if (!root["cm_saturation_boost"].isNull())
+        cm_saturation_boost.SetJsonValue(root["cm_saturation_boost"]);
+    if (!root["cm_contrast_boost"].isNull())
+        cm_contrast_boost.SetJsonValue(root["cm_contrast_boost"]);
 }
 
-std::string ColorMap::PropertiesJSON(int64_t requested_frame) const
-{
+std::string ColorMap::PropertiesJSON(int64_t requested_frame) const {
     Json::Value root = BasePropertiesJSON(requested_frame);
 
     root["lut_path"] = add_property_json(
         "LUT File", 0.0, "string", lut_path, nullptr, 0, 0, false, requested_frame);
 
     root["intensity"] = add_property_json(
-        "Overall Intensity",
-        intensity.GetValue(requested_frame),
+        "Overall Intensity", intensity.GetValue(requested_frame),
         "float", "", &intensity, 0.0, 1.0, false, requested_frame);
-
     root["intensity_r"] = add_property_json(
-        "Red Intensity",
-        intensity_r.GetValue(requested_frame),
+        "Red Intensity", intensity_r.GetValue(requested_frame),
         "float", "", &intensity_r, 0.0, 1.0, false, requested_frame);
-
     root["intensity_g"] = add_property_json(
-        "Green Intensity",
-        intensity_g.GetValue(requested_frame),
+        "Green Intensity", intensity_g.GetValue(requested_frame),
         "float", "", &intensity_g, 0.0, 1.0, false, requested_frame);
-
     root["intensity_b"] = add_property_json(
-        "Blue Intensity",
-        intensity_b.GetValue(requested_frame),
+        "Blue Intensity", intensity_b.GetValue(requested_frame),
         "float", "", &intensity_b, 0.0, 1.0, false, requested_frame);
+
+    root["ref_image_path"] = add_property_json(
+        "Reference Image", 0.0, "string", ref_image_path, nullptr, 0, 0, false, requested_frame);
+    root["cm_preserve"] = add_property_json(
+        "Preservation", cm_preserve.GetValue(requested_frame),
+        "float", "", &cm_preserve, 0.0, 1.0, false, requested_frame);
+    root["cm_luminance_blend"] = add_property_json(
+        "Luminance Blend", cm_luminance_blend.GetValue(requested_frame),
+        "float", "", &cm_luminance_blend, 0.0, 1.0, false, requested_frame);
+    root["cm_saturation_boost"] = add_property_json(
+        "Saturation Boost", cm_saturation_boost.GetValue(requested_frame),
+        "float", "", &cm_saturation_boost, 0.5, 2.0, false, requested_frame);
+    root["cm_contrast_boost"] = add_property_json(
+        "Contrast Boost", cm_contrast_boost.GetValue(requested_frame),
+        "float", "", &cm_contrast_boost, 0.5, 2.0, false, requested_frame);
 
     return root.toStyledString();
 }

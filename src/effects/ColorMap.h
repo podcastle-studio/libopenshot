@@ -1,6 +1,6 @@
 /**
  * @file
- * @brief Header file for ColorMap (LUT) effect
+ * @brief Header file for ColorMap (LUT + Color Match) effect
  * @author Jonathan Thomas <jonathan@openshot.org>
  *
  * @ref License
@@ -16,76 +16,101 @@
 #include "../EffectBase.h"
 #include "../Json.h"
 #include "../KeyFrame.h"
-#include <QString>
-#include <QFile>
-#include <QTextStream>
+#include "color_grading_core.h"
+
 #include <vector>
 #include <string>
+#include <mutex>
 
 namespace openshot
 {
 
     /**
-     * @brief Applies a 3D LUT (.cube) color transform to each frame.
+     * @brief Applies a 3D LUT (.cube) color transform or Reinhard color matching to each frame.
      *
-     * Loads a .cube file (LUT_3D_SIZE N × N × N) into memory, then for each pixel
-     * uses nearest‐neighbor lookup and blends the result by keyframable per‐channel intensities.
+     * Two modes (auto-detected from which path is set):
+     *
+     * **LUT mode** (`lut_path` set): Loads a .cube file, resamples to 17³,
+     * applies trilinear interpolation per pixel with keyframable per-channel intensities.
+     *
+     * **Color Match mode** (`ref_image_path` set): Computes Lab statistics from a reference
+     * image once, then per frame: computes source stats (downsampled), bakes Reinhard color
+     * transfer into a 17³ 3D LUT, and applies via the same fast trilinear path.
+     *
+     * Core algorithms shared with WASM web build via color_grading_core.h/cpp.
+     * This wrapper adds: OpenMP parallelized trilinear apply, QImage loading,
+     * EffectBase integration, keyframe animation.
      */
     class ColorMap : public EffectBase
     {
     private:
-        std::string lut_path;             ///< Filesystem path to .cube LUT file
-        int lut_size;                     ///< Dimension N of the cube (LUT_3D_SIZE)
-        std::vector<float> lut_data;      ///< Flat array [N³ × 3] RGB lookup table
-        bool needs_refresh;               ///< Reload LUT on next frame
+        // ── LUT mode state ──────────────────────────────────────────────────
+        std::string lut_path;
+        int lut_size;
+        std::vector<float> lut_data;       ///< Stride-3 [N³ × 3], resampled to 17³
+        bool needs_lut_refresh;
 
-        /// Populate info fields (class_name, name, description)
+        // ── Color match mode state ──────────────────────────────────────────
+        std::string ref_image_path;
+        bool needs_ref_refresh;
+
+        cg::LabStats ref_stats;
+        bool has_ref_stats;
+
+        std::vector<float> baked_lut_data; ///< Stride-3 [17³ × 3]
+        static constexpr int BAKED_LUT_SIZE = 17;
+
+        cg::LabStats cached_src_stats;
+        bool has_cached_stats;
+
+        std::mutex bake_mutex;
+
+        // ── Internal methods ────────────────────────────────────────────────
         void init_effect_details();
-
-        /// Parse the .cube file into lut_size & lut_data
         void load_cube_file();
+        void load_ref_image();
+
+        /// OpenMP parallelized trilinear apply with coord table + fast paths
+        static void applyTrilinearLut(const float* lut, int size,
+                                      unsigned char* pixels, int pixel_count,
+                                      float tR, float tG, float tB);
 
     public:
-        Keyframe intensity;               ///< Overall intensity 0–1 (affects all channels)
-        Keyframe intensity_r;             ///< Blend 0–1 for red channel
-        Keyframe intensity_g;             ///< Blend 0–1 for green channel
-        Keyframe intensity_b;             ///< Blend 0–1 for blue channel
+        // ── LUT mode keyframes ──────────────────────────────────────────────
+        Keyframe intensity;
+        Keyframe intensity_r;
+        Keyframe intensity_g;
+        Keyframe intensity_b;
 
-        /// Blank constructor (used by JSON loader)
+        // ── Color match keyframes ───────────────────────────────────────────
+        Keyframe cm_preserve;
+        Keyframe cm_luminance_blend;
+        Keyframe cm_saturation_boost;
+        Keyframe cm_contrast_boost;
+
         ColorMap();
 
-        /**
-         * @brief Constructor with LUT path and per‐channel intensities
-         *
-         * @param path         Filesystem path to .cube file
-         * @param i            Keyframe for overall intensity (0–1)
-         * @param iR           Keyframe for red blend (0–1)
-         * @param iG           Keyframe for green blend (0–1)
-         * @param iB           Keyframe for blue blend (0–1)
-         */
         ColorMap(const std::string &path,
-                 const Keyframe &i = Keyframe(1.0),
+                 const Keyframe &i  = Keyframe(1.0),
                  const Keyframe &iR = Keyframe(1.0),
                  const Keyframe &iG = Keyframe(1.0),
                  const Keyframe &iB = Keyframe(1.0));
 
-        /// Apply effect to a new frame
+        void SetRefImagePath(const std::string& path);
+        std::string GetRefImagePath() const { return ref_image_path; }
+
         std::shared_ptr<openshot::Frame>
         GetFrame(int64_t frame_number) override
         { return GetFrame(std::make_shared<openshot::Frame>(), frame_number); }
 
-        /// Apply effect to an existing frame
         std::shared_ptr<openshot::Frame>
         GetFrame(std::shared_ptr<openshot::Frame> frame,
                  int64_t frame_number) override;
 
-        // JSON serialization
         std::string Json() const override;
         Json::Value JsonValue() const override;
         void SetJson(const std::string value) override;
         void SetJsonValue(const Json::Value root) override;
-
-        /// Expose properties (for UI)
         std::string PropertiesJSON(int64_t requested_frame) const override;
     };
 
