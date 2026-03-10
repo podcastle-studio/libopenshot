@@ -471,29 +471,30 @@ if (TARGET babl_lib)
   target_link_libraries(openshot PUBLIC babl_lib)
 endif ()
 
-find_package(OpenCV 4)
+################## OPENCV ###################
+# OpenCV is required for core image processing (cv::Mat, GetImageCV, etc.)
+find_package(OpenCV 4 REQUIRED)
+
+if(OpenCV_VERSION VERSION_EQUAL "4.5.1")
+  message(FATAL_ERROR [[Incompatible OpenCV version detected
+OpenCV version 4.5.1 contains header errors which make it unable to be used with OpenShot. Upgrade to OpenCV 4.5.2+ or downgrade to 4.5.0 or earlier.
+See https://github.com/opencv/opencv/issues/19260]])
+endif()
+
 target_link_libraries(openshot PUBLIC
-        opencv_core
-        opencv_video
-        opencv_highgui
-        opencv_dnn
-        opencv_tracking
+  opencv_core
+  opencv_video
+  opencv_highgui
 )
 target_compile_definitions(openshot PUBLIC USE_OPENCV=1)
-################## OPENCV ###################
+
+# Keep track of OpenCV version, to embed in our version header
+set(OPENCV_VERSION_STR "${OpenCV_VERSION}" CACHE STRING "OpenCV version linked with" FORCE)
+mark_as_advanced(OPENCV_VERSION_STR)
+
+# Advanced OpenCV effects (Tracker, Stabilizer, ObjectDetection, Outline)
+# Disabled by default, enable with -DENABLE_OPENCV_EFFECTS=1
 if(ENABLE_OPENCV_EFFECTS)
-  find_package(OpenCV 4)
-  if(NOT OpenCV_FOUND)
-    set(ENABLE_OPENCV FALSE CACHE BOOL
-      "Build with OpenCV algorithms (requires Protobuf 3)" FORCE)
-  # If we have version 4.5.1, all hope is lost
-  elseif(OpenCV_VERSION VERSION_EQUAL "4.5.1")
-    message(WARNING [[Incompatible OpenCV version detected
-OpenCV version 4.5.1 contains header errors which make it unable to be used with OpenShot. OpenCV support wil be disabled. Upgrade to OpenCV 4.5.2+ or downgrade to 4.5.0 or earlier, to enable OpenCV.
-See https://github.com/opencv/opencv/issues/19260]])
-    set(ENABLE_OPENCV FALSE CACHE BOOL
-      "Build with OpenCV algorithms (requires Protobuf 3)" FORCE)
-  else()
     ###
     ### Protocol Buffers
     ###
@@ -520,7 +521,7 @@ See https://github.com/opencv/opencv/issues/19260]])
     target_link_libraries(openshot PRIVATE protobuf::libprotobuf)
 
     ###
-    ### OpenCV
+    ### OpenCV advanced modules
     ###
 
     # Add OpenCV source files
@@ -529,27 +530,19 @@ See https://github.com/opencv/opencv/issues/19260]])
     )
     target_compile_definitions(openshot PUBLIC USE_OPENCV_EFFECTS=1)
     target_link_libraries(openshot PUBLIC
-      opencv_core
-      opencv_video
-      opencv_highgui
       opencv_dnn
       opencv_tracking
     )
-    set(HAVE_OPENCV TRUE CACHE BOOL "Building with OpenCV effects" FORCE)
-    mark_as_advanced(HAVE_OPENCV)
-
-    # Keep track of OpenCV version, to embed in our version header
-    set(OPENCV_VERSION_STR "${OpenCV_VERSION}" CACHE STRING "OpenCV version linked with" FORCE)
-    mark_as_advanced(OPENCV_VERSION_STR)
+    set(HAVE_OPENCV_EFFECTS TRUE CACHE BOOL "Building with advanced OpenCV effects" FORCE)
+    mark_as_advanced(HAVE_OPENCV_EFFECTS)
 
     # We may need to use Tracker as opencv::legacy::Tracker
     if(OpenCV_VERSION VERSION_GREATER "4.5.1")
       target_compile_definitions(openshot PUBLIC USE_LEGACY_TRACKER=1)
     endif()
 
-  endif()
-endif()  # ENABLE_OPENCV
-add_feature_info("OpenCV algorithms" ENABLE_OPENCV "Use OpenCV algorithms")
+endif()  # ENABLE_OPENCV_EFFECTS
+add_feature_info("OpenCV advanced effects" ENABLE_OPENCV_EFFECTS "Tracker, Stabilizer, ObjectDetection, Outline")
 
 
 ###############  SKIA LIBRARY  #################

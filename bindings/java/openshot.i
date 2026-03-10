@@ -185,7 +185,7 @@
 %include "effects/Shift.h"
 %include "effects/SphericalProjection.cpp"
 %include "effects/Wave.h"
-#ifdef USE_OPENCV
+#ifdef USE_OPENCV_EFFECTS
     %include "effects/Stabilizer.h"
     %include "effects/Tracker.h"
     %include "effects/ObjectDetection.h"

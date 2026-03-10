@@ -53,7 +53,8 @@ include(GNUInstallDirs)
 # Collect and display summary of options/dependencies
 include(FeatureSummary)
 
-# Unit test management
+# Unit test management (disabled by default, enable with -DBUILD_TESTING=1 or -DENABLE_TESTS=1)
+set(BUILD_TESTING OFF CACHE BOOL "Build unit tests (requires Catch2)")
 include(CTest)
 
 ################ OPTIONS ##################
@@ -71,7 +72,7 @@ option(APPIMAGE_BUILD "Build to install in an AppImage (Linux only)" OFF)
 option(USE_SYSTEM_JSONCPP "Use system installed JsonCpp, if found" ON)
 option(DISABLE_BUNDLED_JSONCPP "Don't fall back to bundled JsonCpp" OFF)
 option(ENABLE_MAGICK "Use ImageMagick, if available" ON)
-option(ENABLE_OPENCV "Build with OpenCV algorithms (requires Boost, Protobuf 3)" ON)
+option(ENABLE_OPENCV_EFFECTS "Build with advanced OpenCV effects: Tracker, Stabilizer, ObjectDetection, Outline (requires Protobuf 3)" OFF)
 option(USE_HW_ACCEL "Enable hardware-accelerated encoding-decoding with FFmpeg 3.4+" ON)
 
 # Legacy commandline override
