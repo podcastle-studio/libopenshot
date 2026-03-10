@@ -25,20 +25,38 @@ std::string EffectInfo::Json() {
 // Create a new effect instance
 EffectBase* EffectInfo::CreateEffect(std::string effect_type) {
 	// Init the matching effect object
-	if (effect_type == "Bars")
+	if (effect_type == "Alpha")
+		return new Alpha();
+
+	else if (effect_type == "Bars")
 		return new Bars();
 
-	if (effect_type == "Blur")
+	else if (effect_type == "Blur")
 		return new Blur();
+
+	else if (effect_type == "BorderReflectedMove")
+		return new BorderReflectedMove();
+
+	else if (effect_type == "BorderReflectedRotation")
+		return new BorderReflectedRotation();
 
 	else if (effect_type == "Brightness")
 		return new Brightness();
+
+	else if (effect_type == "CameraMovement")
+		return new CameraMovement();
 
 	else if (effect_type == "Caption")
 		return new Caption();
 
 	else if (effect_type == "ChromaKey")
 		return new ChromaKey();
+
+	else if (effect_type == "CircleMask")
+		return new CircleMask();
+
+	else if (effect_type == "ColorAdjustment")
+		return new ColorAdjustment();
 
 	else if (effect_type == "ColorMap")
 		return new ColorMap();
@@ -52,11 +70,20 @@ EffectBase* EffectInfo::CreateEffect(std::string effect_type) {
 	else if (effect_type == "Deinterlace")
 		return new Deinterlace();
 
+	else if (effect_type == "Enhancement")
+		return new Enhancement();
+
+	else if (effect_type == "Exposure")
+		return new Exposure();
+
 	else if (effect_type == "Hue")
 		return new Hue();
 
 	else if (effect_type == "LensFlare")
 		return new LensFlare();
+
+	else if (effect_type == "LightAdjustment")
+		return new LightAdjustment();
 
 	else if (effect_type == "Mask")
 		return new Mask();
@@ -79,8 +106,17 @@ EffectBase* EffectInfo::CreateEffect(std::string effect_type) {
 	else if (effect_type == "SphericalProjection")
 		return new SphericalProjection();
 
+	else if (effect_type == "SplitShift")
+		return new SplitShift();
+
 	else if (effect_type == "Wave")
 		return new Wave();
+
+	else if (effect_type == "Wipe")
+		return new Wipe();
+
+	else if (effect_type == "Zoom")
+		return new Zoom();
 
 	else if(effect_type == "Noise")
 		return new Noise();
@@ -134,17 +170,26 @@ Json::Value EffectInfo::JsonValue() {
 	Json::Value root;
 
 	// Append info JSON from each supported effect
+	root.append(Alpha().JsonInfo());
 	root.append(Bars().JsonInfo());
 	root.append(Blur().JsonInfo());
+	root.append(BorderReflectedMove().JsonInfo());
+	root.append(BorderReflectedRotation().JsonInfo());
 	root.append(Brightness().JsonInfo());
+	root.append(CameraMovement().JsonInfo());
 	root.append(Caption().JsonInfo());
 	root.append(ChromaKey().JsonInfo());
+	root.append(CircleMask().JsonInfo());
+	root.append(ColorAdjustment().JsonInfo());
 	root.append(ColorMap().JsonInfo());
 	root.append(ColorShift().JsonInfo());
 	root.append(Crop().JsonInfo());
 	root.append(Deinterlace().JsonInfo());
+	root.append(Enhancement().JsonInfo());
+	root.append(Exposure().JsonInfo());
 	root.append(Hue().JsonInfo());
 	root.append(LensFlare().JsonInfo());
+	root.append(LightAdjustment().JsonInfo());
 	root.append(Mask().JsonInfo());
 	root.append(Negate().JsonInfo());
 	root.append(Pixelate().JsonInfo());
@@ -152,7 +197,10 @@ Json::Value EffectInfo::JsonValue() {
 	root.append(Sharpen().JsonInfo());
 	root.append(Shift().JsonInfo());
 	root.append(SphericalProjection().JsonInfo());
+	root.append(SplitShift().JsonInfo());
 	root.append(Wave().JsonInfo());
+	root.append(Wipe().JsonInfo());
+	root.append(Zoom().JsonInfo());
 	/* Audio */
 	root.append(Noise().JsonInfo());
 	root.append(Delay().JsonInfo());

@@ -7,6 +7,12 @@
 using namespace openshot;
 
 /// Blank constructor, useful when using Json to load the effect properties
+Wipe::Wipe() : mLevelsLowPercentage(0.0), mLevelsHighPercentage(100.0), enableEffect(1) {
+	// Init effect properties
+	init_effect_details();
+}
+
+// Default constructor
 Wipe::Wipe(Keyframe levelsLowPercentage, Keyframe levelsHighPercentage, Keyframe enableEffect)
     : mLevelsLowPercentage(levelsLowPercentage), mLevelsHighPercentage(levelsHighPercentage), enableEffect(enableEffect) {
 	// Init effect properties
@@ -60,6 +66,7 @@ Json::Value Wipe::JsonValue() const {
 	root["type"] = info.class_name;
     root["levelsLowPercentage"] = mLevelsLowPercentage.JsonValue();
     root["levelsHighPercentage"] = mLevelsHighPercentage.JsonValue();
+	root["enableEffect"] = enableEffect.JsonValue();
 	// return JsonValue
 	return root;
 }
@@ -85,6 +92,14 @@ void Wipe::SetJson(const std::string value) {
 void Wipe::SetJsonValue(const Json::Value root) {
 	// Set parent data
 	EffectBase::SetJsonValue(root);
+
+	// Set data from Json (if key is found)
+	if (!root["levelsLowPercentage"].isNull())
+		mLevelsLowPercentage.SetJsonValue(root["levelsLowPercentage"]);
+	if (!root["levelsHighPercentage"].isNull())
+		mLevelsHighPercentage.SetJsonValue(root["levelsHighPercentage"]);
+	if (!root["enableEffect"].isNull())
+		enableEffect.SetJsonValue(root["enableEffect"]);
 }
 
 // Get all properties for a specific frame

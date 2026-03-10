@@ -103,7 +103,7 @@ void CircleMask::SetJsonValue(const Json::Value root) {
 
 	// Set data from Json (if key is found)
 	if (!root["circleRadius"].isNull())
-		circleRadius = root["circleRadius"].asBool();
+		circleRadius.SetJsonValue(root["circleRadius"]);
 }
 
 // Get all properties for a specific frame

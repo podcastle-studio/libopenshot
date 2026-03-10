@@ -64,6 +64,8 @@ Json::Value Zoom::JsonValue() const {
 	Json::Value root = EffectBase::JsonValue(); // get parent properties
 	root["type"] = info.class_name;
 	root["zoomPercent"] = zoomPercent.JsonValue();
+	root["anchorX"] = anchorX.JsonValue();
+	root["anchorY"] = anchorY.JsonValue();
 
 	// return JsonValue
 	return root;
@@ -94,7 +96,11 @@ void Zoom::SetJsonValue(const Json::Value root) {
 
 	// Set data from Json (if key is found)
 	if (!root["zoomPercent"].isNull())
-        zoomPercent.SetJsonValue(root["color"]);
+		zoomPercent.SetJsonValue(root["zoomPercent"]);
+	if (!root["anchorX"].isNull())
+		anchorX.SetJsonValue(root["anchorX"]);
+	if (!root["anchorY"].isNull())
+		anchorY.SetJsonValue(root["anchorY"]);
 }
 
 // Get all properties for a specific frame

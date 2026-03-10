@@ -75,6 +75,7 @@ Json::Value SplitShift::JsonValue() const {
 	root["type"] = info.class_name;
 	root["splitPoint"] = splitPoint.JsonValue();
 	root["shiftAmount"] = shiftAmount.JsonValue();
+	root["isHorizontal"] = isHorizontal;
 
 	// return JsonValue
 	return root;
@@ -108,6 +109,8 @@ void SplitShift::SetJsonValue(const Json::Value root) {
 		splitPoint.SetJsonValue(root["splitPoint"]);
 	if (!root["shiftAmount"].isNull())
 		shiftAmount.SetJsonValue(root["shiftAmount"]);
+	if (!root["isHorizontal"].isNull())
+		isHorizontal = root["isHorizontal"].asBool();
 }
 
 // Get all properties for a specific frame

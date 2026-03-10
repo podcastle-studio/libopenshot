@@ -25,7 +25,7 @@ namespace openshot
         Keyframe mLevelsHighPercentage;
 		Keyframe enableEffect;
 		/// Blank constructor, useful when using Json to load the effect properties
-		Wipe() = default;
+		Wipe();
 
         Wipe(Keyframe levelsLowPercentage, Keyframe levelsHighPercentage, Keyframe enableEffect = 1);
 

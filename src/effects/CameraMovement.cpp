@@ -115,6 +115,10 @@ Json::Value CameraMovement::JsonValue() const {
 	// Create root json object
 	Json::Value root = EffectBase::JsonValue(); // get parent properties
 	root["type"] = info.class_name;
+	root["rotationAngle"] = rotationAngle.JsonValue();
+	root["zoomPercent"] = zoomPercent.JsonValue();
+	root["moveX"] = moveX.JsonValue();
+	root["moveY"] = moveY.JsonValue();
 
 	// return JsonValue
 	return root;
@@ -144,7 +148,14 @@ void CameraMovement::SetJsonValue(const Json::Value root) {
 	EffectBase::SetJsonValue(root);
 
 	// Set data from Json (if key is found)
-
+	if (!root["rotationAngle"].isNull())
+		rotationAngle.SetJsonValue(root["rotationAngle"]);
+	if (!root["zoomPercent"].isNull())
+		zoomPercent.SetJsonValue(root["zoomPercent"]);
+	if (!root["moveX"].isNull())
+		moveX.SetJsonValue(root["moveX"]);
+	if (!root["moveY"].isNull())
+		moveY.SetJsonValue(root["moveY"]);
 }
 
 // Get all properties for a specific frame
