@@ -167,6 +167,8 @@ namespace openshot {
 
 		std::map<std::string, std::shared_ptr<openshot::TrackedObjectBase>> tracked_objects; ///< map of TrackedObjectBBoxes and their IDs
 
+		bool rendering_audio; ///< If false, clips skip expensive audio time-mapping (set by writer when exporting without audio)
+
 		/// Process a new layer of video or audio
 		void add_layer(std::shared_ptr<openshot::Frame> new_frame, openshot::Clip* source_clip, int64_t clip_frame_number, bool is_top_clip, float max_volume);
 
@@ -364,6 +366,12 @@ namespace openshot {
 		/// @brief Sort all clips and effects on timeline - which affects the internal order of clips and effects arrays
 		/// This is called automatically when Clips or Effects modify the Layer(), Position(), Start(), or End().
 		void SortTimeline() { sort_clips(); sort_effects(); }
+
+		/// @brief Set whether clips should run audio time-mapping when rendering.
+		/// If false, all clips skip audio processing (timeline output is silent). SetAudioOptions on the
+		/// writer still works: the file can have an audio stream (silent). Call before WriteFrame(reader, ...).
+		/// The writer sets this to false when SetSkipClipAudioProcessing(true) or when it has no audio stream.
+		void SetRenderingAudio(bool need_audio) { rendering_audio = need_audio; }
 	};
 
 }

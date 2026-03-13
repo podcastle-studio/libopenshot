@@ -167,8 +167,9 @@ namespace openshot {
 		/// Get a frame object or create a blank one
 		std::shared_ptr<openshot::Frame> GetOrCreateFrame(int64_t number, bool enable_time=true);
 
-		/// Adjust the audio and image of a time mapped frame
-		void apply_timemapping(std::shared_ptr<openshot::Frame> frame);
+		/// Adjust the audio and image of a time mapped frame.
+		/// @param options If non-null and need_audio is false, skips expensive audio resampling (output frame gets silence).
+		void apply_timemapping(std::shared_ptr<openshot::Frame> frame, openshot::TimelineInfoStruct* options = nullptr);
 
 		/// Compare 2 floating point numbers and return true if they are extremely close
 		bool isNear(double a, double b);

@@ -33,6 +33,8 @@ namespace openshot {
 	{
 		bool is_top_clip;				 ///< Is clip on top (if overlapping another clip)
 		bool is_before_clip_keyframes;	///< Is this before clip keyframes are applied
+		bool need_audio = true;			 ///< If false, no clip audio is needed (e.g. writer has no audio or SetRenderingAudio(false))
+		bool need_this_clip_audio = true; ///< If false, this clip's audio is not needed (e.g. clip volume is 0); skip time-mapping for this clip
 	};
 
 	/**

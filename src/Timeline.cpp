@@ -29,7 +29,7 @@ using namespace openshot;
 // Default Constructor for the timeline (which sets the canvas width and height)
 Timeline::Timeline(int width, int height, Fraction fps, int sample_rate, int channels, ChannelLayout channel_layout) :
 		is_open(false), auto_map_clips(true), managed_cache(true), path(""),
-		max_concurrent_frames(OPEN_MP_NUM_PROCESSORS), max_time(0.0)
+		max_concurrent_frames(OPEN_MP_NUM_PROCESSORS), max_time(0.0), rendering_audio(true)
 {
 	// Create CrashHandler and Attach (incase of errors)
 	CrashHandler::Instance();
@@ -83,7 +83,7 @@ Timeline::Timeline(const ReaderInfo info) : Timeline::Timeline(
 // Constructor for the timeline (which loads a JSON structure from a file path, and initializes a timeline)
 Timeline::Timeline(const std::string& projectPath, bool convert_absolute_paths) :
 		is_open(false), auto_map_clips(true), managed_cache(true), path(projectPath),
-		max_concurrent_frames(OPEN_MP_NUM_PROCESSORS), max_time(0.0) {
+		max_concurrent_frames(OPEN_MP_NUM_PROCESSORS), max_time(0.0), rendering_audio(true) {
 
 	// Create CrashHandler and Attach (incase of errors)
 	CrashHandler::Instance();
@@ -650,6 +650,9 @@ void Timeline::add_layer(std::shared_ptr<Frame> new_frame, Clip* source_clip, in
 	TimelineInfoStruct* options = new TimelineInfoStruct();
 	options->is_top_clip = is_top_clip;
 	options->is_before_clip_keyframes = true;
+	options->need_audio = rendering_audio;
+	float clip_volume = source_clip->volume.GetValue(clip_frame_number);
+	options->need_this_clip_audio = rendering_audio && (clip_volume > 0.0f);
 
 	// Get the clip's frame, composited on top of the current timeline frame
 	std::shared_ptr<Frame> source_frame;

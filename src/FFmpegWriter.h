@@ -124,6 +124,7 @@ namespace openshot {
 		bool prepare_streams;
 		bool write_header;
 		bool write_trailer;
+		bool skip_clip_audio_processing = false; ///< When true, timeline clips skip audio time-mapping (silent track, faster export)
 
 		AVFormatContext* oc;
 		AVStream *audio_st, *video_st;
@@ -317,6 +318,11 @@ namespace openshot {
 		/// @param pitch_deg The pitch angle in degrees (vertical orientation, default 0)
 		/// @param roll_deg The roll angle in degrees (tilt orientation, default 0)
 		void AddSphericalMetadata(const std::string& projection="equirectangular", float yaw_deg=0.0f, float pitch_deg=0.0f, float roll_deg=0.0f);
+
+		/// @brief When true, the timeline skips all per-clip audio processing during WriteFrame(reader, ...);
+		/// the output audio track is silent. SetAudioOptions(true, ...) is unchanged (file still has an audio
+		/// stream). Use for faster export when you do not need clip audio. Call before WriteFrame. Default false.
+		void SetSkipClipAudioProcessing(bool skip) { skip_clip_audio_processing = skip; }
 
 	};
 

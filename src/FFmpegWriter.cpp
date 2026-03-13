@@ -26,6 +26,7 @@
 #include "Frame.h"
 #include "OpenMPUtilities.h"
 #include "Settings.h"
+#include "Timeline.h"
 #include "ZmqLogger.h"
 
 using namespace openshot;
@@ -735,6 +736,13 @@ void FFmpegWriter::write_frame(std::shared_ptr<Frame> frame) {
 
 // Write a block of frames from a reader
 void FFmpegWriter::WriteFrame(ReaderBase *reader, int64_t start, int64_t length) {
+	// When the reader is a Timeline, tell it whether clips should run audio time-mapping.
+	// Default: use writer's has_audio. Set skip_clip_audio_processing=true when you want an
+	// audio stream (e.g. silent track) but no per-clip audio processing for speed.
+	Timeline* timeline = dynamic_cast<Timeline*>(reader);
+	if (timeline)
+		timeline->SetRenderingAudio(skip_clip_audio_processing ? false : info.has_audio);
+
 	ZmqLogger::Instance()->AppendDebugMethod(
 		"FFmpegWriter::WriteFrame (from Reader)",
 		"start", start,

@@ -476,7 +476,7 @@ std::shared_ptr<Frame> Clip::GetFrame(std::shared_ptr<openshot::Frame> backgroun
             }
 
             // Get time mapped frame object (used to increase speed, change direction, etc...)
-            apply_timemapping(frame);
+            apply_timemapping(frame, options);
 
             // Apply waveform image (if any)
             apply_waveform(frame, timeline_size);
@@ -603,7 +603,7 @@ std::string Clip::get_file_extension(std::string path)
 }
 
 // Adjust the audio and image of a time mapped frame
-void Clip::apply_timemapping(std::shared_ptr<Frame> frame)
+void Clip::apply_timemapping(std::shared_ptr<Frame> frame, openshot::TimelineInfoStruct* options)
 {
 	// Check for valid reader
 	if (!reader)
@@ -633,6 +633,13 @@ void Clip::apply_timemapping(std::shared_ptr<Frame> frame)
 															  Reader()->info.sample_rate,
 															  Reader()->info.channels);
 		int source_sample_count = round(target_sample_count * fabs(delta));
+
+		// Skip expensive audio time-mapping when: no audio needed globally, this clip's audio not needed (e.g. volume 0),
+		// or this clip's source has no audio (we would output silence anyway).
+		if ((options && (!options->need_audio || !options->need_this_clip_audio)) || !Reader()->info.has_audio) {
+			frame->AddAudioSilence(target_sample_count);
+			return;
+		}
 
 		// Determine starting audio location
 		AudioLocation location;

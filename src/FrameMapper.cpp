@@ -41,8 +41,8 @@ FrameMapper::FrameMapper(ReaderBase *reader, Fraction target, PulldownType targe
 	info.width = reader->info.width;
 	info.height = reader->info.height;
 
-	// Enable/Disable audio (based on settings)
-	info.has_audio = info.sample_rate > 0 && info.channels > 0;
+	// Enable audio only if the underlying reader has audio and we have a target format
+	info.has_audio = reader->info.has_audio && (info.sample_rate > 0 && info.channels > 0);
 
 	// Used to toggle odd / even fields
 	field_toggle = true;
@@ -811,8 +811,8 @@ void FrameMapper::ChangeMapping(Fraction target_fps, PulldownType target_pulldow
 	info.channels = target_channels;
 	info.channel_layout = target_channel_layout;
 
-	// Enable/Disable audio (based on settings)
-	info.has_audio = info.sample_rate > 0 && info.channels > 0;
+	// Enable audio only if the underlying reader has audio and we have a target format
+	info.has_audio = reader->info.has_audio && (info.sample_rate > 0 && info.channels > 0);
 
 	// Clear cache
 	final_cache.Clear();
