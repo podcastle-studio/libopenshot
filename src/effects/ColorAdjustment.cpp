@@ -221,7 +221,7 @@ void ColorAdjustment::SetJsonValue(const Json::Value root) {
     if (!root["temperature"].isNull())
         temperature.SetJsonValue(root["temperature"]);
     if (!root["tint"].isNull())
-        tintlocatio.SetJsonValue(root["tint"]);
+        tint.SetJsonValue(root["tint"]);
     if (!root["vibrance"].isNull())
         vibrance.SetJsonValue(root["vibrance"]);
     if (!root["saturation"].isNull())

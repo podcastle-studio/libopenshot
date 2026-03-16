@@ -16,11 +16,9 @@
 #include "../EffectBase.h"
 #include "../Json.h"
 #include "../KeyFrame.h"
-#include "image-processing-lib/src/ColorGrading/ColorGradingCore.h"
 
-#include <vector>
+#include <memory>
 #include <string>
-#include <mutex>
 
 namespace openshot
 {
@@ -44,36 +42,8 @@ namespace openshot
     class ColorMap : public EffectBase
     {
     private:
-        // ── LUT mode state ──────────────────────────────────────────────────
-        std::string lut_path;
-        int lut_size;
-        std::vector<float> lut_data;       ///< Stride-3 [N³ × 3], resampled to 17³
-        bool needs_lut_refresh;
-
-        // ── Color match mode state ──────────────────────────────────────────
-        std::string ref_image_path;
-        bool needs_ref_refresh;
-
-        ColorGrading::LabStats ref_stats;
-        bool has_ref_stats;
-
-        std::vector<float> baked_lut_data; ///< Stride-3 [17³ × 3]
-        static constexpr int BAKED_LUT_SIZE = 17;
-
-        ColorGrading::LabStats cached_src_stats;
-        bool has_cached_stats;
-
-        std::mutex bake_mutex;
-
-        // ── Internal methods ────────────────────────────────────────────────
-        void init_effect_details();
-        void load_cube_file();
-        void load_ref_image();
-
-        /// OpenMP parallelized trilinear apply with coord table + fast paths
-        static void applyTrilinearLut(const float* lut, int size,
-                                      unsigned char* pixels, int pixel_count,
-                                      float tR, float tG, float tB);
+        struct Impl;
+        std::unique_ptr<Impl> pimpl;
 
     public:
         // ── LUT mode keyframes ──────────────────────────────────────────────
@@ -89,6 +59,7 @@ namespace openshot
         Keyframe cm_contrast_boost;
 
         ColorMap();
+        ~ColorMap();
 
         ColorMap(const std::string &path,
                  const Keyframe &i  = Keyframe(1.0),
@@ -97,7 +68,7 @@ namespace openshot
                  const Keyframe &iB = Keyframe(1.0));
 
         void SetRefImagePath(const std::string& path);
-        std::string GetRefImagePath() const { return ref_image_path; }
+        std::string GetRefImagePath() const;
 
         std::shared_ptr<openshot::Frame>
         GetFrame(int64_t frame_number) override

@@ -12,22 +12,62 @@
 
 #include "ColorMap.h"
 #include "Exceptions.h"
+#include "image-processing-lib/src/ColorGrading/ColorGradingCore.h"
 
 #include <omp.h>
 #include <cmath>
 #include <algorithm>
 #include <fstream>
 #include <sstream>
+#include <vector>
+#include <mutex>
 #include <QImage>
 
 using namespace openshot;
 
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// Impl — private implementation hidden from the header
+// ═══════════════════════════════════════════════════════════════════════════════
+
+struct ColorMap::Impl {
+    // ── LUT mode state ──────────────────────────────────────────────────
+    std::string lut_path;
+    int lut_size = 0;
+    std::vector<float> lut_data;       ///< Stride-3 [N³ × 3], resampled to 17³
+    bool needs_lut_refresh = true;
+
+    // ── Color match mode state ──────────────────────────────────────────
+    std::string ref_image_path;
+    bool needs_ref_refresh = false;
+
+    ColorGrading::LabStats ref_stats;
+    bool has_ref_stats = false;
+
+    std::vector<float> baked_lut_data; ///< Stride-3 [17³ × 3]
+    static constexpr int BAKED_LUT_SIZE = 17;
+
+    ColorGrading::LabStats cached_src_stats;
+    bool has_cached_stats = false;
+
+    std::mutex bake_mutex;
+
+    // ── Internal methods ────────────────────────────────────────────────
+    void load_cube_file();
+    void load_ref_image();
+
+    /// OpenMP parallelized trilinear apply with coord table + fast paths
+    static void applyTrilinearLut(const float* lut, int size,
+                                  unsigned char* pixels, int pixel_count,
+                                  float tR, float tG, float tB);
+};
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // OpenMP trilinear LUT apply (platform-specific optimization)
 // ═══════════════════════════════════════════════════════════════════════════════
 
-void ColorMap::applyTrilinearLut(const float* lut, int size,
+void ColorMap::Impl::applyTrilinearLut(const float* lut, int size,
                                   unsigned char* pixels, int pixel_count,
                                   float tR, float tG, float tB) {
 
@@ -167,7 +207,7 @@ void ColorMap::applyTrilinearLut(const float* lut, int size,
 // .cube file loading — uses shared core parser + resampler
 // ═══════════════════════════════════════════════════════════════════════════════
 
-void ColorMap::load_cube_file()
+void ColorMap::Impl::load_cube_file()
 {
     if (lut_path.empty()) {
         lut_data.clear();
@@ -221,7 +261,7 @@ void ColorMap::load_cube_file()
 // Reference image loading — uses shared core for stats
 // ═══════════════════════════════════════════════════════════════════════════════
 
-void ColorMap::load_ref_image()
+void ColorMap::Impl::load_ref_image()
 {
     has_ref_stats = false;
     has_cached_stats = false;
@@ -246,57 +286,60 @@ void ColorMap::load_ref_image()
 
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// Constructors
+// Constructors / Destructor
 // ═══════════════════════════════════════════════════════════════════════════════
 
-void ColorMap::init_effect_details()
+static void init_effect_details(EffectBase& self)
 {
-    InitEffectInfo();
-    info.class_name  = "ColorMap";
-    info.name        = "Color Map / Lookup";
-    info.description = "Adjust colors using 3D LUT (.cube) or reference image color matching";
-    info.has_video   = true;
-    info.has_audio   = false;
+    self.InitEffectInfo();
+    self.info.class_name  = "ColorMap";
+    self.info.name        = "Color Map / Lookup";
+    self.info.description = "Adjust colors using 3D LUT (.cube) or reference image color matching";
+    self.info.has_video   = true;
+    self.info.has_audio   = false;
 }
 
 ColorMap::ColorMap()
-    : lut_path(""), lut_size(0), needs_lut_refresh(true),
-      ref_image_path(""), needs_ref_refresh(false), has_ref_stats(false),
-      has_cached_stats(false),
+    : pimpl(std::make_unique<Impl>()),
       intensity(1.0), intensity_r(1.0), intensity_g(1.0), intensity_b(1.0),
       cm_preserve(0.3), cm_luminance_blend(0.5),
       cm_saturation_boost(1.1), cm_contrast_boost(1.1)
 {
-    init_effect_details();
+    init_effect_details(*this);
     ColorGrading::initLookupTables();
 }
+
+ColorMap::~ColorMap() = default;
 
 ColorMap::ColorMap(const std::string &path,
                    const Keyframe &i,
                    const Keyframe &iR,
                    const Keyframe &iG,
                    const Keyframe &iB)
-    : lut_path(path), lut_size(0), needs_lut_refresh(true),
-      ref_image_path(""), needs_ref_refresh(false), has_ref_stats(false),
-      has_cached_stats(false),
+    : pimpl(std::make_unique<Impl>()),
       intensity(i), intensity_r(iR), intensity_g(iG), intensity_b(iB),
       cm_preserve(0.3), cm_luminance_blend(0.5),
       cm_saturation_boost(1.1), cm_contrast_boost(1.1)
 {
-    init_effect_details();
+    pimpl->lut_path = path;
+    init_effect_details(*this);
     ColorGrading::initLookupTables();
-    load_cube_file();
+    pimpl->load_cube_file();
 }
 
 void ColorMap::SetRefImagePath(const std::string& path) {
-    ref_image_path = path;
-    needs_ref_refresh = true;
-    has_cached_stats = false;
+    pimpl->ref_image_path = path;
+    pimpl->needs_ref_refresh = true;
+    pimpl->has_cached_stats = false;
     if (!path.empty()) {
-        lut_path.clear();
-        lut_data.clear();
-        lut_size = 0;
+        pimpl->lut_path.clear();
+        pimpl->lut_data.clear();
+        pimpl->lut_size = 0;
     }
+}
+
+std::string ColorMap::GetRefImagePath() const {
+    return pimpl->ref_image_path;
 }
 
 
@@ -307,15 +350,17 @@ void ColorMap::SetRefImagePath(const std::string& path) {
 std::shared_ptr<openshot::Frame>
 ColorMap::GetFrame(std::shared_ptr<openshot::Frame> frame, int64_t frame_number)
 {
-    if (needs_lut_refresh && !lut_path.empty()) {
-        load_cube_file();
+    auto& d = *pimpl;
+
+    if (d.needs_lut_refresh && !d.lut_path.empty()) {
+        d.load_cube_file();
     }
-    if (needs_ref_refresh && !ref_image_path.empty()) {
-        load_ref_image();
+    if (d.needs_ref_refresh && !d.ref_image_path.empty()) {
+        d.load_ref_image();
     }
 
-    bool is_lut_mode = (!lut_data.empty() && lut_size > 0);
-    bool is_cm_mode  = (has_ref_stats && !ref_image_path.empty());
+    bool is_lut_mode = (!d.lut_data.empty() && d.lut_size > 0);
+    bool is_cm_mode  = (d.has_ref_stats && !d.ref_image_path.empty());
 
     if (!is_lut_mode && !is_cm_mode)
         return frame;
@@ -332,38 +377,38 @@ ColorMap::GetFrame(std::shared_ptr<openshot::Frame> frame, int64_t frame_number)
         float tG = (float)intensity_g.GetValue(frame_number) * overall;
         float tB = (float)intensity_b.GetValue(frame_number) * overall;
 
-        applyTrilinearLut(lut_data.data(), lut_size, pixels, pixel_count, tR, tG, tB);
+        Impl::applyTrilinearLut(d.lut_data.data(), d.lut_size, pixels, pixel_count, tR, tG, tB);
 
     } else {
         // ── Color match mode ────────────────────────────────────────────
 
         // Only recompute stats every N frames for speed
         constexpr int STATS_INTERVAL = 4;
-        bool should_check_stats = !has_cached_stats
+        bool should_check_stats = !d.has_cached_stats
                                   || (frame_number % STATS_INTERVAL == 0);
 
         if (should_check_stats) {
             int step = std::max(1, (w * h) / 10000);
             ColorGrading::LabStats srcStats = ColorGrading::computeLabStats(pixels, w, h, step);
 
-            std::lock_guard<std::mutex> lock(bake_mutex);
-            if (!has_cached_stats || !ColorGrading::statsAreSimilar(srcStats, cached_src_stats)) {
+            std::lock_guard<std::mutex> lock(d.bake_mutex);
+            if (!d.has_cached_stats || !ColorGrading::statsAreSimilar(srcStats, d.cached_src_stats)) {
                 // Bake via shared core
-                baked_lut_data.resize(BAKED_LUT_SIZE * BAKED_LUT_SIZE * BAKED_LUT_SIZE * 3);
+                d.baked_lut_data.resize(Impl::BAKED_LUT_SIZE * Impl::BAKED_LUT_SIZE * Impl::BAKED_LUT_SIZE * 3);
                 ColorGrading::ColorMatchParams params;
                 params.preserve        = (float)cm_preserve.GetValue(frame_number);
                 params.luminanceBlend  = (float)cm_luminance_blend.GetValue(frame_number);
                 params.saturationBoost = (float)cm_saturation_boost.GetValue(frame_number);
                 params.contrastBoost   = (float)cm_contrast_boost.GetValue(frame_number);
 
-                ColorGrading::bakeColorMatchLut(baked_lut_data.data(), BAKED_LUT_SIZE,
-                                      srcStats, ref_stats, params);
-                cached_src_stats = srcStats;
-                has_cached_stats = true;
+                ColorGrading::bakeColorMatchLut(d.baked_lut_data.data(), Impl::BAKED_LUT_SIZE,
+                                      srcStats, d.ref_stats, params);
+                d.cached_src_stats = srcStats;
+                d.has_cached_stats = true;
             }
         }
 
-        applyTrilinearLut(baked_lut_data.data(), BAKED_LUT_SIZE, pixels, pixel_count, 1.0f, 1.0f, 1.0f);
+        Impl::applyTrilinearLut(d.baked_lut_data.data(), Impl::BAKED_LUT_SIZE, pixels, pixel_count, 1.0f, 1.0f, 1.0f);
     }
 
     return frame;
@@ -381,8 +426,8 @@ std::string ColorMap::Json() const {
 Json::Value ColorMap::JsonValue() const {
     Json::Value root = EffectBase::JsonValue();
     root["type"]           = info.class_name;
-    root["lut_path"]       = lut_path;
-    root["ref_image_path"] = ref_image_path;
+    root["lut_path"]       = pimpl->lut_path;
+    root["ref_image_path"] = pimpl->ref_image_path;
     root["intensity"]   = intensity.JsonValue();
     root["intensity_r"] = intensity_r.JsonValue();
     root["intensity_g"] = intensity_g.JsonValue();
@@ -408,12 +453,12 @@ void ColorMap::SetJsonValue(const Json::Value root) {
     EffectBase::SetJsonValue(root);
 
     if (!root["lut_path"].isNull()) {
-        lut_path = root["lut_path"].asString();
-        needs_lut_refresh = true;
+        pimpl->lut_path = root["lut_path"].asString();
+        pimpl->needs_lut_refresh = true;
     }
     if (!root["ref_image_path"].isNull()) {
-        ref_image_path = root["ref_image_path"].asString();
-        needs_ref_refresh = true;
+        pimpl->ref_image_path = root["ref_image_path"].asString();
+        pimpl->needs_ref_refresh = true;
     }
     if (!root["intensity"].isNull())
         intensity.SetJsonValue(root["intensity"]);
@@ -437,7 +482,7 @@ std::string ColorMap::PropertiesJSON(int64_t requested_frame) const {
     Json::Value root = BasePropertiesJSON(requested_frame);
 
     root["lut_path"] = add_property_json(
-        "LUT File", 0.0, "string", lut_path, nullptr, 0, 0, false, requested_frame);
+        "LUT File", 0.0, "string", pimpl->lut_path, nullptr, 0, 0, false, requested_frame);
 
     root["intensity"] = add_property_json(
         "Overall Intensity", intensity.GetValue(requested_frame),
@@ -453,7 +498,7 @@ std::string ColorMap::PropertiesJSON(int64_t requested_frame) const {
         "float", "", &intensity_b, 0.0, 1.0, false, requested_frame);
 
     root["ref_image_path"] = add_property_json(
-        "Reference Image", 0.0, "string", ref_image_path, nullptr, 0, 0, false, requested_frame);
+        "Reference Image", 0.0, "string", pimpl->ref_image_path, nullptr, 0, 0, false, requested_frame);
     root["cm_preserve"] = add_property_json(
         "Preservation", cm_preserve.GetValue(requested_frame),
         "float", "", &cm_preserve, 0.0, 1.0, false, requested_frame);
