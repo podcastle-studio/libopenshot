@@ -1631,8 +1631,12 @@ void FFmpegReader::ProcessVideoPacket(int64_t requested_frame) {
     const int bytes_per_line = output_width * bytes_per_pixel;
     const int buf_size = bytes_per_line * output_height;
 
+    // sws_scale may use SIMD (SSE/AVX) internally, writing in 16/32-byte chunks.
+    // When linesize is not a multiple of the SIMD width, the last store on the
+    // final row can overshoot the buffer.  Add 128 bytes of padding to absorb this.
+    constexpr int SWS_SIMD_PADDING = 128;
     constexpr size_t ALIGN = 32;
-    const int aligned_size = ((buf_size + int(ALIGN) - 1) / int(ALIGN)) * int(ALIGN);
+    const int aligned_size = ((buf_size + SWS_SIMD_PADDING + int(ALIGN) - 1) / int(ALIGN)) * int(ALIGN);
 
     uint8_t *buffer = (uint8_t*) aligned_malloc(aligned_size, ALIGN);
     if (!buffer) throw OutOfMemory("Failed to allocate image buffer", path);
