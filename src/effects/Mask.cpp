@@ -28,7 +28,7 @@
 using namespace openshot;
 
 /// Blank constructor, useful when using Json to load the effect properties
-Mask::Mask() : maskType(MaskType::INVALID), reader(NULL), replace_image(false), needs_refresh(true) {
+Mask::Mask() : maskType(MaskType::INVALID), reader(NULL), replace_image(false), invert(false), needs_refresh(true) {
 	// Init effect properties
 	init_effect_details();
 }
@@ -36,7 +36,7 @@ Mask::Mask() : maskType(MaskType::INVALID), reader(NULL), replace_image(false), 
 // Default constructor
 Mask::Mask(ReaderBase *mask_reader, const Keyframe& mask_brightness, const Keyframe& mask_contrast,
 			const Keyframe& start_frame, const Keyframe& end_frame)
-		: reader(mask_reader), needs_refresh(true), maskType(MaskType::CUSTOM), replace_image(false)
+		: reader(mask_reader), needs_refresh(true), maskType(MaskType::CUSTOM), replace_image(false), invert(false)
 		, brightness(mask_brightness), contrast(mask_contrast), startFrame(start_frame), endFrame(end_frame)
 {
 	// Init effect properties
@@ -45,7 +45,7 @@ Mask::Mask(ReaderBase *mask_reader, const Keyframe& mask_brightness, const Keyfr
 
 Mask::Mask(MaskType _maskType, const Keyframe& mask_brightness, const Keyframe& mask_contrast,
 			const Keyframe& start_frame, const Keyframe& end_frame) :
-		maskType(_maskType), reader(NULL), brightness(mask_brightness), contrast(mask_contrast), replace_image(false), needs_refresh(true),
+		maskType(_maskType), reader(NULL), brightness(mask_brightness), contrast(mask_contrast), replace_image(false), invert(false), needs_refresh(true),
         roundedRadiusX(0), roundedRadiusY(0), startFrame(start_frame), endFrame(end_frame)
 {
 	// Init effect properties
@@ -148,6 +148,10 @@ std::shared_ptr<openshot::Frame> Mask::GetFrame(std::shared_ptr<openshot::Frame>
 		const float factor = (20 / std::fmax(0.00001, 20.0 - contrast_value));
 		gray_value = (factor * (gray_value - 128) + 128);
 
+		// Invert the gray value if needed
+		if (invert)
+			gray_value = 255 - gray_value;
+
 		// Calculate the % change in alpha
 		const float alpha_percent = float(constrain(A - gray_value)) / 255.0;
 
@@ -192,6 +196,7 @@ Json::Value Mask::JsonValue() const {
 	else
 		root["reader"] = Json::objectValue;
 	root["replace_image"] = replace_image;
+	root["invert"] = invert;
 	root["start_frame"] = startFrame.JsonValue();
 	root["end_frame"]   = endFrame.JsonValue();
 	// return JsonValue
@@ -224,6 +229,8 @@ void Mask::SetJsonValue(const Json::Value root) {
 	// Set data from Json (if key is found)
 	if (!root["replace_image"].isNull())
 		replace_image = root["replace_image"].asBool();
+	if (!root["invert"].isNull())
+		invert = root["invert"].asBool();
 	if (!root["brightness"].isNull())
 		brightness.SetJsonValue(root["brightness"]);
 	if (!root["contrast"].isNull())
@@ -301,6 +308,11 @@ std::string Mask::PropertiesJSON(int64_t requested_frame) const {
 	root["replace_image"] = add_property_json("Replace Image", replace_image, "int", "", NULL, 0, 1, false, requested_frame);
 	root["replace_image"]["choices"].append(add_property_choice_json("Yes", true, replace_image));
 	root["replace_image"]["choices"].append(add_property_choice_json("No", false, replace_image));
+
+	// Add invert choices (dropdown style)
+	root["invert"] = add_property_json("Invert Mask", invert, "int", "", NULL, 0, 1, false, requested_frame);
+	root["invert"]["choices"].append(add_property_choice_json("Yes", true, invert));
+	root["invert"]["choices"].append(add_property_choice_json("No", false, invert));
 
 	// Keyframes
 	root["brightness"] = add_property_json("Brightness", brightness.GetValue(requested_frame), "float", "", &brightness, -1.0, 1.0, false, requested_frame);

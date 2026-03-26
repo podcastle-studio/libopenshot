@@ -53,6 +53,7 @@ namespace openshot
 
         MaskType maskType;
 		bool replace_image;		///< Replace the frame image with a grayscale image representing the mask. Great for debugging a mask.
+		bool invert;			///< Invert the mask (swap transparent and visible regions).
 		Keyframe brightness;	///< Brightness keyframe to control the wipe / mask effect. A constant value here will prevent animation.
 		Keyframe contrast;		///< Contrast keyframe to control the hardness of the wipe effect / mask.
 
