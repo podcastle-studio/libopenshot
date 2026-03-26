@@ -62,7 +62,7 @@ namespace openshot {
 		int HARDWARE_DECODER = 0;
 
 		/// Scale mode used in FFmpeg decoding and encoding (used as an optimization for faster previews)
-		bool HIGH_QUALITY_SCALING = false;
+		bool HIGH_QUALITY_SCALING = true;
 
 		/// Number of threads of OpenMP
 		int OMP_THREADS = 16;
