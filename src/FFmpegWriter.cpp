@@ -14,9 +14,14 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
 #include <algorithm>
+#include <condition_variable>
+#include <exception>
 #include <iostream>
 #include <cmath>
 #include <ctime>
+#include <mutex>
+#include <queue>
+#include <thread>
 #include <unistd.h>
 
 #include "FFmpegUtilities.h"
@@ -30,6 +35,39 @@
 #include "ZmqLogger.h"
 
 using namespace openshot;
+
+namespace {
+
+/// Bounded blocking queue for pipeline: producer pushes frames, consumer pops in order.
+class BoundedFrameQueue {
+public:
+	explicit BoundedFrameQueue(size_t max_size) : max_size_(max_size) {}
+
+	void push(std::shared_ptr<Frame> frame) {
+		std::unique_lock<std::mutex> lock(mutex_);
+		not_full_.wait(lock, [this]() { return queue_.size() < max_size_; });
+		queue_.push(std::move(frame));
+		not_empty_.notify_one();
+	}
+
+	std::shared_ptr<Frame> pop() {
+		std::unique_lock<std::mutex> lock(mutex_);
+		not_empty_.wait(lock, [this]() { return !queue_.empty(); });
+		auto frame = std::move(queue_.front());
+		queue_.pop();
+		not_full_.notify_one();
+		return frame;
+	}
+
+private:
+	const size_t max_size_;
+	std::queue<std::shared_ptr<Frame>> queue_;
+	std::mutex mutex_;
+	std::condition_variable not_full_;
+	std::condition_variable not_empty_;
+};
+
+} // namespace
 
 // Multiplexer parameters temporary storage
 AVDictionary *mux_dict = NULL;
@@ -734,6 +772,18 @@ void FFmpegWriter::write_frame(std::shared_ptr<Frame> frame) {
 		throw ErrorEncodingVideo("Error while writing raw video frame", -1);
 }
 
+void FFmpegWriter::SetSilentAudioMode(bool enable) {
+	silent_audio_mode_ = enable;
+}
+
+void FFmpegWriter::SetPipelineMode(bool enable) {
+	pipeline_mode_ = enable;
+}
+
+void FFmpegWriter::SetPipelineQueueCapacity(size_t capacity) {
+	pipeline_queue_capacity_ = (capacity == 0) ? 1 : capacity;
+}
+
 // Write a block of frames from a reader
 void FFmpegWriter::WriteFrame(ReaderBase *reader, int64_t start, int64_t length) {
 	// When the reader is a Timeline, tell it whether clips should run audio time-mapping.
@@ -746,16 +796,51 @@ void FFmpegWriter::WriteFrame(ReaderBase *reader, int64_t start, int64_t length)
 	ZmqLogger::Instance()->AppendDebugMethod(
 		"FFmpegWriter::WriteFrame (from Reader)",
 		"start", start,
-		"length", length);
+		"length", length,
+		"pipeline_mode", pipeline_mode_);
 
-	// Loop through each frame (and encoded it)
-	for (int64_t number = start; number <= length; number++) {
-		// Get the frame
-		std::shared_ptr<Frame> f = reader->GetFrame(number);
-
-		// Encode frame
-		WriteFrame(f);
+	if (!pipeline_mode_) {
+		// Sequential: get frame then encode (original behavior)
+		for (int64_t number = start; number <= length; number++) {
+			std::shared_ptr<Frame> f = reader->GetFrame(number);
+			WriteFrame(f);
+		}
+		return;
 	}
+
+	// Pipeline: producer thread gets frames, consumer thread encodes (bounded queue)
+	const size_t queue_capacity = (pipeline_queue_capacity_ == 0) ? 1 : pipeline_queue_capacity_;
+	BoundedFrameQueue queue(queue_capacity);
+	std::exception_ptr consumer_exception;
+
+	std::thread consumer([this, &queue, &consumer_exception]() {
+		try {
+			for (;;) {
+				std::shared_ptr<Frame> f = queue.pop();
+				if (!f)
+					break;
+				WriteFrame(f);
+			}
+		} catch (...) {
+			consumer_exception = std::current_exception();
+		}
+	});
+
+	try {
+		for (int64_t number = start; number <= length; number++) {
+			std::shared_ptr<Frame> f = reader->GetFrame(number);
+			queue.push(std::move(f));
+		}
+		queue.push(nullptr);  // poison pill
+	} catch (...) {
+		queue.push(nullptr);  // unblock consumer
+		consumer.join();
+		throw;
+	}
+
+	consumer.join();
+	if (consumer_exception)
+		std::rethrow_exception(consumer_exception);
 }
 
 // Write the file trailer (after all frames are written)
@@ -1603,40 +1688,54 @@ void FFmpegWriter::write_audio_packets(bool is_final, std::shared_ptr<openshot::
 	// Get audio sample array
 	float *frame_samples_float = NULL;
 
-	// Get the audio details from this frame
+	// Get the audio details from this frame (or use writer config for silent mode)
 	if (frame) {
-		sample_rate_in_frame = frame->SampleRate();
-		samples_in_frame = frame->GetAudioSamplesCount();
-		channels_in_frame = frame->GetAudioChannelsCount();
-		channel_layout_in_frame = frame->ChannelsLayout();
+		if (silent_audio_mode_) {
+			samples_in_frame = Frame::GetSamplesPerFrame(frame->number, info.fps, info.sample_rate, info.channels);
+			channels_in_frame = info.channels;
+			sample_rate_in_frame = info.sample_rate;
+			channel_layout_in_frame = info.channel_layout;
+			// frame_samples_float stays NULL; we fill with zeros below
+		} else {
+			sample_rate_in_frame = frame->SampleRate();
+			samples_in_frame = frame->GetAudioSamplesCount();
+			channels_in_frame = frame->GetAudioChannelsCount();
+			channel_layout_in_frame = frame->ChannelsLayout();
 
-		// Get samples interleaved together (c1 c2 c1 c2 c1 c2)
-		frame_samples_float = frame->GetInterleavedAudioSamples(&samples_in_frame);
+			// Get samples interleaved together (c1 c2 c1 c2 c1 c2)
+			frame_samples_float = frame->GetInterleavedAudioSamples(&samples_in_frame);
+		}
 	}
 
 	// Calculate total samples
 	total_frame_samples = samples_in_frame * channels_in_frame;
 
-	// Translate audio sample values back to 16 bit integers with saturation
-	const int16_t max16 = 32767;
-	const int16_t min16 = -32768;
-	for (int s = 0; s < total_frame_samples; s++, frame_position++) {
-		float valF = frame_samples_float[s] * (1 << 15);
-		int16_t conv;
-		if (valF > max16) {
-			conv = max16;
-		} else if (valF < min16) {
-			conv = min16;
-		} else {
-			conv = int(valF + 32768.5) - 32768; // +0.5 is for rounding
+	if (frame_samples_float) {
+		// Translate audio sample values back to 16 bit integers with saturation
+		const int16_t max16 = 32767;
+		const int16_t min16 = -32768;
+		for (int s = 0; s < total_frame_samples; s++, frame_position++) {
+			float valF = frame_samples_float[s] * (1 << 15);
+			int16_t conv;
+			if (valF > max16) {
+				conv = max16;
+			} else if (valF < min16) {
+				conv = min16;
+			} else {
+				conv = int(valF + 32768.5) - 32768; // +0.5 is for rounding
+			}
+
+			// Copy into buffer
+			all_queued_samples[frame_position] = conv;
 		}
 
-		// Copy into buffer
-		all_queued_samples[frame_position] = conv;
+		// Deallocate float array
+		delete[] frame_samples_float;
+	} else if (total_frame_samples > 0) {
+		// Silent audio: fill with zeros
+		memset(all_queued_samples, 0, static_cast<size_t>(total_frame_samples) * sizeof(int16_t));
+		frame_position = total_frame_samples;
 	}
-
-	// Deallocate float array
-	delete[] frame_samples_float;
 
 
 	// Update total samples (since we've combined all queued frames)

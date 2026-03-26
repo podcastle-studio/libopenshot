@@ -125,6 +125,9 @@ namespace openshot {
 		bool write_header;
 		bool write_trailer;
 		bool skip_clip_audio_processing = false; ///< When true, timeline clips skip audio time-mapping (silent track, faster export)
+		bool silent_audio_mode_ = false; ///< When true, write silent audio instead of decoding frame audio
+		bool pipeline_mode_ = false;
+		size_t pipeline_queue_capacity_ = 8;
 
 		AVFormatContext* oc;
 		AVStream *audio_st, *video_st;
@@ -323,6 +326,25 @@ namespace openshot {
 		/// the output audio track is silent. SetAudioOptions(true, ...) is unchanged (file still has an audio
 		/// stream). Use for faster export when you do not need clip audio. Call before WriteFrame. Default false.
 		void SetSkipClipAudioProcessing(bool skip) { skip_clip_audio_processing = skip; }
+
+		/// @brief Enable silent audio mode. When enabled, write_audio_packets produces silent (zero)
+		/// samples using the writer's audio config instead of decoding audio from frames.
+		/// The audio stream is still written (so the container has an audio track), but it contains
+		/// silence. Useful when you build your own audio externally and mux it later.
+		/// Call before WriteFrame. Default false.
+		void SetSilentAudioMode(bool enable);
+
+		/// @brief Enable or disable pipeline parallelism for export.
+		/// When enabled, frame reading (decode + compose) runs in parallel with encoding,
+		/// which can significantly speed up WriteFrame(ReaderBase*, start, length).
+		/// @param enable true to use producer/consumer pipeline; false for sequential (default)
+		void SetPipelineMode(bool enable);
+
+		/// @brief Set pipeline queue capacity (number of frames buffered between producer and consumer).
+		/// Only used when pipeline mode is enabled. Default is 8. Minimum 1; values that are 0 are treated as 1.
+		/// Larger values allow more overlap but use more memory. Call before WriteFrame.
+		/// @param capacity desired queue size (0 or 1 = minimum 1)
+		void SetPipelineQueueCapacity(size_t capacity);
 
 	};
 
