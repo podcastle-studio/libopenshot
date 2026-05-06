@@ -1640,21 +1640,32 @@ QTransform Clip::get_transform(std::shared_ptr<Frame> frame, int width, int heig
 		// TRANSLATE/MOVE CLIP
 		transform.translate(x, y);
 	}
-	if (!isNear(r, 0) || !isNear(shear_x_value, 0) || !isNear(shear_y_value, 0)) {
-		// ROTATE CLIP (around origin_x, origin_y)
-		float origin_x_offset = (scaled_source_width * origin_x_value);
-		float origin_y_offset = (scaled_source_height * origin_y_value);
-		transform.translate(origin_x_offset, origin_y_offset);
-		transform.rotate(r);
-		transform.shear(shear_x_value, shear_y_value);
-		transform.translate(-origin_x_offset,-origin_y_offset);
-	}
 
-	// SCALE CLIP (if needed)
-	float source_width_scale = (float(source_size.width()) / float(source_image->width())) * sx;
+	// Origin in source-image pixel coords. Using source-coord (not scaled-coord) origin
+	// keeps the origin pixel's canvas position invariant under scale changes, so SCALE
+	// keyframes pivot around origin instead of the source's top-left.
+	float origin_x_src = source_image->width()  * origin_x_value;
+	float origin_y_src = source_image->height() * origin_y_value;
+
+	float source_width_scale  = (float(source_size.width())  / float(source_image->width()))  * sx;
 	float source_height_scale = (float(source_size.height()) / float(source_image->height())) * sy;
-	if (!isNear(source_width_scale, 1.0) || !isNear(source_height_scale, 1.0)) {
-		transform.scale(source_width_scale, source_height_scale);
+
+	const bool needsRotateOrShear = !isNear(r, 0) || !isNear(shear_x_value, 0) || !isNear(shear_y_value, 0);
+	const bool needsScale         = !isNear(source_width_scale, 1.0) || !isNear(source_height_scale, 1.0);
+
+	if (needsRotateOrShear || needsScale) {
+		// ROTATE / SHEAR / SCALE CLIP — all pivot around origin in source coords.
+		// At sx=sy=1 with non-zero rotation this is identical to the prior behavior;
+		// scale=1 makes the inner translate(-origin) cancel the outer translate(+origin).
+		// Difference appears when scale != 1 AND origin != 0: scale pivots around origin
+		// instead of the source's top-left.
+		transform.translate(origin_x_src, origin_y_src);
+		if (!isNear(r, 0)) transform.rotate(r);
+		if (!isNear(shear_x_value, 0) || !isNear(shear_y_value, 0))
+			transform.shear(shear_x_value, shear_y_value);
+		if (needsScale)
+			transform.scale(source_width_scale, source_height_scale);
+		transform.translate(-origin_x_src, -origin_y_src);
 	}
 
 	return transform;
