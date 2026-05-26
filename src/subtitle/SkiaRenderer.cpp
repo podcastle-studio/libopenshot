@@ -120,7 +120,7 @@ SkFont SkiaRenderer::getFontForCharacter(const FontProps& fontProps, const SkUni
     SkFont skFont(typeface, fontProps.fontSize);
 
     if (fontProps.italic) {
-        skFont.setSkewX(-0.25f);
+        skFont.setSkewX(-0.10f);
     }
 
     if (fontProps.fontWeight >= 500) {

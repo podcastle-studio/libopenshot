@@ -84,7 +84,12 @@ std::shared_ptr<openshot::Frame> Crop::GetFrame(std::shared_ptr<openshot::Frame>
         std::max(0.0, 1.0 - top_value - bottom_value) * sz.height());
 
     if (paint_r.width() <= 0.0 || paint_r.height() <= 0.0) {
-        return frame; // nothing to draw
+    	// Fully cropped: emit a transparent frame instead of leaving the source
+    	// unmodified, so an h=0/w=0 keyframe renders as invisible.
+    	QImage empty(sz, QImage::Format_RGBA8888_Premultiplied);
+    	empty.fill(Qt::transparent);
+    	frame->AddImage(std::make_shared<QImage>(empty));
+    	return frame;
     }
 
     // Copy rectangle is destination translated by offsets

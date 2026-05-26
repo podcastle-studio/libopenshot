@@ -1,0 +1,135 @@
+#pragma once
+
+#include <optional>
+#include <string>
+#include <vector>
+
+namespace openshot {
+namespace text {
+
+// Base coefficient: fontSize = projectWidth * SIZE_BASE_COEFFICIENT * transformation.size
+constexpr double SIZE_BASE_COEFFICIENT = 1.0 / 240.0;
+
+// Reference transformation.size used to compute line wrapping. Wrapping decisions
+// are made at this size and then scaled up to the actual transformation.size so
+// they stop depending on Skia's per-Font-instance glyph-advance quantization.
+// See BACKEND_PATCH_LINE_CALCULATION.md. Must agree with the frontend value.
+constexpr double LAYOUT_REFERENCE_SIZE = 10.0;
+
+enum class TextAlignment { LEFT, CENTER, RIGHT };
+enum class TextTransform { NONE, UPPERCASE, LOWERCASE, CAPITALIZE };
+
+struct TextClipStyle {
+    std::string fontFamily;                          // font family name OR explicit path
+    bool italic = false;
+    TextAlignment textAlign = TextAlignment::CENTER;
+    TextTransform textTransform = TextTransform::NONE;
+    std::string color = "#FFFFFF";
+    double lineHeight = 1.2;                          // multiplier
+    double letterSpacing = 0.0;                       // em ratio
+    int fontWeight = 400;
+
+    // Stroke
+    std::optional<std::string> strokeColor;
+    double strokeWidthRatio = 0.0;
+
+    // Shadow
+    std::optional<std::string> shadowColor;
+    double shadowBlurRatio = 0.0;
+    double shadowDistanceRatio = 0.0;
+    double shadowAngle = 0.0;
+
+    // Background
+    std::optional<std::string> backgroundColor;
+    double backgroundRadiusRatio = 0.0;
+    double backgroundPaddingXRatio = 0.0;
+    double backgroundPaddingYRatio = 0.0;
+};
+
+struct TextTransformation {
+    double size = 1.0;                                // factor; fontSize = projectWidth * (1/240) * size
+    double rotation = 0.0;                            // degrees
+    double positionX = 0.0;                           // pixel coord of CENTER of bounding box
+    double positionY = 0.0;                           // pixel coord of CENTER of bounding box
+    // Wrap width as a dimensionless multiplier of the same canvas-and-size scale that drives
+    // fontSize:
+    //   wrapWidthPx = projectWidth * SIZE_BASE_COEFFICIENT * size * maxWidth
+    // This composition makes the wrap box invariant under both canvas resize and `size` change.
+    // 0 = no wrapping (single line). See BACKEND_PATCH_MAX_WIDTH_SIZE_RELATIVE.md.
+    double maxWidth = 0.0;
+};
+
+struct TextClipData {
+    std::string value;
+    TextClipStyle style;
+    TextTransformation transformation;
+};
+
+// ---------------------------------------------------------------------------
+// Pixel-space paint styles (computed)
+// ---------------------------------------------------------------------------
+
+struct TextClipStrokeStyle {
+    std::string color;
+    double width = 0.0;
+};
+
+struct TextClipShadowStyle {
+    std::string color;
+    double opacity = 1.0;
+    double angle = 0.0;
+    double distance = 0.0;
+    double blur = 0.0;
+};
+
+struct TextClipPaintStyle {
+    std::string fontFamily;
+    double fontSize = 0.0;
+    int fontWeight = 400;
+    bool italic = false;
+    std::string color;
+    double letterSpacing = 0.0;
+    double lineHeight = 0.0;
+    TextAlignment alignment = TextAlignment::CENTER;
+    std::optional<TextClipStrokeStyle> stroke;
+    std::optional<TextClipShadowStyle> dropShadow;
+};
+
+struct TextClipBackgroundStyle {
+    std::string color;
+    double opacity = 1.0;
+    double paddingX = 0.0;
+    double paddingY = 0.0;
+    double radius = 0.0;                              // ratio 0..1
+};
+
+// ---------------------------------------------------------------------------
+// Layout result
+// ---------------------------------------------------------------------------
+
+struct TextClipLine {
+    std::string text;
+    double width = 0.0;
+    // Per-codepoint advance: glyphWidth + letterSpacing for every codepoint except the
+    // last (which carries no trailing letter-spacing). Populated by layoutText from
+    // measurements taken at the layout (reference-size) paint, then scaled into actual
+    // pixel space by scaleLayout. Renderer consumes these instead of re-measuring.
+    std::vector<double> letterAdvances;
+};
+
+struct TextClipLayout {
+    std::vector<TextClipLine> lines;
+    double lineHeight = 0.0;
+    double textWidth = 0.0;
+    // Total VISIBLE text height in pixels — NOT lines.size() * lineHeight.
+    //   textHeight = firstLineAscent + (lines.size() - 1) * lineHeight + lastLineDescent
+    double textHeight = 0.0;
+    double layoutWidth = 0.0;
+    // Distance (positive) from the top of the bounding box down to the baseline of the
+    // first visible line. Renderer places the first baseline so the visible top of line 0
+    // sits flush against originY.
+    double firstLineAscent = 0.0;
+};
+
+} // namespace text
+} // namespace openshot

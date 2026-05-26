@@ -52,6 +52,8 @@ set(OPENSHOT_SOURCES
   subtitle/SubtitleRenderer.cpp
   subtitle/TextRenderer.cpp
   subtitle/WordRenderer.cpp
+  text/TextClipRenderer.cpp
+  text/TextClipReader.cpp
   AudioBufferSource.cpp
   AudioDevices.cpp
   AudioReaderSource.cpp
