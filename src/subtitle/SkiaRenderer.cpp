@@ -1,14 +1,98 @@
 #include "SkiaRenderer.h"
 
 #include "skia/include/core/SkFontMgr.h"
+#include "skia/include/core/SkFontArguments.h"
+#include "skia/include/core/SkFontParameters.h"
+#include "skia/include/core/SkFourByteTag.h"
 #include "skia/include/core/SkMaskFilter.h"
 #include "skia/include/core/SkBlurTypes.h"
 #include "skia/include/ports/SkFontMgr_fontconfig.h"
 
+#include <algorithm>
 #include <filesystem>
+#include <vector>
 
 namespace openshot {
 namespace subtitle {
+
+namespace {
+
+// OpenType variation axis tag for weight ("wght").
+constexpr SkFourByteTag kWeightAxisTag = SkSetFourByteTag('w', 'g', 'h', 't');
+
+// Build the OpenType style (weight + slant) the caller is asking for.
+SkFontStyle makeFontStyle(const FontProps& fontProps) {
+    const int weight = fontProps.fontWeight > 0 ? fontProps.fontWeight : SkFontStyle::kNormal_Weight;
+    const SkFontStyle::Slant slant =
+        fontProps.italic ? SkFontStyle::kItalic_Slant : SkFontStyle::kUpright_Slant;
+    return SkFontStyle(weight, SkFontStyle::kNormal_Width, slant);
+}
+
+// If `typeface` is a variable font exposing a weight ("wght") axis, return a clone pinned
+// to `weight` (clamped to the axis range) so we render a genuine heavier cut. Returns the
+// original typeface unchanged when it is not variable / has no weight axis / cloning fails.
+sk_sp<SkTypeface> applyWeightVariation(sk_sp<SkTypeface> typeface, int weight) {
+    if (!typeface) return typeface;
+
+    const int axisCount = typeface->getVariationDesignParameters(nullptr, 0);
+    if (axisCount <= 0) return typeface;
+
+    std::vector<SkFontParameters::Variation::Axis> axes(axisCount);
+    if (typeface->getVariationDesignParameters(axes.data(), axisCount) != axisCount) {
+        return typeface;
+    }
+
+    for (const auto& axis : axes) {
+        if (axis.tag != kWeightAxisTag) continue;
+
+        const float clamped = std::clamp(static_cast<float>(weight), axis.min, axis.max);
+        const SkFontArguments::VariationPosition::Coordinate coord{kWeightAxisTag, clamped};
+        SkFontArguments args;
+        args.setVariationDesignPosition({&coord, 1});
+        if (sk_sp<SkTypeface> cloned = typeface->makeClone(args)) {
+            return cloned;
+        }
+        break;
+    }
+    return typeface;
+}
+
+// The weight this typeface actually renders at: the pinned "wght" variation coordinate for
+// a variable instance, otherwise its static design weight. Used to decide whether a real
+// bold cut was obtained before falling back to synthetic emboldening.
+int effectiveWeight(const sk_sp<SkTypeface>& typeface) {
+    if (!typeface) return SkFontStyle::kNormal_Weight;
+
+    const int count = typeface->getVariationDesignPosition(nullptr, 0);
+    if (count > 0) {
+        std::vector<SkFontArguments::VariationPosition::Coordinate> coords(count);
+        if (typeface->getVariationDesignPosition(coords.data(), count) == count) {
+            for (const auto& c : coords) {
+                if (c.axis == kWeightAxisTag) return static_cast<int>(c.value);
+            }
+        }
+    }
+    return typeface->fontStyle().weight();
+}
+
+// Apply faux bold / faux italic to `font` ONLY where the resolved `typeface` cannot supply
+// the requested style for real. When a genuine bold (or italic/oblique) face was matched we
+// leave the glyphs untouched so the designed cut is rendered instead of a synthetic one.
+void applySyntheticStyle(SkFont& font, const sk_sp<SkTypeface>& typeface, const SkFontStyle& requested) {
+    const bool wantsBold = requested.weight() >= SkFontStyle::kMedium_Weight;
+    if (wantsBold && effectiveWeight(typeface) < SkFontStyle::kMedium_Weight) {
+        font.setEmbolden(true);
+    }
+
+    const bool wantsItalic = requested.slant() != SkFontStyle::kUpright_Slant;
+    const SkFontStyle::Slant actualSlant =
+        typeface ? typeface->fontStyle().slant() : SkFontStyle::kUpright_Slant;
+    if (wantsItalic && actualSlant == SkFontStyle::kUpright_Slant) {
+        font.setSkewX(-0.10f);
+    }
+}
+
+} // namespace
 
 SkiaRenderer::SkiaRenderer(SkCanvas* canvas) : canvas(canvas) {
     fontMgr = SkFontMgr_New_FontConfig(nullptr);
@@ -24,16 +108,11 @@ SkFont SkiaRenderer::getFont(const FontProps& fontProps) {
         return it->second;
     }
 
-    const sk_sp<SkTypeface> typeface = getTypeface(fontProps.fontFamily);
+    const SkFontStyle style = makeFontStyle(fontProps);
+    const sk_sp<SkTypeface> typeface = getTypeface(fontProps.fontFamily, style);
     SkFont skFont(typeface, fontProps.fontSize);
 
-    if (fontProps.italic) {
-        skFont.setSkewX(-0.10f);
-    }
-
-    if (fontProps.fontWeight >= 500) {
-        skFont.setEmbolden(true);
-    }
+    applySyntheticStyle(skFont, typeface, style);
 
     skFont.setEdging(SkFont::Edging::kAntiAlias);
 
@@ -41,68 +120,45 @@ SkFont SkiaRenderer::getFont(const FontProps& fontProps) {
     return skFont;
 }
 
-sk_sp<SkTypeface> SkiaRenderer::getTypefaceForCharacter(const std::string& familyOrPath, const SkUnichar character)
+sk_sp<SkTypeface> SkiaRenderer::getTypefaceForCharacter(const std::string& familyOrPath, const SkUnichar character, const SkFontStyle& style)
 {
-    // ---- cache key ----------------------------------------------------
-    const std::string cacheKey = familyOrPath + "_char_" + std::to_string(character);
+    // ---- cache key (style-aware, so a bold/italic request can't return a cached regular face) --
+    const std::string cacheKey = familyOrPath + "_char_" + std::to_string(character)
+        + "_" + std::to_string(style.weight()) + "_" + std::to_string(style.slant());
     if (const auto it = typefaceCache.find(cacheKey); it != typefaceCache.end()) {
         return it->second;
     }
 
-    // The caller passed no explicit weight/slant for a glyph lookup, so we use a neutral
-    // style (Regular, Upright).  SkFont later emboldens / italicises if needed.
-    constexpr SkFontStyle regStyle(400, SkFontStyle::kNormal_Width, SkFontStyle::kUpright_Slant);
-
-    sk_sp<SkTypeface> typeface;
+    auto covers = [character](const sk_sp<SkTypeface>& typeface) {
+        return typeface && SkFont(typeface).unicharToGlyph(character) != 0;
+    };
 
     // ------------------------------------------------------------------
-    // 1) The requested family name or explicit file-path
+    // 1) The requested family name or explicit file-path, at the requested style. When the
+    //    family ships a real bold / italic cut (or the file is a variable font) this is it.
     // ------------------------------------------------------------------
-    if (std::filesystem::is_regular_file(familyOrPath)) {
-        typeface = fontMgr->makeFromFile(familyOrPath.c_str());
-    } else {
-        typeface = fontMgr->matchFamilyStyle(familyOrPath.c_str(), regStyle);
+    sk_sp<SkTypeface> typeface = matchTypeface(familyOrPath, style);
+    if (covers(typeface)) {
+        typefaceCache[cacheKey] = typeface;
+        return typeface;
     }
 
-    if (typeface) {
-        const SkFont probe(typeface);
-        if (probe.unicharToGlyph(character) != 0) {
+    // ------------------------------------------------------------------
+    // 2) Preferred fallback: Noto Sans Arabic, 3) Secondary fallback: FreeSans.
+    //    Matched at the same style so fallback glyphs keep the requested weight / slant.
+    // ------------------------------------------------------------------
+    for (const char* fallback : {"Noto Sans Arabic", "FreeSans"}) {
+        typeface = fontMgr->matchFamilyStyle(fallback, style);
+        if (covers(typeface)) {
             typefaceCache[cacheKey] = typeface;
             return typeface;
         }
-        typeface.reset();
     }
 
     // ------------------------------------------------------------------
-    // 2) Preferred fallback: Noto Sans Arabic
+    // 4) Last-chance fallback: whatever FontConfig thinks best for this style
     // ------------------------------------------------------------------
-    typeface = fontMgr->matchFamilyStyle("Noto Sans Arabic", regStyle);
-    if (typeface) {
-        const SkFont probe(typeface);
-        if (probe.unicharToGlyph(character) != 0) {
-            typefaceCache[cacheKey] = typeface;
-            return typeface;
-        }
-        typeface.reset();
-    }
-
-    // ------------------------------------------------------------------
-    // 3) Secondary fallback: FreeSans
-    // ------------------------------------------------------------------
-    typeface = fontMgr->matchFamilyStyle("FreeSans", regStyle);
-    if (typeface) {
-        const SkFont probe(typeface);
-        if (probe.unicharToGlyph(character) != 0) {
-            typefaceCache[cacheKey] = typeface;
-            return typeface;
-        }
-        typeface.reset();
-    }
-
-    // ------------------------------------------------------------------
-    // 4) Last-chance fallback: whatever FontConfig thinks best
-    // ------------------------------------------------------------------
-    typeface = fontMgr->matchFamilyStyle(nullptr, regStyle);
+    typeface = fontMgr->matchFamilyStyle(nullptr, style);
 
     // Cache even if null so we don’t repeat the work every call
     typefaceCache[cacheKey] = typeface;
@@ -116,16 +172,11 @@ SkFont SkiaRenderer::getFontForCharacter(const FontProps& fontProps, const SkUni
         return it->second;
     }
 
-    const sk_sp<SkTypeface> typeface = getTypefaceForCharacter(fontProps.fontFamily, character);
+    const SkFontStyle style = makeFontStyle(fontProps);
+    const sk_sp<SkTypeface> typeface = getTypefaceForCharacter(fontProps.fontFamily, character, style);
     SkFont skFont(typeface, fontProps.fontSize);
 
-    if (fontProps.italic) {
-        skFont.setSkewX(-0.10f);
-    }
-
-    if (fontProps.fontWeight >= 500) {
-        skFont.setEmbolden(true);
-    }
+    applySyntheticStyle(skFont, typeface, style);
 
     skFont.setEdging(SkFont::Edging::kAntiAlias);
 
@@ -159,24 +210,32 @@ SkPaint* SkiaRenderer::getPaint(const PaintProps& paintProps) {
     return paintPtr;
 }
 
-sk_sp<SkTypeface> SkiaRenderer::getTypeface(const std::string& familyOrPath) {
-    if (const auto it = typefaceCache.find(familyOrPath); it != typefaceCache.end()) {
+sk_sp<SkTypeface> SkiaRenderer::matchTypeface(const std::string& familyOrPath, const SkFontStyle& style) {
+    if (std::filesystem::is_regular_file(familyOrPath)) {
+        // A font *file* is a fixed face. The exception is a variable font that exposes a
+        // weight axis — pin it to the requested weight so we get a genuine heavier cut
+        // instead of falling back to synthetic emboldening later.
+        return applyWeightVariation(fontMgr->makeFromFile(familyOrPath.c_str()), style.weight());
+    }
+    // matchFamilyStyle returns the installed face closest to `style`; when a real bold (or
+    // italic) cut exists in the family it is returned here.
+    return fontMgr->matchFamilyStyle(familyOrPath.c_str(), style);
+}
+
+sk_sp<SkTypeface> SkiaRenderer::getTypeface(const std::string& familyOrPath, const SkFontStyle& style) {
+    // Style-aware cache key: a later bold/italic request must not reuse a cached regular face.
+    const std::string cacheKey = familyOrPath
+        + "_" + std::to_string(style.weight()) + "_" + std::to_string(style.slant());
+    if (const auto it = typefaceCache.find(cacheKey); it != typefaceCache.end()) {
         return it->second;
     }
 
-    sk_sp<SkTypeface> typeface;
-    constexpr SkFontStyle style(400, SkFontStyle::kNormal_Width, SkFontStyle::kUpright_Slant);
-    if (std::filesystem::is_regular_file(familyOrPath)) {
-        typeface = fontMgr->makeFromFile(familyOrPath.c_str());
-    } else {
-        typeface = fontMgr->matchFamilyStyle(familyOrPath.c_str(), style);
-    }
-
+    sk_sp<SkTypeface> typeface = matchTypeface(familyOrPath, style);
     if (!typeface) { // last‑chance fallback
         typeface = fontMgr->matchFamilyStyle(nullptr, style);
     }
 
-    typefaceCache[familyOrPath] = typeface;
+    typefaceCache[cacheKey] = typeface;
     return typeface;
 }
 

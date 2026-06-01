@@ -54,7 +54,7 @@ public:
     void scale(const float sx, const float sy) const { canvas->scale(sx, sy); }
 
     SkFont getFont(const FontProps& fontProps);
-    sk_sp<SkTypeface> getTypefaceForCharacter(const std::string& familyOrPath, const SkUnichar character);
+    sk_sp<SkTypeface> getTypefaceForCharacter(const std::string& familyOrPath, const SkUnichar character, const SkFontStyle& style);
     SkFont getFontForCharacter(const FontProps& fontProps, const SkUnichar character);
 
     SkPaint* getPaint(const PaintProps& paintProps);
@@ -81,7 +81,13 @@ public:
     }
 
 private:
-    sk_sp<SkTypeface> getTypeface(const std::string& familyOrPath);
+    sk_sp<SkTypeface> getTypeface(const std::string& familyOrPath, const SkFontStyle& style);
+
+    // Resolve a single family name or font-file path to the typeface whose design most
+    // closely matches `style`. For an installed family this returns the real bold / italic
+    // cut when the family ships one; for a variable-font file it pins the weight axis to
+    // the requested weight. No synthetic styling happens here.
+    sk_sp<SkTypeface> matchTypeface(const std::string& familyOrPath, const SkFontStyle& style);
 
     SkColor parseColorString(const std::string& colorStr, const float opacity = 1.0f);
 
