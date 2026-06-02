@@ -98,7 +98,9 @@ if ((${CMAKE_CXX_COMPILER_ID} STREQUAL "GNU") AND
 endif()
 
 #### Set C++ standard level
-set(CMAKE_CXX_STANDARD 17)
+# Skia (chrome/m147+) is built as C++20 and its public headers use C++20
+# constructs, so consumers must compile as C++20 as well.
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 

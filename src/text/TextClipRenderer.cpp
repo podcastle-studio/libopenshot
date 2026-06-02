@@ -7,6 +7,7 @@
 #include <skia/include/core/SkPaint.h>
 #include <skia/include/core/SkRRect.h>
 #include <skia/include/core/SkRect.h>
+#include <skia/include/core/SkSpan.h>
 
 #include <algorithm>
 #include <cctype>
@@ -94,17 +95,19 @@ SkFont getFontForChar(subtitle::SkiaRenderer* renderer, const TextClipPaintStyle
 // Sum of glyph widths for `letter` (single codepoint) in the given font.
 double measureLetterAdvance(const SkFont& font, const std::string& letter) {
     SkGlyphID glyphs[8];
-    const int count = font.textToGlyphs(
+    // M147: textToGlyphs takes an SkSpan output and returns size_t.
+    const size_t count = font.textToGlyphs(
         letter.c_str(), letter.length(),
-        SkTextEncoding::kUTF8, glyphs, 8);
-    if (count <= 0) {
+        SkTextEncoding::kUTF8, SkSpan<SkGlyphID>(glyphs));
+    if (count == 0) {
         // Fallback to measureText
         return font.measureText(letter.c_str(), letter.length(), SkTextEncoding::kUTF8, nullptr);
     }
+    const size_t n = std::min<size_t>(count, 8);
     SkScalar widths[8] = {0};
-    font.getWidths(glyphs, count, widths);
+    font.getWidths(SkSpan<const SkGlyphID>(glyphs, n), SkSpan<SkScalar>(widths, n));
     double advance = 0.0;
-    for (int g = 0; g < count; ++g) advance += widths[g];
+    for (size_t g = 0; g < n; ++g) advance += widths[g];
     return advance;
 }
 
@@ -323,13 +326,15 @@ VerticalBounds measureTextVerticalBounds(
     forEachUtf8(text, [&](const std::string& letter, SkUnichar uc) {
         const SkFont font = getFontForChar(renderer, style, uc);
         SkGlyphID glyphs[8];
-        const int count = font.textToGlyphs(
+        // M147: textToGlyphs/getBounds take SkSpan; textToGlyphs returns size_t.
+        const size_t count = font.textToGlyphs(
             letter.c_str(), letter.length(),
-            SkTextEncoding::kUTF8, glyphs, 8);
-        if (count <= 0) return;
+            SkTextEncoding::kUTF8, SkSpan<SkGlyphID>(glyphs));
+        if (count == 0) return;
+        const size_t n = std::min<size_t>(count, 8);
         SkRect bounds[8];
-        font.getBounds(glyphs, count, bounds, nullptr);
-        for (int g = 0; g < count; ++g) {
+        font.getBounds(SkSpan<const SkGlyphID>(glyphs, n), SkSpan<SkRect>(bounds, n), nullptr);
+        for (size_t g = 0; g < n; ++g) {
             const double t = static_cast<double>(bounds[g].fTop);
             const double b = static_cast<double>(bounds[g].fBottom);
             if (!found) {
@@ -749,8 +754,18 @@ void drawShadowLine(
     const double dx = std::cos(radians) * shadow.distance;
     const double dy = std::sin(radians) * shadow.distance;
 
+    // CPU (backend raster) vs GPU (front-end CanvasKit) blur-match factor.
+    // The backend's CPU mask-blur reads heavier than the front end for the same sigma,
+    // so the backend must use a SMALLER sigma to reproduce the same visual blur.
+    // Calibrated so the back end matches the front end: k = 30/50 = 0.6. Both sides
+    // compute the same nominal sigma (shadowBlurRatio × fontSize); only the backend
+    // applies this correction.
+    constexpr double SHADOW_BLUR_SIGMA_SCALE = 30.0 / 50.0;
+
     const std::optional<double> blur =
-        shadow.blur > 0.0 ? std::optional<double>(shadow.blur) : std::nullopt;
+        shadow.blur > 0.0
+            ? std::optional<double>(shadow.blur * SHADOW_BLUR_SIGMA_SCALE)
+            : std::nullopt;
 
     // Stroke-expanded shadow pass: when the text is stroked, the stroke pushes the visible
     // glyph boundary outward by strokeWidth/2 on each side. The fill-only shadow below would

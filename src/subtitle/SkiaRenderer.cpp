@@ -6,7 +6,9 @@
 #include "skia/include/core/SkFourByteTag.h"
 #include "skia/include/core/SkMaskFilter.h"
 #include "skia/include/core/SkBlurTypes.h"
+#include "skia/include/core/SkSpan.h"
 #include "skia/include/ports/SkFontMgr_fontconfig.h"
+#include "skia/include/ports/SkFontScanner_FreeType.h"
 
 #include <algorithm>
 #include <filesystem>
@@ -34,11 +36,14 @@ SkFontStyle makeFontStyle(const FontProps& fontProps) {
 sk_sp<SkTypeface> applyWeightVariation(sk_sp<SkTypeface> typeface, int weight) {
     if (!typeface) return typeface;
 
-    const int axisCount = typeface->getVariationDesignParameters(nullptr, 0);
+    // M147: getVariationDesignParameters takes an SkSpan; an empty span returns the axis count.
+    const int axisCount = typeface->getVariationDesignParameters(
+        SkSpan<SkFontParameters::Variation::Axis>{});
     if (axisCount <= 0) return typeface;
 
     std::vector<SkFontParameters::Variation::Axis> axes(axisCount);
-    if (typeface->getVariationDesignParameters(axes.data(), axisCount) != axisCount) {
+    if (typeface->getVariationDesignParameters(SkSpan<SkFontParameters::Variation::Axis>(axes))
+            != axisCount) {
         return typeface;
     }
 
@@ -63,10 +68,13 @@ sk_sp<SkTypeface> applyWeightVariation(sk_sp<SkTypeface> typeface, int weight) {
 int effectiveWeight(const sk_sp<SkTypeface>& typeface) {
     if (!typeface) return SkFontStyle::kNormal_Weight;
 
-    const int count = typeface->getVariationDesignPosition(nullptr, 0);
+    // M147: getVariationDesignPosition takes an SkSpan; an empty span returns the axis count.
+    const int count = typeface->getVariationDesignPosition(
+        SkSpan<SkFontArguments::VariationPosition::Coordinate>{});
     if (count > 0) {
         std::vector<SkFontArguments::VariationPosition::Coordinate> coords(count);
-        if (typeface->getVariationDesignPosition(coords.data(), count) == count) {
+        if (typeface->getVariationDesignPosition(
+                SkSpan<SkFontArguments::VariationPosition::Coordinate>(coords)) == count) {
             for (const auto& c : coords) {
                 if (c.axis == kWeightAxisTag) return static_cast<int>(c.value);
             }
@@ -95,7 +103,8 @@ void applySyntheticStyle(SkFont& font, const sk_sp<SkTypeface>& typeface, const 
 } // namespace
 
 SkiaRenderer::SkiaRenderer(SkCanvas* canvas) : canvas(canvas) {
-    fontMgr = SkFontMgr_New_FontConfig(nullptr);
+    // M147: SkFontMgr_New_FontConfig now requires an explicit font scanner.
+    fontMgr = SkFontMgr_New_FontConfig(nullptr, SkFontScanner_Make_FreeType());
     if (!fontMgr) {
         fontMgr = SkFontMgr::RefEmpty();
     }

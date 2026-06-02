@@ -1,7 +1,9 @@
 #include "subtitle/WordRenderer.h"
 #include "subtitle/SkiaRenderer.h"
 #include <skia/include/core/SkPath.h>
+#include <skia/include/core/SkPathBuilder.h>
 #include <skia/include/core/SkRRect.h>
+#include <skia/include/core/SkSpan.h>
 #include <skia/include/core/SkFont.h>
 #include <skia/include/core/SkFontMetrics.h>
 #include <skia/include/core/SkTypeface.h>
@@ -25,36 +27,39 @@ void WordRenderer::bubblePath(SkPath* path, const float x, const float y, const 
     const float bottom = y + height;
     const float r = std::max(0.0f, radius + 2);
 
-    path->moveTo(left, bottom);
-    path->lineTo(left, top + r);
+    // M147: SkPath is immutable; build the contour with SkPathBuilder then assign.
+    SkPathBuilder b;
+    b.moveTo(left, bottom);
+    b.lineTo(left, top + r);
 
     if (r > 0) {
-        path->arcTo(SkRect::MakeXYWH(left, top, r * 2, r * 2), 180, 90, false);
+        b.arcTo(SkRect::MakeXYWH(left, top, r * 2, r * 2), 180, 90, false);
     } else {
-        path->lineTo(left, top);
-        path->lineTo(left + r, top);
+        b.lineTo(left, top);
+        b.lineTo(left + r, top);
     }
 
-    path->lineTo(right - r, top);
+    b.lineTo(right - r, top);
 
     if (r > 0) {
-        path->arcTo(SkRect::MakeXYWH(right - r * 2, top, r * 2, r * 2), 270, 90, false);
+        b.arcTo(SkRect::MakeXYWH(right - r * 2, top, r * 2, r * 2), 270, 90, false);
     } else {
-        path->lineTo(right, top);
-        path->lineTo(right, top + r);
+        b.lineTo(right, top);
+        b.lineTo(right, top + r);
     }
 
-    path->lineTo(right, bottom - r);
+    b.lineTo(right, bottom - r);
 
     if (r > 0) {
-        path->arcTo(SkRect::MakeXYWH(right - r * 2, bottom - r * 2, r * 2, r * 2), 0, 90, false);
+        b.arcTo(SkRect::MakeXYWH(right - r * 2, bottom - r * 2, r * 2, r * 2), 0, 90, false);
     } else {
-        path->lineTo(right, bottom);
-        path->lineTo(right - r, bottom);
+        b.lineTo(right, bottom);
+        b.lineTo(right - r, bottom);
     }
 
-    path->lineTo(left, bottom);
-    path->close();
+    b.lineTo(left, bottom);
+    b.close();
+    *path = b.detach();
 }
 
 void WordRenderer::renderWord(const std::string& word, const SubtitleTextStyle& style,
@@ -169,17 +174,20 @@ std::vector<WordRenderer::CharRenderInfo> WordRenderer::buildCharRenderInfo(
 
         // Get the glyph and its width
         SkGlyphID glyphs[10]; // Support for complex scripts that might produce multiple glyphs
-        int glyphCount = info.font.textToGlyphs(info.utf8Char.c_str(), info.utf8Char.length(),
-                                                SkTextEncoding::kUTF8, glyphs, 10);
+        // M147: textToGlyphs/getWidths take SkSpan; textToGlyphs returns size_t.
+        const size_t rawCount = info.font.textToGlyphs(info.utf8Char.c_str(), info.utf8Char.length(),
+                                                SkTextEncoding::kUTF8, SkSpan<SkGlyphID>(glyphs));
+        const size_t glyphCount = std::min<size_t>(rawCount, 10);
 
         if (glyphCount > 0) {
             // Get widths for all glyphs
             std::vector<SkScalar> widths(glyphCount);
-            info.font.getWidths(glyphs, glyphCount, widths.data());
+            info.font.getWidths(SkSpan<const SkGlyphID>(glyphs, glyphCount),
+                                SkSpan<SkScalar>(widths.data(), glyphCount));
 
             // Sum up all glyph widths (for complex scripts)
             info.advance = 0;
-            for (int g = 0; g < glyphCount; g++) {
+            for (size_t g = 0; g < glyphCount; g++) {
                 info.advance += widths[g];
             }
         } else {
@@ -229,13 +237,13 @@ TextBounds WordRenderer::getTextHeight(const std::string& text, const SubtitleTe
 float WordRenderer::getSpaceWidth(const SubtitleTextStyle& style) const {
     const SkFont skFont = renderer->getFont({ style.fontFamily, style.fontSize, style.fontWeight, style.italic});
 
-    // Get the glyph for space
-    SkGlyphID spaceGlyph;
-    skFont.textToGlyphs(" ", 1, SkTextEncoding::kUTF8, &spaceGlyph, 1);
+    // Get the glyph for space (M147: SkSpan-based APIs)
+    SkGlyphID spaceGlyph = 0;
+    skFont.textToGlyphs(" ", 1, SkTextEncoding::kUTF8, SkSpan<SkGlyphID>(&spaceGlyph, 1));
 
     // Get the width of the space glyph
-    SkScalar spaceWidth;
-    skFont.getWidths(&spaceGlyph, 1, &spaceWidth);
+    SkScalar spaceWidth = 0;
+    skFont.getWidths(SkSpan<const SkGlyphID>(&spaceGlyph, 1), SkSpan<SkScalar>(&spaceWidth, 1));
 
     return spaceWidth + style.letterSpacing;
 }

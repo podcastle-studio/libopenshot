@@ -1,10 +1,17 @@
 #!/bin/bash
 #
-# fetch and build Skia chrome/m131 without GPU support,
-# then generate install_skia.sh (runs entirely in user directory)
+# fetch and build a CPU-only Skia (no GPU), then generate install_skia.sh
+# (runs entirely in user directory)
+#
+# To target a different Skia release, change SKIA_MILESTONE below to any
+# `chrome/m###` branch (e.g. m147 to match canvaskit-wasm 0.41.x).
 #
 
 set -e
+
+# Skia release branch to build (chrome/m###). Keep this in sync with the
+# front end's canvaskit-wasm milestone so CPU/version-driven differences vanish.
+SKIA_MILESTONE="${SKIA_MILESTONE:-m147}"
 
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -21,7 +28,7 @@ if [[ $EUID -eq 0 ]]; then
 fi
 
 echo -e "${GREEN}=== Building Stable Skia (No GPU) ===${NC}"
-echo -e "${BLUE}This will build Skia chrome/m131 (stable) with:${NC}"
+echo -e "${BLUE}This will build Skia chrome/${SKIA_MILESTONE} (stable) with:${NC}"
 echo "  ✓ CPU rendering only (no GPU)"
 echo "  ✓ Full text and font support"
 echo "  ✓ PNG and JPEG support"
@@ -79,8 +86,8 @@ echo -e "${YELLOW}Cloning Skia stable branch...${NC}"
 git clone https://skia.googlesource.com/skia.git
 cd skia
 
-echo -e "${YELLOW}Checking out stable release chrome/m131...${NC}"
-git checkout chrome/m131
+echo -e "${YELLOW}Checking out stable release chrome/${SKIA_MILESTONE}...${NC}"
+git checkout "chrome/${SKIA_MILESTONE}"
 
 echo -e "${YELLOW}Syncing dependencies...${NC}"
 python3 tools/git-sync-deps
@@ -97,8 +104,9 @@ is_debug          = false
 is_official_build = true
 target_cpu        = "x64"
 
-# Disable all GPU back-ends
-skia_enable_gpu   = false
+# Disable all GPU back-ends (arg was renamed skia_enable_gpu -> skia_enable_ganesh
+# in newer milestones; the old name is silently ignored).
+skia_enable_ganesh = false
 skia_use_gl       = false
 skia_use_egl      = false
 skia_use_vulkan   = false
@@ -156,7 +164,9 @@ cxx = "clang++"
 extra_cflags = [
   "-O3", "-DNDEBUG", "-fPIC", "-fno-exceptions", "-fno-rtti"
 ]
-extra_cflags_cc = [ "-std=c++17" ]
+# Skia m147 requires C++20 (uses std::countl_zero/popcount from <bit>).
+# Forcing c++17 here would override Skia's own -std=c++20 and break the build.
+extra_cflags_cc = [ "-std=c++20" ]
 extra_ldflags   = [ "-fPIC" ]
 EOF
 
@@ -168,7 +178,9 @@ bin/gn gen out/Release-CPU
 # ---------------------------------------------------------------------------
 echo -e "${YELLOW}Building Skia (this will take a while)...${NC}"
 echo "Build location: $(pwd)/out/Release-CPU/"
-ninja -C out/Release-CPU
+# Build ONLY the static library target — not tests/tools (which don't always
+# compile cleanly and aren't needed here).
+ninja -C out/Release-CPU skia
 
 # ---------------------------------------------------------------------------
 # 4.  Verify and create the installer
@@ -217,7 +229,7 @@ includedir=\${prefix}/include
 
 Name: Skia
 Description: Skia Graphics Library (CPU-only, Stable)
-Version: chrome-m131
+Version: chrome-__SKIA_MILESTONE__
 Libs: -L\${libdir} -lskia
 Libs.private: -lfreetype -lfontconfig -lharfbuzz -licuuc -licudata -lpng -ljpeg -lexpat -lz -lpthread -ldl -lm
 Cflags: -I\${includedir}/skia
@@ -229,6 +241,8 @@ echo "To use in your project:"
 echo "  Compile: g++ -c myfile.cpp  \$(pkg-config --cflags skia)"
 echo "  Link:    g++ myfile.o       \$(pkg-config --libs skia)"
 INSTALL_SCRIPT
+    # Bake the milestone into the generated installer's skia.pc Version field.
+    sed -i "s/__SKIA_MILESTONE__/${SKIA_MILESTONE}/g" install_skia.sh
     chmod +x install_skia.sh
 
     echo ""
