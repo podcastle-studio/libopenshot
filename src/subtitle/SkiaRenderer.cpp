@@ -11,6 +11,8 @@
 #include "skia/include/ports/SkFontScanner_FreeType.h"
 
 #include <algorithm>
+#include <cmath>
+#include <cstdio>
 #include <filesystem>
 #include <vector>
 
@@ -249,17 +251,51 @@ sk_sp<SkTypeface> SkiaRenderer::getTypeface(const std::string& familyOrPath, con
 }
 
 SkColor SkiaRenderer::parseColorString(const std::string& colorStr, const float opacity) {
-    if (colorStr.empty() || colorStr[0] != '#') {
-        return SkColorSetARGB(255 * opacity, 255, 255, 255);
+    int r = 255, g = 255, b = 255;
+    double a = 1.0;            // colour's own alpha (0..1)
+    bool parsed = false;
+
+    if (!colorStr.empty() && colorStr[0] == '#') {
+        // #rrggbb or #rrggbbaa
+        try {
+            if (colorStr.size() >= 7) {
+                r = std::stoi(colorStr.substr(1, 2), nullptr, 16);
+                g = std::stoi(colorStr.substr(3, 2), nullptr, 16);
+                b = std::stoi(colorStr.substr(5, 2), nullptr, 16);
+                if (colorStr.size() >= 9) {
+                    a = std::stoi(colorStr.substr(7, 2), nullptr, 16) / 255.0;
+                }
+                parsed = true;
+            }
+        } catch (...) {}
+    } else if (colorStr.rfind("rgba", 0) == 0 || colorStr.rfind("RGBA", 0) == 0 ||
+               colorStr.rfind("rgb", 0) == 0  || colorStr.rfind("RGB", 0) == 0) {
+        // rgba(r, g, b, a) or rgb(r, g, b). %d skips leading whitespace, so the
+        // spaces after commas are handled.
+        int rr = 0, gg = 0, bb = 0;
+        double aa = 1.0;
+        if (std::sscanf(colorStr.c_str(), "rgba(%d,%d,%d,%lf)", &rr, &gg, &bb, &aa) >= 3 ||
+            std::sscanf(colorStr.c_str(), "RGBA(%d,%d,%d,%lf)", &rr, &gg, &bb, &aa) >= 3 ||
+            std::sscanf(colorStr.c_str(), "rgb(%d,%d,%d)",      &rr, &gg, &bb)      == 3 ||
+            std::sscanf(colorStr.c_str(), "RGB(%d,%d,%d)",      &rr, &gg, &bb)      == 3) {
+            r = rr; g = gg; b = bb; a = aa;
+            parsed = true;
+        }
     }
 
-    const int r = std::stoi(colorStr.substr(1, 2), nullptr, 16);
-    const int g = std::stoi(colorStr.substr(3, 2), nullptr, 16);
-    const int b = std::stoi(colorStr.substr(5, 2), nullptr, 16);
+    if (!parsed) {
+        // Unknown format → opaque white fallback (legacy behaviour).
+        return SkColorSetARGB(static_cast<U8CPU>(std::lround(255 * opacity)), 255, 255, 255);
+    }
+
+    const int alpha = std::clamp(static_cast<int>(std::lround(a * opacity * 255.0)), 0, 255);
+    r = std::clamp(r, 0, 255);
+    g = std::clamp(g, 0, 255);
+    b = std::clamp(b, 0, 255);
 
     // Platform-specific: This build/platform expects BGR order instead of RGB
     // Despite the function name suggesting RGB order, we need to swap R and B
-    return SkColorSetARGB(255 * opacity, b, g, r);
+    return SkColorSetARGB(static_cast<U8CPU>(alpha), b, g, r);
 }
 
 } // namespace subtitle
