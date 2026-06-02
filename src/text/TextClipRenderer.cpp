@@ -740,6 +740,7 @@ void drawShadowLine(
     const TextClipLine& line,
     const TextClipPaintStyle& style,
     const TextClipShadowStyle& shadow,
+    const std::optional<TextClipStrokeStyle>& stroke,
     double x,
     double baselineY,
     subtitle::SkiaRenderer* renderer)
@@ -748,14 +749,23 @@ void drawShadowLine(
     const double dx = std::cos(radians) * shadow.distance;
     const double dy = std::sin(radians) * shadow.distance;
 
-    const subtitle::PaintProps props{
-        shadow.color,
-        shadow.opacity,
-        std::nullopt,
-        shadow.blur > 0.0 ? std::optional<double>(shadow.blur) : std::nullopt,
-    };
-    const SkPaint* paint = renderer->getPaint(props);
-    drawLetterRun(line, style, x, baselineY, *paint, renderer, dx, dy);
+    const std::optional<double> blur =
+        shadow.blur > 0.0 ? std::optional<double>(shadow.blur) : std::nullopt;
+
+    // Stroke-expanded shadow pass: when the text is stroked, the stroke pushes the visible
+    // glyph boundary outward by strokeWidth/2 on each side. The fill-only shadow below would
+    // be narrower than the stroked text, so first trace the stroked outer edge as a shadow so
+    // the blur halo matches the full stroked+filled glyph. Skipped when there is no stroke.
+    if (stroke.has_value()) {
+        const subtitle::PaintProps strokeProps{shadow.color, shadow.opacity, stroke->width, blur};
+        const SkPaint* strokePaint = renderer->getPaint(strokeProps);
+        drawLetterRun(line, style, x, baselineY, *strokePaint, renderer, dx, dy);
+    }
+
+    // Fill shadow pass: fills the glyph interior of the shadow (the original behaviour).
+    const subtitle::PaintProps fillProps{shadow.color, shadow.opacity, std::nullopt, blur};
+    const SkPaint* fillPaint = renderer->getPaint(fillProps);
+    drawLetterRun(line, style, x, baselineY, *fillPaint, renderer, dx, dy);
 }
 
 void drawBackgroundRect(
@@ -788,8 +798,10 @@ void drawLine(
     double baselineY,
     subtitle::SkiaRenderer* renderer)
 {
+    // Back-to-front per glyph: (1) shadow stroke-expanded pass, (2) shadow fill pass — both
+    // handled inside drawShadowLine — then (3) text stroke, (4) text fill on top.
     if (style.dropShadow.has_value()) {
-        drawShadowLine(line, style, *style.dropShadow, x, baselineY, renderer);
+        drawShadowLine(line, style, *style.dropShadow, style.stroke, x, baselineY, renderer);
     }
     if (style.stroke.has_value()) {
         drawStrokeLine(line, style, *style.stroke, x, baselineY, renderer);
