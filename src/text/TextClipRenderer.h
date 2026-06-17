@@ -1,6 +1,7 @@
 #pragma once
 
 #include "TextClipTypes.h"
+#include "TextCurvedText.h"
 
 #include <optional>
 #include <string>
@@ -87,16 +88,36 @@ TextClipLayout layoutTextAtReferenceSize(
     subtitle::SkiaRenderer* renderer);
 
 /// Starting x offset within layout box for a single line, given the alignment.
-double getLineStartX(const TextClipLine& line, const TextClipLayout& layout, TextAlignment alignment);
+/// `extraLetterSpacing` (animated word-mode spread) widens the line so centered/right
+/// lines spread symmetrically around their anchor instead of growing to one side.
+double getLineStartX(const TextClipLine& line, const TextClipLayout& layout, TextAlignment alignment,
+                     double extraLetterSpacing = 0.0);
 
 // ---------------------------------------------------------------------------
 // Drawing (text-rendering.draw.ts)
 // ---------------------------------------------------------------------------
 
-/// Render a fully computed layout onto the renderer's canvas at the given top-left origin
+/// Render a fully computed FLAT layout onto the renderer's canvas at the given top-left origin
 /// of the text block (i.e. top-left of the layoutWidth × textHeight box; background extends
-/// out by paddingX / paddingY beyond this).
+/// out by paddingX / paddingY beyond this). Draws in global passes
+/// (background -> shadows -> glow -> strokes -> fills). `extraLetterSpacing` (animated word-mode
+/// spread) widens the precomputed advances at draw time; `skipGlow` omits the glow layer (used
+/// when compositing into an offscreen texture where the glow shader is drawn live instead).
 void renderLayout(
+    const TextClipLayout& layout,
+    const TextClipPaintStyle& paint,
+    const std::optional<TextClipBackgroundStyle>& background,
+    double originX,
+    double originY,
+    subtitle::SkiaRenderer* renderer,
+    double extraLetterSpacing = 0.0,
+    bool skipGlow = false);
+
+/// Compute the curved-arc geometry of the layout's first non-empty line (or an empty geometry).
+CurvedTextGeometry curvedGeometryForLayout(const TextClipLayout& layout, const TextClipPaintStyle& paint);
+
+/// Draw the static text content, dispatching flat vs curved based on paint.curveAngle.
+void drawTextContent(
     const TextClipLayout& layout,
     const TextClipPaintStyle& paint,
     const std::optional<TextClipBackgroundStyle>& background,

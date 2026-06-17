@@ -65,6 +65,30 @@ find_package_handle_standard_args(Skia
 
 if(SKIA_FOUND)
     set(SKIA_INCLUDE_DIRS ${SKIA_INCLUDE_DIR})
+
+    # Skia runtime effects (SkRuntimeEffect, used by the text glow shader) transitively
+    # include "modules/skcms/skcms.h". That header lives in the Skia source tree's modules/
+    # directory, which is not always shipped alongside the installed core headers. If the
+    # primary include dir does not provide it, locate a root that does and add it so the
+    # `modules/...` include resolves. Override with -DSKIA_SOURCE_DIR=/path or env SKIA_SOURCE_DIR.
+    if(NOT EXISTS "${SKIA_INCLUDE_DIR}/modules/skcms/skcms.h")
+        find_path(SKIA_MODULES_ROOT
+                NAMES modules/skcms/skcms.h
+                HINTS ${SKIA_SOURCE_DIR} $ENV{SKIA_SOURCE_DIR}
+                PATHS
+                ${SKIA_INCLUDE_DIR}
+                /usr/local/include/skia
+                /usr/include/skia
+                /opt/skia
+        )
+        if(SKIA_MODULES_ROOT)
+            message(STATUS "Found Skia skcms module root: ${SKIA_MODULES_ROOT}")
+            list(APPEND SKIA_INCLUDE_DIRS ${SKIA_MODULES_ROOT})
+        else()
+            message(WARNING "skcms module header not found; SkRuntimeEffect (text glow) may fail to compile. "
+                            "Set -DSKIA_SOURCE_DIR to your Skia source tree.")
+        endif()
+    endif()
     set(SKIA_LIBRARIES
             ${SKIA_LIBRARY}
             ${FREETYPE_LIBRARIES}

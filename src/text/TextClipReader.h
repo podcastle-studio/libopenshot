@@ -1,9 +1,12 @@
 #pragma once
 
 #include "../ReaderBase.h"
+#include "TextAnimationEngine.h"
+#include "TextClipRenderer.h"
 #include "TextClipTypes.h"
 
 #include <memory>
+#include <optional>
 #include <string>
 
 class QImage;
@@ -67,6 +70,18 @@ public:
     void SetTransformation(const text::TextTransformation& transformation);
     void SetProjectWidth(int width);
 
+    /// Enable per-frame text animation. The reader becomes a frame sequence (not a single
+    /// image): each `GetFrame` renders the in/loop/out timeline at that frame's clip-relative
+    /// time. `presets` supplies the keyframe data for the ids in `animations` (delivered in the
+    /// render payload). `fps` is the timeline frame rate; `durationSec` is the clip's visible
+    /// duration. With no active animations this is a no-op and the reader stays a single image.
+    void SetAnimations(const text::TextAnimations& animations,
+                       const text::AnimationPresetMap& presets,
+                       double fps,
+                       double durationSec);
+
+    bool HasAnimation() const { return has_animation; }
+
     const text::TextClipData& Data() const { return data; }
     int ProjectWidth() const { return project_width; }
 
@@ -92,7 +107,10 @@ public:
 
 private:
     void initInfo();
-    void renderToImage();
+    void buildPlan();      ///< (Re)compute paint/layout/background/frame-size from data.
+    void renderToImage();  ///< Render the static (non-animated) frame into rendered_image.
+    /// Render one frame (static when `animation` is empty) into a fresh QImage using the plan.
+    std::shared_ptr<QImage> renderToQImage(const std::optional<text::TextClipAnimationFrame>& animation);
 
     int project_width;
     int frame_width;
@@ -104,7 +122,26 @@ private:
     text::TextClipData data;
     std::shared_ptr<QImage> rendered_image;
     bool is_open;
-    bool dirty;            ///< True when data changed and rendered_image is stale
+    bool dirty;            ///< True when data changed and the plan / rendered_image is stale
+
+    // ---- Animation state ------------------------------------------------------
+    text::TextAnimations animations;
+    text::AnimationPresetMap presets;
+    double anim_fps{30.0};
+    double anim_duration_sec{0.0};
+    bool has_animation{false};
+    std::optional<text::AnimationTimeline> timeline;
+    int anim_char_count{0};
+
+    // ---- Cached render plan (built once per data change in buildPlan) ---------
+    bool plan_empty{true};
+    text::TextClipPaintStyle plan_paint;
+    text::TextClipLayout plan_layout;
+    std::optional<text::TextClipBackgroundStyle> plan_background;
+    double plan_content_w{0.0};
+    double plan_content_h{0.0};
+    double plan_origin_x{0.0};
+    double plan_origin_y{0.0};
 };
 
 } // namespace openshot

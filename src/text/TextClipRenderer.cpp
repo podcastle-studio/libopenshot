@@ -1,6 +1,10 @@
 #include "TextClipRenderer.h"
 
 #include "../subtitle/SkiaRenderer.h"
+#include "TextCurvedText.h"
+#include "TextDrawShared.h"
+#include "TextGlowRenderer.h"
+#include "TextGlowShader.h"
 
 #include <skia/include/core/SkCanvas.h>
 #include <skia/include/core/SkFont.h>
@@ -26,141 +30,6 @@ namespace text {
 namespace {
 
 constexpr char SPACE = ' ';
-
-// ---------------------------------------------------------------------------
-// UTF-8 helpers
-// ---------------------------------------------------------------------------
-
-// Returns the byte length of the UTF-8 codepoint starting at `s[i]`,
-// or 1 if invalid (caller advances past one byte to keep going).
-size_t utf8CharLen(const std::string& s, size_t i) {
-    if (i >= s.size()) return 0;
-    const auto b = static_cast<unsigned char>(s[i]);
-    if ((b & 0x80) == 0) return 1;
-    if ((b & 0xE0) == 0xC0 && i + 1 < s.size()) return 2;
-    if ((b & 0xF0) == 0xE0 && i + 2 < s.size()) return 3;
-    if ((b & 0xF8) == 0xF0 && i + 3 < s.size()) return 4;
-    return 1;
-}
-
-// Decode a UTF-8 codepoint at `s[i]` (with already-known length `len`).
-SkUnichar utf8Decode(const std::string& s, size_t i, size_t len) {
-    if (len == 0) return 0;
-    const char* p = s.c_str() + i;
-    const auto b0 = static_cast<unsigned char>(p[0]);
-    if (len == 1) return b0;
-    if (len == 2) {
-        return ((b0 & 0x1F) << 6) | (static_cast<unsigned char>(p[1]) & 0x3F);
-    }
-    if (len == 3) {
-        return ((b0 & 0x0F) << 12) |
-               ((static_cast<unsigned char>(p[1]) & 0x3F) << 6) |
-               (static_cast<unsigned char>(p[2]) & 0x3F);
-    }
-    return ((b0 & 0x07) << 18) |
-           ((static_cast<unsigned char>(p[1]) & 0x3F) << 12) |
-           ((static_cast<unsigned char>(p[2]) & 0x3F) << 6) |
-           (static_cast<unsigned char>(p[3]) & 0x3F);
-}
-
-// Iterate UTF-8 codepoints. `cb(letter, unichar)` is invoked once per codepoint.
-template <typename Cb>
-void forEachUtf8(const std::string& text, Cb&& cb) {
-    size_t i = 0;
-    while (i < text.size()) {
-        size_t len = utf8CharLen(text, i);
-        if (len == 0) break;
-        const std::string letter = text.substr(i, len);
-        const SkUnichar uc = utf8Decode(text, i, len);
-        cb(letter, uc);
-        i += len;
-    }
-}
-
-// Convert a paint style into FontProps consumable by SkiaRenderer.
-subtitle::FontProps toFontProps(const TextClipPaintStyle& style) {
-    return subtitle::FontProps{
-        style.fontFamily,
-        style.fontSize,
-        style.fontWeight > 0 ? style.fontWeight : 400,
-        style.italic,
-    };
-}
-
-// Get a SkFont specialised for a given Unicode character (with fallback support).
-SkFont getFontForChar(subtitle::SkiaRenderer* renderer, const TextClipPaintStyle& style, SkUnichar uc) {
-    return renderer->getFontForCharacter(toFontProps(style), uc);
-}
-
-// Sum of glyph widths for `letter` (single codepoint) in the given font.
-double measureLetterAdvance(const SkFont& font, const std::string& letter) {
-    SkGlyphID glyphs[8];
-    // M147: textToGlyphs takes an SkSpan output and returns size_t.
-    const size_t count = font.textToGlyphs(
-        letter.c_str(), letter.length(),
-        SkTextEncoding::kUTF8, SkSpan<SkGlyphID>(glyphs));
-    if (count == 0) {
-        // Fallback to measureText
-        return font.measureText(letter.c_str(), letter.length(), SkTextEncoding::kUTF8, nullptr);
-    }
-    const size_t n = std::min<size_t>(count, 8);
-    SkScalar widths[8] = {0};
-    font.getWidths(SkSpan<const SkGlyphID>(glyphs, n), SkSpan<SkScalar>(widths, n));
-    double advance = 0.0;
-    for (size_t g = 0; g < n; ++g) advance += widths[g];
-    return advance;
-}
-
-// ---------------------------------------------------------------------------
-// Color parsing: TS parseColorOpacity
-// ---------------------------------------------------------------------------
-
-struct ParsedColor {
-    std::string color;   // "#rrggbb" hex
-    double opacity = 0.0;
-};
-
-std::string trimCopy(const std::string& s) {
-    auto begin = s.find_first_not_of(" \t\r\n");
-    if (begin == std::string::npos) return "";
-    auto end = s.find_last_not_of(" \t\r\n");
-    return s.substr(begin, end - begin + 1);
-}
-
-ParsedColor parseColorOpacity(const std::string& colorValue) {
-    if (colorValue.empty()) return {std::string(), 0.0};
-
-    if (colorValue.rfind("rgba", 0) == 0 || colorValue.rfind("RGBA", 0) == 0) {
-        // Strip "rgba(" and ")"
-        const auto open = colorValue.find('(');
-        const auto close = colorValue.find(')');
-        if (open == std::string::npos || close == std::string::npos || close <= open) {
-            return {std::string(), 0.0};
-        }
-        const std::string inner = colorValue.substr(open + 1, close - open - 1);
-        std::stringstream ss(inner);
-        std::string part;
-        int idx = 0;
-        int r = 0, g = 0, b = 0;
-        double a = 1.0;
-        while (std::getline(ss, part, ',')) {
-            const auto v = trimCopy(part);
-            try {
-                if (idx == 0) r = std::stoi(v);
-                else if (idx == 1) g = std::stoi(v);
-                else if (idx == 2) b = std::stoi(v);
-                else if (idx == 3) a = std::stod(v);
-            } catch (...) {}
-            ++idx;
-        }
-        char buf[8];
-        std::snprintf(buf, sizeof(buf), "#%02x%02x%02x",
-            std::clamp(r, 0, 255), std::clamp(g, 0, 255), std::clamp(b, 0, 255));
-        return {std::string(buf), a};
-    }
-
-    return {colorValue, 1.0};
-}
 
 } // namespace
 
@@ -255,6 +124,29 @@ TextClipPaintStyle convertTextStyleToPaintStyle(
             };
         }
     }
+
+    // Gaussian blur. Ratio-based so the blur stays visually constant across font sizes.
+    paint.blur = style.blurRatio.has_value() && *style.blurRatio > 0.0
+        ? *style.blurRatio * paint.fontSize
+        : 0.0;
+
+    // Glow: spread -> beam reach, direction -> light-source offset (fontSize units, size-invariant).
+    if (style.glowColor.has_value()) {
+        const auto parsed = parseColorOpacity(*style.glowColor);
+        const double intensity = style.glowIntensityRatio;
+        if (parsed.opacity > 0.0 && intensity > 0.0) {
+            paint.glow = TextClipGlowStyle{
+                parsed.color,
+                parsed.opacity * intensity,
+                style.glowRangeRatio * GLOW_RAY_LEN_SCALE,
+                (style.glowDirectionX / GLOW_DIRECTION_RANGE) * GLOW_MAX_SOURCE_OFFSET,
+                (style.glowDirectionY / GLOW_DIRECTION_RANGE) * GLOW_MAX_SOURCE_OFFSET,
+            };
+        }
+    }
+
+    // Size-invariant (it is an angle), so it passes straight through. nullopt = curving off.
+    paint.curveAngle = style.curveAngle;
 
     return paint;
 }
@@ -563,34 +455,36 @@ TextClipLayout layoutText(
 
     for (size_t pi = 0; pi < paragraphs.size(); ++pi) {
         const auto& paragraph = paragraphs[pi];
+        const bool isLastParagraph = (pi + 1 == paragraphs.size());
 
         if (paragraph.empty()) {
-            lines.push_back({"", 0.0, {}});
+            TextClipLine empty;
+            empty.isHardBreak = !isLastParagraph;
+            lines.push_back(std::move(empty));
             continue;
         }
 
         const auto pLines = layoutParagraph(paragraph, style, wrapWidth, renderer);
         for (const auto& line : pLines) lines.push_back(line);
 
-        if (pi + 1 < paragraphs.size() && pLines.empty()) {
-            lines.push_back({"", 0.0, {}});
+        if (!isLastParagraph && pLines.empty()) {
+            TextClipLine empty;
+            empty.isHardBreak = true;
+            lines.push_back(std::move(empty));
+        }
+
+        // Mark the last line of this paragraph as a hard break (unless it's the last paragraph).
+        if (!isLastParagraph && !lines.empty()) {
+            lines.back().isHardBreak = true;
         }
     }
 
     if (lines.empty()) {
-        lines.push_back({"", 0.0, {}});
+        lines.push_back({});
     }
 
-    // Populate per-codepoint letter advances for each line at the supplied paint.
-    // When the caller is `layoutTextAtReferenceSize`, these are reference-space advances
-    // which scaleLayout converts back into actual pixel space.
-    for (auto& line : lines) {
-        line.letterAdvances = computeLetterAdvances(line.text, style, renderer);
-    }
-
-    // Vertical metrics: use real glyph bounds from a line that actually has ink. Whitespace-
-    // only lines would collapse to zero bounds because spaces carry no glyph extents; in that
-    // case fall back to the "Hg" probe so we still get a font-nominal ascent / descent.
+    // Whitespace-only lines collapse to zero glyph bounds (spaces carry no ink), so fall back to
+    // the "Hg" probe for those so they still get a font-nominal ascent / descent.
     auto hasInk = [](const std::string& s) {
         for (char c : s) {
             if (!std::isspace(static_cast<unsigned char>(c))) return true;
@@ -599,27 +493,35 @@ TextClipLayout layoutText(
     };
 
     const std::string VERTICAL_METRICS_PROBE = "Hg";
-    std::string firstNonEmpty = VERTICAL_METRICS_PROBE;
-    for (const auto& l : lines) {
-        if (hasInk(l.text)) { firstNonEmpty = l.text; break; }
-    }
-    std::string lastNonEmpty = VERTICAL_METRICS_PROBE;
-    for (auto it = lines.rbegin(); it != lines.rend(); ++it) {
-        if (hasInk(it->text)) { lastNonEmpty = it->text; break; }
-    }
+    const VerticalBounds probeBounds = measureTextVerticalBounds(VERTICAL_METRICS_PROBE, style, renderer);
 
-    const VerticalBounds firstBounds = measureTextVerticalBounds(firstNonEmpty, style, renderer);
-    const VerticalBounds lastBounds  = (firstNonEmpty == lastNonEmpty)
-        ? firstBounds
-        : measureTextVerticalBounds(lastNonEmpty, style, renderer);
-
-    // top is negative (above baseline); bottom is positive (below baseline). Convert to
-    // positive distances.
-    const double firstLineAscent = -firstBounds.top;
-    const double lastLineDescent = lastBounds.bottom;
+    // Populate per-codepoint advances and per-line vertical metrics for each line. When the
+    // caller is `layoutTextAtReferenceSize`, these are reference-space values which scaleLayout
+    // converts back into actual pixel space.
+    for (auto& line : lines) {
+        line.letterAdvances = computeLetterAdvances(line.text, style, renderer);
+        if (hasInk(line.text)) {
+            const VerticalBounds bounds = measureTextVerticalBounds(line.text, style, renderer);
+            line.ascent = -bounds.top;
+            line.descent = bounds.bottom;
+        } else {
+            line.ascent = -probeBounds.top;
+            line.descent = probeBounds.bottom;
+        }
+    }
 
     double textWidth = 0.0;
     for (const auto& l : lines) textWidth = std::max(textWidth, l.width);
+
+    // First inked line's ascent and last inked line's descent bound the visible block.
+    double firstLineAscent = -probeBounds.top;
+    for (const auto& l : lines) {
+        if (hasInk(l.text)) { firstLineAscent = l.ascent; break; }
+    }
+    double lastLineDescent = probeBounds.bottom;
+    for (auto it = lines.rbegin(); it != lines.rend(); ++it) {
+        if (hasInk(it->text)) { lastLineDescent = it->descent; break; }
+    }
 
     // Single line collapses to (ascent + descent) — the exact ink height.
     const double textHeight = firstLineAscent
@@ -644,6 +546,9 @@ TextClipLayout scaleLayout(const TextClipLayout& layout, double sizeScale) {
         for (double a : line.letterAdvances) {
             scaled.letterAdvances.push_back(a * sizeScale);
         }
+        scaled.isHardBreak = line.isHardBreak;
+        scaled.ascent = line.ascent * sizeScale;
+        scaled.descent = line.descent * sizeScale;
         out.lines.push_back(std::move(scaled));
     }
     out.lineHeight      = layout.lineHeight      * sizeScale;
@@ -674,12 +579,15 @@ TextClipLayout layoutTextAtReferenceSize(
     return scaleLayout(referenceLayout, sizeScale);
 }
 
-double getLineStartX(const TextClipLine& line, const TextClipLayout& layout, TextAlignment alignment) {
+double getLineStartX(const TextClipLine& line, const TextClipLayout& layout, TextAlignment alignment,
+                     double extraLetterSpacing) {
+    const size_t n = utf8Length(line.text);
+    const double width = line.width + (n > 0 ? static_cast<double>(n - 1) : 0.0) * extraLetterSpacing;
     switch (alignment) {
     case TextAlignment::LEFT:  return 0.0;
-    case TextAlignment::RIGHT: return layout.layoutWidth - line.width;
+    case TextAlignment::RIGHT: return layout.layoutWidth - width;
     case TextAlignment::CENTER:
-    default:                   return (layout.layoutWidth - line.width) / 2.0;
+    default:                   return (layout.layoutWidth - width) / 2.0;
     }
 }
 
@@ -689,43 +597,29 @@ double getLineStartX(const TextClipLine& line, const TextClipLayout& layout, Tex
 
 namespace {
 
-// Walk the codepoints of `line.text` left-to-right, using the precomputed
-// `line.letterAdvances` as cursor advances. The advances were measured at the
-// layout (reference-size) paint and scaled to actual pixel space, so they MUST
-// be consumed as-is — re-measuring at the live paint would reintroduce the
-// per-`Font`-instance quantization drift the line-calculation patch eliminates.
-void drawLetterRun(
-    const TextClipLine& line,
-    const TextClipPaintStyle& style,
-    double startX,
-    double baselineY,
-    const SkPaint& paint,
-    subtitle::SkiaRenderer* renderer,
-    double deltaX = 0.0,
-    double deltaY = 0.0)
-{
-    if (line.text.empty()) return;
-    double cursor = startX;
-    size_t idx = 0;
-    forEachUtf8(line.text, [&](const std::string& letter, SkUnichar uc) {
-        const SkFont font = getFontForChar(renderer, style, uc);
-        renderer->drawText(letter, static_cast<float>(cursor + deltaX),
-                           static_cast<float>(baselineY + deltaY), paint, font);
-        cursor += idx < line.letterAdvances.size() ? line.letterAdvances[idx] : 0.0;
-        ++idx;
-    });
-}
+// CPU (backend raster) vs GPU (front-end CanvasKit) blur-match factor. The backend's CPU
+// mask-blur reads heavier than the front end for the same sigma, so the backend uses a
+// SMALLER shadow sigma to reproduce the same visual blur. k = 30/50 = 0.6.
+constexpr double SHADOW_BLUR_SIGMA_SCALE = 30.0 / 50.0;
 
+// Topmost crisp fill of the flat block. When glow is active the fill is softened (Layer 3):
+// lower opacity + a sub-pixel mask blur so the underlying bloom/ray light dominates the edges.
 void drawTextLine(
     const TextClipLine& line,
     const TextClipPaintStyle& style,
     double x,
     double baselineY,
-    subtitle::SkiaRenderer* renderer)
+    subtitle::SkiaRenderer* renderer,
+    double extraLetterSpacing = 0.0)
 {
-    const subtitle::PaintProps props{style.color, 1.0, std::nullopt, std::nullopt};
-    const SkPaint* paint = renderer->getPaint(props);
-    drawLetterRun(line, style, x, baselineY, *paint, renderer);
+    const double coreSoftBlur = style.glow.has_value() ? GLOW_CORE_TEXT_BLUR_RATIO * style.fontSize : 0.0;
+    const double fillBlur = combineBlur(style.blur, coreSoftBlur);
+    const std::optional<double> blurOpt = fillBlur > 0.0 ? std::optional<double>(fillBlur) : std::nullopt;
+    const SkPaint* paint = renderer->getPaint(subtitle::PaintProps{
+        style.color, style.glow.has_value() ? GLOW_CORE_TEXT_OPACITY : 1.0, std::nullopt, blurOpt});
+    forEachLetter(line, x, extraLetterSpacing, [&](const std::string& letter, double letterX) {
+        drawLetter(renderer, letter, letterX, baselineY, *paint, style);
+    });
 }
 
 void drawStrokeLine(
@@ -734,11 +628,14 @@ void drawStrokeLine(
     const TextClipStrokeStyle& stroke,
     double x,
     double baselineY,
-    subtitle::SkiaRenderer* renderer)
+    subtitle::SkiaRenderer* renderer,
+    double extraLetterSpacing = 0.0)
 {
-    const subtitle::PaintProps props{stroke.color, 1.0, stroke.width, std::nullopt};
-    const SkPaint* paint = renderer->getPaint(props);
-    drawLetterRun(line, style, x, baselineY, *paint, renderer);
+    const std::optional<double> blurOpt = style.blur > 0.0 ? std::optional<double>(style.blur) : std::nullopt;
+    const SkPaint* paint = renderer->getPaint(subtitle::PaintProps{stroke.color, 1.0, stroke.width, blurOpt});
+    forEachLetter(line, x, extraLetterSpacing, [&](const std::string& letter, double letterX) {
+        drawLetter(renderer, letter, letterX, baselineY, *paint, style);
+    });
 }
 
 void drawShadowLine(
@@ -748,80 +645,30 @@ void drawShadowLine(
     const std::optional<TextClipStrokeStyle>& stroke,
     double x,
     double baselineY,
-    subtitle::SkiaRenderer* renderer)
+    subtitle::SkiaRenderer* renderer,
+    double extraLetterSpacing = 0.0)
 {
     const double radians = shadow.angle * M_PI / 180.0;
     const double dx = std::cos(radians) * shadow.distance;
     const double dy = std::sin(radians) * shadow.distance;
 
-    // CPU (backend raster) vs GPU (front-end CanvasKit) blur-match factor.
-    // The backend's CPU mask-blur reads heavier than the front end for the same sigma,
-    // so the backend must use a SMALLER sigma to reproduce the same visual blur.
-    // Calibrated so the back end matches the front end: k = 30/50 = 0.6. Both sides
-    // compute the same nominal sigma (shadowBlurRatio × fontSize); only the backend
-    // applies this correction.
-    constexpr double SHADOW_BLUR_SIGMA_SCALE = 30.0 / 50.0;
+    // The text blur compounds with the shadow's own blur (combineBlur), then the backend
+    // CPU-vs-GPU calibration is applied. With style.blur == 0 this reduces to the legacy
+    // shadow.blur * SHADOW_BLUR_SIGMA_SCALE, so existing static output is unchanged.
+    const double shadowBlur = combineBlur(shadow.blur, style.blur) * SHADOW_BLUR_SIGMA_SCALE;
+    const std::optional<double> blur = shadowBlur > 0.0 ? std::optional<double>(shadowBlur) : std::nullopt;
 
-    const std::optional<double> blur =
-        shadow.blur > 0.0
-            ? std::optional<double>(shadow.blur * SHADOW_BLUR_SIGMA_SCALE)
-            : std::nullopt;
+    // Stroke-expanded shadow pass: trace the stroked outer edge so the blur halo matches the
+    // full stroked+filled glyph. Skipped when there is no stroke.
+    const SkPaint* strokePaint = stroke.has_value()
+        ? renderer->getPaint(subtitle::PaintProps{shadow.color, shadow.opacity, stroke->width, blur})
+        : nullptr;
+    const SkPaint* fillPaint = renderer->getPaint(subtitle::PaintProps{shadow.color, shadow.opacity, std::nullopt, blur});
 
-    // Stroke-expanded shadow pass: when the text is stroked, the stroke pushes the visible
-    // glyph boundary outward by strokeWidth/2 on each side. The fill-only shadow below would
-    // be narrower than the stroked text, so first trace the stroked outer edge as a shadow so
-    // the blur halo matches the full stroked+filled glyph. Skipped when there is no stroke.
-    if (stroke.has_value()) {
-        const subtitle::PaintProps strokeProps{shadow.color, shadow.opacity, stroke->width, blur};
-        const SkPaint* strokePaint = renderer->getPaint(strokeProps);
-        drawLetterRun(line, style, x, baselineY, *strokePaint, renderer, dx, dy);
-    }
-
-    // Fill shadow pass: fills the glyph interior of the shadow (the original behaviour).
-    const subtitle::PaintProps fillProps{shadow.color, shadow.opacity, std::nullopt, blur};
-    const SkPaint* fillPaint = renderer->getPaint(fillProps);
-    drawLetterRun(line, style, x, baselineY, *fillPaint, renderer, dx, dy);
-}
-
-void drawBackgroundRect(
-    const TextClipLayout& layout,
-    const TextClipBackgroundStyle& background,
-    double originX,
-    double originY,
-    subtitle::SkiaRenderer* renderer)
-{
-    const double width = layout.layoutWidth + 2.0 * background.paddingX;
-    const double height = layout.textHeight + 2.0 * background.paddingY;
-    const double radius = (std::min(width, height) / 2.0) * background.radius;
-
-    const subtitle::PaintProps props{background.color, background.opacity, std::nullopt, std::nullopt};
-    const SkPaint* paint = renderer->getPaint(props);
-
-    const SkRect rect = SkRect::MakeLTRB(
-        static_cast<float>(originX - background.paddingX),
-        static_cast<float>(originY - background.paddingY),
-        static_cast<float>(originX + layout.layoutWidth + background.paddingX),
-        static_cast<float>(originY + layout.textHeight + background.paddingY));
-    const SkRRect rrect = SkRRect::MakeRectXY(rect, static_cast<float>(radius), static_cast<float>(radius));
-    renderer->drawRRect(rrect, *paint);
-}
-
-void drawLine(
-    const TextClipLine& line,
-    const TextClipPaintStyle& style,
-    double x,
-    double baselineY,
-    subtitle::SkiaRenderer* renderer)
-{
-    // Back-to-front per glyph: (1) shadow stroke-expanded pass, (2) shadow fill pass — both
-    // handled inside drawShadowLine — then (3) text stroke, (4) text fill on top.
-    if (style.dropShadow.has_value()) {
-        drawShadowLine(line, style, *style.dropShadow, style.stroke, x, baselineY, renderer);
-    }
-    if (style.stroke.has_value()) {
-        drawStrokeLine(line, style, *style.stroke, x, baselineY, renderer);
-    }
-    drawTextLine(line, style, x, baselineY, renderer);
+    forEachLetter(line, x, extraLetterSpacing, [&](const std::string& letter, double letterX) {
+        if (strokePaint) drawLetter(renderer, letter, letterX + dx, baselineY + dy, *strokePaint, style);
+        drawLetter(renderer, letter, letterX + dx, baselineY + dy, *fillPaint, style);
+    });
 }
 
 } // namespace
@@ -832,24 +679,78 @@ void renderLayout(
     const std::optional<TextClipBackgroundStyle>& background,
     double originX,
     double originY,
-    subtitle::SkiaRenderer* renderer)
+    subtitle::SkiaRenderer* renderer,
+    double extraLetterSpacing,
+    bool skipGlow)
 {
     if (background.has_value()) {
-        drawBackgroundRect(layout, *background, originX, originY, renderer);
+        drawBackgroundRect(renderer, *background, originX, originY, layout.layoutWidth, layout.textHeight);
     }
 
     // First baseline sits `firstLineAscent` below the top of the text block, so the visible
     // top of line 0's glyphs lines up exactly with originY. Subsequent baselines step down
     // by lineHeight (the inter-baseline advance).
     const double firstBaselineY = originY + layout.firstLineAscent;
+    auto lineStart = [&](const TextClipLine& line) {
+        return originX + getLineStartX(line, layout, paint.alignment, extraLetterSpacing);
+    };
+
+    // Global passes (background -> all shadows -> glow -> all strokes -> all fills) so a line's
+    // shadow/stroke can never land on top of another line's fill, and the glow sits beneath all
+    // crisp glyphs. For non-overlapping lines this is identical to per-line draw order.
+    if (paint.dropShadow.has_value()) {
+        for (size_t li = 0; li < layout.lines.size(); ++li) {
+            const auto& line = layout.lines[li];
+            if (line.text.empty()) continue;
+            drawShadowLine(line, paint, *paint.dropShadow, paint.stroke, lineStart(line),
+                           firstBaselineY + static_cast<double>(li) * layout.lineHeight, renderer, extraLetterSpacing);
+        }
+    }
+
+    if (paint.glow.has_value() && !skipGlow) {
+        TextGlowRenderer(renderer).drawGlowLayer(layout, paint, *paint.glow, originX, originY, nullptr, 1.0, extraLetterSpacing);
+    }
+
+    if (paint.stroke.has_value()) {
+        for (size_t li = 0; li < layout.lines.size(); ++li) {
+            const auto& line = layout.lines[li];
+            if (line.text.empty()) continue;
+            drawStrokeLine(line, paint, *paint.stroke, lineStart(line),
+                           firstBaselineY + static_cast<double>(li) * layout.lineHeight, renderer, extraLetterSpacing);
+        }
+    }
 
     for (size_t li = 0; li < layout.lines.size(); ++li) {
         const auto& line = layout.lines[li];
         if (line.text.empty()) continue;
+        drawTextLine(line, paint, lineStart(line),
+                     firstBaselineY + static_cast<double>(li) * layout.lineHeight, renderer, extraLetterSpacing);
+    }
+}
 
-        const double x = originX + getLineStartX(line, layout, paint.alignment);
-        const double baselineY = firstBaselineY + static_cast<double>(li) * layout.lineHeight;
-        drawLine(line, paint, x, baselineY, renderer);
+CurvedTextGeometry curvedGeometryForLayout(const TextClipLayout& layout, const TextClipPaintStyle& paint) {
+    const double angle = paint.curveAngle.value_or(0.0);
+    for (const auto& line : layout.lines) {
+        if (!line.text.empty()) return computeCurvedGeometry(line, angle);
+    }
+    return CurvedTextGeometry{};
+}
+
+void drawTextContent(
+    const TextClipLayout& layout,
+    const TextClipPaintStyle& paint,
+    const std::optional<TextClipBackgroundStyle>& background,
+    double originX,
+    double originY,
+    subtitle::SkiaRenderer* renderer)
+{
+    if (paint.curveAngle.has_value()) {
+        const CurvedTextGeometry geometry = curvedGeometryForLayout(layout, paint);
+        TextGlowRenderer glowRenderer(renderer);
+        CurvedTextPainter painter(renderer, &glowRenderer);
+        painter.drawCurvedStatic(geometry, layout, paint, background, originX, originY);
+    } else {
+        renderLayout(layout, paint, background, originX, originY, renderer);
     }
 }
 
@@ -895,12 +796,21 @@ RenderResult renderTextClip(
     const double paddingX = background.has_value() ? background->paddingX : 0.0;
     const double paddingY = background.has_value() ? background->paddingY : 0.0;
 
+    // Curved text bounds the arc's AABB, not the flat line box.
+    double contentWidth = layout.layoutWidth;
+    double contentHeight = layout.textHeight;
+    if (paint.curveAngle.has_value()) {
+        const CurvedTextGeometry geometry = curvedGeometryForLayout(layout, paint);
+        contentWidth = geometry.width;
+        contentHeight = geometry.height;
+    }
+
     RenderResult result;
     result.layout = layout;
-    result.boundingWidth = layout.layoutWidth + 2.0 * paddingX;
-    result.boundingHeight = layout.textHeight + 2.0 * paddingY;
+    result.boundingWidth = contentWidth + 2.0 * paddingX;
+    result.boundingHeight = contentHeight + 2.0 * paddingY;
 
-    renderLayout(layout, paint, background, originX, originY, renderer);
+    drawTextContent(layout, paint, background, originX, originY, renderer);
     return result;
 }
 

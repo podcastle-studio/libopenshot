@@ -4,7 +4,10 @@
 #include "../Frame.h"
 #include "../Json.h"
 #include "../subtitle/SkiaRenderer.h"
+#include "TextAnimationRenderer.h"
 #include "TextClipRenderer.h"
+#include "TextDrawShared.h"
+#include "TextGlowShader.h"
 
 #include <skia/include/core/SkBitmap.h>
 #include <skia/include/core/SkCanvas.h>
@@ -15,6 +18,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <regex>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -26,6 +30,36 @@ namespace {
 
 // Blur reach: cover ~3 σ of the gaussian (the rest is visually negligible).
 constexpr double SHADOW_BLUR_SIGMA_MULTIPLIER = 3.0;
+
+// Curved text is a single unbroken line bent along the path — collapse hard breaks (and the
+// whitespace around them) to single spaces so it lays out as one line. Mirrors the frontend
+// `value.replace(/\s*\n+\s*/g, ' ')`.
+std::string collapseNewlines(const std::string& value) {
+    static const std::regex re(R"(\s*\n+\s*)");
+    return std::regex_replace(value, re, " ");
+}
+
+// Outward margin (px) the text effects (shadow, stroke, gaussian blur, glow beams) extend
+// beyond the bounding box, so the frame buffer reserves room for them and nothing is clipped.
+double effectsMargin(const openshot::text::TextClipPaintStyle& paint,
+                     double contentWidth, double contentHeight) {
+    const double strokeMargin = paint.stroke.has_value() ? paint.stroke->width : 0.0;
+    double shadowMargin = 0.0;
+    if (paint.dropShadow.has_value()) {
+        shadowMargin = paint.dropShadow->distance + SHADOW_BLUR_SIGMA_MULTIPLIER * paint.dropShadow->blur;
+    }
+    double glowMargin = 0.0;
+    if (paint.glow.has_value()) {
+        const double offX = paint.glow->sourceOffX * paint.fontSize;
+        const double offY = paint.glow->sourceOffY * paint.fontSize;
+        const double offMax = std::max(std::abs(offX), std::abs(offY));
+        const double halfExtent = std::max(contentWidth, contentHeight) / 2.0;
+        glowMargin = paint.glow->rayLen * (halfExtent + offMax) + offMax
+                     + openshot::text::GLOW_BEAM_BLUR_RATIO * paint.fontSize * 3.0;
+    }
+    const double blurMargin = SHADOW_BLUR_SIGMA_MULTIPLIER * paint.blur;
+    return std::max({strokeMargin, shadowMargin, glowMargin}) + blurMargin;
+}
 
 text::TextAlignment parseAlignment(const std::string& s) {
     if (s == "LEFT") return text::TextAlignment::LEFT;
@@ -76,6 +110,13 @@ void styleFromJson(const Json::Value& j, text::TextClipStyle& style) {
     if (!j["backgroundRadiusRatio"].isNull()) style.backgroundRadiusRatio = j["backgroundRadiusRatio"].asDouble();
     if (!j["backgroundPaddingXRatio"].isNull())style.backgroundPaddingXRatio = j["backgroundPaddingXRatio"].asDouble();
     if (!j["backgroundPaddingYRatio"].isNull())style.backgroundPaddingYRatio = j["backgroundPaddingYRatio"].asDouble();
+    if (!j["blurRatio"].isNull())             style.blurRatio = j["blurRatio"].asDouble();
+    if (!j["glowColor"].isNull())             style.glowColor = j["glowColor"].asString();
+    if (!j["glowIntensityRatio"].isNull())    style.glowIntensityRatio = j["glowIntensityRatio"].asDouble();
+    if (!j["glowRangeRatio"].isNull())        style.glowRangeRatio = j["glowRangeRatio"].asDouble();
+    if (!j["glowDirectionX"].isNull())        style.glowDirectionX = j["glowDirectionX"].asDouble();
+    if (!j["glowDirectionY"].isNull())        style.glowDirectionY = j["glowDirectionY"].asDouble();
+    if (!j["curveAngle"].isNull())            style.curveAngle = j["curveAngle"].asDouble();
 }
 
 Json::Value styleToJson(const text::TextClipStyle& style) {
@@ -95,9 +136,16 @@ Json::Value styleToJson(const text::TextClipStyle& style) {
     j["backgroundRadiusRatio"] = style.backgroundRadiusRatio;
     j["backgroundPaddingXRatio"] = style.backgroundPaddingXRatio;
     j["backgroundPaddingYRatio"] = style.backgroundPaddingYRatio;
+    j["glowIntensityRatio"] = style.glowIntensityRatio;
+    j["glowRangeRatio"] = style.glowRangeRatio;
+    j["glowDirectionX"] = style.glowDirectionX;
+    j["glowDirectionY"] = style.glowDirectionY;
     if (style.strokeColor.has_value())     j["strokeColor"]     = *style.strokeColor;
     if (style.shadowColor.has_value())     j["shadowColor"]     = *style.shadowColor;
     if (style.backgroundColor.has_value()) j["backgroundColor"] = *style.backgroundColor;
+    if (style.blurRatio.has_value())       j["blurRatio"]       = *style.blurRatio;
+    if (style.glowColor.has_value())       j["glowColor"]       = *style.glowColor;
+    if (style.curveAngle.has_value())      j["curveAngle"]      = *style.curveAngle;
     return j;
 }
 
@@ -151,8 +199,9 @@ TextClipReader::~TextClipReader() = default;
 
 void TextClipReader::Open() {
     if (is_open) return;
-    renderToImage();   // computes frame_width / frame_height first
+    buildPlan();       // computes frame_width / frame_height + cached render plan
     initInfo();
+    dirty = false;
     is_open = true;
 }
 
@@ -165,10 +214,13 @@ void TextClipReader::Close() {
 }
 
 void TextClipReader::initInfo() {
+    // Animated text is a frame SEQUENCE (each frame differs); static text is a single image.
+    const int fpsNum = has_animation ? std::max(1, static_cast<int>(std::lround(anim_fps))) : 30;
+
     info.has_audio = false;
     info.has_video = true;
     info.has_alpha = true;
-    info.has_single_image = true;
+    info.has_single_image = !has_animation;
     info.file_size = 0;
     info.vcodec = "QImage";
     info.width = std::max(1, frame_width);
@@ -176,10 +228,10 @@ void TextClipReader::initInfo() {
     info.pixel_ratio.num = 1;
     info.pixel_ratio.den = 1;
     info.duration = 60 * 60 * 1; // 1 hour
-    info.fps.num = 30;
+    info.fps.num = fpsNum;
     info.fps.den = 1;
     info.video_timebase.num = 1;
-    info.video_timebase.den = 30;
+    info.video_timebase.den = fpsNum;
     info.video_length = static_cast<int64_t>(std::round(info.duration * info.fps.ToDouble()));
 
     Fraction dar(info.width * info.pixel_ratio.num, info.height * info.pixel_ratio.den);
@@ -192,23 +244,23 @@ void TextClipReader::initInfo() {
 // Rendering
 // ---------------------------------------------------------------------------
 
-void TextClipReader::renderToImage() {
+void TextClipReader::buildPlan() {
     if (project_width <= 0 || data.value.empty()) {
         // Minimal 1×1 transparent placeholder — keeps Clip/Frame happy.
+        plan_empty = true;
         frame_width = 1;
         frame_height = 1;
         bounding_width = 0.0;
         bounding_height = 0.0;
         frame_center_project_x = data.transformation.positionX;
         frame_center_project_y = data.transformation.positionY;
-        rendered_image = std::make_shared<QImage>(1, 1, QImage::Format_RGBA8888_Premultiplied);
-        rendered_image->fill(QColor(0, 0, 0, 0));
-        dirty = false;
+        has_animation = false;
+        timeline.reset();
         return;
     }
+    plan_empty = false;
 
     // 1. Compute paint + background + layout (using only a measuring SkiaRenderer).
-    const std::string transformed = text::transformTextValue(data.value, data.style.textTransform);
     const text::TextClipPaintStyle paint =
         text::convertTextStyleToPaintStyle(data.style, data.transformation, project_width);
 
@@ -221,14 +273,19 @@ void TextClipReader::renderToImage() {
 
     const auto background = text::convertBackgroundStyle(data.style, paint);
 
+    const bool isCurved = paint.curveAngle.has_value();
+
+    std::string transformed = text::transformTextValue(data.value, data.style.textTransform);
+    if (isCurved) transformed = collapseNewlines(transformed);
+
     // maxWidth is a dimensionless multiplier of the canvas-and-size scale; convert to pixels.
-    // See BACKEND_PATCH_MAX_WIDTH_SIZE_RELATIVE.md.
+    // See BACKEND_PATCH_MAX_WIDTH_SIZE_RELATIVE.md. Curved text never wraps (single line).
     const double maxWidthPx = data.transformation.maxWidth > 0.0
         ? project_width * text::SIZE_BASE_COEFFICIENT
               * data.transformation.size * data.transformation.maxWidth
         : 0.0;
-    const double wrapWidth    = maxWidthPx > 0.0 ? maxWidthPx : 1e9;
-    const double userMaxWidth = maxWidthPx;
+    const double wrapWidth    = isCurved ? 1e18 : (maxWidthPx > 0.0 ? maxWidthPx : 1e9);
+    const double userMaxWidth = isCurved ? 0.0 : maxWidthPx;
 
     // Layout needs a canvas-less renderer for font measurement only. Skia requires a canvas,
     // so spin up a tiny dummy bitmap just to satisfy the API. The canvas isn't drawn to.
@@ -240,11 +297,19 @@ void TextClipReader::renderToImage() {
     const text::TextClipLayout layout = text::layoutTextAtReferenceSize(
         transformed, paint, layoutPaint, wrapWidth, userMaxWidth, &measureRenderer);
 
-    // 2. Compute the bounding rect (text + bg padding).
+    // 2. Content box: the flat text block, or the curved arc's bounding box when curving.
+    double contentWidth = layout.layoutWidth;
+    double contentHeight = layout.textHeight;
+    if (isCurved) {
+        const text::CurvedTextGeometry geometry = text::curvedGeometryForLayout(layout, paint);
+        contentWidth = geometry.width;
+        contentHeight = geometry.height;
+    }
+
     const double bgPaddingX = background.has_value() ? background->paddingX : 0.0;
     const double bgPaddingY = background.has_value() ? background->paddingY : 0.0;
-    const double boundingWidth  = layout.layoutWidth + 2.0 * bgPaddingX;
-    const double boundingHeight = layout.textHeight  + 2.0 * bgPaddingY;
+    const double boundingWidth  = contentWidth  + 2.0 * bgPaddingX;
+    const double boundingHeight = contentHeight + 2.0 * bgPaddingY;
     bounding_width  = boundingWidth;
     bounding_height = boundingHeight;
 
@@ -258,26 +323,32 @@ void TextClipReader::renderToImage() {
     frame_center_project_x = data.transformation.positionX + alignmentOffset;
     frame_center_project_y = data.transformation.positionY;
 
-    // 3. Compute extra padding for shadow blur/distance and stroke.
-    const double strokeHalf = paint.stroke.has_value() ? paint.stroke->width / 2.0 : 0.0;
-    double shadowExtentX = 0.0;
-    double shadowExtentY = 0.0;
-    if (paint.dropShadow.has_value()) {
-        const double angleRad = paint.dropShadow->angle * M_PI / 180.0;
-        const double dx = std::abs(std::cos(angleRad) * paint.dropShadow->distance);
-        const double dy = std::abs(std::sin(angleRad) * paint.dropShadow->distance);
-        const double blurExtent = SHADOW_BLUR_SIGMA_MULTIPLIER * paint.dropShadow->blur;
-        shadowExtentX = dx + blurExtent;
-        shadowExtentY = dy + blurExtent;
+    // 3. Resolve the animation timeline. Active only when an animation slot is set, the clip has
+    //    a positive duration, and preset keyframe data is available to drive it.
+    timeline.reset();
+    has_animation = false;
+    anim_char_count = 0;
+    if (animations.hasActive() && anim_duration_sec > 0.0 && !presets.empty()) {
+        timeline = text::buildAnimationTimeline(animations, anim_duration_sec);
+        has_animation = timeline.has_value();
+        for (const auto& line : layout.lines) anim_char_count += static_cast<int>(text::utf8Length(line.text));
     }
-    const double padX = std::max(strokeHalf, shadowExtentX);
-    const double padY = std::max(strokeHalf, shadowExtentY);
 
-    // Pre-rotation frame: bounding rect centred, with symmetric padding around it.
-    const double preW = boundingWidth  + 2.0 * padX;
-    const double preH = boundingHeight + 2.0 * padY;
+    // 4. Symmetric padding for the text effects (shadow / stroke / blur / glow beams).
+    const double pad = effectsMargin(paint, contentWidth, contentHeight);
 
-    // 4. Rotation AABB — the smallest axis-aligned rect containing the rotated preW×preH.
+    // Pre-rotation frame: bounding rect centred, with symmetric padding around it. For animated
+    // text, expand to the animation's reach across the whole timeline so glyphs never clip.
+    double preW = boundingWidth  + 2.0 * pad;
+    double preH = boundingHeight + 2.0 * pad;
+    if (has_animation) {
+        const text::AnimatedExtent extent = text::computeAnimatedExtent(
+            layout, paint, boundingWidth, boundingHeight, *timeline, presets, anim_char_count);
+        preW = 2.0 * extent.halfWidth + 2.0 * pad;
+        preH = 2.0 * extent.halfHeight + 2.0 * pad;
+    }
+
+    // 5. Rotation AABB — the smallest axis-aligned rect containing the rotated preW×preH.
     double aabbW = preW;
     double aabbH = preH;
     if (data.transformation.rotation != 0.0) {
@@ -291,35 +362,53 @@ void TextClipReader::renderToImage() {
     frame_width  = std::max(1, static_cast<int>(std::ceil(aabbW)));
     frame_height = std::max(1, static_cast<int>(std::ceil(aabbH)));
 
-    // 5. Allocate the tight frame.
-    rendered_image = std::make_shared<QImage>(frame_width, frame_height, QImage::Format_RGBA8888_Premultiplied);
-    rendered_image->fill(QColor(0, 0, 0, 0));
+    // Cache the plan for per-frame rendering. Origin = top-left of the content box; the
+    // background extends paddingX/Y beyond it, so centring the content box on (0,0) means
+    // top-left = (-contentWidth/2, -contentHeight/2).
+    plan_paint = paint;
+    plan_layout = layout;
+    plan_background = background;
+    plan_content_w = contentWidth;
+    plan_content_h = contentHeight;
+    plan_origin_x = -contentWidth / 2.0;
+    plan_origin_y = -contentHeight / 2.0;
+}
+
+std::shared_ptr<QImage> TextClipReader::renderToQImage(
+    const std::optional<text::TextClipAnimationFrame>& animation) {
+    if (plan_empty) {
+        auto img = std::make_shared<QImage>(1, 1, QImage::Format_RGBA8888_Premultiplied);
+        img->fill(QColor(0, 0, 0, 0));
+        return img;
+    }
+
+    auto img = std::make_shared<QImage>(frame_width, frame_height, QImage::Format_RGBA8888_Premultiplied);
+    img->fill(QColor(0, 0, 0, 0));
 
     SkBitmap bitmap;
     const SkImageInfo skiaInfo = SkImageInfo::MakeN32Premul(frame_width, frame_height);
-    if (!bitmap.installPixels(skiaInfo, rendered_image->bits(), rendered_image->bytesPerLine())) {
-        dirty = false;
-        return;
+    if (!bitmap.installPixels(skiaInfo, img->bits(), img->bytesPerLine())) {
+        return img;
     }
     SkCanvas canvas(bitmap);
     subtitle::SkiaRenderer renderer(&canvas);
 
-    // 6. Centre the bounding box at the frame's centre; rotate around that centre.
+    // Centre the content box at the frame's centre; rotate around that centre.
     canvas.save();
     canvas.translate(static_cast<float>(frame_width)  / 2.0f,
                      static_cast<float>(frame_height) / 2.0f);
     if (data.transformation.rotation != 0.0) {
         canvas.rotate(static_cast<float>(data.transformation.rotation));
     }
-    // renderLayout expects origin = top-left of the text block (NOT the background).
-    // The background extends paddingX/Y beyond, so to centre the BACKGROUND on (0,0):
-    //   text block top-left = (-layoutWidth/2, -textHeight/2)
-    const double originX = -layout.layoutWidth / 2.0;
-    const double originY = -layout.textHeight  / 2.0;
-    text::renderLayout(layout, paint, background, originX, originY, &renderer);
+    text::renderTextFrame(plan_layout, plan_paint, plan_background,
+                          plan_origin_x, plan_origin_y, 1.0, animation, &renderer);
     canvas.restore();
 
-    dirty = false;
+    return img;
+}
+
+void TextClipReader::renderToImage() {
+    rendered_image = renderToQImage(std::nullopt);
 }
 
 // ---------------------------------------------------------------------------
@@ -331,22 +420,44 @@ std::shared_ptr<Frame> TextClipReader::GetFrame(int64_t requested_frame) {
 
     if (!is_open) Open();
     if (dirty) {
-        renderToImage();
+        buildPlan();
         initInfo();
+        rendered_image.reset();
+        dirty = false;
     }
 
     const int sample_count = Frame::GetSamplesPerFrame(requested_frame, info.fps, info.sample_rate, info.channels);
 
-    if (!rendered_image) {
+    std::shared_ptr<QImage> image;
+    if (has_animation && timeline.has_value()) {
+        // Per-frame animated text: resolve the frame plan at this frame's clip-relative time
+        // and render that frame fresh (no single-image cache).
+        const double elapsedSec = std::max(0.0, static_cast<double>(requested_frame - 1) / anim_fps);
+        std::optional<text::TextClipAnimationFrame> animFrame;
+        const text::FramePlan plan = text::planFrame(elapsedSec, *timeline, anim_char_count, presets);
+        if (plan.presetId.has_value()) {
+            const auto it = presets.find(*plan.presetId);
+            if (it != presets.end()) {
+                animFrame = text::buildAnimationFrame(plan, it->second, elapsedSec);
+            }
+        }
+        image = renderToQImage(animFrame);
+    } else {
+        // Static single image — render once and cache.
+        if (!rendered_image) renderToImage();
+        image = rendered_image;
+    }
+
+    if (!image) {
         return std::make_shared<Frame>(requested_frame, std::max(1, frame_width),
                                        std::max(1, frame_height), "#00000000",
                                        sample_count, info.channels);
     }
 
     auto frame = std::make_shared<Frame>(
-        requested_frame, rendered_image->width(), rendered_image->height(),
+        requested_frame, image->width(), image->height(),
         "#00000000", sample_count, info.channels);
-    frame->AddImage(std::make_shared<QImage>(rendered_image->copy()));
+    frame->AddImage(std::make_shared<QImage>(image->copy()));
     return frame;
 }
 
@@ -371,6 +482,17 @@ void TextClipReader::SetTransformation(const text::TextTransformation& transform
 
 void TextClipReader::SetProjectWidth(int width) {
     project_width = width;
+    dirty = true;
+}
+
+void TextClipReader::SetAnimations(const text::TextAnimations& animations_,
+                                   const text::AnimationPresetMap& presets_,
+                                   double fps,
+                                   double durationSec) {
+    animations = animations_;
+    presets = presets_;
+    anim_fps = fps > 0.0 ? fps : 30.0;
+    anim_duration_sec = durationSec;
     dirty = true;
 }
 

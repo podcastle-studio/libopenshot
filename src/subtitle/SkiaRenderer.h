@@ -80,6 +80,17 @@ public:
         canvas->drawPath(path, paint);
     }
 
+    // Temporarily redirect drawing to an offscreen canvas (e.g. a raster surface for the
+    // glow silhouette or the word-mode composited block), run `draw`, then restore the
+    // previous canvas. Mirrors CanvasKitRenderer.renderToCanvas in the TS reference.
+    template <typename Fn>
+    void renderToCanvas(SkCanvas* target, Fn&& draw) {
+        SkCanvas* previous = canvas;
+        canvas = target;
+        draw();
+        canvas = previous;
+    }
+
 private:
     sk_sp<SkTypeface> getTypeface(const std::string& familyOrPath, const SkFontStyle& style);
 

@@ -44,6 +44,20 @@ struct TextClipStyle {
     double backgroundRadiusRatio = 0.0;
     double backgroundPaddingXRatio = 0.0;
     double backgroundPaddingYRatio = 0.0;
+
+    // Gaussian blur. nullopt = blur off. rendered sigma = blurRatio * fontSize (size-invariant).
+    std::optional<double> blurRatio;
+
+    // Glow (volumetric "sunbeam" halo). nullopt color = glow off.
+    std::optional<std::string> glowColor;
+    double glowIntensityRatio = 0.0;                  // 0..1 brightness — alpha multiplier on the glow colour
+    double glowRangeRatio = 0.0;                      // 0..1 beam reach — rayLen = glowRangeRatio * GLOW_RAY_LEN_SCALE
+    double glowDirectionX = 0.0;                      // -50..50 horizontal light-source offset from block centre
+    double glowDirectionY = 0.0;                      // -50..50 vertical light-source offset from block centre
+
+    // Curved text. nullopt = curving off. -360..360 degrees = the arc the single line spans
+    // (sign chooses the bend direction); 0 = enabled but straight, 360 = full circle.
+    std::optional<double> curveAngle;
 };
 
 struct TextTransformation {
@@ -82,6 +96,14 @@ struct TextClipShadowStyle {
     double blur = 0.0;
 };
 
+struct TextClipGlowStyle {
+    std::string color;                                // opaque glow colour — the silhouette fill
+    double opacity = 1.0;                             // paint alpha (intensity * colour alpha)
+    double rayLen = 0.0;                              // beam reach — how far the rays extend (0 = none)
+    double sourceOffX = 0.0;                          // light-source offset from block centre, in fontSize units
+    double sourceOffY = 0.0;
+};
+
 struct TextClipPaintStyle {
     std::string fontFamily;
     double fontSize = 0.0;
@@ -93,6 +115,13 @@ struct TextClipPaintStyle {
     TextAlignment alignment = TextAlignment::CENTER;
     std::optional<TextClipStrokeStyle> stroke;
     std::optional<TextClipShadowStyle> dropShadow;
+    // Gaussian blur sigma (px) applied to fill + stroke, and folded into the shadow blur. 0 = off.
+    double blur = 0.0;
+    // Coloured halo around the glyphs (on the stroke silhouette if present, else the fill). nullopt = off.
+    std::optional<TextClipGlowStyle> glow;
+    // Curved-text arc angle in degrees, or nullopt when curving is off. When set the text is
+    // forced onto a single line bent along a circular arc.
+    std::optional<double> curveAngle;
 };
 
 struct TextClipBackgroundStyle {
@@ -115,6 +144,12 @@ struct TextClipLine {
     // measurements taken at the layout (reference-size) paint, then scaled into actual
     // pixel space by scaleLayout. Renderer consumes these instead of re-measuring.
     std::vector<double> letterAdvances;
+    // True when this line ends a hard paragraph break ('\n') rather than a soft wrap.
+    bool isHardBreak = false;
+    // Distance (positive) from this line's baseline up to its glyph top.
+    double ascent = 0.0;
+    // Distance (positive) from this line's baseline down to its glyph bottom.
+    double descent = 0.0;
 };
 
 struct TextClipLayout {
