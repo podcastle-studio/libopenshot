@@ -29,6 +29,14 @@ target_link_libraries(openshot-example openshot)
 add_executable(openshot-html-example ExampleHtml.cpp)
 target_link_libraries(openshot-html-example openshot Qt5::Gui)
 
+# Glow performance benchmark (Full HD, timed)
+add_executable(openshot-glow-bench GlowBench.cpp)
+target_link_libraries(openshot-glow-bench openshot Qt5::Gui)
+
+# Render a real export payload's text clip and report render time
+add_executable(openshot-payload-timer PayloadTimer.cpp)
+target_link_libraries(openshot-payload-timer openshot Qt5::Gui)
+
 ############### PLAYER EXECUTABLE ################
 # Create test executable
 add_executable(openshot-player qt-demo/main.cpp)

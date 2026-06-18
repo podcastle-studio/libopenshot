@@ -122,6 +122,10 @@ struct TextClipPaintStyle {
     // Curved-text arc angle in degrees, or nullopt when curving is off. When set the text is
     // forced onto a single line bent along a circular arc.
     std::optional<double> curveAngle;
+    // transformation.size / LAYOUT_REFERENCE_SIZE. The front end renders the glow at the
+    // reference size and GPU-scales the sprite, so its GLOW_MAX_TEXTURE_DIM cap is in reference
+    // space; the backend renders at actual size, so it scales that cap by sizeScale to match.
+    double sizeScale = 1.0;
 };
 
 struct TextClipBackgroundStyle {

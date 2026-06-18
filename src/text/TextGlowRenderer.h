@@ -11,6 +11,7 @@
 #include "TextAnimationEngine.h"
 #include "TextClipTypes.h"
 #include "TextCurvedText.h"
+#include "TextGlowShader.h"
 
 #include <skia/include/core/SkImage.h>
 #include <skia/include/core/SkRefCnt.h>
@@ -81,6 +82,11 @@ private:
         double extraLetterSpacing);
 
     subtitle::SkiaRenderer* renderer;
+
+    // Glow render quality for this pass. The animated path lowers these (motion hides the
+    // difference); the static/resting path keeps full quality (and is cached, so paid once).
+    double glowScale_ = GLOW_RENDER_SCALE;
+    double glowStepCap_ = 32.0;
 };
 
 } // namespace text

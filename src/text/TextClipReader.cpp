@@ -441,7 +441,17 @@ std::shared_ptr<Frame> TextClipReader::GetFrame(int64_t requested_frame) {
                 animFrame = text::buildAnimationFrame(plan, it->second, elapsedSec);
             }
         }
-        image = renderToQImage(animFrame);
+        if (animFrame.has_value()) {
+            // Active animation frame — render fresh.
+            image = renderToQImage(animFrame);
+        } else {
+            // Idle/resting phase (e.g. after an IN finishes, or the gap before an OUT): the
+            // frame is the static resting text, pixel-identical every frame. Render it ONCE and
+            // reuse the cache — this skips recomputing the (expensive) glow for every resting
+            // frame. For a 5s clip with a 1.5s IN that's ~70% of frames served from cache.
+            if (!rendered_image) renderToImage();
+            image = rendered_image;
+        }
     } else {
         // Static single image — render once and cache.
         if (!rendered_image) renderToImage();

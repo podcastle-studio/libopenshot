@@ -46,12 +46,28 @@ constexpr double GLOW_DIRECTION_RANGE = 50.0;
 // spread/offset can't ask for an enormous surface.
 constexpr int GLOW_MAX_TEXTURE_DIM = 1024;
 
+// The glow is low-frequency (ray-march + beam/bloom blur), so the silhouette,
+// ray-march, and blurs are all computed at this fraction of full resolution and
+// upscaled bilinearly when composited. 0.5 ≈ 4× fewer pixels (and the ray-march is
+// per-output-pixel, so ~4× fewer shader evals) with no visible quality loss.
+// Lower = faster and softer. CPU-only optimization.
+constexpr double GLOW_RENDER_SCALE = 0.5;
+
+// In-motion glow quality. Default = same as static so the glow does NOT change quality when
+// the animation ends (a lower value pops visibly against the full-quality, cached resting
+// glow — especially for large text with fast scale changes). Lower these ONLY if you accept
+// an in-motion vs resting quality difference in exchange for faster active frames. CPU-only.
+constexpr double GLOW_ANIM_RENDER_SCALE = GLOW_RENDER_SCALE;  // 0.5 — match resting
+constexpr double GLOW_ANIM_STEP_CAP     = 32.0;               // match resting
+
 // Compile (once) and return the glow runtime effect, or null if unsupported.
 SkRuntimeEffect* getGlowEffect();
 
-// Ray sample count, scaled with beam length and capped at the shader's loop bound (64).
+// Ray sample count, scaled with beam length. Capped at 32: the beam blur fuses the
+// discrete samples, so 32 marches are visually indistinguishable from the shader's
+// 64 loop bound while halving the per-pixel cost. CPU-only optimization.
 inline double glowSteps(double rayLen) {
-    return std::min(64.0, std::max(12.0, std::round(rayLen * 40.0) + 14.0));
+    return std::min(32.0, std::max(12.0, std::round(rayLen * 40.0) + 14.0));
 }
 
 } // namespace text

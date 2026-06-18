@@ -428,7 +428,10 @@ void CharAnimationRenderer::drawAnimatedCharItems(
 
         for (const auto& item : items) {
             const double animBlur = item.props.blur() > 0.0 ? item.props.blur() * fontSize : 0.0;
-            const double combinedBlur = std::sqrt(shadow.blur * shadow.blur + animBlur * animBlur + style.blur * style.blur);
+            // Match the flat/curved shadow paths: apply the CPU-vs-GPU blur calibration.
+            const double combinedBlur =
+                std::sqrt(shadow.blur * shadow.blur + animBlur * animBlur + style.blur * style.blur)
+                * SHADOW_BLUR_SIGMA_SCALE;
             canvas->save();
             applyCharTransform(renderer, canvas, item, fontSize, flags);
             if (style.stroke.has_value()) {

@@ -184,7 +184,7 @@ void CurvedTextPainter::drawCurvedStatic(
         const double radians = shadow.angle * M_PI / 180.0;
         const double dx = std::cos(radians) * shadow.distance;
         const double dy = std::sin(radians) * shadow.distance;
-        const double shadowBlur = combineBlur(shadow.blur, style.blur);
+        const double shadowBlur = combineBlur(shadow.blur, style.blur) * SHADOW_BLUR_SIGMA_SCALE;
         const std::optional<double> blurOpt = shadowBlur > 0.0 ? std::optional<double>(shadowBlur) : std::nullopt;
 
         const SkPaint* shadowFill = renderer->getPaint(

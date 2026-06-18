@@ -98,6 +98,7 @@ TextClipPaintStyle convertTextStyleToPaintStyle(
     TextClipPaintStyle paint;
     paint.fontFamily = style.fontFamily;
     paint.fontSize = projectWidth * SIZE_BASE_COEFFICIENT * transformation.size;
+    paint.sizeScale = transformation.size / LAYOUT_REFERENCE_SIZE;
     paint.fontWeight = style.fontWeight;
     paint.italic = style.italic;
     paint.color = style.color;
@@ -597,10 +598,8 @@ double getLineStartX(const TextClipLine& line, const TextClipLayout& layout, Tex
 
 namespace {
 
-// CPU (backend raster) vs GPU (front-end CanvasKit) blur-match factor. The backend's CPU
-// mask-blur reads heavier than the front end for the same sigma, so the backend uses a
-// SMALLER shadow sigma to reproduce the same visual blur. k = 30/50 = 0.6.
-constexpr double SHADOW_BLUR_SIGMA_SCALE = 30.0 / 50.0;
+// SHADOW_BLUR_SIGMA_SCALE (CPU-vs-GPU shadow blur match) lives in TextDrawShared.h so the
+// flat, curved, and animated shadow paths all apply the same correction.
 
 // Topmost crisp fill of the flat block. When glow is active the fill is softened (Layer 3):
 // lower opacity + a sub-pixel mask blur so the underlying bloom/ray light dominates the edges.
