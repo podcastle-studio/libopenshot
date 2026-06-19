@@ -158,9 +158,9 @@ inline double combineBlur(double a, double b) {
 
 // CPU (backend raster) vs GPU (front-end CanvasKit) mask-blur match factor. The backend's
 // CPU mask-blur reads heavier than the front end for the same sigma, so the backend uses a
-// SMALLER shadow sigma to reproduce the same visual blur. k = 30/50 = 0.6. Applied to the
+// SMALLER shadow sigma to reproduce the same visual blur. k = 30/90. Applied to the
 // shadow blur in every render path (flat / curved / animated) so they all match the front end.
-constexpr double SHADOW_BLUR_SIGMA_SCALE = 30.0 / 50.0;
+constexpr double SHADOW_BLUR_SIGMA_SCALE = 30.0 / 90.0;
 
 struct ParsedColor {
     std::string color;   // "#rrggbb" hex (or pass-through value)

@@ -46,19 +46,14 @@ constexpr double GLOW_DIRECTION_RANGE = 50.0;
 // spread/offset can't ask for an enormous surface.
 constexpr int GLOW_MAX_TEXTURE_DIM = 1024;
 
-// The glow is low-frequency (ray-march + beam/bloom blur), so the silhouette,
-// ray-march, and blurs are all computed at this fraction of full resolution and
-// upscaled bilinearly when composited. 0.5 ≈ 4× fewer pixels (and the ray-march is
-// per-output-pixel, so ~4× fewer shader evals) with no visible quality loss.
-// Lower = faster and softer. CPU-only optimization.
-constexpr double GLOW_RENDER_SCALE = 0.5;
-
-// In-motion glow quality. Default = same as static so the glow does NOT change quality when
-// the animation ends (a lower value pops visibly against the full-quality, cached resting
-// glow — especially for large text with fast scale changes). Lower these ONLY if you accept
-// an in-motion vs resting quality difference in exchange for faster active frames. CPU-only.
-constexpr double GLOW_ANIM_RENDER_SCALE = GLOW_RENDER_SCALE;  // 0.5 — match resting
-constexpr double GLOW_ANIM_STEP_CAP     = 32.0;               // match resting
+// The glow is low-frequency (ray-march + beam/bloom blur), so the silhouette, ray-march, and
+// blurs are computed at this fraction of full resolution and upscaled bilinearly. Lower =
+// faster/softer; the ray-march is per-output-pixel so cost scales ~quadratically with this.
+// Applied UNIFORMLY to resting and in-motion frames (no mid-clip quality pop). CPU-only.
+// Default 0.40 (+ 24 ray-march steps) is the chosen quality/speed balance (~1.8× faster than
+// full 0.5/32, visually close). Override at runtime — no rebuild — with env OPENSHOT_GLOW_SCALE
+// (0.05..1.0) and OPENSHOT_GLOW_STEPS (4..32) for further A/B tuning.
+constexpr double GLOW_RENDER_SCALE = 0.40;
 
 // Compile (once) and return the glow runtime effect, or null if unsupported.
 SkRuntimeEffect* getGlowEffect();

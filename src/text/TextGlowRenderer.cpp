@@ -17,9 +17,36 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 
 namespace openshot {
 namespace text {
+
+namespace {
+// Glow quality, read once from the environment for easy A/B tuning (no rebuild). Applied
+// UNIFORMLY to resting and in-motion frames so the glow never changes quality mid-clip (no
+// pop). Defaults are the chosen 0.40 / 24 balance; lowering trades softness for speed.
+//   OPENSHOT_GLOW_SCALE  silhouette/ray-march render scale (0.05..1.0, default GLOW_RENDER_SCALE)
+//   OPENSHOT_GLOW_STEPS  ray-march step cap (4..32, default 24)
+double glowScaleSetting() {
+    static const double v = [] {
+        if (const char* e = std::getenv("OPENSHOT_GLOW_SCALE")) {
+            try { double d = std::stod(e); if (d >= 0.05 && d <= 1.0) return d; } catch (...) {}
+        }
+        return GLOW_RENDER_SCALE;
+    }();
+    return v;
+}
+double glowStepCapSetting() {
+    static const double v = [] {
+        if (const char* e = std::getenv("OPENSHOT_GLOW_STEPS")) {
+            try { double d = std::stod(e); if (d >= 4.0 && d <= 32.0) return d; } catch (...) {}
+        }
+        return 24.0;
+    }();
+    return v;
+}
+} // namespace
 
 void TextGlowRenderer::drawGlowLayer(
     const TextClipLayout& layout,
@@ -33,6 +60,9 @@ void TextGlowRenderer::drawGlowLayer(
 {
     if (!renderer->getCanvas()) return;
     if (!getGlowEffect()) return;
+
+    glowScale_ = glowScaleSetting();
+    glowStepCap_ = glowStepCapSetting();
 
     // The glow silhouette spans the curved content box when curving, otherwise the flat block.
     const double contentWidth = curved ? curved->width : layout.layoutWidth;
@@ -145,10 +175,10 @@ void TextGlowRenderer::drawAnimatedGlowLayer(
     if (!renderer->getCanvas() || items.empty()) return;
     if (!getGlowEffect()) return;
 
-    // In-motion frames: render the glow at the cheaper animation quality. (Resting frames go
-    // through the static path at full quality and are cached, so they're unaffected.)
-    glowScale_ = GLOW_ANIM_RENDER_SCALE;
-    glowStepCap_ = GLOW_ANIM_STEP_CAP;
+    // Same uniform glow quality as the static/resting path, so the glow does not change quality
+    // when the animation ends. Tunable via OPENSHOT_GLOW_SCALE / OPENSHOT_GLOW_STEPS.
+    glowScale_ = glowScaleSetting();
+    glowStepCap_ = glowStepCapSetting();
 
     const GlowMargin geom = glowMarginFor(contentWidth, contentHeight, style, glow);
     if (!geom.valid) return;
@@ -235,6 +265,7 @@ void TextGlowRenderer::paintGlowFromSilhouette(
     // Compose ray-march + local bloom into a small offscreen with their alphas baked.
     // Screen blending is associative, so screening this combined layer onto the canvas
     // matches drawing the ray then the bloom directly — but it lets us upscale only once.
+    // (RGBA: this holds the COLOURED glow output, unlike the alpha-only silhouette.)
     sk_sp<SkSurface> glowSurface = SkSurfaces::Raster(SkImageInfo::MakeN32Premul(sw, sh));
     if (!glowSurface) return;
     SkCanvas* gc = glowSurface->getCanvas();
