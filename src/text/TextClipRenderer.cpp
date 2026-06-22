@@ -598,8 +598,8 @@ double getLineStartX(const TextClipLine& line, const TextClipLayout& layout, Tex
 
 namespace {
 
-// SHADOW_BLUR_SIGMA_SCALE (CPU-vs-GPU mask-blur match) lives in TextDrawShared.h so the
-// flat, curved, and animated shadow/stroke/fill paths all apply the same correction.
+// SHADOW_BLUR_SIGMA_SCALE (CPU-vs-GPU shadow blur match) lives in TextDrawShared.h so the
+// flat, curved, and animated shadow paths all apply the same correction.
 
 // Topmost crisp fill of the flat block. When glow is active the fill is softened (Layer 3):
 // lower opacity + a sub-pixel mask blur so the underlying bloom/ray light dominates the edges.
@@ -612,8 +612,7 @@ void drawTextLine(
     double extraLetterSpacing = 0.0)
 {
     const double coreSoftBlur = style.glow.has_value() ? GLOW_CORE_TEXT_BLUR_RATIO * style.fontSize : 0.0;
-    // Same CPU-vs-GPU mask-blur calibration as the shadow path so the fill blur matches the front end.
-    const double fillBlur = combineBlur(style.blur, coreSoftBlur) * SHADOW_BLUR_SIGMA_SCALE;
+    const double fillBlur = combineBlur(style.blur, coreSoftBlur);
     const std::optional<double> blurOpt = fillBlur > 0.0 ? std::optional<double>(fillBlur) : std::nullopt;
     const SkPaint* paint = renderer->getPaint(subtitle::PaintProps{
         style.color, style.glow.has_value() ? GLOW_CORE_TEXT_OPACITY : 1.0, std::nullopt, blurOpt});
@@ -631,9 +630,7 @@ void drawStrokeLine(
     subtitle::SkiaRenderer* renderer,
     double extraLetterSpacing = 0.0)
 {
-    // Same CPU-vs-GPU mask-blur calibration as the shadow path so the stroke blur matches the front end.
-    const double strokeBlur = style.blur * SHADOW_BLUR_SIGMA_SCALE;
-    const std::optional<double> blurOpt = strokeBlur > 0.0 ? std::optional<double>(strokeBlur) : std::nullopt;
+    const std::optional<double> blurOpt = style.blur > 0.0 ? std::optional<double>(style.blur) : std::nullopt;
     const SkPaint* paint = renderer->getPaint(subtitle::PaintProps{stroke.color, 1.0, stroke.width, blurOpt});
     forEachLetter(line, x, extraLetterSpacing, [&](const std::string& letter, double letterX) {
         drawLetter(renderer, letter, letterX, baselineY, *paint, style);

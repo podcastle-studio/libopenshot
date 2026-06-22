@@ -204,9 +204,7 @@ void CurvedTextPainter::drawCurvedStatic(
     }
 
     if (style.stroke.has_value()) {
-        // Same CPU-vs-GPU mask-blur calibration as the shadow path so the stroke blur matches the front end.
-        const double strokeBlur = style.blur * SHADOW_BLUR_SIGMA_SCALE;
-        const std::optional<double> blurOpt = strokeBlur > 0.0 ? std::optional<double>(strokeBlur) : std::nullopt;
+        const std::optional<double> blurOpt = style.blur > 0.0 ? std::optional<double>(style.blur) : std::nullopt;
         const SkPaint* strokePaint = renderer->getPaint(
             subtitle::PaintProps{style.stroke->color, 1.0, style.stroke->width, blurOpt});
         forEachCurvedGlyph(renderer, geometry, originX, originY, style, nullptr, *strokePaint);
@@ -214,8 +212,7 @@ void CurvedTextPainter::drawCurvedStatic(
 
     // Soften the topmost crisp text when glow is active (Layer 3).
     const double coreSoftBlur = style.glow.has_value() ? GLOW_CORE_TEXT_BLUR_RATIO * style.fontSize : 0.0;
-    // Same CPU-vs-GPU mask-blur calibration as the shadow path so the fill blur matches the front end.
-    const double fillBlur = combineBlur(style.blur, coreSoftBlur) * SHADOW_BLUR_SIGMA_SCALE;
+    const double fillBlur = combineBlur(style.blur, coreSoftBlur);
     const std::optional<double> fillBlurOpt = fillBlur > 0.0 ? std::optional<double>(fillBlur) : std::nullopt;
     const SkPaint* fillPaint = renderer->getPaint(subtitle::PaintProps{
         style.color, style.glow.has_value() ? GLOW_CORE_TEXT_OPACITY : 1.0, std::nullopt, fillBlurOpt});
