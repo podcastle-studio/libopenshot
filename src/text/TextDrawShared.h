@@ -168,7 +168,7 @@ constexpr double SHADOW_BLUR_SIGMA_SCALE = 30.0 / 90.0;
 // (k = 30/50) than the shadow. The fill/stroke paths apply it to the text blur through the
 // calibratedTextBlur helper below. Note the shadow paths fold style.blur into their combined
 // sigma scaled by SHADOW_BLUR_SIGMA_SCALE instead — that contribution is part of the shadow.
-constexpr double TEXT_BLUR_SIGMA_SCALE = 30.0 / 50.0;
+constexpr double TEXT_BLUR_SIGMA_SCALE = 30.0 / 60.0;
 
 inline double calibratedTextBlur(double styleBlur) {
     return styleBlur > 0.0 ? styleBlur * TEXT_BLUR_SIGMA_SCALE : 0.0;
