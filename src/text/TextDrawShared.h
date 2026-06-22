@@ -158,8 +158,12 @@ inline double combineBlur(double a, double b) {
 
 // CPU (backend raster) vs GPU (front-end CanvasKit) mask-blur match factor. The backend's
 // CPU mask-blur reads heavier than the front end for the same sigma, so the backend uses a
-// SMALLER shadow sigma to reproduce the same visual blur. k = 30/90. Applied to the
-// shadow blur in every render path (flat / curved / animated) so they all match the front end.
+// SMALLER sigma to reproduce the same visual blur. k = 30/90. This is a property of the
+// mask-blur mechanism itself, so it is applied to EVERY mask-blur sigma (shadow, stroke, and
+// fill — including the glow core-soft blur) in every render path (flat / curved / animated)
+// so they all match the front end. (The "SHADOW_" name is historical.) Note: the whole-block
+// animated blur and glow beams use SkImageFilters::Blur, a different gaussian that this factor
+// was not measured against, so they intentionally do not apply it.
 constexpr double SHADOW_BLUR_SIGMA_SCALE = 30.0 / 90.0;
 
 struct ParsedColor {

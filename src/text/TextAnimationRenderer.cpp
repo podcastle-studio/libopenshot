@@ -454,7 +454,9 @@ void CharAnimationRenderer::drawAnimatedCharItems(
             const double animBlur = item.props.blur() > 0.0 ? item.props.blur() * fontSize : 0.0;
             canvas->save();
             applyCharTransform(renderer, canvas, item, fontSize, flags);
-            withAnimatedPaint(renderer, {stroke.color, 1.0, stroke.width}, item.opacity, combineBlur(animBlur, style.blur),
+            // Same CPU-vs-GPU mask-blur calibration as the shadow path so the stroke blur matches the front end.
+            withAnimatedPaint(renderer, {stroke.color, 1.0, stroke.width}, item.opacity,
+                combineBlur(animBlur, style.blur) * SHADOW_BLUR_SIGMA_SCALE,
                 [&](const SkPaint& paint) { drawAnimatedLetter(renderer, item, 0.0, 0.0, paint, style); });
             canvas->restore();
         }
@@ -466,8 +468,9 @@ void CharAnimationRenderer::drawAnimatedCharItems(
         const double animBlur = item.props.blur() > 0.0 ? item.props.blur() * fontSize : 0.0;
         canvas->save();
         applyCharTransform(renderer, canvas, item, fontSize, flags);
+        // Same CPU-vs-GPU mask-blur calibration as the shadow path so the fill blur matches the front end.
         withAnimatedPaint(renderer, {style.color, coreOpacity, std::nullopt}, item.opacity,
-            combineBlur(combineBlur(animBlur, style.blur), coreSoftBlur),
+            combineBlur(combineBlur(animBlur, style.blur), coreSoftBlur) * SHADOW_BLUR_SIGMA_SCALE,
             [&](const SkPaint& paint) { drawAnimatedLetter(renderer, item, 0.0, 0.0, paint, style); });
         canvas->restore();
     }
