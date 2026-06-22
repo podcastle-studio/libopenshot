@@ -612,7 +612,7 @@ void drawTextLine(
     double extraLetterSpacing = 0.0)
 {
     const double coreSoftBlur = style.glow.has_value() ? GLOW_CORE_TEXT_BLUR_RATIO * style.fontSize : 0.0;
-    const double fillBlur = combineBlur(style.blur, coreSoftBlur);
+    const double fillBlur = combineBlur(calibratedTextBlur(style.blur), coreSoftBlur);
     const std::optional<double> blurOpt = fillBlur > 0.0 ? std::optional<double>(fillBlur) : std::nullopt;
     const SkPaint* paint = renderer->getPaint(subtitle::PaintProps{
         style.color, style.glow.has_value() ? GLOW_CORE_TEXT_OPACITY : 1.0, std::nullopt, blurOpt});
@@ -630,7 +630,8 @@ void drawStrokeLine(
     subtitle::SkiaRenderer* renderer,
     double extraLetterSpacing = 0.0)
 {
-    const std::optional<double> blurOpt = style.blur > 0.0 ? std::optional<double>(style.blur) : std::nullopt;
+    const double textBlur = calibratedTextBlur(style.blur);
+    const std::optional<double> blurOpt = textBlur > 0.0 ? std::optional<double>(textBlur) : std::nullopt;
     const SkPaint* paint = renderer->getPaint(subtitle::PaintProps{stroke.color, 1.0, stroke.width, blurOpt});
     forEachLetter(line, x, extraLetterSpacing, [&](const std::string& letter, double letterX) {
         drawLetter(renderer, letter, letterX, baselineY, *paint, style);

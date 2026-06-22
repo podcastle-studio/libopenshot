@@ -158,9 +158,21 @@ inline double combineBlur(double a, double b) {
 
 // CPU (backend raster) vs GPU (front-end CanvasKit) mask-blur match factor. The backend's
 // CPU mask-blur reads heavier than the front end for the same sigma, so the backend uses a
-// SMALLER shadow sigma to reproduce the same visual blur. k = 30/90. Applied to the
+// SMALLER sigma to reproduce the same visual blur. The shadow reads heavier than the plain
+// text blur, so the two get different factors: the shadow uses k = 30/90, applied to the
 // shadow blur in every render path (flat / curved / animated) so they all match the front end.
 constexpr double SHADOW_BLUR_SIGMA_SCALE = 30.0 / 90.0;
+
+// The user-facing text blur (style.blur, derived from `blurRatio`) is an ordinary mask blur,
+// so it needs its own CPU-vs-GPU calibration to match the front-end look — a lighter factor
+// (k = 30/50) than the shadow. The fill/stroke paths apply it to the text blur through the
+// calibratedTextBlur helper below. Note the shadow paths fold style.blur into their combined
+// sigma scaled by SHADOW_BLUR_SIGMA_SCALE instead — that contribution is part of the shadow.
+constexpr double TEXT_BLUR_SIGMA_SCALE = 30.0 / 50.0;
+
+inline double calibratedTextBlur(double styleBlur) {
+    return styleBlur > 0.0 ? styleBlur * TEXT_BLUR_SIGMA_SCALE : 0.0;
+}
 
 struct ParsedColor {
     std::string color;   // "#rrggbb" hex (or pass-through value)

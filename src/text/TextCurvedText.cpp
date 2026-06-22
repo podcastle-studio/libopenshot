@@ -204,7 +204,8 @@ void CurvedTextPainter::drawCurvedStatic(
     }
 
     if (style.stroke.has_value()) {
-        const std::optional<double> blurOpt = style.blur > 0.0 ? std::optional<double>(style.blur) : std::nullopt;
+        const double textBlur = calibratedTextBlur(style.blur);
+        const std::optional<double> blurOpt = textBlur > 0.0 ? std::optional<double>(textBlur) : std::nullopt;
         const SkPaint* strokePaint = renderer->getPaint(
             subtitle::PaintProps{style.stroke->color, 1.0, style.stroke->width, blurOpt});
         forEachCurvedGlyph(renderer, geometry, originX, originY, style, nullptr, *strokePaint);
@@ -212,7 +213,7 @@ void CurvedTextPainter::drawCurvedStatic(
 
     // Soften the topmost crisp text when glow is active (Layer 3).
     const double coreSoftBlur = style.glow.has_value() ? GLOW_CORE_TEXT_BLUR_RATIO * style.fontSize : 0.0;
-    const double fillBlur = combineBlur(style.blur, coreSoftBlur);
+    const double fillBlur = combineBlur(calibratedTextBlur(style.blur), coreSoftBlur);
     const std::optional<double> fillBlurOpt = fillBlur > 0.0 ? std::optional<double>(fillBlur) : std::nullopt;
     const SkPaint* fillPaint = renderer->getPaint(subtitle::PaintProps{
         style.color, style.glow.has_value() ? GLOW_CORE_TEXT_OPACITY : 1.0, std::nullopt, fillBlurOpt});

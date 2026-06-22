@@ -454,7 +454,7 @@ void CharAnimationRenderer::drawAnimatedCharItems(
             const double animBlur = item.props.blur() > 0.0 ? item.props.blur() * fontSize : 0.0;
             canvas->save();
             applyCharTransform(renderer, canvas, item, fontSize, flags);
-            withAnimatedPaint(renderer, {stroke.color, 1.0, stroke.width}, item.opacity, combineBlur(animBlur, style.blur),
+            withAnimatedPaint(renderer, {stroke.color, 1.0, stroke.width}, item.opacity, combineBlur(animBlur, calibratedTextBlur(style.blur)),
                 [&](const SkPaint& paint) { drawAnimatedLetter(renderer, item, 0.0, 0.0, paint, style); });
             canvas->restore();
         }
@@ -467,7 +467,7 @@ void CharAnimationRenderer::drawAnimatedCharItems(
         canvas->save();
         applyCharTransform(renderer, canvas, item, fontSize, flags);
         withAnimatedPaint(renderer, {style.color, coreOpacity, std::nullopt}, item.opacity,
-            combineBlur(combineBlur(animBlur, style.blur), coreSoftBlur),
+            combineBlur(combineBlur(animBlur, calibratedTextBlur(style.blur)), coreSoftBlur),
             [&](const SkPaint& paint) { drawAnimatedLetter(renderer, item, 0.0, 0.0, paint, style); });
         canvas->restore();
     }
