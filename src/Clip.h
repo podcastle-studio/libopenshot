@@ -117,6 +117,8 @@ namespace openshot {
 
 	private:
 		bool waveform; ///< Should a waveform be used instead of the clip's image
+		bool shadow; ///< Should a drop shadow be drawn behind the clip's image
+		bool blur; ///< Should the clip's image be blurred
 		std::list<openshot::EffectBase*> effects; ///< List of clips on this timeline
 		bool is_open;	///< Is Reader opened
 		std::string parentObjectId; ///< Id of the bounding box that this clip is attached to
@@ -160,6 +162,12 @@ namespace openshot {
 		
 		/// Get QTransform from keyframes
 		QTransform get_transform(std::shared_ptr<Frame> frame, int width, int height);
+
+		/// Build a blurred, tinted drop-shadow image from a source image (in the source
+		/// image's own coordinate space). The returned image is padded on all sides to make
+		/// room for the blur; offset_x and offset_y receive the position (in source-image
+		/// coordinates) at which the shadow image should be drawn so it lines up with the source.
+		std::shared_ptr<QImage> get_shadow_image(std::shared_ptr<QImage> source_image, int64_t frame_number, int& offset_x, int& offset_y);
 
 		/// Get file extension
 		std::string get_file_extension(std::string path);
@@ -327,6 +335,14 @@ namespace openshot {
 		bool Waveform() { return waveform; } ///< Get the waveform property of this clip
 		void Waveform(bool value) { waveform = value; } ///< Set the waveform property of this clip
 
+		// Shadow property
+		bool Shadow() { return shadow; } ///< Get the drop-shadow property of this clip
+		void Shadow(bool value) { shadow = value; } ///< Set the drop-shadow property of this clip
+
+		// Blur property
+		bool Blur() { return blur; } ///< Get the blur property of this clip
+		void Blur(bool value) { blur = value; } ///< Set the blur property of this clip
+
 		// Scale, Location, and Alpha curves
 		openshot::Keyframe scale_x; ///< Curve representing the horizontal scaling in percent (0 to 1)
 		openshot::Keyframe scale_y; ///< Curve representing the vertical scaling in percent (0 to 1)
@@ -340,6 +356,17 @@ namespace openshot {
 		openshot::Keyframe shear_y; ///< Curve representing Y shear angle in degrees (-45.0=down, 45.0=up)
 		openshot::Keyframe origin_x; ///< Curve representing X origin point (0.0=0% (left), 1.0=100% (right))
 		openshot::Keyframe origin_y; ///< Curve representing Y origin point (0.0=0% (top), 1.0=100% (bottom))
+
+		// Drop shadow curves (only used when Shadow() is enabled). The shadow is offset from
+		// the clip by `shadow_distance` pixels along `shadow_angle` (degrees, measured
+		// clockwise from the positive X axis with +Y pointing down: 0=right, 90=down).
+		openshot::Keyframe shadow_blur; ///< Curve representing the shadow's blur radius in pixels (0 = sharp)
+		openshot::Keyframe shadow_distance; ///< Curve representing the shadow's offset distance in pixels
+		openshot::Keyframe shadow_angle; ///< Curve representing the shadow's offset direction in degrees
+		openshot::Color shadow_color; ///< Color of the drop shadow (alpha channel controls shadow opacity)
+
+		// Blur curve (only used when Blur() is enabled)
+		openshot::Keyframe blur_amount; ///< Curve representing the clip blur radius in pixels (0 = none)
 
         QPainter::CompositionMode composition_mode = QPainter::CompositionMode_SourceOver; ///< Composition mode for blending this clip with the background
 

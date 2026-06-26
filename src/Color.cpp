@@ -15,7 +15,43 @@
 #include "Color.h"
 #include "Exceptions.h"
 
+#include <QColor>
+#include <QString>
+#include <QStringList>
+
 using namespace openshot;
+
+namespace {
+	// Parse a color string into a QColor, accepting either:
+	//   - hex or named colors handled by QColor (e.g. "#RRGGBB", "#AARRGGBB", "red"), or
+	//   - CSS-style "rgb(r, g, b)" / "rgba(r, g, b, a)" where r,g,b are 0-255.
+	// The alpha in rgba() is treated as a 0-1 fraction (CSS convention) when <= 1,
+	// otherwise as a 0-255 value.
+	QColor parseColorString(const QString& input) {
+		const QString s = input.trimmed();
+		if (s.startsWith("rgb", Qt::CaseInsensitive)) {
+			const int open = s.indexOf('(');
+			const int close = s.lastIndexOf(')');
+			if (open >= 0 && close > open) {
+				const QStringList parts = s.mid(open + 1, close - open - 1).split(',');
+				if (parts.size() >= 3) {
+					const int r = qBound(0, (int) std::lround(parts[0].trimmed().toDouble()), 255);
+					const int g = qBound(0, (int) std::lround(parts[1].trimmed().toDouble()), 255);
+					const int b = qBound(0, (int) std::lround(parts[2].trimmed().toDouble()), 255);
+					int a = 255;
+					if (parts.size() >= 4) {
+						const double av = parts[3].trimmed().toDouble();
+						a = qBound(0, (int) std::lround(av <= 1.0 ? av * 255.0 : av), 255);
+					}
+					return QColor(r, g, b, a);
+				}
+			}
+			return QColor(); // malformed rgb()/rgba()
+		}
+		// Fall back to QColor's own hex/named-color parsing
+		return QColor(s);
+	}
+}
 
 // Constructor which takes R,G,B,A
 Color::Color(unsigned char Red, unsigned char Green, unsigned char Blue, unsigned char Alpha) :
@@ -36,12 +72,12 @@ Color::Color(QColor qcolor) :
     alpha(qcolor.alpha()) { }
 
 
-// Constructor which takes a HEX color code
+// Constructor which takes a color string (hex, named, or CSS rgb()/rgba())
 Color::Color(std::string color_hex)
-    : Color::Color(QString::fromStdString(color_hex)) {}
+    : Color::Color(parseColorString(QString::fromStdString(color_hex))) {}
 
 Color::Color(const char* color_hex)
-    : Color::Color(QString(color_hex)) {}
+    : Color::Color(parseColorString(QString(color_hex))) {}
 
 // Get the HEX value of a color at a specific frame
 std::string Color::GetColorHex(int64_t frame_number) {

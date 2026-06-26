@@ -31,7 +31,47 @@
 
 #include <Qt>
 
+#include <algorithm>
+#include <cmath>
+#include <vector>
+
 using namespace openshot;
+
+namespace {
+	// One separable box-blur pass over a single-channel float buffer (width x height,
+	// row-major). Edges are handled by clamping. Repeating this pass a few times in
+	// each direction approximates a Gaussian blur, which is what we want for a soft shadow.
+	void box_blur_pass(const std::vector<float>& in, std::vector<float>& out,
+	                   int width, int height, int radius, bool horizontal) {
+		const float norm = 1.0f / (2 * radius + 1);
+		if (horizontal) {
+			for (int y = 0; y < height; ++y) {
+				const int base = y * width;
+				float sum = 0.0f;
+				for (int i = -radius; i <= radius; ++i)
+					sum += in[base + std::min(std::max(i, 0), width - 1)];
+				for (int x = 0; x < width; ++x) {
+					out[base + x] = sum * norm;
+					const int add = std::min(x + radius + 1, width - 1);
+					const int rem = std::max(x - radius, 0);
+					sum += in[base + add] - in[base + rem];
+				}
+			}
+		} else {
+			for (int x = 0; x < width; ++x) {
+				float sum = 0.0f;
+				for (int i = -radius; i <= radius; ++i)
+					sum += in[std::min(std::max(i, 0), height - 1) * width + x];
+				for (int y = 0; y < height; ++y) {
+					out[y * width + x] = sum * norm;
+					const int add = std::min(y + radius + 1, height - 1);
+					const int rem = std::max(y - radius, 0);
+					sum += in[add * width + x] - in[rem * width + x];
+				}
+			}
+		}
+	}
+}
 
 // Init default settings for a clip
 void Clip::init_settings()
@@ -47,6 +87,7 @@ void Clip::init_settings()
 	display = FRAME_DISPLAY_NONE;
 	mixing = VOLUME_MIX_NONE;
 	waveform = false;
+	shadow = false;
 	previous_properties = "";
 	parentObjectId = "";
 
@@ -67,6 +108,16 @@ void Clip::init_settings()
 
 	// Init audio waveform color
 	wave_color = Color((unsigned char)0, (unsigned char)123, (unsigned char)255, (unsigned char)255);
+
+	// Init drop shadow curves and color (semi-transparent black, offset down-right at 45°)
+	shadow_blur = Keyframe(10.0);
+	shadow_distance = Keyframe(14.0);
+	shadow_angle = Keyframe(45.0);
+	shadow_color = Color((unsigned char)0, (unsigned char)0, (unsigned char)0, (unsigned char)160);
+
+	// Init clip blur curve
+	blur = false;
+	blur_amount = Keyframe(10.0);
 
 	// Init shear and perspective curves
 	shear_x = Keyframe(0.0);
@@ -851,6 +902,8 @@ std::string Clip::PropertiesJSON(int64_t requested_frame) const {
 	root["display"] = add_property_json("Frame Number", display, "int", "", NULL, 0, 3, false, requested_frame);
 	root["mixing"] = add_property_json("Volume Mixing", mixing, "int", "", NULL, 0, 2, false, requested_frame);
 	root["waveform"] = add_property_json("Waveform", waveform, "int", "", NULL, 0, 1, false, requested_frame);
+	root["shadow"] = add_property_json("Shadow", shadow, "int", "", NULL, 0, 1, false, requested_frame);
+	root["blur_enabled"] = add_property_json("Blur", blur, "int", "", NULL, 0, 1, false, requested_frame);
 	root["parentObjectId"] = add_property_json("Parent", 0.0, "string", parentObjectId, NULL, -1, -1, false, requested_frame);
 
 	// Add gravity choices (dropdown style)
@@ -884,6 +937,14 @@ std::string Clip::PropertiesJSON(int64_t requested_frame) const {
 	// Add waveform choices (dropdown style)
 	root["waveform"]["choices"].append(add_property_choice_json("Yes", true, waveform));
 	root["waveform"]["choices"].append(add_property_choice_json("No", false, waveform));
+
+	// Add shadow choices (dropdown style)
+	root["shadow"]["choices"].append(add_property_choice_json("Yes", true, shadow));
+	root["shadow"]["choices"].append(add_property_choice_json("No", false, shadow));
+
+	// Add blur choices (dropdown style)
+	root["blur_enabled"]["choices"].append(add_property_choice_json("Yes", true, blur));
+	root["blur_enabled"]["choices"].append(add_property_choice_json("No", false, blur));
 
 	// Add the parentClipObject's properties
 	if (parentClipObject)
@@ -948,6 +1009,21 @@ std::string Clip::PropertiesJSON(int64_t requested_frame) const {
 	root["wave_color"]["green"] = add_property_json("Green", wave_color.green.GetValue(requested_frame), "float", "", &wave_color.green, 0, 255, false, requested_frame);
 	root["wave_color"]["alpha"] = add_property_json("Alpha", wave_color.alpha.GetValue(requested_frame), "float", "", &wave_color.alpha, 0, 255, false, requested_frame);
 
+	// Drop shadow keyframes
+	root["shadow_blur"] = add_property_json("Shadow Blur", shadow_blur.GetValue(requested_frame), "float", "", &shadow_blur, 0, 100, false, requested_frame);
+	root["shadow_distance"] = add_property_json("Shadow Distance", shadow_distance.GetValue(requested_frame), "float", "", &shadow_distance, 0, 1000, false, requested_frame);
+	root["shadow_angle"] = add_property_json("Shadow Angle", shadow_angle.GetValue(requested_frame), "float", "", &shadow_angle, -360, 360, false, requested_frame);
+
+	// Drop shadow color
+	root["shadow_color"] = add_property_json("Shadow Color", 0.0, "color", "", &shadow_color.red, 0, 255, false, requested_frame);
+	root["shadow_color"]["red"] = add_property_json("Red", shadow_color.red.GetValue(requested_frame), "float", "", &shadow_color.red, 0, 255, false, requested_frame);
+	root["shadow_color"]["blue"] = add_property_json("Blue", shadow_color.blue.GetValue(requested_frame), "float", "", &shadow_color.blue, 0, 255, false, requested_frame);
+	root["shadow_color"]["green"] = add_property_json("Green", shadow_color.green.GetValue(requested_frame), "float", "", &shadow_color.green, 0, 255, false, requested_frame);
+	root["shadow_color"]["alpha"] = add_property_json("Alpha", shadow_color.alpha.GetValue(requested_frame), "float", "", &shadow_color.alpha, 0, 255, false, requested_frame);
+
+	// Clip blur amount
+	root["blur_amount"] = add_property_json("Blur Amount", blur_amount.GetValue(requested_frame), "float", "", &blur_amount, 0, 100, false, requested_frame);
+
 	// Return formatted string
 	return root.toStyledString();
 }
@@ -964,6 +1040,24 @@ Json::Value Clip::JsonValue() const {
 	root["display"] = display;
 	root["mixing"] = mixing;
 	root["waveform"] = waveform;
+
+	// Drop shadow (nested "boxShadow" object, matching the rendering service's contract)
+	Json::Value box_shadow;
+	box_shadow["enabled"] = shadow;
+	box_shadow["color"] = QColor(shadow_color.red.GetInt(0), shadow_color.green.GetInt(0),
+	                             shadow_color.blue.GetInt(0), shadow_color.alpha.GetInt(0))
+	                          .name(QColor::HexArgb).toStdString();
+	box_shadow["blur"] = shadow_blur.JsonValue();
+	box_shadow["distance"] = shadow_distance.JsonValue();
+	box_shadow["angle"] = shadow_angle.JsonValue();
+	root["boxShadow"] = box_shadow;
+
+	// Clip blur (nested "blur" object, matching the rendering service's contract)
+	Json::Value clip_blur;
+	clip_blur["enabled"] = blur;
+	clip_blur["amount"] = blur_amount.JsonValue();
+	root["blur"] = clip_blur;
+
 	root["scale_x"] = scale_x.JsonValue();
 	root["scale_y"] = scale_y.JsonValue();
 	root["location_x"] = location_x.JsonValue();
@@ -1053,6 +1147,47 @@ void Clip::SetJsonValue(const Json::Value root) {
 		mixing = (VolumeMixType) root["mixing"].asInt();
 	if (!root["waveform"].isNull())
 		waveform = root["waveform"].asBool();
+
+	// Drop shadow ("boxShadow" object: { color, blur, distance, angle, enabled }).
+	// blur/distance/angle accept either a plain number or a full Keyframe object.
+	if (root["boxShadow"].isObject()) {
+		const Json::Value box_shadow = root["boxShadow"];
+		if (!box_shadow["enabled"].isNull())
+			shadow = box_shadow["enabled"].asBool();
+		if (!box_shadow["color"].isNull())
+			shadow_color = Color(box_shadow["color"].asString());
+		if (!box_shadow["blur"].isNull())
+			shadow_blur.SetJsonValue(box_shadow["blur"]);
+		if (!box_shadow["distance"].isNull())
+			shadow_distance.SetJsonValue(box_shadow["distance"]);
+		if (!box_shadow["angle"].isNull())
+			shadow_angle.SetJsonValue(box_shadow["angle"]);
+	}
+
+	// Clip blur ("blur" object: { amount, enabled }). amount accepts a number or Keyframe.
+	if (root["blur"].isObject()) {
+		const Json::Value clip_blur = root["blur"];
+		if (!clip_blur["enabled"].isNull())
+			blur = clip_blur["enabled"].asBool();
+		if (!clip_blur["amount"].isNull())
+			blur_amount.SetJsonValue(clip_blur["amount"]);
+	}
+
+	// Flat keys (used by the OpenShot editor's property panel; see PropertiesJSON)
+	if (!root["shadow"].isNull())
+		shadow = root["shadow"].asBool();
+	if (!root["shadow_color"].isNull())
+		shadow_color.SetJsonValue(root["shadow_color"]);
+	if (!root["shadow_blur"].isNull())
+		shadow_blur.SetJsonValue(root["shadow_blur"]);
+	if (!root["shadow_distance"].isNull())
+		shadow_distance.SetJsonValue(root["shadow_distance"]);
+	if (!root["shadow_angle"].isNull())
+		shadow_angle.SetJsonValue(root["shadow_angle"]);
+	if (!root["blur_enabled"].isNull())
+		blur = root["blur_enabled"].asBool();
+	if (!root["blur_amount"].isNull())
+		blur_amount.SetJsonValue(root["blur_amount"]);
 	if (!root["scale_x"].isNull())
 		scale_x.SetJsonValue(root["scale_x"]);
 	if (!root["scale_y"].isNull())
@@ -1318,6 +1453,60 @@ bool Clip::isNear(double a, double b)
 }
 
 // Apply keyframes to the source frame (if any)
+std::shared_ptr<QImage> Clip::get_shadow_image(std::shared_ptr<QImage> source_image, int64_t frame_number, int& offset_x, int& offset_y) {
+	// Blur radius (in source-image pixels) and padding to give the blur room to spread
+	const int radius = std::max(0, (int) std::lround(shadow_blur.GetValue(frame_number)));
+	const int pad = radius * 3 + 1;
+
+	const int src_w = source_image->width();
+	const int src_h = source_image->height();
+	const int w = src_w + pad * 2;
+	const int h = src_h + pad * 2;
+
+	// The shadow is a blurred silhouette of the source, so we only need the source's
+	// alpha channel. Copy it into a zero-padded float buffer.
+	std::vector<float> a(static_cast<size_t>(w) * h, 0.0f);
+	QImage src = source_image->convertToFormat(QImage::Format_ARGB32);
+	for (int y = 0; y < src_h; ++y) {
+		const QRgb* row = reinterpret_cast<const QRgb*>(src.constScanLine(y));
+		float* dst = &a[static_cast<size_t>(y + pad) * w + pad];
+		for (int x = 0; x < src_w; ++x)
+			dst[x] = qAlpha(row[x]);
+	}
+
+	// Blur the alpha channel (3 separable box passes ≈ Gaussian)
+	if (radius > 0) {
+		std::vector<float> tmp(static_cast<size_t>(w) * h, 0.0f);
+		for (int p = 0; p < 3; ++p) {
+			box_blur_pass(a, tmp, w, h, radius, true);
+			box_blur_pass(tmp, a, w, h, radius, false);
+		}
+	}
+
+	// Tint the blurred silhouette with the shadow color. The color's alpha acts as an
+	// overall shadow-opacity multiplier on top of the source's (blurred) alpha.
+	const int sr = std::min(255, std::max(0, (int) std::lround(shadow_color.red.GetValue(frame_number))));
+	const int sg = std::min(255, std::max(0, (int) std::lround(shadow_color.green.GetValue(frame_number))));
+	const int sb = std::min(255, std::max(0, (int) std::lround(shadow_color.blue.GetValue(frame_number))));
+	const float sa = std::min(255.0f, std::max(0.0f, (float) shadow_color.alpha.GetValue(frame_number))) / 255.0f;
+
+	auto shadow_image = std::make_shared<QImage>(w, h, QImage::Format_ARGB32);
+	for (int y = 0; y < h; ++y) {
+		QRgb* row = reinterpret_cast<QRgb*>(shadow_image->scanLine(y));
+		const float* asrc = &a[static_cast<size_t>(y) * w];
+		for (int x = 0; x < w; ++x) {
+			int alpha = (int) std::lround(asrc[x] * sa);
+			if (alpha < 0) alpha = 0; else if (alpha > 255) alpha = 255;
+			row[x] = qRgba(sr, sg, sb, alpha);
+		}
+	}
+
+	// The shadow's top-left pixel maps to source pixel (-pad, -pad)
+	offset_x = -pad;
+	offset_y = -pad;
+	return shadow_image;
+}
+
 void Clip::apply_keyframes(std::shared_ptr<Frame> frame, QSize timeline_size) {
 	// Skip out if video was disabled or only an audio frame (no visualisation in use)
 	if (!frame->has_image_data) {
@@ -1335,12 +1524,42 @@ void Clip::apply_keyframes(std::shared_ptr<Frame> frame, QSize timeline_size) {
 	// Get transform from clip's keyframes
 	QTransform transform = get_transform(frame, background_canvas->width(), background_canvas->height());
 
+	// Blur the clip's image (if enabled). Done before the shadow is generated and before
+	// compositing, so both the shadow silhouette and the drawn clip reflect the blur.
+	if (blur) {
+		const int blur_radius = std::max(0, (int) std::lround(blur_amount.GetValue(frame->number)));
+		if (blur_radius > 0) {
+			auto imageCv = frame->GetImageCV();
+			Podcastle::Effects::applyBlurEffect(imageCv, blur_radius, blur_radius);
+			frame->SetImageCV(imageCv);
+			// Re-fetch the (now blurred) image, since SetImageCV replaces it
+			source_image = frame->GetImage();
+		}
+	}
+
 	// Load timeline's new frame image into a QPainter
 	QPainter painter(background_canvas.get());
 	painter.setRenderHints(QPainter::Antialiasing | QPainter::SmoothPixmapTransform | QPainter::TextAntialiasing, true);
 
 	// Apply transform (translate, rotate, scale)
 	painter.setTransform(transform);
+
+	// Draw drop shadow behind the clip image (if enabled). The shadow is built in the
+	// source image's coordinate space and drawn under the same transform, so it scales
+	// and rotates together with the clip.
+	if (shadow) {
+		int shadow_offset_x = 0;
+		int shadow_offset_y = 0;
+		std::shared_ptr<QImage> shadow_image = get_shadow_image(source_image, frame->number, shadow_offset_x, shadow_offset_y);
+		// Convert polar (distance, angle) offset into source-image x/y offset.
+		// Angle is in degrees, clockwise from +X, with +Y pointing down.
+		const double distance = shadow_distance.GetValue(frame->number);
+		const double angle_rad = shadow_angle.GetValue(frame->number) * M_PI / 180.0;
+		const float dx = (float) (distance * std::cos(angle_rad));
+		const float dy = (float) (distance * std::sin(angle_rad));
+		painter.setCompositionMode(QPainter::CompositionMode_SourceOver);
+		painter.drawImage(QPointF(dx + shadow_offset_x, dy + shadow_offset_y), *shadow_image);
+	}
 
 	// Composite a new layer onto the image
 	painter.setCompositionMode(QPainter::CompositionMode_SourceOver);
