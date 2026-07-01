@@ -11,6 +11,7 @@
 #include <skia/include/core/SkPaint.h>
 #include <skia/include/core/SkRRect.h>
 #include <skia/include/core/SkRect.h>
+#include <skia/include/core/SkShader.h>
 #include <skia/include/core/SkSpan.h>
 
 #include <algorithm>
@@ -30,6 +31,104 @@ namespace text {
 namespace {
 
 constexpr char SPACE = ' ';
+
+std::string trimWs(const std::string& s) {
+    const auto b = s.find_first_not_of(" \t\r\n");
+    if (b == std::string::npos) return "";
+    const auto e = s.find_last_not_of(" \t\r\n");
+    return s.substr(b, e - b + 1);
+}
+
+std::string toLowerAscii(const std::string& s) {
+    std::string out;
+    out.reserve(s.size());
+    for (char c : s) out.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
+    return out;
+}
+
+// Split on commas that are NOT inside parentheses (so rgb()/rgba() stay intact).
+std::vector<std::string> splitTopLevelCommas(const std::string& s) {
+    std::vector<std::string> out;
+    std::string cur;
+    int depth = 0;
+    for (char c : s) {
+        if (c == '(') ++depth;
+        else if (c == ')') depth = std::max(0, depth - 1);
+        if (c == ',' && depth == 0) {
+            out.push_back(cur);
+            cur.clear();
+        } else {
+            cur.push_back(c);
+        }
+    }
+    out.push_back(cur);
+    return out;
+}
+
+// Parse a CSS linear-gradient(...) string into a TextClipGradient, or nullopt for a solid colour
+// / anything not a parseable linear gradient (so the solid-colour path is used unchanged).
+std::optional<TextClipGradient> parseTextGradient(const std::string& value) {
+    const std::string trimmed = trimWs(value);
+    const std::string lower = toLowerAscii(trimmed);
+    if (lower.rfind("linear-gradient", 0) != 0) return std::nullopt;
+
+    const auto open = trimmed.find('(');
+    const auto close = trimmed.rfind(')');
+    if (open == std::string::npos || close == std::string::npos || close <= open) return std::nullopt;
+
+    const std::string inner = trimmed.substr(open + 1, close - open - 1);
+    std::vector<std::string> parts = splitTopLevelCommas(inner);
+
+    TextClipGradient grad;
+    grad.angle = DEFAULT_GRADIENT_ANGLE;
+
+    // A leading "<number>deg" token sets the angle; otherwise it's a colour stop.
+    size_t firstStop = 0;
+    if (!parts.empty()) {
+        const std::string p0 = trimWs(parts[0]);
+        const std::string p0l = toLowerAscii(p0);
+        const auto degPos = p0l.find("deg");
+        if (degPos != std::string::npos) {
+            try {
+                grad.angle = std::stod(p0.substr(0, degPos));
+                firstStop = 1;
+            } catch (...) {}
+        }
+    }
+
+    // Each remaining part: colour + optional trailing "<number>%" position.
+    std::vector<std::string> colors;
+    std::vector<std::optional<double>> positions;
+    for (size_t i = firstStop; i < parts.size(); ++i) {
+        const std::string part = trimWs(parts[i]);
+        if (part.empty()) continue;
+        std::string color = part;
+        std::optional<double> pos;
+        if (part.back() == '%') {
+            const auto sp = part.find_last_of(" \t");
+            if (sp != std::string::npos) {
+                color = trimWs(part.substr(0, sp));
+                try {
+                    pos = std::stod(trimWs(part.substr(sp + 1, part.size() - sp - 2))) / 100.0;
+                } catch (...) { pos.reset(); }
+            }
+        }
+        colors.push_back(color);
+        positions.push_back(pos);
+    }
+
+    if (colors.size() < 2) return std::nullopt;
+
+    // Distribute any missing positions evenly across the stops, clamped 0..1.
+    const size_t n = colors.size();
+    for (size_t i = 0; i < n; ++i) {
+        double p = positions[i].has_value()
+            ? *positions[i]
+            : static_cast<double>(i) / static_cast<double>(n - 1);
+        grad.stops.push_back({colors[i], clamp01(p)});
+    }
+    return grad;
+}
 
 } // namespace
 
@@ -101,16 +200,30 @@ TextClipPaintStyle convertTextStyleToPaintStyle(
     paint.sizeScale = transformation.size / LAYOUT_REFERENCE_SIZE;
     paint.fontWeight = style.fontWeight;
     paint.italic = style.italic;
-    paint.color = style.color;
     paint.letterSpacing = style.letterSpacing * paint.fontSize;
     paint.lineHeight = style.lineHeight * paint.fontSize;
     paint.alignment = style.textAlign;
 
+    // Fill colour: a CSS linear-gradient becomes paint.colorGradient, and the solid `color` is
+    // set to the OPAQUE first-stop colour (glyph coverage only) so the paint alpha / SrcIn mask
+    // doesn't globally dim the gradient. A solid colour passes straight through.
+    if (auto grad = parseTextGradient(style.color); grad.has_value() && !grad->stops.empty()) {
+        paint.colorGradient = grad;
+        paint.color = parseColorOpacity(grad->stops.front().color).color;
+    } else {
+        paint.color = style.color;
+    }
+
     if (style.strokeColor.has_value() && style.strokeWidthRatio > 0.0) {
-        paint.stroke = TextClipStrokeStyle{
-            *style.strokeColor,
-            style.strokeWidthRatio * paint.fontSize,
-        };
+        TextClipStrokeStyle stroke;
+        stroke.width = style.strokeWidthRatio * paint.fontSize;
+        if (auto grad = parseTextGradient(*style.strokeColor); grad.has_value() && !grad->stops.empty()) {
+            stroke.gradient = grad;
+            stroke.color = parseColorOpacity(grad->stops.front().color).color;
+        } else {
+            stroke.color = *style.strokeColor;
+        }
+        paint.stroke = std::move(stroke);
     }
 
     if (style.shadowColor.has_value()) {
@@ -609,13 +722,26 @@ void drawTextLine(
     double x,
     double baselineY,
     subtitle::SkiaRenderer* renderer,
-    double extraLetterSpacing = 0.0)
+    double extraLetterSpacing = 0.0,
+    const PaintGradient* gradient = nullptr)
 {
     const double coreSoftBlur = style.glow.has_value() ? GLOW_CORE_TEXT_BLUR_RATIO * style.fontSize : 0.0;
     const double fillBlur = combineBlur(calibratedTextBlur(style.blur), coreSoftBlur);
     const std::optional<double> blurOpt = fillBlur > 0.0 ? std::optional<double>(fillBlur) : std::nullopt;
-    const SkPaint* paint = renderer->getPaint(subtitle::PaintProps{
+    const SkPaint* base = renderer->getPaint(subtitle::PaintProps{
         style.color, style.glow.has_value() ? GLOW_CORE_TEXT_OPACITY : 1.0, std::nullopt, blurOpt});
+
+    // Gradient fill: same paint (AA / core-soft blur / opacity) with a linear-gradient shader in
+    // block space so the ramp spans the whole block. The shader colour dominates `style.color`.
+    SkPaint gradPaint;
+    const SkPaint* paint = base;
+    if (gradient) {
+        if (sk_sp<SkShader> shader = makeGradientShader(renderer, *gradient)) {
+            gradPaint = *base;
+            gradPaint.setShader(shader);
+            paint = &gradPaint;
+        }
+    }
     forEachLetter(line, x, extraLetterSpacing, [&](const std::string& letter, double letterX) {
         drawLetter(renderer, letter, letterX, baselineY, *paint, style);
     });
@@ -628,11 +754,22 @@ void drawStrokeLine(
     double x,
     double baselineY,
     subtitle::SkiaRenderer* renderer,
-    double extraLetterSpacing = 0.0)
+    double extraLetterSpacing = 0.0,
+    const PaintGradient* gradient = nullptr)
 {
     const double textBlur = calibratedTextBlur(style.blur);
     const std::optional<double> blurOpt = textBlur > 0.0 ? std::optional<double>(textBlur) : std::nullopt;
-    const SkPaint* paint = renderer->getPaint(subtitle::PaintProps{stroke.color, 1.0, stroke.width, blurOpt});
+    const SkPaint* base = renderer->getPaint(subtitle::PaintProps{stroke.color, 1.0, stroke.width, blurOpt});
+
+    SkPaint gradPaint;
+    const SkPaint* paint = base;
+    if (gradient) {
+        if (sk_sp<SkShader> shader = makeGradientShader(renderer, *gradient)) {
+            gradPaint = *base;
+            gradPaint.setShader(shader);
+            paint = &gradPaint;
+        }
+    }
     forEachLetter(line, x, extraLetterSpacing, [&](const std::string& letter, double letterX) {
         drawLetter(renderer, letter, letterX, baselineY, *paint, style);
     });
@@ -673,6 +810,25 @@ void drawShadowLine(
 
 } // namespace
 
+void renderShadowLayer(
+    const TextClipLayout& layout,
+    const TextClipPaintStyle& paint,
+    double originX,
+    double originY,
+    subtitle::SkiaRenderer* renderer,
+    double extraLetterSpacing)
+{
+    if (!paint.dropShadow.has_value()) return;
+    const double firstBaselineY = originY + layout.firstLineAscent;
+    for (size_t li = 0; li < layout.lines.size(); ++li) {
+        const auto& line = layout.lines[li];
+        if (line.text.empty()) continue;
+        const double lineX = originX + getLineStartX(line, layout, paint.alignment, extraLetterSpacing);
+        drawShadowLine(line, paint, *paint.dropShadow, paint.stroke, lineX,
+                       firstBaselineY + static_cast<double>(li) * layout.lineHeight, renderer, extraLetterSpacing);
+    }
+}
+
 void renderLayout(
     const TextClipLayout& layout,
     const TextClipPaintStyle& paint,
@@ -681,7 +837,8 @@ void renderLayout(
     double originY,
     subtitle::SkiaRenderer* renderer,
     double extraLetterSpacing,
-    bool skipGlow)
+    bool skipGlow,
+    bool skipShadow)
 {
     if (background.has_value()) {
         drawBackgroundRect(renderer, *background, originX, originY, layout.layoutWidth, layout.textHeight);
@@ -695,16 +852,22 @@ void renderLayout(
         return originX + getLineStartX(line, layout, paint.alignment, extraLetterSpacing);
     };
 
+    // Gradient fill / stroke endpoints span the whole block (all lines share them), computed over
+    // the content box in absolute canvas coords so the flat shader-paint maps correctly.
+    std::optional<PaintGradient> fillGradient;
+    if (paint.colorGradient.has_value()) {
+        fillGradient = gradientFill(*paint.colorGradient, originX, originY, layout.layoutWidth, layout.textHeight);
+    }
+    std::optional<PaintGradient> strokeGradient;
+    if (paint.stroke.has_value() && paint.stroke->gradient.has_value()) {
+        strokeGradient = gradientFill(*paint.stroke->gradient, originX, originY, layout.layoutWidth, layout.textHeight);
+    }
+
     // Global passes (background -> all shadows -> glow -> all strokes -> all fills) so a line's
     // shadow/stroke can never land on top of another line's fill, and the glow sits beneath all
     // crisp glyphs. For non-overlapping lines this is identical to per-line draw order.
-    if (paint.dropShadow.has_value()) {
-        for (size_t li = 0; li < layout.lines.size(); ++li) {
-            const auto& line = layout.lines[li];
-            if (line.text.empty()) continue;
-            drawShadowLine(line, paint, *paint.dropShadow, paint.stroke, lineStart(line),
-                           firstBaselineY + static_cast<double>(li) * layout.lineHeight, renderer, extraLetterSpacing);
-        }
+    if (!skipShadow) {
+        renderShadowLayer(layout, paint, originX, originY, renderer, extraLetterSpacing);
     }
 
     if (paint.glow.has_value() && !skipGlow) {
@@ -716,7 +879,8 @@ void renderLayout(
             const auto& line = layout.lines[li];
             if (line.text.empty()) continue;
             drawStrokeLine(line, paint, *paint.stroke, lineStart(line),
-                           firstBaselineY + static_cast<double>(li) * layout.lineHeight, renderer, extraLetterSpacing);
+                           firstBaselineY + static_cast<double>(li) * layout.lineHeight, renderer, extraLetterSpacing,
+                           strokeGradient.has_value() ? &*strokeGradient : nullptr);
         }
     }
 
@@ -724,7 +888,8 @@ void renderLayout(
         const auto& line = layout.lines[li];
         if (line.text.empty()) continue;
         drawTextLine(line, paint, lineStart(line),
-                     firstBaselineY + static_cast<double>(li) * layout.lineHeight, renderer, extraLetterSpacing);
+                     firstBaselineY + static_cast<double>(li) * layout.lineHeight, renderer, extraLetterSpacing,
+                     fillGradient.has_value() ? &*fillGradient : nullptr);
     }
 }
 

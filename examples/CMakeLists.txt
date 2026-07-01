@@ -29,6 +29,10 @@ target_link_libraries(openshot-example openshot)
 add_executable(openshot-html-example ExampleHtml.cpp)
 target_link_libraries(openshot-html-example openshot Qt5::Gui)
 
+# Render harness for the new text features (gradient fill + static 3D tilt) from tmp/payload.json.
+add_executable(openshot-text-payload TextPayloadExample.cpp)
+target_link_libraries(openshot-text-payload openshot Qt5::Gui)
+
 ############### PLAYER EXECUTABLE ################
 # Create test executable
 add_executable(openshot-player qt-demo/main.cpp)

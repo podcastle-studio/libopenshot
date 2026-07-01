@@ -9,6 +9,7 @@
 #include "skia/include/core/SkSpan.h"
 #include "skia/include/ports/SkFontMgr_fontconfig.h"
 #include "skia/include/ports/SkFontScanner_FreeType.h"
+#include "skia/include/effects/SkGradient.h"
 
 #include <algorithm>
 #include <cmath>
@@ -219,6 +220,31 @@ SkPaint* SkiaRenderer::getPaint(const PaintProps& paintProps) {
     SkPaint* paintPtr = paint.get();
     paintCache[key] = std::move(paint);
     return paintPtr;
+}
+
+sk_sp<SkShader> SkiaRenderer::makeLinearGradientShader(
+    const SkPoint pts[2],
+    const std::vector<std::pair<std::string, double>>& stops)
+{
+    if (stops.size() < 2) return nullptr;
+
+    std::vector<SkColor4f> colors;
+    std::vector<float> positions;
+    colors.reserve(stops.size());
+    positions.reserve(stops.size());
+    for (const auto& stop : stops) {
+        // parseColorString already applies the platform BGR swap; keep the stop opaque unless the
+        // colour itself carries alpha (opacity arg = 1.0).
+        colors.push_back(SkColor4f::FromColor(parseColorString(stop.first, 1.0f)));
+        positions.push_back(static_cast<float>(std::clamp(stop.second, 0.0, 1.0)));
+    }
+
+    const SkGradient::Colors gradColors(
+        SkSpan<const SkColor4f>(colors.data(), colors.size()),
+        SkSpan<const float>(positions.data(), positions.size()),
+        SkTileMode::kClamp);
+    const SkGradient gradient(gradColors, SkGradient::Interpolation{});
+    return SkShaders::LinearGradient(pts, gradient, nullptr);
 }
 
 sk_sp<SkTypeface> SkiaRenderer::matchTypeface(const std::string& familyOrPath, const SkFontStyle& style) {

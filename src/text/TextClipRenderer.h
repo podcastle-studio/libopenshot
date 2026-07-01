@@ -111,7 +111,20 @@ void renderLayout(
     double originY,
     subtitle::SkiaRenderer* renderer,
     double extraLetterSpacing = 0.0,
-    bool skipGlow = false);
+    bool skipGlow = false,
+    bool skipShadow = false);
+
+/// Draw ONLY the flat block's drop-shadow pass (no background / glow / stroke / fill). No-op when
+/// the paint has no shadow. Used by the 3D-tilt word path to draw the shadow live under the same
+/// transform (instead of baking it into the perspective-warped texture, which would foreshorten
+/// and weaken the halo). Mirrors how the glow layer is drawn live in that path.
+void renderShadowLayer(
+    const TextClipLayout& layout,
+    const TextClipPaintStyle& paint,
+    double originX,
+    double originY,
+    subtitle::SkiaRenderer* renderer,
+    double extraLetterSpacing = 0.0);
 
 /// Compute the curved-arc geometry of the layout's first non-empty line (or an empty geometry).
 CurvedTextGeometry curvedGeometryForLayout(const TextClipLayout& layout, const TextClipPaintStyle& paint);

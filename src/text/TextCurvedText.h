@@ -60,7 +60,8 @@ public:
         : renderer(renderer), glowRenderer(glowRenderer) {}
 
     // Paint the static curved block: background, then global passes (shadow -> glow ->
-    // stroke -> fill), every glyph positioned and rotated along the arc.
+    // stroke -> fill), every glyph positioned and rotated along the arc. `skipGlow` / `skipShadow`
+    // omit those layers (used by the 3D-tilt path, which draws them live under the transform).
     void drawCurvedStatic(
         const CurvedTextGeometry& geometry,
         const TextClipLayout& layout,
@@ -68,7 +69,16 @@ public:
         const std::optional<TextClipBackgroundStyle>& background,
         double originX,
         double originY,
-        bool skipGlow = false);
+        bool skipGlow = false,
+        bool skipShadow = false);
+
+    // Draw ONLY the curved drop-shadow pass (no background / glow / stroke / fill). No-op when the
+    // style has no shadow. Used by the 3D-tilt path to draw the shadow live under the transform.
+    void drawCurvedShadowOnly(
+        const CurvedTextGeometry& geometry,
+        const TextClipPaintStyle& style,
+        double originX,
+        double originY);
 
 private:
     subtitle::SkiaRenderer* renderer;

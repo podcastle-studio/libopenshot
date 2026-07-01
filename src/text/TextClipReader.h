@@ -123,6 +123,7 @@ private:
     std::shared_ptr<QImage> rendered_image;
     bool is_open;
     bool dirty;            ///< True when data changed and the plan / rendered_image is stale
+    bool has_tilt{false};  ///< True when transformation.tiltX/tiltY carry a static 3D tilt
 
     // ---- Animation state ------------------------------------------------------
     text::TextAnimations animations;

@@ -33,43 +33,33 @@
 
 #include <algorithm>
 #include <cmath>
-#include <vector>
 
 using namespace openshot;
 
 namespace {
-	// One separable box-blur pass over a single-channel float buffer (width x height,
-	// row-major). Edges are handled by clamping. Repeating this pass a few times in
-	// each direction approximates a Gaussian blur, which is what we want for a soft shadow.
-	void box_blur_pass(const std::vector<float>& in, std::vector<float>& out,
-	                   int width, int height, int radius, bool horizontal) {
-		const float norm = 1.0f / (2 * radius + 1);
-		if (horizontal) {
-			for (int y = 0; y < height; ++y) {
-				const int base = y * width;
-				float sum = 0.0f;
-				for (int i = -radius; i <= radius; ++i)
-					sum += in[base + std::min(std::max(i, 0), width - 1)];
-				for (int x = 0; x < width; ++x) {
-					out[base + x] = sum * norm;
-					const int add = std::min(x + radius + 1, width - 1);
-					const int rem = std::max(x - radius, 0);
-					sum += in[base + add] - in[base + rem];
-				}
-			}
-		} else {
-			for (int x = 0; x < width; ++x) {
-				float sum = 0.0f;
-				for (int i = -radius; i <= radius; ++i)
-					sum += in[std::min(std::max(i, 0), height - 1) * width + x];
-				for (int y = 0; y < height; ++y) {
-					out[y * width + x] = sum * norm;
-					const int add = std::min(y + radius + 1, height - 1);
-					const int rem = std::max(y - radius, 0);
-					sum += in[add * width + x] - in[rem * width + x];
-				}
-			}
-		}
+	// High-quality Gaussian blur over a cv::Mat, in place. The amount uses the same units
+	// as the image-processing-lib box blur (applyBlurEffect): a box-equivalent kernel size
+	// in pixels. A box of width w has variance (w^2 - 1)/12, so we build a Gaussian of the
+	// matching variance — same blur spread as that box size, but smooth instead of boxy.
+	void gaussian_blur(cv::Mat& image, int horizontal, int vertical) {
+		auto sigma_for_box = [](int box_size) -> double {
+			const double w = std::max(1, box_size);
+			return std::sqrt(std::max(0.0, (w * w - 1.0) / 12.0));
+		};
+		// Smallest odd kernel covering ~+/-3 sigma (1 = no blur along that axis).
+		auto kernel_for_sigma = [](double sigma) -> int {
+			if (sigma <= 0.0) return 1;
+			return std::max(1, static_cast<int>(std::ceil(sigma * 6.0)) | 1);
+		};
+
+		const double sigma_x = sigma_for_box(horizontal);
+		const double sigma_y = sigma_for_box(vertical);
+		if (sigma_x <= 0.0 && sigma_y <= 0.0)
+			return;
+
+		cv::GaussianBlur(image, image,
+		                 cv::Size(kernel_for_sigma(sigma_x), kernel_for_sigma(sigma_y)),
+		                 sigma_x, sigma_y);
 	}
 }
 
@@ -1452,11 +1442,13 @@ bool Clip::isNear(double a, double b)
 	return fabs(a - b) < 0.000001;
 }
 
-// Apply keyframes to the source frame (if any)
+// Build a blurred, tinted drop-shadow image from the source image's alpha silhouette
 std::shared_ptr<QImage> Clip::get_shadow_image(std::shared_ptr<QImage> source_image, int64_t frame_number, int& offset_x, int& offset_y) {
-	// Blur radius (in source-image pixels) and padding to give the blur room to spread
-	const int radius = std::max(0, (int) std::lround(shadow_blur.GetValue(frame_number)));
-	const int pad = radius * 3 + 1;
+	// Shadow blur amount, passed to the shared image-processing-lib Gaussian blur using the
+	// same units as the clip blur (box-equivalent kernel size in pixels). Pad the canvas so
+	// the Gaussian has room to spread past the silhouette edge (~3 sigma ≈ 0.87·amount).
+	const int blur_amount = std::max(0, (int) std::lround(shadow_blur.GetValue(frame_number)));
+	const int pad = blur_amount > 0 ? blur_amount + 1 : 0;
 
 	const int src_w = source_image->width();
 	const int src_h = source_image->height();
@@ -1464,24 +1456,19 @@ std::shared_ptr<QImage> Clip::get_shadow_image(std::shared_ptr<QImage> source_im
 	const int h = src_h + pad * 2;
 
 	// The shadow is a blurred silhouette of the source, so we only need the source's
-	// alpha channel. Copy it into a zero-padded float buffer.
-	std::vector<float> a(static_cast<size_t>(w) * h, 0.0f);
+	// alpha channel. Copy it into a zero-padded single-channel image.
+	cv::Mat alpha_mat(h, w, CV_8UC1, cv::Scalar(0));
 	QImage src = source_image->convertToFormat(QImage::Format_ARGB32);
 	for (int y = 0; y < src_h; ++y) {
 		const QRgb* row = reinterpret_cast<const QRgb*>(src.constScanLine(y));
-		float* dst = &a[static_cast<size_t>(y + pad) * w + pad];
+		uchar* dst = alpha_mat.ptr<uchar>(y + pad) + pad;
 		for (int x = 0; x < src_w; ++x)
 			dst[x] = qAlpha(row[x]);
 	}
 
-	// Blur the alpha channel (3 separable box passes ≈ Gaussian)
-	if (radius > 0) {
-		std::vector<float> tmp(static_cast<size_t>(w) * h, 0.0f);
-		for (int p = 0; p < 3; ++p) {
-			box_blur_pass(a, tmp, w, h, radius, true);
-			box_blur_pass(tmp, a, w, h, radius, false);
-		}
-	}
+	// Blur the alpha silhouette with a high-quality Gaussian (local helper)
+	if (blur_amount > 0)
+		gaussian_blur(alpha_mat, blur_amount, blur_amount);
 
 	// Tint the blurred silhouette with the shadow color. The color's alpha acts as an
 	// overall shadow-opacity multiplier on top of the source's (blurred) alpha.
@@ -1493,11 +1480,11 @@ std::shared_ptr<QImage> Clip::get_shadow_image(std::shared_ptr<QImage> source_im
 	auto shadow_image = std::make_shared<QImage>(w, h, QImage::Format_ARGB32);
 	for (int y = 0; y < h; ++y) {
 		QRgb* row = reinterpret_cast<QRgb*>(shadow_image->scanLine(y));
-		const float* asrc = &a[static_cast<size_t>(y) * w];
+		const uchar* asrc = alpha_mat.ptr<uchar>(y);
 		for (int x = 0; x < w; ++x) {
-			int alpha = (int) std::lround(asrc[x] * sa);
-			if (alpha < 0) alpha = 0; else if (alpha > 255) alpha = 255;
-			row[x] = qRgba(sr, sg, sb, alpha);
+			int a = (int) std::lround(asrc[x] * sa);
+			if (a < 0) a = 0; else if (a > 255) a = 255;
+			row[x] = qRgba(sr, sg, sb, a);
 		}
 	}
 
@@ -1530,7 +1517,7 @@ void Clip::apply_keyframes(std::shared_ptr<Frame> frame, QSize timeline_size) {
 		const int blur_radius = std::max(0, (int) std::lround(blur_amount.GetValue(frame->number)));
 		if (blur_radius > 0) {
 			auto imageCv = frame->GetImageCV();
-			Podcastle::Effects::applyBlurEffect(imageCv, blur_radius, blur_radius);
+			gaussian_blur(imageCv, blur_radius, blur_radius);
 			frame->SetImageCV(imageCv);
 			// Re-fetch the (now blurred) image, since SetImageCV replaces it
 			source_image = frame->GetImage();

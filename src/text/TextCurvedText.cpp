@@ -163,6 +163,34 @@ double curvedBlockMargin(const TextClipPaintStyle& style, const CurvedTextGeomet
     return std::ceil(std::max({shadowMargin, strokeMargin, glowMargin}) + (blurSigma + style.blur) * 3.0 + 4.0);
 }
 
+void CurvedTextPainter::drawCurvedShadowOnly(
+    const CurvedTextGeometry& geometry,
+    const TextClipPaintStyle& style,
+    double originX,
+    double originY)
+{
+    SkCanvas* canvas = renderer->getCanvas();
+    if (!canvas || !style.dropShadow.has_value()) return;
+
+    const auto& shadow = *style.dropShadow;
+    const double radians = shadow.angle * M_PI / 180.0;
+    const double dx = std::cos(radians) * shadow.distance;
+    const double dy = std::sin(radians) * shadow.distance;
+    const double shadowBlur = combineBlur(shadow.blur, style.blur) * SHADOW_BLUR_SIGMA_SCALE;
+    const std::optional<double> blurOpt = shadowBlur > 0.0 ? std::optional<double>(shadowBlur) : std::nullopt;
+
+    const SkPaint* shadowFill = renderer->getPaint(
+        subtitle::PaintProps{shadow.color, shadow.opacity, std::nullopt, blurOpt});
+    const SkPaint* shadowStroke = style.stroke.has_value()
+        ? renderer->getPaint(subtitle::PaintProps{shadow.color, shadow.opacity, style.stroke->width, blurOpt})
+        : nullptr;
+
+    canvas->save();
+    canvas->translate(static_cast<float>(dx), static_cast<float>(dy));
+    forEachCurvedGlyph(renderer, geometry, originX, originY, style, shadowStroke, *shadowFill);
+    canvas->restore();
+}
+
 void CurvedTextPainter::drawCurvedStatic(
     const CurvedTextGeometry& geometry,
     const TextClipLayout& layout,
@@ -170,7 +198,8 @@ void CurvedTextPainter::drawCurvedStatic(
     const std::optional<TextClipBackgroundStyle>& background,
     double originX,
     double originY,
-    bool skipGlow)
+    bool skipGlow,
+    bool skipShadow)
 {
     SkCanvas* canvas = renderer->getCanvas();
     if (!canvas) return;
@@ -179,36 +208,35 @@ void CurvedTextPainter::drawCurvedStatic(
         drawBackgroundRect(renderer, *background, originX, originY, geometry.width, geometry.height);
     }
 
-    if (style.dropShadow.has_value()) {
-        const auto& shadow = *style.dropShadow;
-        const double radians = shadow.angle * M_PI / 180.0;
-        const double dx = std::cos(radians) * shadow.distance;
-        const double dy = std::sin(radians) * shadow.distance;
-        const double shadowBlur = combineBlur(shadow.blur, style.blur) * SHADOW_BLUR_SIGMA_SCALE;
-        const std::optional<double> blurOpt = shadowBlur > 0.0 ? std::optional<double>(shadowBlur) : std::nullopt;
-
-        const SkPaint* shadowFill = renderer->getPaint(
-            subtitle::PaintProps{shadow.color, shadow.opacity, std::nullopt, blurOpt});
-        const SkPaint* shadowStroke = style.stroke.has_value()
-            ? renderer->getPaint(subtitle::PaintProps{shadow.color, shadow.opacity, style.stroke->width, blurOpt})
-            : nullptr;
-
-        canvas->save();
-        canvas->translate(static_cast<float>(dx), static_cast<float>(dy));
-        forEachCurvedGlyph(renderer, geometry, originX, originY, style, shadowStroke, *shadowFill);
-        canvas->restore();
+    if (!skipShadow) {
+        drawCurvedShadowOnly(geometry, style, originX, originY);
     }
 
     if (style.glow.has_value() && !skipGlow) {
         glowRenderer->drawGlowLayer(layout, style, *style.glow, originX, originY, &geometry);
     }
 
+    // Coverage-box for the per-glyph gradient layers: the content box padded so no glyph ink /
+    // stroke is clipped by the saveLayer bounds. The gradient endpoints still span the CONTENT
+    // box (via gradientFill), so the ramp maps in block space regardless of the arc transforms.
+    const double coverageMargin = curvedBlockMargin(style, geometry, 0.0);
+    const SkRect coverageBox = SkRect::MakeLTRB(
+        static_cast<float>(originX - coverageMargin), static_cast<float>(originY - coverageMargin),
+        static_cast<float>(originX + geometry.width + coverageMargin),
+        static_cast<float>(originY + geometry.height + coverageMargin));
+
     if (style.stroke.has_value()) {
         const double textBlur = calibratedTextBlur(style.blur);
         const std::optional<double> blurOpt = textBlur > 0.0 ? std::optional<double>(textBlur) : std::nullopt;
         const SkPaint* strokePaint = renderer->getPaint(
             subtitle::PaintProps{style.stroke->color, 1.0, style.stroke->width, blurOpt});
-        forEachCurvedGlyph(renderer, geometry, originX, originY, style, nullptr, *strokePaint);
+        auto drawStroke = [&] { forEachCurvedGlyph(renderer, geometry, originX, originY, style, nullptr, *strokePaint); };
+        if (style.stroke->gradient.has_value()) {
+            const PaintGradient g = gradientFill(*style.stroke->gradient, originX, originY, geometry.width, geometry.height);
+            withGradientCoverage(renderer, g, coverageBox, drawStroke);
+        } else {
+            drawStroke();
+        }
     }
 
     // Soften the topmost crisp text when glow is active (Layer 3).
@@ -217,7 +245,13 @@ void CurvedTextPainter::drawCurvedStatic(
     const std::optional<double> fillBlurOpt = fillBlur > 0.0 ? std::optional<double>(fillBlur) : std::nullopt;
     const SkPaint* fillPaint = renderer->getPaint(subtitle::PaintProps{
         style.color, style.glow.has_value() ? GLOW_CORE_TEXT_OPACITY : 1.0, std::nullopt, fillBlurOpt});
-    forEachCurvedGlyph(renderer, geometry, originX, originY, style, nullptr, *fillPaint);
+    auto drawFill = [&] { forEachCurvedGlyph(renderer, geometry, originX, originY, style, nullptr, *fillPaint); };
+    if (style.colorGradient.has_value()) {
+        const PaintGradient g = gradientFill(*style.colorGradient, originX, originY, geometry.width, geometry.height);
+        withGradientCoverage(renderer, g, coverageBox, drawFill);
+    } else {
+        drawFill();
+    }
 }
 
 } // namespace text

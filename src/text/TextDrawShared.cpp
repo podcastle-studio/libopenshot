@@ -1,12 +1,22 @@
 #include "TextDrawShared.h"
 
+#include <skia/include/core/SkBlendMode.h>
+#include <skia/include/core/SkCanvas.h>
 #include <skia/include/core/SkPaint.h>
 #include <skia/include/core/SkRRect.h>
 #include <skia/include/core/SkRect.h>
+#include <skia/include/core/SkShader.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <sstream>
+#include <utility>
+#include <vector>
+
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
 
 namespace openshot {
 namespace text {
@@ -78,6 +88,60 @@ void drawBackgroundRect(
         static_cast<float>(originY + contentHeight + background.paddingY));
     const SkRRect rrect = SkRRect::MakeRectXY(rect, static_cast<float>(radius), static_cast<float>(radius));
     renderer->drawRRect(rrect, *paint);
+}
+
+PaintGradient gradientFill(const TextClipGradient& gradient,
+                           double x, double y, double width, double height) {
+    const double angleRad = gradient.angle * M_PI / 180.0;
+    // Canvas y-axis points down: 0deg = bottom→top, 90deg = left→right.
+    const double dx = std::sin(angleRad);
+    const double dy = -std::cos(angleRad);
+    const double cx = x + width / 2.0;
+    const double cy = y + height / 2.0;
+    // Half-length = projection of the box onto the gradient direction, so the ramp spans the block.
+    const double half = (std::abs(width * dx) + std::abs(height * dy)) / 2.0;
+
+    PaintGradient out;
+    out.start = SkPoint::Make(static_cast<float>(cx - dx * half), static_cast<float>(cy - dy * half));
+    out.end   = SkPoint::Make(static_cast<float>(cx + dx * half), static_cast<float>(cy + dy * half));
+    out.stops = gradient.stops;
+    return out;
+}
+
+sk_sp<SkShader> makeGradientShader(subtitle::SkiaRenderer* renderer, const PaintGradient& gradient) {
+    std::vector<std::pair<std::string, double>> pairs;
+    pairs.reserve(gradient.stops.size());
+    for (const auto& s : gradient.stops) pairs.emplace_back(s.color, s.position);
+    const SkPoint pts[2] = {gradient.start, gradient.end};
+    return renderer->makeLinearGradientShader(pts, pairs);
+}
+
+void withGradientCoverage(
+    subtitle::SkiaRenderer* renderer,
+    const PaintGradient& gradient,
+    const SkRect& box,
+    const std::function<void()>& drawCoverage) {
+    SkCanvas* canvas = renderer->getCanvas();
+    if (!canvas) { drawCoverage(); return; }
+
+    sk_sp<SkShader> shader = makeGradientShader(renderer, gradient);
+    if (!shader) { drawCoverage(); return; }
+
+    // An empty box means "bound the layer by the current clip" — used by the char-animation path
+    // where animated glyphs can translate outside any tight content box. Otherwise the explicit
+    // box bounds both the layer and the SrcIn rect. Either way the gradient endpoints are in block
+    // space, so the ramp spans the block regardless of per-glyph transforms.
+    const bool useClip = box.isEmpty();
+    canvas->saveLayer(useClip ? nullptr : &box, nullptr);
+    drawCoverage();
+
+    SkPaint gradientPaint;
+    gradientPaint.setAntiAlias(true);
+    gradientPaint.setShader(shader);
+    gradientPaint.setBlendMode(SkBlendMode::kSrcIn);
+    canvas->drawRect(useClip ? canvas->getLocalClipBounds() : box, gradientPaint);
+
+    canvas->restore();
 }
 
 } // namespace text

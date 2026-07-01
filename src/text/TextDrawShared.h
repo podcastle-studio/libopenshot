@@ -12,11 +12,17 @@
 
 #include <skia/include/core/SkFont.h>
 #include <skia/include/core/SkPaint.h>
+#include <skia/include/core/SkPoint.h>
+#include <skia/include/core/SkRect.h>
+#include <skia/include/core/SkRefCnt.h>
+#include <skia/include/core/SkShader.h>
 #include <skia/include/core/SkSpan.h>
 
 #include <algorithm>
 #include <cmath>
+#include <functional>
 #include <string>
+#include <vector>
 
 namespace openshot {
 namespace text {
@@ -192,6 +198,40 @@ void drawBackgroundRect(
     double originY,
     double contentWidth,
     double contentHeight);
+
+// ---------------------------------------------------------------------------
+// Gradient fills (text-rendering gradient path)
+// ---------------------------------------------------------------------------
+
+// A gradient resolved to concrete shader endpoints (block space) + its stops. Produced by
+// gradientFill() from a TextClipGradient plus a content box.
+struct PaintGradient {
+    SkPoint start{0, 0};
+    SkPoint end{0, 0};
+    std::vector<TextClipGradient::Stop> stops;
+};
+
+// Resolve a CSS linear-gradient over a content box (x, y, width, height) into shader endpoints.
+// Uses standard CSS geometry: the gradient line passes through the box centre at `angle`, its
+// half-length is the box's projection onto that direction. Canvas y-axis points down, so the
+// progression direction is dx = sin(angle), dy = -cos(angle). The ramp spans the whole block.
+PaintGradient gradientFill(const TextClipGradient& gradient,
+                           double x, double y, double width, double height);
+
+// Build the Skia linear-gradient shader for a resolved PaintGradient (endpoints + stops), or null
+// if it has fewer than two stops. Used by the flat shader-paint path and by withGradientCoverage.
+sk_sp<SkShader> makeGradientShader(subtitle::SkiaRenderer* renderer, const PaintGradient& gradient);
+
+// Per-glyph gradient compositing: open an isolated layer over `box`, run `drawCoverage` (which
+// draws the glyphs in the opaque coverage colour under their own per-glyph transforms), then
+// paint the linear-gradient shader over the whole layer with SrcIn so the gradient shows only
+// where glyphs cover and is mapped in block space (the active CTM) — the ramp spans the whole
+// block regardless of the per-glyph transforms. Restores the layer at the end.
+void withGradientCoverage(
+    subtitle::SkiaRenderer* renderer,
+    const PaintGradient& gradient,
+    const SkRect& box,
+    const std::function<void()>& drawCoverage);
 
 } // namespace text
 } // namespace openshot

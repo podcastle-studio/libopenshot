@@ -199,6 +199,11 @@ struct TextClipAnimationFrame {
 
     // CHAR mode: resolve evaluated keyframes for a character by its draw index.
     std::function<ResolvedAnimProps(int)> getCharProps;
+
+    // Static 3D tilt {rotateX, rotateY} (degrees) applied to the whole block. In WORD mode the
+    // tilt is folded into `props`; in CHAR mode there is no block-level transform, so it is
+    // carried here and the char-animated glyphs are baked flat then tilted as one unit.
+    std::optional<std::pair<double, double>> static3D;
 };
 
 std::optional<TextClipAnimationFrame> buildAnimationFrame(

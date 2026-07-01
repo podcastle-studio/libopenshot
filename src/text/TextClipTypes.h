@@ -19,6 +19,26 @@ constexpr double LAYOUT_REFERENCE_SIZE = 10.0;
 enum class TextAlignment { LEFT, CENTER, RIGHT };
 enum class TextTransform { NONE, UPPERCASE, LOWERCASE, CAPITALIZE };
 
+// Default CSS linear-gradient angle when none is specified in the string (0 = bottom→top,
+// 90 = left→right). Matches the frontend DEFAULT_GRADIENT_ANGLE.
+constexpr double DEFAULT_GRADIENT_ANGLE = 90.0;
+
+// Static 3D tilt maps onto the animation transform's rotateX/rotateY/perspective. This fixed
+// perspective (× fontSize) makes the same tilt read consistently at every font size. Mirrors
+// the frontend STATIC_ROTATION_PERSPECTIVE.
+constexpr double STATIC_ROTATION_PERSPECTIVE = 16.0;
+
+// A parsed CSS linear-gradient: an angle (degrees) plus colour stops. Attached to a paint style
+// (fill) or stroke style when the corresponding CSS colour is a linear-gradient, else absent.
+struct TextClipGradient {
+    struct Stop {
+        std::string color;      // raw CSS colour string (consumed by parseColorString)
+        double position = 0.0;  // normalised 0..1
+    };
+    double angle = DEFAULT_GRADIENT_ANGLE;  // 0 = bottom→top, 90 = left→right
+    std::vector<Stop> stops;
+};
+
 struct TextClipStyle {
     std::string fontFamily;                          // font family name OR explicit path
     bool italic = false;
@@ -71,6 +91,11 @@ struct TextTransformation {
     // This composition makes the wrap box invariant under both canvas resize and `size` change.
     // 0 = no wrapping (single line). See BACKEND_PATCH_MAX_WIDTH_SIZE_RELATIVE.md.
     double maxWidth = 0.0;
+    // Static 3D tilt of the whole block about its own centre, each in the range −90…90°.
+    // Expressed through the animation transform system (rotateX/rotateY + STATIC_ROTATION_PERSPECTIVE).
+    // 0/0 = no tilt.
+    double tiltX = 0.0;                               // vertical tilt (maps to rotateX)
+    double tiltY = 0.0;                               // horizontal tilt (maps to rotateY)
 };
 
 struct TextClipData {
@@ -86,6 +111,8 @@ struct TextClipData {
 struct TextClipStrokeStyle {
     std::string color;
     double width = 0.0;
+    // Set when the stroke colour is a CSS linear-gradient; else nullopt (solid stroke).
+    std::optional<TextClipGradient> gradient;
 };
 
 struct TextClipShadowStyle {
@@ -110,6 +137,9 @@ struct TextClipPaintStyle {
     int fontWeight = 400;
     bool italic = false;
     std::string color;
+    // Set when the fill colour (style.color) is a CSS linear-gradient; else nullopt (solid fill).
+    // When set, `color` holds only the opaque coverage colour (the first stop, alpha stripped).
+    std::optional<TextClipGradient> colorGradient;
     double letterSpacing = 0.0;
     double lineHeight = 0.0;
     TextAlignment alignment = TextAlignment::CENTER;

@@ -3,6 +3,8 @@
 #include <skia/include/core/SkCanvas.h>
 #include <skia/include/core/SkFont.h>
 #include <skia/include/core/SkPaint.h>
+#include <skia/include/core/SkPoint.h>
+#include <skia/include/core/SkShader.h>
 #include <skia/include/core/SkTypeface.h>
 #include <skia/include/core/SkFontMgr.h>
 #include <skia/include/core/SkRRect.h>
@@ -11,6 +13,8 @@
 #include <memory>
 #include <string>
 #include <sstream>
+#include <utility>
+#include <vector>
 
 namespace openshot {
 namespace subtitle {
@@ -58,6 +62,13 @@ public:
     SkFont getFontForCharacter(const FontProps& fontProps, const SkUnichar character);
 
     SkPaint* getPaint(const PaintProps& paintProps);
+
+    // Build a linear-gradient shader between two points. `stops` are (CSS colour, position 0..1)
+    // pairs, parsed with the same parseColorString used everywhere else (so the platform BGR
+    // swap stays consistent). Returns null if fewer than two stops. Clamps at both ends.
+    sk_sp<SkShader> makeLinearGradientShader(
+        const SkPoint pts[2],
+        const std::vector<std::pair<std::string, double>>& stops);
 
     // Skia-specific helpers
     static SkRect makeRect(const float left, const float top, const float right, const float bottom) {

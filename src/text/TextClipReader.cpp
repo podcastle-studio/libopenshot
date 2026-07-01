@@ -153,6 +153,8 @@ void transformationFromJson(const Json::Value& j, text::TextTransformation& t) {
     if (!j["size"].isNull())     t.size = j["size"].asDouble();
     if (!j["rotation"].isNull()) t.rotation = j["rotation"].asDouble();
     if (!j["maxWidth"].isNull()) t.maxWidth = j["maxWidth"].asDouble();
+    if (!j["tiltX"].isNull())    t.tiltX = j["tiltX"].asDouble();
+    if (!j["tiltY"].isNull())    t.tiltY = j["tiltY"].asDouble();
     if (j["position"].isObject()) {
         if (!j["position"]["x"].isNull()) t.positionX = j["position"]["x"].asDouble();
         if (!j["position"]["y"].isNull()) t.positionY = j["position"]["y"].asDouble();
@@ -164,6 +166,8 @@ Json::Value transformationToJson(const text::TextTransformation& t) {
     j["size"] = t.size;
     j["rotation"] = t.rotation;
     j["maxWidth"] = t.maxWidth;
+    j["tiltX"] = t.tiltX;
+    j["tiltY"] = t.tiltY;
     Json::Value pos(Json::objectValue);
     pos["x"] = t.positionX;
     pos["y"] = t.positionY;
@@ -255,10 +259,12 @@ void TextClipReader::buildPlan() {
         frame_center_project_x = data.transformation.positionX;
         frame_center_project_y = data.transformation.positionY;
         has_animation = false;
+        has_tilt = false;
         timeline.reset();
         return;
     }
     plan_empty = false;
+    has_tilt = data.transformation.tiltX != 0.0 || data.transformation.tiltY != 0.0;
 
     // 1. Compute paint + background + layout (using only a measuring SkiaRenderer).
     const text::TextClipPaintStyle paint =
@@ -339,14 +345,29 @@ void TextClipReader::buildPlan() {
 
     // Pre-rotation frame: bounding rect centred, with symmetric padding around it. For animated
     // text, expand to the animation's reach across the whole timeline so glyphs never clip.
-    double preW = boundingWidth  + 2.0 * pad;
-    double preH = boundingHeight + 2.0 * pad;
+    double halfW = boundingWidth  / 2.0;
+    double halfH = boundingHeight / 2.0;
     if (has_animation) {
         const text::AnimatedExtent extent = text::computeAnimatedExtent(
             layout, paint, boundingWidth, boundingHeight, *timeline, presets, anim_char_count);
-        preW = 2.0 * extent.halfWidth + 2.0 * pad;
-        preH = 2.0 * extent.halfHeight + 2.0 * pad;
+        halfW = extent.halfWidth;
+        halfH = extent.halfHeight;
     }
+    // Static 3D tilt projects the (already animation-expanded) block; map its AABB through the tilt
+    // matrix so the perspective-foreshortened corners are never clipped.
+    if (has_tilt) {
+        const text::TextClipAnimationFrame f =
+            text::buildStatic3DFrame(data.transformation.tiltX, data.transformation.tiltY);
+        const SkMatrix m = text::animationMatrix(f.props, paint.fontSize, 2.0 * halfW, 2.0 * halfH, f.flags);
+        const SkRect box = SkRect::MakeLTRB(static_cast<float>(-halfW), static_cast<float>(-halfH),
+                                            static_cast<float>(halfW), static_cast<float>(halfH));
+        SkRect mapped;
+        m.mapRect(&mapped, box);
+        halfW = std::max({std::abs(static_cast<double>(mapped.fLeft)), std::abs(static_cast<double>(mapped.fRight)), halfW});
+        halfH = std::max({std::abs(static_cast<double>(mapped.fTop)), std::abs(static_cast<double>(mapped.fBottom)), halfH});
+    }
+    double preW = 2.0 * halfW + 2.0 * pad;
+    double preH = 2.0 * halfH + 2.0 * pad;
 
     // 5. Rotation AABB — the smallest axis-aligned rect containing the rotated preW×preH.
     double aabbW = preW;
@@ -408,7 +429,13 @@ std::shared_ptr<QImage> TextClipReader::renderToQImage(
 }
 
 void TextClipReader::renderToImage() {
-    rendered_image = renderToQImage(std::nullopt);
+    // A resting frame carrying only the static 3D tilt (if any) — constant across frames, so the
+    // single-image cache still holds. Without tilt this is a plain static render (std::nullopt).
+    std::optional<text::TextClipAnimationFrame> frame;
+    if (has_tilt) {
+        frame = text::buildStatic3DFrame(data.transformation.tiltX, data.transformation.tiltY);
+    }
+    rendered_image = renderToQImage(frame);
 }
 
 // ---------------------------------------------------------------------------
@@ -442,6 +469,15 @@ std::shared_ptr<Frame> TextClipReader::GetFrame(int64_t requested_frame) {
             }
         }
         if (animFrame.has_value()) {
+            // Fold a static 3D tilt into the active animation frame: word frames add it to their
+            // props; char frames carry it separately (baked flat then tilted as one unit).
+            if (has_tilt) {
+                if (animFrame->mode == text::AnimationMode::WORD) {
+                    text::composeStatic3DIntoWordFrame(*animFrame, data.transformation.tiltX, data.transformation.tiltY);
+                } else if (animFrame->mode == text::AnimationMode::CHAR) {
+                    animFrame->static3D = std::make_pair(data.transformation.tiltX, data.transformation.tiltY);
+                }
+            }
             // Active animation frame — render fresh.
             image = renderToQImage(animFrame);
         } else {

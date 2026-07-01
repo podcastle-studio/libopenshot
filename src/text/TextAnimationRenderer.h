@@ -93,10 +93,14 @@ struct WordAnimationContent {
     double contentHeight = 0.0;
     std::function<double(double blurSigma)> margin;
     // Paint the block (background + glyphs) with its glyph-box top-left at (originX, originY).
-    // skipGlow omits the glow layer (composited-texture path draws the glow live instead).
-    std::function<void(double originX, double originY, bool skipGlow)> draw;
+    // skipGlow omits the glow layer (composited-texture path draws the glow live instead);
+    // skipShadow omits the drop shadow (3D path draws it live so the warp doesn't foreshorten it).
+    std::function<void(double originX, double originY, bool skipGlow, bool skipShadow)> draw;
     // Paint just the glow layer with the glyph-box top-left at (originX, originY).
     std::function<void(double originX, double originY, double opacityMul)> drawGlow;
+    // Paint just the drop-shadow layer at (originX, originY). Optional (unset = shadow stays baked
+    // into the texture). When set, the 3D path draws the shadow live under the transform.
+    std::function<void(double originX, double originY)> drawShadow;
 };
 
 class WordAnimationRenderer {
@@ -126,25 +130,49 @@ public:
     CharAnimationRenderer(subtitle::SkiaRenderer* renderer, TextGlowRenderer* glowRenderer)
         : renderer(renderer), glowRenderer(glowRenderer) {}
 
+    // `skipGlow` omits the glow layer (used when compositing into an offscreen texture for the
+    // char-mode + 3D-tilt path, where the glow is drawn live afterwards under the same transform).
     void renderCharAnimated(
         const TextClipLayout& layout, const TextClipPaintStyle& style,
         const std::optional<TextClipBackgroundStyle>& background,
-        double originX, double originY, const TextClipAnimationFrame& animation);
+        double originX, double originY, const TextClipAnimationFrame& animation, bool skipGlow = false);
 
     void renderCurvedCharAnimated(
         const CurvedTextGeometry& geometry, const TextClipLine& line, const TextClipPaintStyle& style,
         const std::optional<TextClipBackgroundStyle>& background,
+        double originX, double originY, const TextClipAnimationFrame& animation, bool skipGlow = false);
+
+    // Draw ONLY the glow layer of the char animation (no fills / strokes / shadows). No-op when the
+    // style has no glow. Used by the char-mode + 3D path to draw the glow live over the tilted block.
+    void drawCharAnimatedGlowOnly(
+        const TextClipLayout& layout, const TextClipPaintStyle& style,
+        double originX, double originY, const TextClipAnimationFrame& animation);
+
+    void drawCurvedCharAnimatedGlowOnly(
+        const CurvedTextGeometry& geometry, const TextClipLine& line, const TextClipPaintStyle& style,
         double originX, double originY, const TextClipAnimationFrame& animation);
 
 private:
     void drawAnimatedCharItems(
         std::vector<AnimatedCharItem>& items, const TextClipPaintStyle& style,
         const AnimationTransformFlags& flags,
-        double contentWidth, double contentHeight, double originX, double originY);
+        double contentWidth, double contentHeight, double originX, double originY, bool skipGlow = false);
 
     subtitle::SkiaRenderer* renderer;
     TextGlowRenderer* glowRenderer;
 };
+
+// ── Static 3D tilt ─────────────────────────────────────────────────────────
+
+// Build a resting WORD-mode frame that carries only a static 3D tilt (rotateX = tiltX,
+// rotateY = tiltY, perspective = STATIC_ROTATION_PERSPECTIVE). Flows through the same
+// texture+3D word path used by 3D animation presets.
+TextClipAnimationFrame buildStatic3DFrame(double tiltX, double tiltY);
+
+// Fold a static tilt into an existing WORD-mode animation frame: ADD the static angles onto
+// whatever the preset animates, and supply STATIC_ROTATION_PERSPECTIVE only if the preset does
+// not animate its own perspective (so flat presets still read as 3D under the tilt).
+void composeStatic3DIntoWordFrame(TextClipAnimationFrame& frame, double tiltX, double tiltY);
 
 // ── Top-level per-frame dispatch ─────────────────────────────────────────────
 

@@ -360,7 +360,7 @@ namespace openshot {
 		// Drop shadow curves (only used when Shadow() is enabled). The shadow is offset from
 		// the clip by `shadow_distance` pixels along `shadow_angle` (degrees, measured
 		// clockwise from the positive X axis with +Y pointing down: 0=right, 90=down).
-		openshot::Keyframe shadow_blur; ///< Curve representing the shadow's blur radius in pixels (0 = sharp)
+		openshot::Keyframe shadow_blur; ///< Curve representing the shadow's blur (box-blur kernel size in pixels, same units as blur_amount; 0 = sharp)
 		openshot::Keyframe shadow_distance; ///< Curve representing the shadow's offset distance in pixels
 		openshot::Keyframe shadow_angle; ///< Curve representing the shadow's offset direction in degrees
 		openshot::Color shadow_color; ///< Color of the drop shadow (alpha channel controls shadow opacity)
