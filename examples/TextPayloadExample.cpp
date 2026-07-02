@@ -30,7 +30,7 @@ namespace {
 // Build a positioned text Clip. Mirrors video-rendering-service addTextClip: the reader is placed
 // at canvas centre (position/rotation zeroed) while keeping size + tiltX/tiltY; the Clip carries
 // the on-canvas position via its location curve.
-Clip* makeTextClip(int canvasW,
+Clip* makeTextClip(int canvasW, int canvasH,
                    const std::string& fontPath,
                    const std::string& value,
                    text::TextClipStyle style,
@@ -46,7 +46,7 @@ Clip* makeTextClip(int canvasW,
     data.transformation.positionY = 0.0;
     data.transformation.rotation  = 0.0;   // 2D rotation would move to the Clip; tiltX/Y stay.
 
-    auto* reader = new TextClipReader(canvasW, data);
+    auto* reader = new TextClipReader(canvasW, canvasH, data);
     auto* clip = new Clip(reader);
     clip->Position(0.0);
     clip->Start(0.0);
@@ -59,7 +59,7 @@ Clip* makeTextClip(int canvasW,
 }
 
 // ── Payload 2 (gradient fill + gradient STROKE + shadow + 3D tilt) ──────────
-void buildPayload2(Timeline& timeline, int W, const std::string& fontsDir) {
+void buildPayload2(Timeline& timeline, int W, int H, const std::string& fontsDir) {
     // Clip A: gold→red gradient fill, 3-stop horizontal gradient stroke, yellow drop shadow,
     // static 3D tilt.
     {
@@ -83,7 +83,7 @@ void buildPayload2(Timeline& timeline, int W, const std::string& fontsDir) {
         t.tiltX = 38;
         t.tiltY = 50;
 
-        timeline.AddClip(makeTextClip(W, fontsDir + "poppins-900.woff",
+        timeline.AddClip(makeTextClip(W, H,fontsDir + "poppins-900.woff",
                                       "THIS\nCONVERTS", s, t,
                                       0.46458333333333335, 0.3824074074074074));
     }
@@ -102,14 +102,14 @@ void buildPayload2(Timeline& timeline, int W, const std::string& fontsDir) {
         t.size = 2.41980670942495;
         t.maxWidth = 12.036;
 
-        timeline.AddClip(makeTextClip(W, fontsDir + "roboto-400.woff",
+        timeline.AddClip(makeTextClip(W, H,fontsDir + "roboto-400.woff",
                                       "B2B GROWTH", s, t,
                                       0.44531249999999994, 0.8105186616865886));
     }
 }
 
 // ── Payload 3 (payload 2 + a text blurRatio on the tilted clip) ─────────────
-void buildPayload3(Timeline& timeline, int W, const std::string& fontsDir) {
+void buildPayload3(Timeline& timeline, int W, int H, const std::string& fontsDir) {
     {
         text::TextClipStyle s;
         s.textAlign = text::TextAlignment::CENTER;
@@ -132,7 +132,7 @@ void buildPayload3(Timeline& timeline, int W, const std::string& fontsDir) {
         t.tiltX = 38;
         t.tiltY = 50;
 
-        timeline.AddClip(makeTextClip(W, fontsDir + "poppins-900.woff",
+        timeline.AddClip(makeTextClip(W, H,fontsDir + "poppins-900.woff",
                                       "THIS\nCONVERTS", s, t,
                                       0.5010416666666667, 0.262037037037037));
     }
@@ -149,14 +149,14 @@ void buildPayload3(Timeline& timeline, int W, const std::string& fontsDir) {
         t.size = 2.41980670942495;
         t.maxWidth = 12.036;
 
-        timeline.AddClip(makeTextClip(W, fontsDir + "roboto-400.woff",
+        timeline.AddClip(makeTextClip(W, H,fontsDir + "roboto-400.woff",
                                       "B2B GROWTH", s, t,
                                       0.44531249999999994, 0.8105186616865886));
     }
 }
 
 // ── Payload 4 (payload 3 flat: gradient fill + stroke + shadow + blur, NO tilt) ─
-void buildPayload4(Timeline& timeline, int W, const std::string& fontsDir) {
+void buildPayload4(Timeline& timeline, int W, int H, const std::string& fontsDir) {
     {
         text::TextClipStyle s;
         s.textAlign = text::TextAlignment::CENTER;
@@ -179,7 +179,7 @@ void buildPayload4(Timeline& timeline, int W, const std::string& fontsDir) {
         t.tiltX = 0;
         t.tiltY = 0;
 
-        timeline.AddClip(makeTextClip(W, fontsDir + "poppins-900.woff",
+        timeline.AddClip(makeTextClip(W, H,fontsDir + "poppins-900.woff",
                                       "THIS\nCONVERTS", s, t,
                                       0.5010416666666667, 0.262037037037037));
     }
@@ -196,9 +196,69 @@ void buildPayload4(Timeline& timeline, int W, const std::string& fontsDir) {
         t.size = 2.41980670942495;
         t.maxWidth = 12.036;
 
-        timeline.AddClip(makeTextClip(W, fontsDir + "roboto-400.woff",
+        timeline.AddClip(makeTextClip(W, H,fontsDir + "roboto-400.woff",
                                       "B2B GROWTH", s, t,
                                       0.44531249999999994, 0.8105186616865886));
+    }
+}
+
+// ── Payload 5 (real video-rendering-service export: portrait, two TEXT tracks) ──
+// From an exportId a2ba2448 project (settings 2160x3840). Reproduces addTextClip preprocessing:
+// project_width = settings.width (the portrait W passed in), size/maxWidth passed through, position
+// carried by the Clip (GRAVITY_CENTER, location = pos-0.5 for CENTER text), fontId -> local woff.
+// The headline's in/out char animations (Zoom Shake / Fly Away) are OMITTED: we render the resting
+// frame, and wrapping/layout (the thing under test across resolutions) is animation-independent.
+void buildPayload5(Timeline& timeline, int W, int H, const std::string& /*fontsDir*/) {
+    const std::string kRoboto =
+        "/tmp/claude-1000/-home-seno-Desktop-projects-libopenshot/2eab89e1-cae0-4bfa-825b-15d9e5e1ac19/scratchpad/fonts/roboto-400.woff";
+    const std::string kPlayfair =
+        "/tmp/claude-1000/-home-seno-Desktop-projects-libopenshot/2eab89e1-cae0-4bfa-825b-15d9e5e1ac19/scratchpad/fonts/playfair-400-italic.woff";
+
+    // Track zindex 1 (below): big italic Playfair headline with 3D tilt.
+    {
+        text::TextClipStyle s;
+        s.italic = true;
+        s.textAlign = text::TextAlignment::CENTER;
+        s.textTransform = text::TextTransform::NONE;
+        s.color = "#f0ead8";
+        s.lineHeight = 0.8;
+        s.letterSpacing = -0.02;
+        s.fontWeight = 900;
+
+        text::TextTransformation t;
+        t.size = 26.285062962373054;
+        t.maxWidth = 6.940993244171142;
+        t.tiltX = -40;
+        t.tiltY = 18;
+
+        Clip* c = makeTextClip(W, H,kPlayfair, "TO DO\nGREAT WORK", s, t,
+                               0.4027777777777778, 0.0765625);
+        c->Layer(1);
+        timeline.AddClip(c);
+    }
+
+    // Track zindex 2 (on top): small uppercase Roboto label with a faint background.
+    {
+        text::TextClipStyle s;
+        s.textAlign = text::TextAlignment::CENTER;
+        s.textTransform = text::TextTransform::UPPERCASE;
+        s.color = "#4a4038";
+        s.lineHeight = 1.2;
+        s.letterSpacing = 0.5;
+        s.fontWeight = 400;
+        s.backgroundColor = "rgba(0, 0, 0, 0.01)";
+        s.backgroundRadiusRatio = 0.3;
+        s.backgroundPaddingXRatio = 0.1;
+        s.backgroundPaddingYRatio = 1.0;
+
+        text::TextTransformation t;
+        t.size = 2.7574316377769614;
+        t.maxWidth = 26.97;
+
+        Clip* c = makeTextClip(W, H,kRoboto, "IS TO LOVE WHAT YOU DO", s, t,
+                               0.4796296296296295, 0.2948591540510747);
+        c->Layer(2);
+        timeline.AddClip(c);
     }
 }
 
@@ -210,11 +270,13 @@ int main(int argc, char** argv) {
     const std::string which = argc > 1 ? argv[1] : "1";
     const std::string res   = argc > 2 ? argv[2] : "720";
 
-    // Resolution presets (all 16:9, so the fractional payload layout is identical).
+    // Resolution presets. Payloads 1-4 are 16:9 landscape; payload 5 is a 9:16 portrait project
+    // (settings 2160x3840), so HD/FHD/4K there mean 720x1280 / 1080x1920 / 2160x3840.
     int W = 1280, H = 720;
-    if (res == "1080" || res == "fhd" || res == "fullhd") { W = 1920; H = 1080; }
-    else if (res == "4k" || res == "2160")                { W = 3840; H = 2160; }
-    else                                                  { W = 1280; H = 720;  }
+    const bool portrait = (which == "5");
+    if (res == "1080" || res == "fhd" || res == "fullhd") { W = portrait ? 1080 : 1920; H = portrait ? 1920 : 1080; }
+    else if (res == "4k" || res == "2160")                { W = portrait ? 2160 : 3840; H = portrait ? 3840 : 2160; }
+    else                                                  { W = portrait ? 720  : 1280; H = portrait ? 1280 : 720;  }
 
     const std::string suffix = (which == "1") ? "" : which;
     const std::string base    = "text-payload" + suffix + "-" + res;
@@ -225,12 +287,14 @@ int main(int argc, char** argv) {
     timeline.color = Color(std::string("#222326"));   // payload background (solid COLOR)
     timeline.Open();
 
-    if (which == "4") {
-        buildPayload4(timeline, W, fontsDir);
+    if (which == "5") {
+        buildPayload5(timeline, W, H, fontsDir);
+    } else if (which == "4") {
+        buildPayload4(timeline, W, H, fontsDir);
     } else if (which == "3") {
-        buildPayload3(timeline, W, fontsDir);
+        buildPayload3(timeline, W, H, fontsDir);
     } else if (which == "2") {
-        buildPayload2(timeline, W, fontsDir);
+        buildPayload2(timeline, W, H, fontsDir);
     } else {
 
     // ── Clip 1: gradient fill + static 3D tilt ──────────────────────────────
@@ -249,7 +313,7 @@ int main(int argc, char** argv) {
         t.tiltX = 38;
         t.tiltY = 50;
 
-        timeline.AddClip(makeTextClip(W, fontsDir + "poppins-900.woff",
+        timeline.AddClip(makeTextClip(W, H,fontsDir + "poppins-900.woff",
                                       "THIS\nCONVERTS", s, t,
                                       0.4322916666666667, 0.6703703703703704));
     }
@@ -271,7 +335,7 @@ int main(int argc, char** argv) {
         t.size = 3.0778597006824575;
         t.maxWidth = 6.680701754385964;
 
-        timeline.AddClip(makeTextClip(W, fontsDir + "ibmplexmono-400.woff",
+        timeline.AddClip(makeTextClip(W, H,fontsDir + "ibmplexmono-400.woff",
                                       "\xE2\x94\x81\xE2\x94\x81\xE2\x94\x81\xE2\x94\x81\xE2\x94\x81\xE2\x94\x81\xE2\x94\x81",
                                       s, t, 0.4322916666666667, 0.768320641777177));
     }
@@ -290,7 +354,7 @@ int main(int argc, char** argv) {
         t.size = 2.59188185320628;
         t.maxWidth = 12.036;
 
-        timeline.AddClip(makeTextClip(W, fontsDir + "roboto-400.woff",
+        timeline.AddClip(makeTextClip(W, H,fontsDir + "roboto-400.woff",
                                       "B2B GROWTH", s, t,
                                       0.4322916666666667, 0.7822089979841851));
     }

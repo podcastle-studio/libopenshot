@@ -8,11 +8,14 @@
 
 #include <skia/include/core/SkCanvas.h>
 #include <skia/include/core/SkFont.h>
+#include <skia/include/core/SkImageInfo.h>
 #include <skia/include/core/SkPaint.h>
 #include <skia/include/core/SkRRect.h>
 #include <skia/include/core/SkRect.h>
+#include <skia/include/core/SkSamplingOptions.h>
 #include <skia/include/core/SkShader.h>
 #include <skia/include/core/SkSpan.h>
+#include <skia/include/core/SkSurface.h>
 
 #include <algorithm>
 #include <cctype>
@@ -681,9 +684,11 @@ TextClipLayout layoutTextAtReferenceSize(
     double userMaxWidth,
     subtitle::SkiaRenderer* renderer)
 {
-    // paint.fontSize / layoutPaint.fontSize == transformation.size / LAYOUT_REFERENCE_SIZE,
-    // since both paints come from the same convertTextStyleToPaintStyle call with the same
-    // projectWidth and only differ in transformation.size.
+    // sizeScale maps the reference layout (measured at layoutPaint's fixed size AND fixed Full HD
+    // project width) up to the real render size. Because layoutPaint uses the fixed reference
+    // project width while wrapWidth is computed at the real project_width, dividing wrapWidth by
+    // sizeScale cancels the real project_width out: refWrapWidth reduces to a resolution-independent
+    // LAYOUT_REFERENCE_SIZE-scaled width, so the wrap is measured identically at every resolution.
     const double sizeScale = layoutPaint.fontSize > 0.0
         ? paint.fontSize / layoutPaint.fontSize
         : 1.0;
@@ -783,16 +788,16 @@ void drawShadowLine(
     double x,
     double baselineY,
     subtitle::SkiaRenderer* renderer,
-    double extraLetterSpacing = 0.0)
+    double extraLetterSpacing,
+    double shadowBlur)
 {
     const double radians = shadow.angle * M_PI / 180.0;
     const double dx = std::cos(radians) * shadow.distance;
     const double dy = std::sin(radians) * shadow.distance;
 
-    // The text blur compounds with the shadow's own blur (combineBlur), then the backend
-    // CPU-vs-GPU calibration is applied. With style.blur == 0 this reduces to the legacy
-    // shadow.blur * SHADOW_BLUR_SIGMA_SCALE, so existing static output is unchanged.
-    const double shadowBlur = combineBlur(shadow.blur, style.blur) * SHADOW_BLUR_SIGMA_SCALE;
+    // `shadowBlur` is the already-combined, already-calibrated mask sigma (device px) chosen by the
+    // caller — the direct path passes the full sigma; the downscale path passes the reduced offscreen
+    // sigma (see renderShadowLayer). Kept as a parameter so both share one glyph-drawing routine.
     const std::optional<double> blur = shadowBlur > 0.0 ? std::optional<double>(shadowBlur) : std::nullopt;
 
     // Stroke-expanded shadow pass: trace the stroked outer edge so the blur halo matches the
@@ -819,14 +824,63 @@ void renderShadowLayer(
     double extraLetterSpacing)
 {
     if (!paint.dropShadow.has_value()) return;
-    const double firstBaselineY = originY + layout.firstLineAscent;
-    for (size_t li = 0; li < layout.lines.size(); ++li) {
-        const auto& line = layout.lines[li];
-        if (line.text.empty()) continue;
-        const double lineX = originX + getLineStartX(line, layout, paint.alignment, extraLetterSpacing);
-        drawShadowLine(line, paint, *paint.dropShadow, paint.stroke, lineX,
-                       firstBaselineY + static_cast<double>(li) * layout.lineHeight, renderer, extraLetterSpacing);
+    const TextClipShadowStyle& shadow = *paint.dropShadow;
+
+    // Combined text+shadow blur, calibrated (see TextDrawShared.h). This is the true device-space
+    // sigma we want to reproduce at any resolution.
+    const double shadowBlur = combineBlur(shadow.blur, paint.blur) * SHADOW_BLUR_SIGMA_SCALE;
+
+    // Draw every non-empty line's shadow at content-box origin (ox, oy) with mask sigma `blurSigma`.
+    auto drawLines = [&](double ox, double oy, double blurSigma) {
+        const double firstBaselineY = oy + layout.firstLineAscent;
+        for (size_t li = 0; li < layout.lines.size(); ++li) {
+            const auto& line = layout.lines[li];
+            if (line.text.empty()) continue;
+            const double lineX = ox + getLineStartX(line, layout, paint.alignment, extraLetterSpacing);
+            drawShadowLine(line, paint, shadow, paint.stroke, lineX,
+                           firstBaselineY + static_cast<double>(li) * layout.lineHeight,
+                           renderer, extraLetterSpacing, blurSigma);
+        }
+    };
+
+    // Fast path: sigma within Skia's CPU mask-blur capacity -> draw directly onto the canvas. Byte-
+    // for-byte identical to the previous behaviour for every case that didn't hit the clamp (e.g.
+    // 720p / 1080p), so nothing changes there.
+    if (shadowBlur <= MAX_CPU_MASK_BLUR_SIGMA) {
+        drawLines(originX, originY, shadowBlur);
+        return;
     }
+
+    // Large-sigma path (mirrors the front-end GPU GaussianBlur). Skia's CPU mask blur hard-clamps
+    // sigma at 128 px, so at high resolutions a big shadow (sigma > 128) renders too tight. Instead,
+    // render the shadow into a downscaled offscreen, blur there with a sigma under the cap, then
+    // upscale — which reconstructs the true Gaussian at the full sigma and matches CanvasKit.
+    const double s = MAX_CPU_MASK_BLUR_SIGMA / shadowBlur;   // downscale factor (< 1)
+    const double radians = shadow.angle * M_PI / 180.0;
+    const double offsetReach = std::max(std::abs(std::cos(radians)), std::abs(std::sin(radians))) * shadow.distance;
+    const double margin = std::ceil(3.0 * shadowBlur + offsetReach + 4.0);   // gaussian reach + offset
+    const double blockW = layout.layoutWidth + 2.0 * margin;
+    const double blockH = layout.textHeight  + 2.0 * margin;
+    const int sw = std::max(2, static_cast<int>(std::ceil(blockW * s)));
+    const int sh = std::max(2, static_cast<int>(std::ceil(blockH * s)));
+
+    sk_sp<SkSurface> surface = SkSurfaces::Raster(SkImageInfo::MakeN32Premul(sw, sh));
+    if (!surface) { drawLines(originX, originY, shadowBlur); return; }   // fallback: clamped, but drawn
+    SkCanvas* offscreen = surface->getCanvas();
+    offscreen->clear(SK_ColorTRANSPARENT);
+    offscreen->scale(static_cast<float>(s), static_cast<float>(s));   // draw full-coord glyphs downscaled
+    renderer->renderToCanvas(offscreen, [&] {
+        drawLines(margin, margin, shadowBlur * s);   // offscreen sigma == MAX_CPU_MASK_BLUR_SIGMA, under cap
+    });
+    sk_sp<SkImage> image = surface->makeImageSnapshot();
+    if (!image) return;
+
+    SkCanvas* canvas = renderer->getCanvas();
+    canvas->save();
+    canvas->translate(static_cast<float>(originX - margin), static_cast<float>(originY - margin));
+    canvas->scale(static_cast<float>(1.0 / s), static_cast<float>(1.0 / s));
+    canvas->drawImage(image.get(), 0, 0, SkSamplingOptions(SkFilterMode::kLinear), nullptr);
+    canvas->restore();
 }
 
 void renderLayout(
@@ -926,23 +980,25 @@ void drawTextContent(
 RenderResult renderTextClip(
     const TextClipData& clipData,
     double projectWidth,
+    double projectHeight,
     subtitle::SkiaRenderer* renderer,
     double originX,
     double originY)
 {
     const std::string text = transformTextValue(clipData.value, clipData.style.textTransform);
 
-    // `paint` rasterizes glyphs at the live size; `layoutPaint` drives line breaks at the
-    // fixed LAYOUT_REFERENCE_SIZE so wrap decisions stop depending on Skia's per-Font
-    // glyph-advance quantization. Both come from the same helper with the same projectWidth
-    // and only differ in transformation.size.
+    // `paint` rasterizes glyphs at the live size; `layoutPaint` drives line breaks at the fixed
+    // LAYOUT_REFERENCE_SIZE and the aspect-ratio-correct reference width (Full HD long side) so wrap
+    // decisions stop depending on Skia's per-Font glyph-advance quantization AND on export resolution.
+    // The sizeScale in layoutTextAtReferenceSize divides the reference width back out to the real size.
     const TextClipPaintStyle paint = convertTextStyleToPaintStyle(
         clipData.style, clipData.transformation, projectWidth);
 
     TextTransformation refTransformation = clipData.transformation;
     refTransformation.size = LAYOUT_REFERENCE_SIZE;
     const TextClipPaintStyle layoutPaint = convertTextStyleToPaintStyle(
-        clipData.style, refTransformation, projectWidth);
+        clipData.style, refTransformation,
+        layoutReferenceProjectWidth(static_cast<int>(projectWidth), static_cast<int>(projectHeight)));
 
     const auto background = convertBackgroundStyle(clipData.style, paint);
 

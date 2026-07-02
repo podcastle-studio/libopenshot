@@ -16,6 +16,30 @@ constexpr double SIZE_BASE_COEFFICIENT = 1.0 / 240.0;
 // See BACKEND_PATCH_LINE_CALCULATION.md. Must agree with the frontend value.
 constexpr double LAYOUT_REFERENCE_SIZE = 10.0;
 
+// Long side (px) of the Full-HD layout reference canvas. Wrap/line-break measurement runs on a
+// reference canvas at the project's aspect ratio whose LONGER side is pinned to this value, so the
+// measuring font size is resolution-independent (otherwise it would be projectWidth/240*10 —
+// 80px@1080p vs 160px@4K — and Skia's non-linear glyph metrics would reflow the text, e.g. 2 lines
+// at 1080p but 3 at 4K). See layoutReferenceProjectWidth().
+constexpr double LAYOUT_REFERENCE_LONG_SIDE = 1920.0;
+
+// Reference project WIDTH used ONLY for the wrap/line-break measurement (resolution-independent).
+// The reference canvas keeps the project's aspect ratio with its longer side = LAYOUT_REFERENCE_LONG_SIDE,
+// so the width is that scaled to the project's orientation:
+//   refWidth = round( projectWidth * LONG_SIDE / max(projectWidth, projectHeight) )
+// 16:9 -> 1920, 9:16 -> 1080, 1:1 -> 1920, 3:4 portrait -> 1440, 4:3 landscape -> 1920.
+// projectHeight <= 0 (unknown) falls back to treating the project as landscape (refWidth = LONG_SIDE).
+// The sizeScale in layoutTextAtReferenceSize divides this reference width back out to the real
+// render size, so geometry stays correct while the wrap decision is identical at every resolution.
+inline double layoutReferenceProjectWidth(int projectWidth, int projectHeight) {
+    if (projectWidth <= 0) return LAYOUT_REFERENCE_LONG_SIDE;
+    const int longSide = projectWidth >= projectHeight ? projectWidth : projectHeight;
+    if (longSide <= 0) return LAYOUT_REFERENCE_LONG_SIDE;
+    const double w = static_cast<double>(projectWidth) * LAYOUT_REFERENCE_LONG_SIDE
+                     / static_cast<double>(longSide);
+    return static_cast<double>(static_cast<long>(w + 0.5));   // round to nearest px
+}
+
 enum class TextAlignment { LEFT, CENTER, RIGHT };
 enum class TextTransform { NONE, UPPERCASE, LOWERCASE, CAPITALIZE };
 

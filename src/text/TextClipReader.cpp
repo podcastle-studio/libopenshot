@@ -182,14 +182,15 @@ Json::Value transformationToJson(const text::TextTransformation& t) {
 // ---------------------------------------------------------------------------
 
 TextClipReader::TextClipReader()
-    : project_width(1920), frame_width(0), frame_height(0), is_open(false), dirty(true)
+    : project_width(1920), project_height(1080), frame_width(0), frame_height(0), is_open(false), dirty(true)
 {
     Open();
     Close();
 }
 
-TextClipReader::TextClipReader(int project_width_, const text::TextClipData& data_)
-    : project_width(project_width_), frame_width(0), frame_height(0), data(data_), is_open(false), dirty(true)
+TextClipReader::TextClipReader(int project_width_, int project_height_, const text::TextClipData& data_)
+    : project_width(project_width_), project_height(project_height_), frame_width(0), frame_height(0),
+      data(data_), is_open(false), dirty(true)
 {
     Open();
     Close();
@@ -270,12 +271,16 @@ void TextClipReader::buildPlan() {
     const text::TextClipPaintStyle paint =
         text::convertTextStyleToPaintStyle(data.style, data.transformation, project_width);
 
-    // `layoutPaint` drives line breaks at LAYOUT_REFERENCE_SIZE so wrap decisions are stable
-    // across `transformation.size`. See BACKEND_PATCH_LINE_CALCULATION.md.
+    // `layoutPaint` drives line breaks at LAYOUT_REFERENCE_SIZE so wrap decisions are stable across
+    // `transformation.size`, and at the aspect-ratio-correct reference width (Full HD long side) so
+    // they are also stable across export resolution. Using the real project_width here would let the
+    // measuring font size (and thus Skia's non-linear metrics) reflow the text at 4K. The sizeScale
+    // in layoutTextAtReferenceSize divides it back out, keeping geometry correct.
+    // See BACKEND_PATCH_LINE_CALCULATION.md.
     text::TextTransformation refTransformation = data.transformation;
     refTransformation.size = text::LAYOUT_REFERENCE_SIZE;
-    const text::TextClipPaintStyle layoutPaint =
-        text::convertTextStyleToPaintStyle(data.style, refTransformation, project_width);
+    const text::TextClipPaintStyle layoutPaint = text::convertTextStyleToPaintStyle(
+        data.style, refTransformation, text::layoutReferenceProjectWidth(project_width, project_height));
 
     const auto background = text::convertBackgroundStyle(data.style, paint);
 

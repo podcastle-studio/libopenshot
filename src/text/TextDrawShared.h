@@ -162,23 +162,33 @@ inline double combineBlur(double a, double b) {
     return (a > 0.0 || b > 0.0) ? std::sqrt(a * a + b * b) : 0.0;
 }
 
-// CPU (backend raster) vs GPU (front-end CanvasKit) mask-blur match factor. The backend's
-// CPU mask-blur reads heavier than the front end for the same sigma, so the backend uses a
-// SMALLER sigma to reproduce the same visual blur. The shadow reads heavier than the plain
-// text blur, so the two get different factors: the shadow uses k = 30/90, applied to the
-// shadow blur in every render path (flat / curved / animated) so they all match the front end.
-constexpr double SHADOW_BLUR_SIGMA_SCALE = 30.0 / 90.0;
-
-// The user-facing text blur (style.blur, derived from `blurRatio`) is an ordinary mask blur,
-// so it needs its own CPU-vs-GPU calibration to match the front-end look — a lighter factor
-// (k = 30/50) than the shadow. The fill/stroke paths apply it to the text blur through the
-// calibratedTextBlur helper below. Note the shadow paths fold style.blur into their combined
-// sigma scaled by SHADOW_BLUR_SIGMA_SCALE instead — that contribution is part of the shadow.
-constexpr double TEXT_BLUR_SIGMA_SCALE = 30.0 / 70.0;
+// CPU (backend raster) vs GPU (front-end CanvasKit) mask-blur match factor = 1.0 (no scaling).
+// Both engines run Skia's SAME normal mask-blur math on the same device-space sigma
+// (blurRatio * fontSize), so the sigma must be fed through unchanged to match the front end:
+//   - For device sigma <= kMaxLinearSigma (4 px) CanvasKit's GPU path computes the EXACT
+//     Gaussian kernel (radius = ceil(3*sigma)) — identical to our CPU SkMaskBlurFilter.
+//   - For sigma > 4 px the GPU downscales -> blurs at sigma<=4 -> bilinearly upscales, which
+//     reconstructs the same Gaussian to within a few percent (if anything slightly heavier,
+//     not lighter). There is no Skia mechanism that makes GPU blur a fraction of the requested
+//     sigma, so no sub-1 correction is warranted.
+// (The previous 30/90 and 30/70 factors matched a shrunk on-screen preview viewport, not the
+// full-resolution export, and made exported text ~2-3x too sharp.)
+// These are applied in every render path (flat / curved / animated); keeping them as named
+// constants leaves the call sites untouched and makes it trivial to A/B against a real export.
+constexpr double SHADOW_BLUR_SIGMA_SCALE = 1.0;
+constexpr double TEXT_BLUR_SIGMA_SCALE = 1.0;
 
 inline double calibratedTextBlur(double styleBlur) {
     return styleBlur > 0.0 ? styleBlur * TEXT_BLUR_SIGMA_SCALE : 0.0;
 }
+
+// Skia's CPU mask-blur hard-clamps its sigma (SkBlurMaskFilterImpl::computeXformedSigma -> 128 px,
+// SkMaskBlurFilter -> 135 px), so a mask blur beyond ~128 px silently renders TOO SMALL. The
+// front-end GPU path has no such clamp: for large sigma it downscales the mask, blurs, and upscales,
+// reproducing the full blur. When a blur sigma exceeds this working ceiling the render paths must
+// mirror that downscale (blur under the cap on a shrunk offscreen, then upscale) instead of feeding
+// the raw sigma to a mask filter. 120 px sits safely under Skia's 128 px clamp with headroom.
+constexpr double MAX_CPU_MASK_BLUR_SIGMA = 120.0;
 
 struct ParsedColor {
     std::string color;   // "#rrggbb" hex (or pass-through value)

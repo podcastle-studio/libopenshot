@@ -44,8 +44,10 @@ public:
     TextClipReader();
 
     /// @param project_width Project (timeline) canvas width in pixels — drives font sizing.
+    /// @param project_height Project canvas height in pixels — only used (with width) to pick the
+    ///        aspect-ratio-correct wrap reference width. 0 = unknown -> treated as landscape.
     /// @param data Text clip data (value, style, transformation).
-    TextClipReader(int project_width, const text::TextClipData& data);
+    TextClipReader(int project_width, int project_height, const text::TextClipData& data);
 
     ~TextClipReader() override;
 
@@ -113,6 +115,7 @@ private:
     std::shared_ptr<QImage> renderToQImage(const std::optional<text::TextClipAnimationFrame>& animation);
 
     int project_width;
+    int project_height;
     int frame_width;
     int frame_height;
     double bounding_width{0.0};

@@ -156,6 +156,7 @@ struct RenderResult {
 RenderResult renderTextClip(
     const TextClipData& clipData,
     double projectWidth,
+    double projectHeight,
     subtitle::SkiaRenderer* renderer,
     double originX,
     double originY);
