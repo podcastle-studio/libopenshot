@@ -119,6 +119,8 @@ namespace openshot {
 		bool waveform; ///< Should a waveform be used instead of the clip's image
 		bool shadow; ///< Should a drop shadow be drawn behind the clip's image
 		bool blur; ///< Should the clip's image be blurred
+		bool flip_horizontal; ///< Should the clip's image be mirrored left-to-right
+		bool flip_vertical; ///< Should the clip's image be mirrored top-to-bottom
 		std::list<openshot::EffectBase*> effects; ///< List of clips on this timeline
 		bool is_open;	///< Is Reader opened
 		std::string parentObjectId; ///< Id of the bounding box that this clip is attached to
@@ -342,6 +344,12 @@ namespace openshot {
 		// Blur property
 		bool Blur() { return blur; } ///< Get the blur property of this clip
 		void Blur(bool value) { blur = value; } ///< Set the blur property of this clip
+
+		// Flip (mirror) properties
+		bool FlipHorizontal() { return flip_horizontal; } ///< Get the horizontal-flip (mirror) property of this clip
+		void FlipHorizontal(bool value) { flip_horizontal = value; } ///< Set the horizontal-flip (mirror) property of this clip
+		bool FlipVertical() { return flip_vertical; } ///< Get the vertical-flip (mirror) property of this clip
+		void FlipVertical(bool value) { flip_vertical = value; } ///< Set the vertical-flip (mirror) property of this clip
 
 		// Scale, Location, and Alpha curves
 		openshot::Keyframe scale_x; ///< Curve representing the horizontal scaling in percent (0 to 1)

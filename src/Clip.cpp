@@ -78,6 +78,8 @@ void Clip::init_settings()
 	mixing = VOLUME_MIX_NONE;
 	waveform = false;
 	shadow = false;
+	flip_horizontal = false;
+	flip_vertical = false;
 	previous_properties = "";
 	parentObjectId = "";
 
@@ -894,6 +896,8 @@ std::string Clip::PropertiesJSON(int64_t requested_frame) const {
 	root["waveform"] = add_property_json("Waveform", waveform, "int", "", NULL, 0, 1, false, requested_frame);
 	root["shadow"] = add_property_json("Shadow", shadow, "int", "", NULL, 0, 1, false, requested_frame);
 	root["blur_enabled"] = add_property_json("Blur", blur, "int", "", NULL, 0, 1, false, requested_frame);
+	root["flip_horizontal"] = add_property_json("Flip Horizontal", flip_horizontal, "int", "", NULL, 0, 1, false, requested_frame);
+	root["flip_vertical"] = add_property_json("Flip Vertical", flip_vertical, "int", "", NULL, 0, 1, false, requested_frame);
 	root["parentObjectId"] = add_property_json("Parent", 0.0, "string", parentObjectId, NULL, -1, -1, false, requested_frame);
 
 	// Add gravity choices (dropdown style)
@@ -935,6 +939,12 @@ std::string Clip::PropertiesJSON(int64_t requested_frame) const {
 	// Add blur choices (dropdown style)
 	root["blur_enabled"]["choices"].append(add_property_choice_json("Yes", true, blur));
 	root["blur_enabled"]["choices"].append(add_property_choice_json("No", false, blur));
+
+	// Add flip choices (dropdown style)
+	root["flip_horizontal"]["choices"].append(add_property_choice_json("Yes", true, flip_horizontal));
+	root["flip_horizontal"]["choices"].append(add_property_choice_json("No", false, flip_horizontal));
+	root["flip_vertical"]["choices"].append(add_property_choice_json("Yes", true, flip_vertical));
+	root["flip_vertical"]["choices"].append(add_property_choice_json("No", false, flip_vertical));
 
 	// Add the parentClipObject's properties
 	if (parentClipObject)
@@ -1030,6 +1040,8 @@ Json::Value Clip::JsonValue() const {
 	root["display"] = display;
 	root["mixing"] = mixing;
 	root["waveform"] = waveform;
+	root["flip_horizontal"] = flip_horizontal;
+	root["flip_vertical"] = flip_vertical;
 
 	// Drop shadow (nested "boxShadow" object, matching the rendering service's contract)
 	Json::Value box_shadow;
@@ -1137,6 +1149,10 @@ void Clip::SetJsonValue(const Json::Value root) {
 		mixing = (VolumeMixType) root["mixing"].asInt();
 	if (!root["waveform"].isNull())
 		waveform = root["waveform"].asBool();
+	if (!root["flip_horizontal"].isNull())
+		flip_horizontal = root["flip_horizontal"].asBool();
+	if (!root["flip_vertical"].isNull())
+		flip_vertical = root["flip_vertical"].asBool();
 
 	// Drop shadow ("boxShadow" object: { color, blur, distance, angle, enabled }).
 	// blur/distance/angle accept either a plain number or a full Keyframe object.
@@ -1854,6 +1870,19 @@ QTransform Clip::get_transform(std::shared_ptr<Frame> frame, int width, int heig
 		transform.rotate(r);
 		transform.shear(shear_x_value, shear_y_value);
 		transform.translate(-origin_x_offset,-origin_y_offset);
+	}
+
+	// FLIP CLIP (mirror the source content within its own scaled box, before the source->box
+	// scale below). A negative scale about the box centre keeps the image in the same rectangle
+	// but mirrored; applied before rotation/shear so a flipped+rotated clip reads as "content
+	// mirrored, then rotated" (the standard editor behavior).
+	if (flip_horizontal) {
+		transform.translate(scaled_source_width, 0);
+		transform.scale(-1, 1);
+	}
+	if (flip_vertical) {
+		transform.translate(0, scaled_source_height);
+		transform.scale(1, -1);
 	}
 
 	// SCALE CLIP (if needed)

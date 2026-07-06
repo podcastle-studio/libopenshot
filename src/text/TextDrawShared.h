@@ -162,7 +162,7 @@ inline double combineBlur(double a, double b) {
     return (a > 0.0 || b > 0.0) ? std::sqrt(a * a + b * b) : 0.0;
 }
 
-// CPU (backend raster) vs GPU (front-end CanvasKit) mask-blur match factor = 1.0 (no scaling).
+// CPU (backend raster) vs GPU (front-end CanvasKit) a mask-blur match factor = 1.0 (no scaling).
 // Both engines run Skia's SAME normal mask-blur math on the same device-space sigma
 // (blurRatio * fontSize), so the sigma must be fed through unchanged to match the front end:
 //   - For device sigma <= kMaxLinearSigma (4 px) CanvasKit's GPU path computes the EXACT
