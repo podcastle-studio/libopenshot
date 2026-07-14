@@ -18,6 +18,7 @@
 #include "FFmpegWriter.h"
 #include "text/TextClipReader.h"
 #include "text/TextClipTypes.h"
+#include "text/TextStyleKeyframes.h"
 
 #ifndef FONTS_DIR
 #define FONTS_DIR "/tmp/claude-1000/-home-seno-Desktop-projects-libopenshot/2cc099d5-1e7f-4060-8363-3a92bd367d5b/scratchpad/fonts/"
@@ -262,6 +263,129 @@ void buildPayload5(Timeline& timeline, int W, int H, const std::string& /*fontsD
     }
 }
 
+// ── Payload 6 (volumetric glow, flat/no-tilt — exercises the glow silhouette path) ──
+// Centred light (directionX/Y = 0) so the god-rays radiate symmetrically: any asymmetry in the
+// rendered glow would reveal a light-position / rectPad bug in the silhouette rewrite. Rendered
+// at 4k too, to confirm large text keeps its full beam extent (downscale, not truncation).
+void buildPayload6(Timeline& timeline, int W, int H, const std::string& /*fontsDir*/) {
+    const std::string kFont = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf";
+    text::TextClipStyle s;
+    s.textAlign = text::TextAlignment::CENTER;
+    s.textTransform = text::TextTransform::UPPERCASE;
+    s.color = "#FFFFFF";
+    s.glowColor = "#37F0C8";
+    s.glowIntensityRatio = 0.75;
+    s.glowRangeRatio = 0.6;
+    s.glowDirectionX = 0.0;
+    s.glowDirectionY = 0.0;
+    s.lineHeight = 1.0;
+    s.letterSpacing = 0.0;
+    s.fontWeight = 700;
+
+    text::TextTransformation t;
+    t.size = 10.0;
+    t.maxWidth = 12.0;
+
+    timeline.AddClip(makeTextClip(W, H, kFont, "GLOW", s, t, 0.5, 0.5));
+}
+
+// ── Payload 7 (keyframed STYLE + TILT — exercises the SetStyleKeyframes overlay) ──
+// A 2s clip that keyframes, over its duration: tiltY 0→50°, glowRangeRatio 0.2→0.9,
+// glowDirectionX −40→40, blurRatio 0→0.3, and the FILL colour solid-white → red→blue gradient
+// (exercises the §4 union-of-stops colour path). Rendered as multiple frames (see main) so the
+// interpolation is visible; the worst-case frame buffer must hold every frame without clipping.
+void buildPayload7(Timeline& timeline, int W, int H, const std::string& /*fontsDir*/) {
+    const std::string kFont = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf";
+    const double fps = 30.0;
+    const int64_t frames = 60;   // 2s @ 30fps
+
+    text::TextClipStyle s;
+    s.fontFamily = kFont;
+    s.textAlign = text::TextAlignment::CENTER;
+    s.textTransform = text::TextTransform::UPPERCASE;
+    s.color = "#FFFFFF";
+    s.glowColor = "#37F0C8";      // enables glow; range/direction keyframed below
+    s.glowIntensityRatio = 0.85;
+    s.glowRangeRatio = 0.2;
+    s.glowDirectionX = -40.0;
+    s.glowDirectionY = 0.0;
+    s.blurRatio = 0.0;            // enables blur; keyframed below
+    s.lineHeight = 1.0;
+    s.fontWeight = 700;
+
+    text::TextClipData data;
+    data.value = "KEYFRAME";
+    data.style = s;
+    data.transformation.size = 8.0;
+    data.transformation.maxWidth = 18.0;
+
+    auto* reader = new TextClipReader(W, H, data);
+
+    text::TextStyleKeyframes kf;
+    { openshot::Keyframe k; k.AddPoint(1, 0.0,   LINEAR); k.AddPoint(frames, 50.0, LINEAR); kf.tiltY = k; }
+    { openshot::Keyframe k; k.AddPoint(1, 0.2,   LINEAR); k.AddPoint(frames, 0.9,  LINEAR); kf.glowRangeRatio = k; }
+    { openshot::Keyframe k; k.AddPoint(1, -40.0, LINEAR); k.AddPoint(frames, 40.0, LINEAR); kf.glowDirectionX = k; }
+    { openshot::Keyframe k; k.AddPoint(1, 0.0,   LINEAR); k.AddPoint(frames, 0.3,  LINEAR); kf.blurRatio = k; }
+    {
+        text::ColorKeyPoint p0; p0.timeSec = 0.0; p0.interp = LINEAR; p0.value = "#FFFFFF";
+        text::ColorKeyPoint p1; p1.timeSec = 2.0; p1.interp = LINEAR;
+        p1.value = "linear-gradient(90deg, #FF3B30 0%, #0A84FF 100%)";
+        kf.color.points = {p0, p1};
+    }
+    reader->SetStyleKeyframes(kf, fps);
+
+    auto* clip = new Clip(reader);
+    clip->Position(0.0);
+    clip->Start(0.0);
+    clip->End(2.0);
+    clip->gravity = GRAVITY_CENTER;
+    clip->scale   = SCALE_NONE;
+    clip->location_x = Keyframe(0.0);   // centred
+    clip->location_y = Keyframe(0.0);
+    timeline.AddClip(clip);
+}
+
+// ── Payload 8 (isolated FILL colour keyframe: solid → gradient, no glow/blur/tilt) ──
+// Large legible text so the §4 colour interpolation is directly visible: fill goes white →
+// (red→blue linear-gradient) over 2s. No other effects, so nothing obscures the fill.
+void buildPayload8(Timeline& timeline, int W, int H, const std::string& /*fontsDir*/) {
+    const std::string kFont = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf";
+    const double fps = 30.0;
+
+    text::TextClipStyle s;
+    s.fontFamily = kFont;
+    s.textAlign = text::TextAlignment::CENTER;
+    s.textTransform = text::TextTransform::UPPERCASE;
+    s.color = "#FFFFFF";
+    s.lineHeight = 1.0;
+    s.fontWeight = 700;
+
+    text::TextClipData data;
+    data.value = "COLOR";
+    data.style = s;
+    data.transformation.size = 14.0;
+    data.transformation.maxWidth = 18.0;
+
+    auto* reader = new TextClipReader(W, H, data);
+
+    text::TextStyleKeyframes kf;
+    text::ColorKeyPoint p0; p0.timeSec = 0.0; p0.interp = LINEAR; p0.value = "#FFFFFF";
+    text::ColorKeyPoint p1; p1.timeSec = 2.0; p1.interp = LINEAR;
+    p1.value = "linear-gradient(90deg, #FF3B30 0%, #0A84FF 100%)";
+    kf.color.points = {p0, p1};
+    reader->SetStyleKeyframes(kf, fps);
+
+    auto* clip = new Clip(reader);
+    clip->Position(0.0);
+    clip->Start(0.0);
+    clip->End(2.0);
+    clip->gravity = GRAVITY_CENTER;
+    clip->scale   = SCALE_NONE;
+    clip->location_x = Keyframe(0.0);
+    clip->location_y = Keyframe(0.0);
+    timeline.AddClip(clip);
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -287,7 +411,13 @@ int main(int argc, char** argv) {
     timeline.color = Color(std::string("#222326"));   // payload background (solid COLOR)
     timeline.Open();
 
-    if (which == "5") {
+    if (which == "8") {
+        buildPayload8(timeline, W, H, fontsDir);
+    } else if (which == "7") {
+        buildPayload7(timeline, W, H, fontsDir);
+    } else if (which == "6") {
+        buildPayload6(timeline, W, H, fontsDir);
+    } else if (which == "5") {
         buildPayload5(timeline, W, H, fontsDir);
     } else if (which == "4") {
         buildPayload4(timeline, W, H, fontsDir);
@@ -360,6 +490,18 @@ int main(int argc, char** argv) {
     }
 
     } // end payload 1
+
+    // Keyframed payload: render several frames across the clip so the interpolation is visible.
+    if (which == "7" || which == "8") {
+        for (int fn : {1, 30, 60}) {
+            auto fr = timeline.GetFrame(fn);
+            const std::string p = base + "-f" + std::to_string(fn) + ".png";
+            fr->Save(p, 1.0, "PNG", 100);
+            std::cout << "Wrote " << p << " (" << fr->GetWidth() << "x" << fr->GetHeight() << ")\n";
+        }
+        timeline.Close();
+        return 0;
+    }
 
     // Single-frame PNG (no animation → every frame identical).
     auto frame = timeline.GetFrame(1);

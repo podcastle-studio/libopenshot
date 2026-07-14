@@ -19,6 +19,10 @@ namespace text {
 
 std::string transformTextValue(const std::string& value, TextTransform transform);
 
+/// Parse a CSS linear-gradient(...) string into a TextClipGradient, or nullopt for a solid colour
+/// (or anything not a parseable linear gradient). Reused by the keyframe colour sampler.
+std::optional<TextClipGradient> parseTextGradient(const std::string& value);
+
 /// Convert alignment-anchored x to center-based x.
 /// LEFT:  +width/2,  RIGHT: -width/2,  CENTER: 0.
 double alignmentOffsetX(TextAlignment alignment, double width);

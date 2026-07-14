@@ -284,7 +284,17 @@ void TextClipReader::buildPlan() {
 
     const auto background = text::convertBackgroundStyle(data.style, paint);
 
-    const bool isCurved = paint.curveAngle.has_value();
+    // Curving is active if the static style curves OR a curveAngle keyframe does — either way the
+    // layout must be newline-collapsed to a single line, so the cached plan_layout is valid for the
+    // per-frame curved render (resolvePlanAtFrame reuses it, only recomputing the arc geometry).
+    const bool curveKeyframed = has_style_keyframes && style_keyframes.curveAngle.has_value();
+    const bool isCurved = paint.curveAngle.has_value() || curveKeyframed;
+
+    // When the base is flat but curveAngle is keyframed, borrow frame 1's angle for the base
+    // geometry so curvedGeometryForLayout has an angle to work with.
+    text::TextClipPaintStyle curvePaint = paint;
+    if (curveKeyframed && !curvePaint.curveAngle.has_value())
+        curvePaint.curveAngle = style_keyframes.curveAngle->GetValue(1);
 
     std::string transformed = text::transformTextValue(data.value, data.style.textTransform);
     if (isCurved) transformed = collapseNewlines(transformed);
@@ -312,7 +322,7 @@ void TextClipReader::buildPlan() {
     double contentWidth = layout.layoutWidth;
     double contentHeight = layout.textHeight;
     if (isCurved) {
-        const text::CurvedTextGeometry geometry = text::curvedGeometryForLayout(layout, paint);
+        const text::CurvedTextGeometry geometry = text::curvedGeometryForLayout(layout, curvePaint);
         contentWidth = geometry.width;
         contentHeight = geometry.height;
     }
@@ -345,52 +355,10 @@ void TextClipReader::buildPlan() {
         for (const auto& line : layout.lines) anim_char_count += static_cast<int>(text::utf8Length(line.text));
     }
 
-    // 4. Symmetric padding for the text effects (shadow / stroke / blur / glow beams).
-    const double pad = effectsMargin(paint, contentWidth, contentHeight);
-
-    // Pre-rotation frame: bounding rect centred, with symmetric padding around it. For animated
-    // text, expand to the animation's reach across the whole timeline so glyphs never clip.
-    double halfW = boundingWidth  / 2.0;
-    double halfH = boundingHeight / 2.0;
-    if (has_animation) {
-        const text::AnimatedExtent extent = text::computeAnimatedExtent(
-            layout, paint, boundingWidth, boundingHeight, *timeline, presets, anim_char_count);
-        halfW = extent.halfWidth;
-        halfH = extent.halfHeight;
-    }
-    // Static 3D tilt projects the (already animation-expanded) block; map its AABB through the tilt
-    // matrix so the perspective-foreshortened corners are never clipped.
-    if (has_tilt) {
-        const text::TextClipAnimationFrame f =
-            text::buildStatic3DFrame(data.transformation.tiltX, data.transformation.tiltY);
-        const SkMatrix m = text::animationMatrix(f.props, paint.fontSize, 2.0 * halfW, 2.0 * halfH, f.flags);
-        const SkRect box = SkRect::MakeLTRB(static_cast<float>(-halfW), static_cast<float>(-halfH),
-                                            static_cast<float>(halfW), static_cast<float>(halfH));
-        SkRect mapped;
-        m.mapRect(&mapped, box);
-        halfW = std::max({std::abs(static_cast<double>(mapped.fLeft)), std::abs(static_cast<double>(mapped.fRight)), halfW});
-        halfH = std::max({std::abs(static_cast<double>(mapped.fTop)), std::abs(static_cast<double>(mapped.fBottom)), halfH});
-    }
-    double preW = 2.0 * halfW + 2.0 * pad;
-    double preH = 2.0 * halfH + 2.0 * pad;
-
-    // 5. Rotation AABB — the smallest axis-aligned rect containing the rotated preW×preH.
-    double aabbW = preW;
-    double aabbH = preH;
-    if (data.transformation.rotation != 0.0) {
-        const double th = data.transformation.rotation * M_PI / 180.0;
-        const double c = std::abs(std::cos(th));
-        const double s = std::abs(std::sin(th));
-        aabbW = preW * c + preH * s;
-        aabbH = preW * s + preH * c;
-    }
-
-    frame_width  = std::max(1, static_cast<int>(std::ceil(aabbW)));
-    frame_height = std::max(1, static_cast<int>(std::ceil(aabbH)));
-
     // Cache the plan for per-frame rendering. Origin = top-left of the content box; the
     // background extends paddingX/Y beyond it, so centring the content box on (0,0) means
-    // top-left = (-contentWidth/2, -contentHeight/2).
+    // top-left = (-contentWidth/2, -contentHeight/2). Set BEFORE frame sizing so the worst-case
+    // pass (resolvePlanAtFrame) can read plan_layout / plan_content_* for curved geometry.
     plan_paint = paint;
     plan_layout = layout;
     plan_background = background;
@@ -398,9 +366,169 @@ void TextClipReader::buildPlan() {
     plan_content_h = contentHeight;
     plan_origin_x = -contentWidth / 2.0;
     plan_origin_y = -contentHeight / 2.0;
+
+    // 4/5. Frame buffer sizing. The buffer must bound EVERY frame, so it is sized to the worst case
+    // across the whole timeline: the animation reach (computeAnimatedExtent), the static/keyframed
+    // 3D-tilt AABB, and the effect margins (shadow/stroke/blur/glow), all wrapped in the 2D-rotation
+    // AABB. Background padding is static; only colours/glow/blur/tilt/curve vary per frame.
+    const double bgPadX = background.has_value() ? background->paddingX : 0.0;
+    const double bgPadY = background.has_value() ? background->paddingY : 0.0;
+
+    double animHalfW = 0.0, animHalfH = 0.0;
+    if (has_animation) {
+        const text::AnimatedExtent extent = text::computeAnimatedExtent(
+            layout, paint, boundingWidth, boundingHeight, *timeline, presets, anim_char_count);
+        animHalfW = extent.halfWidth;
+        animHalfH = extent.halfHeight;
+    }
+
+    // Axis-aligned extent of one frame given its (possibly keyframed) paint / content box / tilt.
+    const double rotationRad = data.transformation.rotation * M_PI / 180.0;
+    const double rotC = std::abs(std::cos(rotationRad));
+    const double rotS = std::abs(std::sin(rotationRad));
+    auto extentFor = [&](const text::TextClipPaintStyle& p, double cw, double ch,
+                         double padX, double padY, double tiltX, double tiltY) -> std::pair<double, double> {
+        double halfW = (cw + 2.0 * padX) / 2.0;
+        double halfH = (ch + 2.0 * padY) / 2.0;
+        if (has_animation) { halfW = std::max(halfW, animHalfW); halfH = std::max(halfH, animHalfH); }
+        if (tiltX != 0.0 || tiltY != 0.0) {
+            const text::TextClipAnimationFrame f = text::buildStatic3DFrame(tiltX, tiltY);
+            const SkMatrix m = text::animationMatrix(f.props, p.fontSize, 2.0 * halfW, 2.0 * halfH, f.flags);
+            const SkRect box = SkRect::MakeLTRB(static_cast<float>(-halfW), static_cast<float>(-halfH),
+                                                static_cast<float>(halfW), static_cast<float>(halfH));
+            SkRect mapped;
+            m.mapRect(&mapped, box);
+            halfW = std::max({std::abs(static_cast<double>(mapped.fLeft)), std::abs(static_cast<double>(mapped.fRight)), halfW});
+            halfH = std::max({std::abs(static_cast<double>(mapped.fTop)),  std::abs(static_cast<double>(mapped.fBottom)), halfH});
+        }
+        const double pad = effectsMargin(p, cw, ch);
+        const double preW = 2.0 * halfW + 2.0 * pad;
+        const double preH = 2.0 * halfH + 2.0 * pad;
+        return {preW * rotC + preH * rotS, preW * rotS + preH * rotC};
+    };
+
+    std::pair<double, double> aabb = extentFor(paint, contentWidth, contentHeight,
+                                               bgPadX, bgPadY,
+                                               data.transformation.tiltX, data.transformation.tiltY);
+    double aabbW = aabb.first, aabbH = aabb.second;
+
+    // Keyframed style/tilt: expand to the worst case across the whole animated range. The frame
+    // extent is NON-MONOTONIC in several channels (e.g. a curveAngle arc bounding box peaks near
+    // 180 deg; a BEZIER ease can overshoot past its endpoints), so sampling only the keyframe
+    // control points would miss interior peaks and under-size the buffer (→ mid-animation clipping).
+    // Instead sweep every frame across [1, lastFrame], capped to a sane sample budget for long clips.
+    if (has_style_keyframes && style_keyframes.affectsFrameSize()) {
+        int64_t lastFrame = 1;
+        auto trackNum = [&](const std::optional<openshot::Keyframe>& k) {
+            if (!k) return;
+            for (int64_t i = 0; i < k->GetCount(); ++i)
+                lastFrame = std::max(lastFrame, static_cast<int64_t>(std::llround(k->GetPoint(i).co.X)));
+        };
+        trackNum(style_keyframes.tiltX); trackNum(style_keyframes.tiltY);
+        trackNum(style_keyframes.glowIntensityRatio); trackNum(style_keyframes.glowRangeRatio);
+        trackNum(style_keyframes.glowDirectionX); trackNum(style_keyframes.glowDirectionY);
+        trackNum(style_keyframes.blurRatio); trackNum(style_keyframes.curveAngle);
+        trackNum(style_keyframes.strokeWidthRatio);
+        trackNum(style_keyframes.shadowBlurRatio); trackNum(style_keyframes.shadowDistanceRatio);
+        trackNum(style_keyframes.shadowAngle);
+        trackNum(style_keyframes.backgroundPaddingXRatio); trackNum(style_keyframes.backgroundPaddingYRatio);
+        trackNum(style_keyframes.backgroundRadiusRatio);
+        // Colour channels are time-indexed; convert their last point to a frame.
+        auto trackCol = [&](const text::ColorKeyframeChannel& ch) {
+            for (const auto& p : ch.points)
+                lastFrame = std::max(lastFrame, static_cast<int64_t>(std::llround(p.timeSec * anim_fps)) + 1);
+        };
+        trackCol(style_keyframes.color); trackCol(style_keyframes.strokeColor);
+        trackCol(style_keyframes.shadowColor); trackCol(style_keyframes.backgroundColor);
+        trackCol(style_keyframes.glowColor);
+
+        constexpr int64_t kMaxSamples = 400;
+        const int64_t step = std::max<int64_t>(1, (lastFrame + kMaxSamples - 1) / kMaxSamples);
+        for (int64_t fr = 1; fr <= lastFrame; fr += step) {
+            const ResolvedPlan rp = resolvePlanAtFrame(fr);
+            const double fPadX = rp.background.has_value() ? rp.background->paddingX : 0.0;
+            const double fPadY = rp.background.has_value() ? rp.background->paddingY : 0.0;
+            const std::pair<double, double> e =
+                extentFor(rp.paint, rp.content_w, rp.content_h, fPadX, fPadY, rp.tiltX, rp.tiltY);
+            aabbW = std::max(aabbW, e.first);
+            aabbH = std::max(aabbH, e.second);
+        }
+    }
+
+    frame_width  = std::max(1, static_cast<int>(std::ceil(aabbW)));
+    frame_height = std::max(1, static_cast<int>(std::ceil(aabbH)));
+}
+
+TextClipReader::ResolvedPlan TextClipReader::cachedPlan() const {
+    ResolvedPlan p;
+    p.paint = plan_paint;
+    p.background = plan_background;
+    p.content_w = plan_content_w;
+    p.content_h = plan_content_h;
+    p.origin_x = plan_origin_x;
+    p.origin_y = plan_origin_y;
+    p.tiltX = data.transformation.tiltX;
+    p.tiltY = data.transformation.tiltY;
+    return p;
+}
+
+TextClipReader::ResolvedPlan TextClipReader::resolvePlanAtFrame(int64_t frame) const {
+    // Overwrite the keyframed fields on a copy of the static style/transformation.
+    text::TextClipStyle s = data.style;
+    text::TextTransformation tf = data.transformation;
+    const text::TextStyleKeyframes& kf = style_keyframes;
+
+    if (kf.tiltX) tf.tiltX = kf.tiltX->GetValue(frame);
+    if (kf.tiltY) tf.tiltY = kf.tiltY->GetValue(frame);
+    if (kf.glowIntensityRatio) s.glowIntensityRatio = kf.glowIntensityRatio->GetValue(frame);
+    if (kf.glowRangeRatio)     s.glowRangeRatio     = kf.glowRangeRatio->GetValue(frame);
+    if (kf.glowDirectionX)     s.glowDirectionX     = kf.glowDirectionX->GetValue(frame);
+    if (kf.glowDirectionY)     s.glowDirectionY     = kf.glowDirectionY->GetValue(frame);
+    if (kf.blurRatio)          s.blurRatio          = kf.blurRatio->GetValue(frame);
+    if (kf.curveAngle)         s.curveAngle         = kf.curveAngle->GetValue(frame);
+    if (kf.strokeWidthRatio)   s.strokeWidthRatio   = kf.strokeWidthRatio->GetValue(frame);
+    if (kf.shadowBlurRatio)    s.shadowBlurRatio    = kf.shadowBlurRatio->GetValue(frame);
+    if (kf.shadowDistanceRatio)s.shadowDistanceRatio= kf.shadowDistanceRatio->GetValue(frame);
+    if (kf.shadowAngle)        s.shadowAngle        = kf.shadowAngle->GetValue(frame);
+    if (kf.backgroundPaddingXRatio) s.backgroundPaddingXRatio = kf.backgroundPaddingXRatio->GetValue(frame);
+    if (kf.backgroundPaddingYRatio) s.backgroundPaddingYRatio = kf.backgroundPaddingYRatio->GetValue(frame);
+    if (kf.backgroundRadiusRatio)   s.backgroundRadiusRatio   = kf.backgroundRadiusRatio->GetValue(frame);
+
+    // Colour channels are time-indexed (seconds) and resolve to a CSS string the paint path parses.
+    const double tSec = std::max(0.0, static_cast<double>(frame - 1) / anim_fps);
+    if (!kf.color.empty())
+        s.color = text::sampleColorChannel(kf.color, tSec, s.color);
+    if (!kf.strokeColor.empty())
+        s.strokeColor = text::sampleColorChannel(kf.strokeColor, tSec, s.strokeColor.value_or(""));
+    if (!kf.shadowColor.empty())
+        s.shadowColor = text::sampleColorChannel(kf.shadowColor, tSec, s.shadowColor.value_or(""));
+    if (!kf.backgroundColor.empty())
+        s.backgroundColor = text::sampleColorChannel(kf.backgroundColor, tSec, s.backgroundColor.value_or(""));
+    if (!kf.glowColor.empty())
+        s.glowColor = text::sampleColorChannel(kf.glowColor, tSec, s.glowColor.value_or(""));
+
+    ResolvedPlan p;
+    p.paint = text::convertTextStyleToPaintStyle(s, tf, project_width);
+    p.background = text::convertBackgroundStyle(s, p.paint);
+    // Only a keyframed curveAngle changes glyph geometry (wrapping/layout are stable), so recompute
+    // the curved content box per frame; otherwise reuse the cached (flat or static-curve) content.
+    if (p.paint.curveAngle.has_value()) {
+        const text::CurvedTextGeometry g = text::curvedGeometryForLayout(plan_layout, p.paint);
+        p.content_w = g.width;
+        p.content_h = g.height;
+    } else {
+        p.content_w = plan_content_w;
+        p.content_h = plan_content_h;
+    }
+    p.origin_x = -p.content_w / 2.0;
+    p.origin_y = -p.content_h / 2.0;
+    p.tiltX = tf.tiltX;
+    p.tiltY = tf.tiltY;
+    return p;
 }
 
 std::shared_ptr<QImage> TextClipReader::renderToQImage(
+    const ResolvedPlan& plan,
     const std::optional<text::TextClipAnimationFrame>& animation) {
     if (plan_empty) {
         auto img = std::make_shared<QImage>(1, 1, QImage::Format_RGBA8888_Premultiplied);
@@ -426,8 +554,8 @@ std::shared_ptr<QImage> TextClipReader::renderToQImage(
     if (data.transformation.rotation != 0.0) {
         canvas.rotate(static_cast<float>(data.transformation.rotation));
     }
-    text::renderTextFrame(plan_layout, plan_paint, plan_background,
-                          plan_origin_x, plan_origin_y, 1.0, animation, &renderer);
+    text::renderTextFrame(plan_layout, plan.paint, plan.background,
+                          plan.origin_x, plan.origin_y, 1.0, animation, &renderer);
     canvas.restore();
 
     return img;
@@ -440,7 +568,7 @@ void TextClipReader::renderToImage() {
     if (has_tilt) {
         frame = text::buildStatic3DFrame(data.transformation.tiltX, data.transformation.tiltY);
     }
-    rendered_image = renderToQImage(frame);
+    rendered_image = renderToQImage(cachedPlan(), frame);
 }
 
 // ---------------------------------------------------------------------------
@@ -460,12 +588,10 @@ std::shared_ptr<Frame> TextClipReader::GetFrame(int64_t requested_frame) {
 
     const int sample_count = Frame::GetSamplesPerFrame(requested_frame, info.fps, info.sample_rate, info.channels);
 
-    std::shared_ptr<QImage> image;
+    // Resolve the active animation frame at this frame's clip-relative time (if any).
+    std::optional<text::TextClipAnimationFrame> animFrame;
     if (has_animation && timeline.has_value()) {
-        // Per-frame animated text: resolve the frame plan at this frame's clip-relative time
-        // and render that frame fresh (no single-image cache).
         const double elapsedSec = std::max(0.0, static_cast<double>(requested_frame - 1) / anim_fps);
-        std::optional<text::TextClipAnimationFrame> animFrame;
         const text::FramePlan plan = text::planFrame(elapsedSec, *timeline, anim_char_count, presets);
         if (plan.presetId.has_value()) {
             const auto it = presets.find(*plan.presetId);
@@ -473,30 +599,35 @@ std::shared_ptr<Frame> TextClipReader::GetFrame(int64_t requested_frame) {
                 animFrame = text::buildAnimationFrame(plan, it->second, elapsedSec);
             }
         }
-        if (animFrame.has_value()) {
-            // Fold a static 3D tilt into the active animation frame: word frames add it to their
-            // props; char frames carry it separately (baked flat then tilted as one unit).
-            if (has_tilt) {
-                if (animFrame->mode == text::AnimationMode::WORD) {
-                    text::composeStatic3DIntoWordFrame(*animFrame, data.transformation.tiltX, data.transformation.tiltY);
-                } else if (animFrame->mode == text::AnimationMode::CHAR) {
-                    animFrame->static3D = std::make_pair(data.transformation.tiltX, data.transformation.tiltY);
-                }
-            }
-            // Active animation frame — render fresh.
-            image = renderToQImage(animFrame);
-        } else {
-            // Idle/resting phase (e.g. after an IN finishes, or the gap before an OUT): the
-            // frame is the static resting text, pixel-identical every frame. Render it ONCE and
-            // reuse the cache — this skips recomputing the (expensive) glow for every resting
-            // frame. For a 5s clip with a 1.5s IN that's ~70% of frames served from cache.
-            if (!rendered_image) renderToImage();
-            image = rendered_image;
-        }
-    } else {
-        // Static single image — render once and cache.
+    }
+
+    std::shared_ptr<QImage> image;
+    if (!has_style_keyframes && !animFrame.has_value()) {
+        // Static / resting phase: the frame is pixel-identical every frame (incl. any static 3D
+        // tilt). Render ONCE and reuse the cache — this skips recomputing the (expensive) glow for
+        // every resting frame. For a 5s clip with a 1.5s IN that's ~70% of frames served from cache.
         if (!rendered_image) renderToImage();
         image = rendered_image;
+    } else {
+        // Per-frame render. Resolve the style keyframe overlay (if any), else reuse the cached plan.
+        // No single-image cache here — the content varies frame to frame.
+        const ResolvedPlan rp = has_style_keyframes ? resolvePlanAtFrame(requested_frame) : cachedPlan();
+        const bool tilt = rp.tiltX != 0.0 || rp.tiltY != 0.0;
+        std::optional<text::TextClipAnimationFrame> frame = animFrame;
+        if (frame.has_value()) {
+            // Fold the (static or keyframed) 3D tilt into the active animation frame: word frames add
+            // it to their props; char frames carry it separately (baked flat then tilted as one unit).
+            if (tilt) {
+                if (frame->mode == text::AnimationMode::WORD) {
+                    text::composeStatic3DIntoWordFrame(*frame, rp.tiltX, rp.tiltY);
+                } else if (frame->mode == text::AnimationMode::CHAR) {
+                    frame->static3D = std::make_pair(rp.tiltX, rp.tiltY);
+                }
+            }
+        } else if (tilt) {
+            frame = text::buildStatic3DFrame(rp.tiltX, rp.tiltY);
+        }
+        image = renderToQImage(rp, frame);
     }
 
     if (!image) {
@@ -533,6 +664,13 @@ void TextClipReader::SetTransformation(const text::TextTransformation& transform
 
 void TextClipReader::SetProjectWidth(int width) {
     project_width = width;
+    dirty = true;
+}
+
+void TextClipReader::SetStyleKeyframes(const text::TextStyleKeyframes& keyframes, double fps) {
+    style_keyframes = keyframes;
+    has_style_keyframes = !keyframes.empty();
+    if (fps > 0.0) anim_fps = fps;   // shared frame↔time clock (also set by SetAnimations)
     dirty = true;
 }
 

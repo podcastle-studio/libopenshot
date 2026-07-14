@@ -68,8 +68,11 @@ std::vector<std::string> splitTopLevelCommas(const std::string& s) {
     return out;
 }
 
+} // namespace
+
 // Parse a CSS linear-gradient(...) string into a TextClipGradient, or nullopt for a solid colour
-// / anything not a parseable linear gradient (so the solid-colour path is used unchanged).
+// / anything not a parseable linear gradient (so the solid-colour path is used unchanged). Exposed
+// via the header so the keyframe colour sampler (TextColorKeyframes) reuses the exact same parse.
 std::optional<TextClipGradient> parseTextGradient(const std::string& value) {
     const std::string trimmed = trimWs(value);
     const std::string lower = toLowerAscii(trimmed);
@@ -132,8 +135,6 @@ std::optional<TextClipGradient> parseTextGradient(const std::string& value) {
     }
     return grad;
 }
-
-} // namespace
 
 // ---------------------------------------------------------------------------
 // transformTextValue

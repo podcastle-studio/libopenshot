@@ -55,6 +55,7 @@ set(OPENSHOT_SOURCES
   text/TextClipRenderer.cpp
   text/TextClipReader.cpp
   text/TextDrawShared.cpp
+  text/TextColorKeyframes.cpp
   text/TextGlowShader.cpp
   text/TextGlowRenderer.cpp
   text/TextCurvedText.cpp

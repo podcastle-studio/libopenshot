@@ -4,6 +4,7 @@
 #include "TextAnimationEngine.h"
 #include "TextClipRenderer.h"
 #include "TextClipTypes.h"
+#include "TextStyleKeyframes.h"
 
 #include <memory>
 #include <optional>
@@ -84,6 +85,17 @@ public:
 
     bool HasAnimation() const { return has_animation; }
 
+    /// Enable per-frame keyframed text STYLE / TILT (glow, blur, curve, colours, tiltX/tiltY).
+    /// Each populated channel varies its property over the clip's local time; absent channels use
+    /// the static style value. The reader becomes a per-frame sequence (like animations): the output
+    /// frame buffer is sized to the worst case across the timeline, and each GetFrame samples the
+    /// overlay to a resolved style and renders fresh. Empty overlay clears it (back to static).
+    /// `fps` is the timeline frame rate: numeric channels are frame-indexed (openshot::Keyframe),
+    /// while colour channels are time-indexed (seconds), so fps maps between them.
+    void SetStyleKeyframes(const text::TextStyleKeyframes& keyframes, double fps);
+
+    bool HasStyleKeyframes() const { return has_style_keyframes; }
+
     const text::TextClipData& Data() const { return data; }
     int ProjectWidth() const { return project_width; }
 
@@ -111,8 +123,28 @@ private:
     void initInfo();
     void buildPlan();      ///< (Re)compute paint/layout/background/frame-size from data.
     void renderToImage();  ///< Render the static (non-animated) frame into rendered_image.
-    /// Render one frame (static when `animation` is empty) into a fresh QImage using the plan.
-    std::shared_ptr<QImage> renderToQImage(const std::optional<text::TextClipAnimationFrame>& animation);
+
+    /// The per-frame render inputs: cached plan for static/animation, or resolved from the style
+    /// keyframe overlay. Layout is always the cached plan_layout (only curveAngle varies geometry,
+    /// captured by content_w/h + origin here); paint/background/colours may vary per frame.
+    struct ResolvedPlan {
+        text::TextClipPaintStyle paint;
+        std::optional<text::TextClipBackgroundStyle> background;
+        double content_w = 0.0;
+        double content_h = 0.0;
+        double origin_x = 0.0;
+        double origin_y = 0.0;
+        double tiltX = 0.0;
+        double tiltY = 0.0;
+    };
+    /// Package the cached buildPlan output as a ResolvedPlan (static / animation path).
+    ResolvedPlan cachedPlan() const;
+    /// Sample the style keyframe overlay at `frame` into a ResolvedPlan (keyframed path).
+    ResolvedPlan resolvePlanAtFrame(int64_t frame) const;
+
+    /// Render one frame using the supplied plan (static when `animation` is empty) into a QImage.
+    std::shared_ptr<QImage> renderToQImage(const ResolvedPlan& plan,
+                                           const std::optional<text::TextClipAnimationFrame>& animation);
 
     int project_width;
     int project_height;
@@ -136,6 +168,10 @@ private:
     bool has_animation{false};
     std::optional<text::AnimationTimeline> timeline;
     int anim_char_count{0};
+
+    // ---- Style keyframe overlay (glow/blur/curve/colours/tilt) ---------------
+    text::TextStyleKeyframes style_keyframes;
+    bool has_style_keyframes{false};
 
     // ---- Cached render plan (built once per data change in buildPlan) ---------
     bool plan_empty{true};

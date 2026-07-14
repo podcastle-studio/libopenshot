@@ -54,13 +54,21 @@ public:
         const AnimationTransformFlags& animation);
 
 private:
-    struct GlowMargin { double margin; int width; int height; bool valid; };
+    // The silhouette image is sized ONLY by glyph geometry (imageMargin: stroke overhang + fixed
+    // beam-blur softening + word-mode spread + per-char overshoot) so it stays a stable size while
+    // an animating rayLen/light-offset changes only shader uniforms — no per-frame re-rasterize,
+    // no ~1px jump. `rectPad` carries the beam reach and only widens the ray-march draw surface
+    // (sampled beyond the image via Decal), never the image. `renderScale` folds the quality
+    // downscale (GLOW_RENDER_SCALE) with an extra downscale when the surface would exceed the
+    // texture cap — so large text keeps its full beam extent instead of being truncated/skipped.
+    struct GlowMargin { double imageMargin; double rectPad; int width; int height; double renderScale; bool valid; };
 
-    // Size the silhouette: pad for the outward beams, capped at GLOW_MAX_TEXTURE_DIM.
+    // Size the silhouette image + separate beam-reach draw padding. `extraPad` adds per-char
+    // overshoot room for the char-mode animated silhouette (rebuilt every frame anyway).
     GlowMargin glowMarginFor(
         double contentWidth, double contentHeight,
         const TextClipPaintStyle& style, const TextClipGlowStyle& glow,
-        double spreadMargin = 0.0) const;
+        double spreadMargin = 0.0, double extraPad = 0.0) const;
 
     // Composite the glow beneath the crisp text (ray-march shader + local bloom, both Screen).
     void paintGlowFromSilhouette(
@@ -68,7 +76,7 @@ private:
         const TextClipGlowStyle& glow,
         const TextClipPaintStyle& style,
         double contentWidth, double contentHeight,
-        double margin, int width, int height,
+        double imageMargin, double rectPad, int width, int height, double renderScale,
         double originX, double originY,
         double opacityMul);
 
@@ -77,7 +85,7 @@ private:
         const TextClipLayout& layout,
         const TextClipPaintStyle& style,
         const std::string& glowColor,
-        double margin, int width, int height,
+        double imageMargin, int width, int height, double renderScale,
         const CurvedTextGeometry* curved,
         double extraLetterSpacing);
 

@@ -65,6 +65,12 @@ SkMatrix concatRotation3D(const ResolvedAnimProps& props, double fontSize, bool 
     return m;
 }
 
+// Cap on the offscreen word-block texture (px). The block margin (uncapped glow/spread
+// reservation) × the size scale could otherwise request a multi-thousand-px surface, which
+// aborts the raster heap or makes SkSurfaces::Raster return null and silently drop the whole
+// block+glow. Beyond this, the raster is downscaled (and drawn back into the same dst rect).
+constexpr int WORD_BLOCK_MAX_TEXTURE_DIM = 4096;
+
 // Flat block safety margin (shadow/stroke/glow/blur/animated-spread extent).
 double blockMargin(const TextClipPaintStyle& style, double blurSigma, double extraLetterSpacing,
                    const TextClipLayout& layout) {
@@ -306,8 +312,15 @@ void WordAnimationRenderer::drawWordBlockTexture(
 
     const double dstWidth = blockWidth + 2.0 * margin;
     const double dstHeight = blockHeight + 2.0 * margin;
-    const int texWidth = std::max(2, static_cast<int>(std::ceil(dstWidth * scale)));
-    const int texHeight = std::max(2, static_cast<int>(std::ceil(dstHeight * scale)));
+    // Downscale the raster (never the dst rect) when it would exceed the texture cap, so an
+    // extreme size/margin can't abort the heap or silently drop the block. The dst rect below is
+    // unchanged, so this only lowers the texture resolution, keeping geometry identical.
+    double renderScale = scale;
+    const double fullMaxDim = std::max(dstWidth, dstHeight) * scale;
+    if (fullMaxDim > WORD_BLOCK_MAX_TEXTURE_DIM)
+        renderScale = scale * (WORD_BLOCK_MAX_TEXTURE_DIM / fullMaxDim);
+    const int texWidth = std::max(2, static_cast<int>(std::ceil(dstWidth * renderScale)));
+    const int texHeight = std::max(2, static_cast<int>(std::ceil(dstHeight * renderScale)));
 
     // Bake the shadow + stroke + fill into the flat texture, then let the 3D perspective warp the
     // whole thing together — the shadow is a flat drop shadow on the same plane as the glyphs, so it
@@ -318,7 +331,7 @@ void WordAnimationRenderer::drawWordBlockTexture(
     SkCanvas* offscreen = surface->getCanvas();
     offscreen->clear(SK_ColorTRANSPARENT);
     offscreen->save();
-    offscreen->scale(static_cast<float>(scale), static_cast<float>(scale));
+    offscreen->scale(static_cast<float>(renderScale), static_cast<float>(renderScale));
     renderer->renderToCanvas(offscreen, [&] {
         // Skip only the glow here; it is drawn live on the destination canvas below. The shadow stays
         // baked so the perspective warp tilts it along with the glyphs.
