@@ -3,6 +3,8 @@
 #include "TextRenderer.h"
 #include "Helpers.h"
 
+#include <skia/include/core/SkFontMetrics.h>
+
 namespace openshot {
 namespace subtitle {
 
@@ -58,17 +60,22 @@ std::vector<std::vector<size_t>> SubtitleRenderer::getLines(const std::vector<St
     return lines;
 }
 
-void SubtitleRenderer::drawContainer(const float blockW, const float blockH, const SubtitleContainerStyle& style) const {
+void SubtitleRenderer::drawContainer(const float blockW, const float blockH, const SubtitleContainerStyle& style,
+                                     const double verticalOffset) const {
     if (!style.color.has_value() || style.opacity <= 0) return;
 
     const PaintProps paintProps{ *style.color, style.opacity };
     const SkPaint* paint = renderer->getPaint(paintProps);
 
-    // NB: we are already translated so that the text block’s origin is (0,0)
+    // NB: we are already translated so that the text block’s origin is (0,0). The line-box model
+    // places baselines at getStartY = fontSize*(line+1), so the glyphs' true visual centre is
+    // `verticalOffset` below the naive block centre (blockH/2). Shift the box by that offset so the
+    // text is vertically CENTRED in the rectangle — the same correction the per-word background
+    // (drawWordBackground's deltaY) already applies. Without it the text sits low in the box.
     const auto left   = -style.paddingX;
-    const auto top    = -style.paddingY;
+    const auto top    = -style.paddingY + verticalOffset;
     const auto right  =  blockW + style.paddingX;
-    const auto bottom =  blockH + style.paddingY;
+    const auto bottom =  blockH + style.paddingY + verticalOffset;
 
     const SkRect rect = renderer->makeRect(left, top, right, bottom);
     const SkRRect rr  = renderer->makeRRect(rect, style.radius, style.radius);
@@ -156,7 +163,16 @@ void SubtitleRenderer::renderSegment(const SubtitleSegment& segment, const Segme
     renderer->translate(-viewportW / 2, -blockH / 2);
 
     // ── background box  ───────────────────────────────────────────────────
-    drawContainer(viewportW, blockH, contStyle);
+    // Vertical centring offset from the default-style font metrics (matches drawWordBackground's
+    // deltaY): the baseline model puts glyphs `deltaY` below the naive block centre, so the
+    // container box must shift by the same amount to keep the text centred inside it.
+    const SkFont contFont = renderer->getFont({ s.fontFamily, s.fontSize, s.fontWeight, s.italic });
+    SkFontMetrics contMetrics{};
+    contFont.getMetrics(&contMetrics);
+    const double containerDeltaY =
+        (s.fontSize - (contMetrics.fDescent - contMetrics.fAscent)) / 2.0 + contMetrics.fDescent;
+
+    drawContainer(viewportW, blockH, contStyle, containerDeltaY);
 
     // ── draw each visual line ─────────────────────────────────────────────
     for (size_t li = 0; li < lines.size(); ++li) {

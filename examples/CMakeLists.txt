@@ -33,6 +33,10 @@ target_link_libraries(openshot-html-example openshot Qt5::Gui)
 add_executable(openshot-text-payload TextPayloadExample.cpp)
 target_link_libraries(openshot-text-payload openshot Qt5::Gui)
 
+# Render harness for subtitle segments (container-background vertical centring check).
+add_executable(openshot-subtitle-payload SubtitlePayloadExample.cpp)
+target_link_libraries(openshot-subtitle-payload openshot Qt5::Gui)
+
 ############### PLAYER EXECUTABLE ################
 # Create test executable
 add_executable(openshot-player qt-demo/main.cpp)
