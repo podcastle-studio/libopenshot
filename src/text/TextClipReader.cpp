@@ -568,6 +568,14 @@ void TextClipReader::renderToImage() {
     if (has_tilt) {
         frame = text::buildStatic3DFrame(data.transformation.tiltX, data.transformation.tiltY);
     }
+    // Animated clips render their ACTIVE frames through the confined word-texture / char path (which
+    // bakes the drop shadow into a bounded offscreen). Bake this cached RESTING frame the same way so
+    // the shadow can't pop between the resting render (flat = unbounded full-buffer shadow) and the
+    // animated frames when the animation starts — regardless of when in the clip that happens.
+    if (has_animation) {
+        if (!frame) frame = text::buildStatic3DFrame(0.0, 0.0);
+        frame->forceBlockTexture = true;
+    }
     rendered_image = renderToQImage(cachedPlan(), frame);
 }
 
@@ -612,7 +620,17 @@ std::shared_ptr<Frame> TextClipReader::GetFrame(int64_t requested_frame) {
         // Per-frame render. Resolve the style keyframe overlay (if any), else reuse the cached plan.
         // No single-image cache here — the content varies frame to frame.
         const ResolvedPlan rp = has_style_keyframes ? resolvePlanAtFrame(requested_frame) : cachedPlan();
-        const bool tilt = rp.tiltX != 0.0 || rp.tiltY != 0.0;
+        // A clip that EVER uses the confined word-texture / char path (any active animation, or any
+        // static/keyframed 3D tilt) renders its drop shadow bounded to the block; the flat/live path
+        // draws it unbounded into the full frame buffer. If a clip mixes the two — e.g. a resting frame
+        // with tilt == 0, then a nonzero-tilt frame, or a flat body then an animation — the shadow
+        // visibly pops between frames. So whenever the clip is "dynamic", force EVERY frame onto the
+        // confined texture path (a tilt==0 frame renders as an identity 3D transform), giving one
+        // consistent shadow across the whole clip no matter when the tilt/animation kicks in.
+        const bool tiltKeyframed = has_style_keyframes &&
+                                   (style_keyframes.tiltX.has_value() || style_keyframes.tiltY.has_value());
+        const bool forceTexture = has_animation || has_tilt || tiltKeyframed;
+        const bool tilt = rp.tiltX != 0.0 || rp.tiltY != 0.0 || forceTexture;
         std::optional<text::TextClipAnimationFrame> frame = animFrame;
         if (frame.has_value()) {
             // Fold the (static or keyframed) 3D tilt into the active animation frame: word frames add
@@ -620,12 +638,14 @@ std::shared_ptr<Frame> TextClipReader::GetFrame(int64_t requested_frame) {
             if (tilt) {
                 if (frame->mode == text::AnimationMode::WORD) {
                     text::composeStatic3DIntoWordFrame(*frame, rp.tiltX, rp.tiltY);
+                    if (forceTexture) frame->forceBlockTexture = true;
                 } else if (frame->mode == text::AnimationMode::CHAR) {
                     frame->static3D = std::make_pair(rp.tiltX, rp.tiltY);
                 }
             }
         } else if (tilt) {
             frame = text::buildStatic3DFrame(rp.tiltX, rp.tiltY);
+            if (forceTexture) frame->forceBlockTexture = true;
         }
         image = renderToQImage(rp, frame);
     }

@@ -386,6 +386,125 @@ void buildPayload8(Timeline& timeline, int W, int H, const std::string& /*fontsD
     timeline.AddClip(clip);
 }
 
+// ── Payload 9 (the user's provided payload: full style + shadow/glow/tilt keyframes + Tumble Out) ──
+Clip* buildPayload9(int W, int H, const std::string& fontsDir) {
+    const std::string kFont = fontsDir + "irish_grover.woff";
+    const double fps = 30.0;
+
+    text::TextClipStyle s;
+    s.fontFamily = kFont;
+    s.textAlign = text::TextAlignment::CENTER;
+    s.color = "linear-gradient(270deg, #FFC6EB 0%, #F9FCDA 28%, #BEFF9E 50.2%, #70D4FF 75.1%, #5479FF 100%)";
+    s.lineHeight = 0.86;
+    s.letterSpacing = -0.03;
+    s.fontWeight = 900;
+    s.strokeColor = "linear-gradient(135deg, #E1DCAE 0%, #58A8C3 44.3%, #F48E80 100%)";
+    s.strokeWidthRatio = 0.04;
+    s.shadowColor = "#EC4899";
+    s.shadowBlurRatio = 0.3;
+    s.shadowDistanceRatio = 0.2;
+    s.shadowAngle = 40.0;
+    s.backgroundColor = "rgba(234, 88, 12, 1)";
+    s.backgroundRadiusRatio = 0.3;
+    s.backgroundPaddingXRatio = 0.1;
+    s.backgroundPaddingYRatio = 0.1;
+    s.glowColor = "#FAC40A";
+    s.glowIntensityRatio = 0.0;
+    s.glowRangeRatio = 0.0;
+
+    text::TextClipData data;
+    data.value = "THIS\nCONVERTS";
+    data.style = s;
+    data.transformation.size = 39.474993956458064;
+    data.transformation.maxWidth = 5.86025;
+
+    auto* reader = new TextClipReader(W, H, data);
+
+    text::AnimationPreset tumble;
+    tumble.level = text::AnimationPresetLevel::CHAR;
+    auto& ks = tumble.keyframes;
+    ks.txInRotatedFrame = true;
+    ks.easing = text::CubicBezier{0.22, 0.61, 0.36, 1.0};
+    auto track = [](std::initializer_list<std::pair<double,double>> pts) {
+        std::vector<text::PresetKeyframe> t;
+        for (auto [pct, val] : pts) { text::PresetKeyframe k; k.pct = pct; k.value = val; t.push_back(k); }
+        return t;
+    };
+    ks.tracks[(size_t)text::AnimProp::opacity] = track({{0,1},{30,1},{80,0},{100,0}});
+    ks.tracks[(size_t)text::AnimProp::rotate]  = track({{0,0},{30,0},{80,360},{100,360}});
+    ks.tracks[(size_t)text::AnimProp::sx]      = track({{0,1},{30,1},{80,0.3},{100,0.3}});
+    ks.tracks[(size_t)text::AnimProp::sy]      = track({{0,1},{30,1},{80,0.3},{100,0.3}});
+    ks.tracks[(size_t)text::AnimProp::ty]      = track({{0,0},{30,0},{80,1.666667},{100,1.666667}});
+
+    text::TextAnimations anims;
+    anims.outAnimationId = "tumble";
+    anims.outAnimationDuration = 1.5;   // seconds (service converts payload's 1500 ms → 1.5 s)
+    text::AnimationPresetMap presets{{"tumble", tumble}};
+    reader->SetAnimations(anims, presets, fps, 5.196);
+
+    // Style keyframes built like KeyframeApplier: frame = lround(fps*timeSec)+1, LINEAR.
+    // (3390 ms → f103, 3420 ms → f104, 3480 ms → f105, 3600 ms → f109, 4770 ms → f144)
+    text::TextStyleKeyframes kf;
+    auto num2 = [](double v1, int f2, double v2) {
+        openshot::Keyframe k; k.AddPoint(1, v1, LINEAR); k.AddPoint(f2, v2, LINEAR); return k;
+    };
+    kf.backgroundPaddingXRatio = num2(0.1, 103, 0.24);
+    kf.backgroundPaddingYRatio = num2(0.1, 103, 0.3);
+    kf.backgroundRadiusRatio   = num2(0.3, 103, 0.7);
+    kf.glowIntensityRatio      = num2(0.0, 103, 0.91);
+    kf.glowRangeRatio          = num2(0.0, 103, 0.9);
+    kf.glowDirectionX          = num2(0.0, 103, -23.0);
+    kf.glowDirectionY          = num2(0.0, 103, -24.0);
+    kf.shadowAngle             = num2(40.0, 103, -136.0);
+    kf.shadowBlurRatio         = num2(0.3, 103, 0.63);
+    kf.shadowDistanceRatio     = num2(0.2, 103, 0.84);
+    kf.strokeWidthRatio        = num2(0.04, 103, 0.35);
+    kf.tiltX                   = num2(0.0, 109, 25.0);
+    kf.tiltY                   = num2(0.0, 109, 60.0);
+    {   // fill colour: solid-ish gradient at f1 → gradient at f109 (3600 ms)
+        text::ColorKeyPoint a; a.timeSec = 0.0;   a.interp = LINEAR;
+        a.value = "linear-gradient(270deg, #FFC6EB 0%, #F9FCDA 28%, #BEFF9E 50.2%, #70D4FF 75.1%, #5479FF 100%)";
+        text::ColorKeyPoint b; b.timeSec = 3.6; b.interp = LINEAR;
+        b.value = "linear-gradient(45deg, #F4F400 0%, #6A556E 50%, #BB0007 100%)";
+        kf.color.points = {a, b};
+    }
+    {   // stroke colour f1 → f103
+        text::ColorKeyPoint a; a.timeSec = 0.0;   a.interp = LINEAR;
+        a.value = "linear-gradient(135deg, #E1DCAE 0%, #58A8C3 44.3%, #F48E80 100%)";
+        text::ColorKeyPoint b; b.timeSec = 3.39; b.interp = LINEAR;
+        b.value = "linear-gradient(270deg, #FFCBDD 0%, #F9CFFF 36.1%, #FFFA9C 100%)";
+        kf.strokeColor.points = {a, b};
+    }
+    {   // shadow colour f1 → f104 (3420 ms)
+        text::ColorKeyPoint a; a.timeSec = 0.0;   a.interp = LINEAR; a.value = "#EC4899";
+        text::ColorKeyPoint b; b.timeSec = 3.42; b.interp = LINEAR; b.value = "#4F46E5";
+        kf.shadowColor.points = {a, b};
+    }
+    {   // background colour: orange → orange (f105) → near-transparent (f144, 4770 ms)
+        text::ColorKeyPoint a; a.timeSec = 0.0;   a.interp = LINEAR; a.value = "rgba(234, 88, 12, 1)";
+        text::ColorKeyPoint b; b.timeSec = 3.48; b.interp = LINEAR; b.value = "#ea580c";
+        text::ColorKeyPoint c; c.timeSec = 4.77; c.interp = LINEAR; c.value = "rgba(0, 0, 0, 0.01)";
+        kf.backgroundColor.points = {a, b, c};
+    }
+    {   // glow colour f1 → f103
+        text::ColorKeyPoint a; a.timeSec = 0.0;   a.interp = LINEAR; a.value = "#FAC40A";
+        text::ColorKeyPoint b; b.timeSec = 3.39; b.interp = LINEAR; b.value = "#9333EA";
+        kf.glowColor.points = {a, b};
+    }
+    reader->SetStyleKeyframes(kf, fps);
+
+    auto* clip = new Clip(reader);
+    clip->Position(0.0);
+    clip->Start(0.0);
+    clip->End(5.196);
+    clip->Layer(1000);
+    clip->gravity = GRAVITY_CENTER;
+    clip->scale   = SCALE_NONE;
+    clip->location_x = Keyframe(0.0);
+    clip->location_y = Keyframe(0.0);
+    return clip;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -397,7 +516,7 @@ int main(int argc, char** argv) {
     // Resolution presets. Payloads 1-4 are 16:9 landscape; payload 5 is a 9:16 portrait project
     // (settings 2160x3840), so HD/FHD/4K there mean 720x1280 / 1080x1920 / 2160x3840.
     int W = 1280, H = 720;
-    const bool portrait = (which == "5");
+    const bool portrait = (which == "5" || which == "9");
     if (res == "1080" || res == "fhd" || res == "fullhd") { W = portrait ? 1080 : 1920; H = portrait ? 1920 : 1080; }
     else if (res == "4k" || res == "2160")                { W = portrait ? 2160 : 3840; H = portrait ? 3840 : 2160; }
     else                                                  { W = portrait ? 720  : 1280; H = portrait ? 1280 : 720;  }
@@ -411,7 +530,9 @@ int main(int argc, char** argv) {
     timeline.color = Color(std::string("#222326"));   // payload background (solid COLOR)
     timeline.Open();
 
-    if (which == "8") {
+    if (which == "9") {
+        timeline.AddClip(buildPayload9(W, H, fontsDir));
+    } else if (which == "8") {
         buildPayload8(timeline, W, H, fontsDir);
     } else if (which == "7") {
         buildPayload7(timeline, W, H, fontsDir);
@@ -490,6 +611,35 @@ int main(int argc, char** argv) {
     }
 
     } // end payload 1
+
+    // Payload 9: the user's real payload. Write a full MP4 (service-style, start frame 1 per the fix)
+    // plus key PNG frames, so the whole animation and the early-shadow behaviour can be inspected.
+    if (which == "9") {
+        const int64_t fullLast = static_cast<int64_t>(std::llround(5.196 * fps));   // ~156
+        // Optional 3rd arg caps the number of frames (e.g. "30" to render just the 1st second).
+        const int64_t lastFrame = argc > 3 ? std::min<int64_t>(fullLast, std::atoi(argv[3])) : fullLast;
+        FFmpegWriter w(mp4Path);
+        w.SetVideoOptions("libx264", W, H, Fraction(fps, 1), 24000000);
+        w.PrepareStreams();
+        w.SetOption(VIDEO_STREAM, "crf", "18");
+        w.SetOption(VIDEO_STREAM, "preset", "medium");
+        w.SetOption(VIDEO_STREAM, "g", "30");
+        w.Open();
+        w.WriteFrame(&timeline, 1, lastFrame);   // 1-indexed (matches the service fix)
+        w.Close();
+        std::cout << "Wrote " << mp4Path << " (" << W << "x" << H << ", frames 1.." << lastFrame << ")\n";
+        std::vector<int> keyFrames;
+        for (int fn : {1, 5, 10, 15, 20, 25, 30, 45, 103, 130})
+            if (fn <= lastFrame) keyFrames.push_back(fn);
+        for (int fn : keyFrames) {
+            auto fr = timeline.GetFrame(fn);
+            const std::string p = base + "-f" + std::to_string(fn) + ".png";
+            fr->Save(p, 1.0, "PNG", 100);
+            std::cout << "Wrote " << p << "\n";
+        }
+        timeline.Close();
+        return 0;
+    }
 
     // Keyframed payload: render several frames across the clip so the interpolation is visible.
     if (which == "7" || which == "8") {

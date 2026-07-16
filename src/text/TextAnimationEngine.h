@@ -196,6 +196,11 @@ struct TextClipAnimationFrame {
     ResolvedAnimProps props;
     std::optional<std::vector<std::pair<double, double>>> clipPolygon;
     bool scaleAnimated = false;
+    // Force the composited word-block texture path even when the tilt currently evaluates to 0.
+    // Set for clips with KEYFRAMED tilt so the frame where tilt == 0 renders the shadow the same
+    // (confined, baked-into-texture) way as neighbouring nonzero-tilt frames — otherwise the render
+    // flips to the flat path at exactly-0 tilt and the drop shadow visibly pops larger for a frame.
+    bool forceBlockTexture = false;
 
     // CHAR mode: resolve evaluated keyframes for a character by its draw index.
     std::function<ResolvedAnimProps(int)> getCharProps;

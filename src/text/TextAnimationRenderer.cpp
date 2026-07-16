@@ -253,7 +253,10 @@ void WordAnimationRenderer::renderWordAnimatedBlock(
     }
 
     // 3D / scale-animating presets draw the composited block texture instead of live glyphs.
-    if (is3D || (animation.scaleAnimated && !hasGlitch)) {
+    // `forceBlockTexture` keeps a keyframed-tilt clip on this path even at the frame where tilt == 0,
+    // so its (confined) shadow matches the neighbouring tilted frames instead of popping to the flat
+    // full-buffer shadow.
+    if (is3D || animation.forceBlockTexture || (animation.scaleAnimated && !hasGlitch)) {
         drawWordBlockTexture(content, paddingX, paddingY, scale, props, fontSize);
         canvas->restore();
         return;
