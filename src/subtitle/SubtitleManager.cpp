@@ -333,9 +333,13 @@ void SubtitleManager::renderAtFrame(std::shared_ptr<QImage> frameImage, int64_t 
     SkiaRenderer skiaRenderer(&canvas);
     SubtitleRenderer subtitleRenderer(&skiaRenderer, fps);
 
-    // Find and render active segments
+    // Find and render active segments. The active window is HALF-OPEN [startTimeMs, endTimeMs):
+    // subtitle segments tile the timeline contiguously (each segment's endTime == the next
+    // segment's startTime), so an inclusive end would make the boundary instant belong to BOTH
+    // the ending and the starting segment — rendering two words stacked on top of each other for
+    // that frame. Half-open assigns each boundary to exactly one segment (the next one).
     for (const auto& segment : segments) {
-        if (segment.visible && timeMs >= segment.startTimeMs && timeMs <= segment.endTimeMs) {
+        if (segment.visible && timeMs >= segment.startTimeMs && timeMs < segment.endTimeMs) {
             float segmentTimeMs = timeMs - segment.startTimeMs;
 
             // Use the segment's maxWidth if it has custom settings, otherwise use default
@@ -355,7 +359,7 @@ bool SubtitleManager::hasActiveSubtitlesAtFrame(const int64_t frameNumber) const
     const float timeMs = frameToMs(frameNumber, fps);
 
     for (const auto& segment : segments) {
-        if (segment.visible && timeMs >= segment.startTimeMs && timeMs <= segment.endTimeMs) {
+        if (segment.visible && timeMs >= segment.startTimeMs && timeMs < segment.endTimeMs) {
             return true;
         }
     }

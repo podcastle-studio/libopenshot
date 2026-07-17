@@ -205,7 +205,9 @@ void SubtitleRenderer::renderSegmentAtFrame(const SubtitleSegment& segment, cons
     const float timeMs = frameToMs(frameNumber, fps);
     const float segmentTimeMs = timeMs - segment.startTimeMs;
 
-    if (segmentTimeMs >= 0 && segmentTimeMs <= (segment.endTimeMs - segment.startTimeMs)) {
+    // Half-open [0, duration) so a frame landing exactly on the segment's end boundary is NOT drawn
+    // here (it belongs to the next segment) — consistent with SubtitleManager::renderAtFrame.
+    if (segmentTimeMs >= 0 && segmentTimeMs < (segment.endTimeMs - segment.startTimeMs)) {
         renderSegment(segment, settings, segmentTimeMs, canvasWidth, canvasHeight);
     }
 }

@@ -91,11 +91,15 @@ void withAnimatedPaint(subtitle::SkiaRenderer* renderer, const AnimatedPaintBase
 struct WordAnimationContent {
     double contentWidth = 0.0;
     double contentHeight = 0.0;
+    // True when the style has a glow. When set, the 3D texture path bakes the block in two z-layers
+    // (BelowGlow then AboveGlow) with the live glow composited between them, so the glow keeps its flat
+    // z-order (above background + shadow, below stroke + fill) instead of sinking under the whole block.
+    bool hasGlow = false;
     std::function<double(double blurSigma)> margin;
-    // Paint the block (background + glyphs) with its glyph-box top-left at (originX, originY).
-    // skipGlow omits the glow layer (composited-texture path draws the glow live instead);
-    // skipShadow omits the drop shadow (3D path draws it live so the warp doesn't foreshorten it).
-    std::function<void(double originX, double originY, bool skipGlow, bool skipShadow)> draw;
+    // Paint the block for a given z-band (see BlockDrawLayer): All = whole block with glow inline,
+    // BelowGlow = background + shadow, AboveGlow = stroke + fill. skipShadow omits the drop shadow
+    // (unused today; the shadow is always baked). glyph-box top-left sits at (originX, originY).
+    std::function<void(double originX, double originY, BlockDrawLayer layer, bool skipShadow)> draw;
     // Paint just the glow layer with the glyph-box top-left at (originX, originY).
     std::function<void(double originX, double originY, double opacityMul)> drawGlow;
     // Paint just the drop-shadow layer at (originX, originY). Optional (unset = shadow stays baked
@@ -135,12 +139,14 @@ public:
     void renderCharAnimated(
         const TextClipLayout& layout, const TextClipPaintStyle& style,
         const std::optional<TextClipBackgroundStyle>& background,
-        double originX, double originY, const TextClipAnimationFrame& animation, bool skipGlow = false);
+        double originX, double originY, const TextClipAnimationFrame& animation, bool skipGlow = false,
+        BlockDrawLayer layer = BlockDrawLayer::All);
 
     void renderCurvedCharAnimated(
         const CurvedTextGeometry& geometry, const TextClipLine& line, const TextClipPaintStyle& style,
         const std::optional<TextClipBackgroundStyle>& background,
-        double originX, double originY, const TextClipAnimationFrame& animation, bool skipGlow = false);
+        double originX, double originY, const TextClipAnimationFrame& animation, bool skipGlow = false,
+        BlockDrawLayer layer = BlockDrawLayer::All);
 
     // Draw ONLY the glow layer of the char animation (no fills / strokes / shadows). No-op when the
     // style has no glow. Used by the char-mode + 3D path to draw the glow live over the tilted block.
@@ -156,7 +162,8 @@ private:
     void drawAnimatedCharItems(
         std::vector<AnimatedCharItem>& items, const TextClipPaintStyle& style,
         const AnimationTransformFlags& flags,
-        double contentWidth, double contentHeight, double originX, double originY, bool skipGlow = false);
+        double contentWidth, double contentHeight, double originX, double originY, bool skipGlow = false,
+        BlockDrawLayer layer = BlockDrawLayer::All);
 
     subtitle::SkiaRenderer* renderer;
     TextGlowRenderer* glowRenderer;

@@ -7,6 +7,14 @@
 namespace openshot {
 namespace text {
 
+// z-band selector for painting a text block. The flat block order is
+// background → shadow → glow → stroke → fill. Under a 3D tilt the block is baked into offscreen
+// texture(s); when a glow is present the glow must be drawn LIVE (it can't be baked), so the block is
+// baked in TWO z-layers with the live glow composited between them:
+//   BelowGlow = background + shadow, AboveGlow = stroke + fill, All = the whole block (glow inline).
+// This reproduces the flat layer order under the tilt. See tmp/GLOW_TILT_ZORDER_FIX.md.
+enum class BlockDrawLayer { All, BelowGlow, AboveGlow };
+
 // Base coefficient: fontSize = projectWidth * SIZE_BASE_COEFFICIENT * transformation.size
 constexpr double SIZE_BASE_COEFFICIENT = 1.0 / 240.0;
 

@@ -296,7 +296,7 @@ void WordAnimationRenderer::renderWordAnimatedBlock(
                 SkClipOp::kIntersect, true);
         }
         canvas->translate(static_cast<float>(-centerX), static_cast<float>(-centerY));
-        content.draw(originX, originY, false, false);
+        content.draw(originX, originY, BlockDrawLayer::All, false);   // live path: whole block, glow inline
         canvas->restore();
     }
 
@@ -325,42 +325,54 @@ void WordAnimationRenderer::drawWordBlockTexture(
     const int texWidth = std::max(2, static_cast<int>(std::ceil(dstWidth * renderScale)));
     const int texHeight = std::max(2, static_cast<int>(std::ceil(dstHeight * renderScale)));
 
-    // Bake the shadow + stroke + fill into the flat texture, then let the 3D perspective warp the
-    // whole thing together — the shadow is a flat drop shadow on the same plane as the glyphs, so it
-    // must be tilted with them (matching the front end, which transforms one composited flat layer).
-    // Only the glow is drawn live below (it is a screen-space beam effect, not part of the flat plane).
-    sk_sp<SkSurface> surface = SkSurfaces::Raster(SkImageInfo::MakeN32Premul(texWidth, texHeight));
-    if (!surface) return;
-    SkCanvas* offscreen = surface->getCanvas();
-    offscreen->clear(SK_ColorTRANSPARENT);
-    offscreen->save();
-    offscreen->scale(static_cast<float>(renderScale), static_cast<float>(renderScale));
-    renderer->renderToCanvas(offscreen, [&] {
-        // Skip only the glow here; it is drawn live on the destination canvas below. The shadow stays
-        // baked so the perspective warp tilts it along with the glyphs.
-        content.draw(margin + paddingX, margin + paddingY, true, false);
-    });
-    offscreen->restore();
-    sk_sp<SkImage> image = surface->makeImageSnapshot();
-    if (!image) return;
+    const double opacity = clamp01(props.opacity());
+    const double motionBlurSigma = props.blur() > 0.0 ? props.blur() * fontSize : 0.0;
 
-    // Glow live, beneath the composited block, faded with the block's animated opacity.
-    content.drawGlow(-dstWidth / 2.0 + margin + paddingX, -dstHeight / 2.0 + margin + paddingY, clamp01(props.opacity()));
+    // Bake one z-band of the flat block into an offscreen image, then let the 3D perspective warp it.
+    // The shadow stays baked so the warp tilts it with the glyphs (matching the front end, which
+    // transforms one composited flat layer).
+    auto bakeLayer = [&](BlockDrawLayer layer) -> sk_sp<SkImage> {
+        sk_sp<SkSurface> surface = SkSurfaces::Raster(SkImageInfo::MakeN32Premul(texWidth, texHeight));
+        if (!surface) return nullptr;
+        SkCanvas* offscreen = surface->getCanvas();
+        offscreen->clear(SK_ColorTRANSPARENT);
+        offscreen->save();
+        offscreen->scale(static_cast<float>(renderScale), static_cast<float>(renderScale));
+        renderer->renderToCanvas(offscreen, [&] {
+            content.draw(margin + paddingX, margin + paddingY, layer, false);
+        });
+        offscreen->restore();
+        return surface->makeImageSnapshot();
+    };
+    auto drawLayerImage = [&](const sk_sp<SkImage>& image) {
+        if (!image) return;
+        SkPaint paint;
+        paint.setAntiAlias(true);
+        paint.setAlphaf(static_cast<float>(opacity));
+        if (motionBlurSigma > 0.0) {
+            paint.setImageFilter(SkImageFilters::Blur(motionBlurSigma, motionBlurSigma, SkTileMode::kClamp, nullptr));
+        }
+        canvas->drawImageRect(
+            image.get(),
+            SkRect::MakeWH(static_cast<float>(texWidth), static_cast<float>(texHeight)),
+            SkRect::MakeXYWH(static_cast<float>(-dstWidth / 2.0), static_cast<float>(-dstHeight / 2.0),
+                             static_cast<float>(dstWidth), static_cast<float>(dstHeight)),
+            SkSamplingOptions(SkFilterMode::kLinear, SkMipmapMode::kLinear),
+            &paint, SkCanvas::kStrict_SrcRectConstraint);
+    };
 
-    SkPaint paint;
-    paint.setAntiAlias(true);
-    paint.setAlphaf(static_cast<float>(clamp01(props.opacity())));
-    if (props.blur() > 0.0) {
-        const double sigma = props.blur() * fontSize;
-        paint.setImageFilter(SkImageFilters::Blur(sigma, sigma, SkTileMode::kClamp, nullptr));
+    if (!content.hasGlow) {
+        // Fast path (no glow): one texture holds the whole block. Byte-identical to before.
+        drawLayerImage(bakeLayer(BlockDrawLayer::All));
+        return;
     }
-    canvas->drawImageRect(
-        image.get(),
-        SkRect::MakeWH(static_cast<float>(texWidth), static_cast<float>(texHeight)),
-        SkRect::MakeXYWH(static_cast<float>(-dstWidth / 2.0), static_cast<float>(-dstHeight / 2.0),
-                         static_cast<float>(dstWidth), static_cast<float>(dstHeight)),
-        SkSamplingOptions(SkFilterMode::kLinear, SkMipmapMode::kLinear),
-        &paint, SkCanvas::kStrict_SrcRectConstraint);
+
+    // Glow present: bake the block in TWO z-layers and composite the LIVE glow between them, so the
+    // flat order (background + shadow → glow → stroke + fill) is preserved under the tilt. Previously
+    // the glow was drawn beneath the whole single texture, sinking it under the background/shadow.
+    drawLayerImage(bakeLayer(BlockDrawLayer::BelowGlow));                 // background + shadow
+    content.drawGlow(-dstWidth / 2.0 + margin + paddingX, -dstHeight / 2.0 + margin + paddingY, opacity);
+    drawLayerImage(bakeLayer(BlockDrawLayer::AboveGlow));                 // stroke + fill
 }
 
 // ── Char-mode renderer ───────────────────────────────────────────────────────
@@ -449,12 +461,18 @@ std::vector<AnimatedCharItem> collectCurvedAnimatedChars(
 void CharAnimationRenderer::drawAnimatedCharItems(
     std::vector<AnimatedCharItem>& items, const TextClipPaintStyle& style,
     const AnimationTransformFlags& flags,
-    double contentWidth, double contentHeight, double originX, double originY, bool skipGlow) {
+    double contentWidth, double contentHeight, double originX, double originY, bool skipGlow,
+    BlockDrawLayer layer) {
     SkCanvas* canvas = renderer->getCanvas();
     const double fontSize = style.fontSize;
     if (items.empty()) return;
 
-    if (style.dropShadow.has_value()) {
+    // z-band gating for the 3D two-texture split (see BlockDrawLayer).
+    const bool drawBelow = layer != BlockDrawLayer::AboveGlow;   // shadow (background is in caller)
+    const bool drawAbove = layer != BlockDrawLayer::BelowGlow;   // stroke + fill
+    const bool drawGlow  = layer == BlockDrawLayer::All;         // glow only in the single/all pass
+
+    if (drawBelow && style.dropShadow.has_value()) {
         const auto& shadow = *style.dropShadow;
         const double radians = shadow.angle * DEG;
         const double dx = std::cos(radians) * shadow.distance;
@@ -478,11 +496,11 @@ void CharAnimationRenderer::drawAnimatedCharItems(
         }
     }
 
-    if (style.glow.has_value() && !skipGlow) {
+    if (drawGlow && style.glow.has_value() && !skipGlow) {
         glowRenderer->drawAnimatedGlowLayer(items, style, *style.glow, contentWidth, contentHeight, originX, originY, flags);
     }
 
-    if (style.stroke.has_value()) {
+    if (drawAbove && style.stroke.has_value()) {
         const auto& stroke = *style.stroke;
         auto drawStrokes = [&] {
             for (const auto& item : items) {
@@ -516,6 +534,7 @@ void CharAnimationRenderer::drawAnimatedCharItems(
             canvas->restore();
         }
     };
+    if (!drawAbove) return;   // BelowGlow layer: shadow only, no stroke / fill
     if (style.colorGradient.has_value()) {
         const PaintGradient g = gradientFill(*style.colorGradient, originX, originY, contentWidth, contentHeight);
         withGradientCoverage(renderer, g, SkRect::MakeEmpty(), drawFills);
@@ -527,23 +546,25 @@ void CharAnimationRenderer::drawAnimatedCharItems(
 void CharAnimationRenderer::renderCharAnimated(
     const TextClipLayout& layout, const TextClipPaintStyle& style,
     const std::optional<TextClipBackgroundStyle>& background,
-    double originX, double originY, const TextClipAnimationFrame& animation, bool skipGlow) {
-    if (background.has_value()) {
+    double originX, double originY, const TextClipAnimationFrame& animation, bool skipGlow,
+    BlockDrawLayer layer) {
+    if (layer != BlockDrawLayer::AboveGlow && background.has_value()) {
         drawBackgroundRect(renderer, *background, originX, originY, layout.layoutWidth, layout.textHeight);
     }
     std::vector<AnimatedCharItem> items = collectAnimatedChars(layout, style, originX, originY, animation);
-    drawAnimatedCharItems(items, style, animation.flags, layout.layoutWidth, layout.textHeight, originX, originY, skipGlow);
+    drawAnimatedCharItems(items, style, animation.flags, layout.layoutWidth, layout.textHeight, originX, originY, skipGlow, layer);
 }
 
 void CharAnimationRenderer::renderCurvedCharAnimated(
     const CurvedTextGeometry& geometry, const TextClipLine& line, const TextClipPaintStyle& style,
     const std::optional<TextClipBackgroundStyle>& background,
-    double originX, double originY, const TextClipAnimationFrame& animation, bool skipGlow) {
-    if (background.has_value()) {
+    double originX, double originY, const TextClipAnimationFrame& animation, bool skipGlow,
+    BlockDrawLayer layer) {
+    if (layer != BlockDrawLayer::AboveGlow && background.has_value()) {
         drawBackgroundRect(renderer, *background, originX, originY, geometry.width, geometry.height);
     }
     std::vector<AnimatedCharItem> items = collectCurvedAnimatedChars(geometry, line, originX, originY, animation);
-    drawAnimatedCharItems(items, style, animation.flags, geometry.width, geometry.height, originX, originY, skipGlow);
+    drawAnimatedCharItems(items, style, animation.flags, geometry.width, geometry.height, originX, originY, skipGlow, layer);
 }
 
 void CharAnimationRenderer::drawCharAnimatedGlowOnly(
@@ -579,11 +600,12 @@ void renderWordAnimatedFlat(
     WordAnimationContent content;
     content.contentWidth = layout.layoutWidth;
     content.contentHeight = layout.textHeight;
+    content.hasGlow = style.glow.has_value();
     content.margin = [&style, &layout, extraLetterSpacing](double blurSigma) {
         return blockMargin(style, blurSigma, extraLetterSpacing, layout);
     };
-    content.draw = [renderer, &layout, &style, &background, extraLetterSpacing](double ox, double oy, bool skipGlow, bool skipShadow) {
-        renderLayout(layout, style, background, ox, oy, renderer, extraLetterSpacing, skipGlow, skipShadow);
+    content.draw = [renderer, &layout, &style, &background, extraLetterSpacing](double ox, double oy, BlockDrawLayer layer, bool skipShadow) {
+        renderLayout(layout, style, background, ox, oy, renderer, extraLetterSpacing, /*skipGlow*/ false, skipShadow, layer);
     };
     content.drawGlow = [&glow, &layout, &style, extraLetterSpacing](double ox, double oy, double opacityMul) {
         if (style.glow.has_value()) {
@@ -605,11 +627,12 @@ void renderWordAnimatedCurved(
     WordAnimationContent content;
     content.contentWidth = geometry.width;
     content.contentHeight = geometry.height;
+    content.hasGlow = style.glow.has_value();
     content.margin = [&style, &geometry](double blurSigma) {
         return curvedBlockMargin(style, geometry, blurSigma);
     };
-    content.draw = [&painter, &geometry, &layout, &style, &background](double ox, double oy, bool skipGlow, bool skipShadow) {
-        painter.drawCurvedStatic(geometry, layout, style, background, ox, oy, skipGlow, skipShadow);
+    content.draw = [&painter, &geometry, &layout, &style, &background](double ox, double oy, BlockDrawLayer layer, bool skipShadow) {
+        painter.drawCurvedStatic(geometry, layout, style, background, ox, oy, /*skipGlow*/ false, skipShadow, layer);
     };
     content.drawGlow = [&glow, &layout, &style, &geometry](double ox, double oy, double opacityMul) {
         if (style.glow.has_value()) {
@@ -635,12 +658,13 @@ void renderCharAnimated3D(
     WordAnimationContent content;
     content.contentWidth = layout.layoutWidth;
     content.contentHeight = layout.textHeight;
+    content.hasGlow = style.glow.has_value();
     content.margin = [&style, &layout](double blurSigma) {
         return blockMargin(style, blurSigma, 0.0, layout);
     };
-    content.draw = [renderer, &glow, &layout, &style, &background, &animation](double ox, double oy, bool skipGlow, bool /*skipShadow*/) {
+    content.draw = [renderer, &glow, &layout, &style, &background, &animation](double ox, double oy, BlockDrawLayer layer, bool /*skipShadow*/) {
         // Char + 3D keeps the shadow baked into the texture (no live drawShadow set below).
-        CharAnimationRenderer(renderer, &glow).renderCharAnimated(layout, style, background, ox, oy, animation, skipGlow);
+        CharAnimationRenderer(renderer, &glow).renderCharAnimated(layout, style, background, ox, oy, animation, /*skipGlow*/ false, layer);
     };
     content.drawGlow = [renderer, &glow, &layout, &style, &animation](double ox, double oy, double /*opacityMul*/) {
         CharAnimationRenderer(renderer, &glow).drawCharAnimatedGlowOnly(layout, style, ox, oy, animation);
@@ -659,11 +683,12 @@ void renderCurvedCharAnimated3D(
     WordAnimationContent content;
     content.contentWidth = geometry.width;
     content.contentHeight = geometry.height;
+    content.hasGlow = style.glow.has_value();
     content.margin = [&style, &geometry](double blurSigma) {
         return curvedBlockMargin(style, geometry, blurSigma);
     };
-    content.draw = [renderer, &glow, &geometry, &line, &style, &background, &animation](double ox, double oy, bool skipGlow, bool /*skipShadow*/) {
-        CharAnimationRenderer(renderer, &glow).renderCurvedCharAnimated(geometry, line, style, background, ox, oy, animation, skipGlow);
+    content.draw = [renderer, &glow, &geometry, &line, &style, &background, &animation](double ox, double oy, BlockDrawLayer layer, bool /*skipShadow*/) {
+        CharAnimationRenderer(renderer, &glow).renderCurvedCharAnimated(geometry, line, style, background, ox, oy, animation, /*skipGlow*/ false, layer);
     };
     content.drawGlow = [renderer, &glow, &geometry, &line, &style, &animation](double ox, double oy, double /*opacityMul*/) {
         CharAnimationRenderer(renderer, &glow).drawCurvedCharAnimatedGlowOnly(geometry, line, style, ox, oy, animation);

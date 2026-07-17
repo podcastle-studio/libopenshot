@@ -116,7 +116,8 @@ void renderLayout(
     subtitle::SkiaRenderer* renderer,
     double extraLetterSpacing = 0.0,
     bool skipGlow = false,
-    bool skipShadow = false);
+    bool skipShadow = false,
+    BlockDrawLayer layer = BlockDrawLayer::All);
 
 /// Draw ONLY the flat block's drop-shadow pass (no background / glow / stroke / fill). No-op when
 /// the paint has no shadow. Used by the 3D-tilt word path to draw the shadow live under the same

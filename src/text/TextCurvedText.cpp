@@ -199,26 +199,34 @@ void CurvedTextPainter::drawCurvedStatic(
     double originX,
     double originY,
     bool skipGlow,
-    bool skipShadow)
+    bool skipShadow,
+    BlockDrawLayer layer)
 {
     SkCanvas* canvas = renderer->getCanvas();
     if (!canvas) return;
 
-    if (background.has_value()) {
+    // z-band gating for the 3D two-texture split (see BlockDrawLayer).
+    const bool drawBelow = layer != BlockDrawLayer::AboveGlow;   // background + shadow
+    const bool drawAbove = layer != BlockDrawLayer::BelowGlow;   // stroke + fill
+    const bool drawGlow  = layer == BlockDrawLayer::All;         // glow only in the single/all pass
+
+    if (drawBelow && background.has_value()) {
         drawBackgroundRect(renderer, *background, originX, originY, geometry.width, geometry.height);
     }
 
-    if (!skipShadow) {
+    if (drawBelow && !skipShadow) {
         drawCurvedShadowOnly(geometry, style, originX, originY);
     }
 
-    if (style.glow.has_value() && !skipGlow) {
+    if (drawGlow && style.glow.has_value() && !skipGlow) {
         glowRenderer->drawGlowLayer(layout, style, *style.glow, originX, originY, &geometry);
     }
 
     // Coverage-box for the per-glyph gradient layers: the content box padded so no glyph ink /
     // stroke is clipped by the saveLayer bounds. The gradient endpoints still span the CONTENT
     // box (via gradientFill), so the ramp maps in block space regardless of the arc transforms.
+    if (!drawAbove) return;   // BelowGlow layer: background + shadow only, no stroke / fill
+
     const double coverageMargin = curvedBlockMargin(style, geometry, 0.0);
     const SkRect coverageBox = SkRect::MakeLTRB(
         static_cast<float>(originX - coverageMargin), static_cast<float>(originY - coverageMargin),

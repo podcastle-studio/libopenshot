@@ -893,9 +893,16 @@ void renderLayout(
     subtitle::SkiaRenderer* renderer,
     double extraLetterSpacing,
     bool skipGlow,
-    bool skipShadow)
+    bool skipShadow,
+    BlockDrawLayer layer)
 {
-    if (background.has_value()) {
+    // z-band gating for the 3D two-texture split (see BlockDrawLayer): BelowGlow paints only
+    // background + shadow, AboveGlow paints only stroke + fill, All paints everything (glow inline).
+    const bool drawBelow = layer != BlockDrawLayer::AboveGlow;   // background + shadow
+    const bool drawAbove = layer != BlockDrawLayer::BelowGlow;   // stroke + fill
+    const bool drawGlow  = layer == BlockDrawLayer::All;         // glow only in the single/all pass
+
+    if (drawBelow && background.has_value()) {
         drawBackgroundRect(renderer, *background, originX, originY, layout.layoutWidth, layout.textHeight);
     }
 
@@ -921,15 +928,15 @@ void renderLayout(
     // Global passes (background -> all shadows -> glow -> all strokes -> all fills) so a line's
     // shadow/stroke can never land on top of another line's fill, and the glow sits beneath all
     // crisp glyphs. For non-overlapping lines this is identical to per-line draw order.
-    if (!skipShadow) {
+    if (drawBelow && !skipShadow) {
         renderShadowLayer(layout, paint, originX, originY, renderer, extraLetterSpacing);
     }
 
-    if (paint.glow.has_value() && !skipGlow) {
+    if (drawGlow && paint.glow.has_value() && !skipGlow) {
         TextGlowRenderer(renderer).drawGlowLayer(layout, paint, *paint.glow, originX, originY, nullptr, 1.0, extraLetterSpacing);
     }
 
-    if (paint.stroke.has_value()) {
+    if (drawAbove && paint.stroke.has_value()) {
         for (size_t li = 0; li < layout.lines.size(); ++li) {
             const auto& line = layout.lines[li];
             if (line.text.empty()) continue;
@@ -939,12 +946,14 @@ void renderLayout(
         }
     }
 
-    for (size_t li = 0; li < layout.lines.size(); ++li) {
-        const auto& line = layout.lines[li];
-        if (line.text.empty()) continue;
-        drawTextLine(line, paint, lineStart(line),
-                     firstBaselineY + static_cast<double>(li) * layout.lineHeight, renderer, extraLetterSpacing,
-                     fillGradient.has_value() ? &*fillGradient : nullptr);
+    if (drawAbove) {
+        for (size_t li = 0; li < layout.lines.size(); ++li) {
+            const auto& line = layout.lines[li];
+            if (line.text.empty()) continue;
+            drawTextLine(line, paint, lineStart(line),
+                         firstBaselineY + static_cast<double>(li) * layout.lineHeight, renderer, extraLetterSpacing,
+                         fillGradient.has_value() ? &*fillGradient : nullptr);
+        }
     }
 }
 

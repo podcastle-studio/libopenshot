@@ -70,7 +70,8 @@ public:
         double originX,
         double originY,
         bool skipGlow = false,
-        bool skipShadow = false);
+        bool skipShadow = false,
+        BlockDrawLayer layer = BlockDrawLayer::All);
 
     // Draw ONLY the curved drop-shadow pass (no background / glow / stroke / fill). No-op when the
     // style has no shadow. Used by the 3D-tilt path to draw the shadow live under the transform.
