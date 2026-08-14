@@ -322,8 +322,39 @@ void WordAnimationRenderer::drawWordBlockTexture(
     const double fullMaxDim = std::max(dstWidth, dstHeight) * scale;
     if (fullMaxDim > WORD_BLOCK_MAX_TEXTURE_DIM)
         renderScale = scale * (WORD_BLOCK_MAX_TEXTURE_DIM / fullMaxDim);
-    const int texWidth = std::max(2, static_cast<int>(std::ceil(dstWidth * renderScale)));
-    const int texHeight = std::max(2, static_cast<int>(std::ceil(dstHeight * renderScale)));
+
+    // Sub-pixel-exact blit. The texture is an integer number of pixels but the dst rect is
+    // fractional (a content box of 768 x 100.8 becomes a 776 x 108.8 rect drawn from a 776 x 109
+    // raster, centred on a fractional offset), so drawImageRect resamples the block bilinearly —
+    // it costs the glyph edges ~1px of softness for no geometric gain. When the block carries no
+    // transform beyond a translation (a resting frame: identity animation props, no tilt, no
+    // rotation — yet the canvas centre can still land on a half pixel) the round-trip can be made
+    // an exact copy instead: fold the destination's sub-pixel offset into the BAKE, then blit on
+    // whole device pixels with nearest sampling. The glyphs land at exactly the same device
+    // position as before — the anti-aliasing simply happens once, while drawing them, instead of
+    // being smeared afterwards. Any real scale/rotation/3D (i.e. every frame this texture path
+    // exists for) keeps the resampling blit, where it is doing genuine work.
+    double bakeOffsetX = 0.0, bakeOffsetY = 0.0;
+    double blitLocalX = 0.0, blitLocalY = 0.0;
+    bool exactBlit = false;
+    if (canvas && renderScale == 1.0) {
+        const SkMatrix ctm = canvas->getLocalToDeviceAs3x3();
+        if (ctm.isTranslate()) {
+            const double deviceLeft = -dstWidth / 2.0 + ctm.getTranslateX();
+            const double deviceTop = -dstHeight / 2.0 + ctm.getTranslateY();
+            bakeOffsetX = deviceLeft - std::floor(deviceLeft);
+            bakeOffsetY = deviceTop - std::floor(deviceTop);
+            // Places texture pixel (0,0) on the whole device pixel floor(deviceLeft/Top): the
+            // bake offset above puts the content back at its exact sub-pixel place inside it.
+            blitLocalX = -dstWidth / 2.0 - bakeOffsetX;
+            blitLocalY = -dstHeight / 2.0 - bakeOffsetY;
+            exactBlit = true;
+        }
+    }
+
+    // The bake offset shifts the content within the texture, so the texture grows to cover it.
+    const int texWidth = std::max(2, static_cast<int>(std::ceil(dstWidth * renderScale + bakeOffsetX)));
+    const int texHeight = std::max(2, static_cast<int>(std::ceil(dstHeight * renderScale + bakeOffsetY)));
 
     const double opacity = clamp01(props.opacity());
     const double motionBlurSigma = props.blur() > 0.0 ? props.blur() * fontSize : 0.0;
@@ -339,7 +370,7 @@ void WordAnimationRenderer::drawWordBlockTexture(
         offscreen->save();
         offscreen->scale(static_cast<float>(renderScale), static_cast<float>(renderScale));
         renderer->renderToCanvas(offscreen, [&] {
-            content.draw(margin + paddingX, margin + paddingY, layer, false);
+            content.draw(margin + paddingX + bakeOffsetX, margin + paddingY + bakeOffsetY, layer, false);
         });
         offscreen->restore();
         return surface->makeImageSnapshot();
@@ -352,9 +383,21 @@ void WordAnimationRenderer::drawWordBlockTexture(
         if (motionBlurSigma > 0.0) {
             paint.setImageFilter(SkImageFilters::Blur(motionBlurSigma, motionBlurSigma, SkTileMode::kClamp, nullptr));
         }
+        if (exactBlit) {
+            // Integer device translate + nearest sampling = a straight copy of the baked pixels.
+            canvas->drawImage(image.get(), static_cast<float>(blitLocalX), static_cast<float>(blitLocalY),
+                              SkSamplingOptions(), &paint);
+            return;
+        }
+        // Source rect = the part of the raster the block was actually baked into, NOT the whole
+        // (ceil-rounded) texture: the block occupies dstWidth x dstHeight of it, so mapping the
+        // full texture onto the dst rect squeezed the content by the rounding slack (~0.2px here)
+        // and biased its position. Sampling exactly what was baked makes the src->dst mapping 1:1,
+        // leaving only the transform the frame actually asks for.
         canvas->drawImageRect(
             image.get(),
-            SkRect::MakeWH(static_cast<float>(texWidth), static_cast<float>(texHeight)),
+            SkRect::MakeWH(static_cast<float>(std::min<double>(dstWidth * renderScale, texWidth)),
+                           static_cast<float>(std::min<double>(dstHeight * renderScale, texHeight))),
             SkRect::MakeXYWH(static_cast<float>(-dstWidth / 2.0), static_cast<float>(-dstHeight / 2.0),
                              static_cast<float>(dstWidth), static_cast<float>(dstHeight)),
             SkSamplingOptions(SkFilterMode::kLinear, SkMipmapMode::kLinear),
