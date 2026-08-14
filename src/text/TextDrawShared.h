@@ -137,6 +137,15 @@ inline double measureLetterAdvance(const SkFont& font, const std::string& letter
 
 // Draw one codepoint `letter` (with per-character fallback font) at the given
 // baseline-left position. Mirrors CanvasKitRenderer.drawLetter in the reference.
+//
+// The glyph goes out as an outline PATH (drawTextAsPath), not through Skia's glyph-mask cache,
+// which snaps every glyph origin to a whole device pixel and re-hints the outline at each scale.
+// Under the per-letter transforms of a char-level animation that snapping is what makes the
+// letters jitter as they settle; a path lands at the exact subpixel position with a shape that
+// does not change with scale. Every text-clip painter (static block, curved, glow, animated)
+// draws through here, so all of them stay pixel-consistent with each other — a resting frame
+// can't shift against the animated frame before it. Faces with no outline (colour emoji) fall
+// back to the mask draw.
 inline void drawLetter(
     subtitle::SkiaRenderer* renderer,
     const std::string& letter,
@@ -148,7 +157,10 @@ inline void drawLetter(
     const size_t len = letter.empty() ? 0 : utf8CharLen(letter, 0);
     const SkUnichar uc = len ? utf8Decode(letter, 0, len) : 0;
     const SkFont font = getFontForChar(renderer, style, uc);
-    renderer->drawText(letter, static_cast<float>(x), static_cast<float>(baselineY), paint, font);
+    const float fx = static_cast<float>(x);
+    const float fy = static_cast<float>(baselineY);
+    if (renderer->drawTextAsPath(letter, fx, fy, paint, font)) return;
+    renderer->drawText(letter, fx, fy, paint, font);
 }
 
 // ---------------------------------------------------------------------------

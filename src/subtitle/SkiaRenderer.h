@@ -3,14 +3,17 @@
 #include <skia/include/core/SkCanvas.h>
 #include <skia/include/core/SkFont.h>
 #include <skia/include/core/SkPaint.h>
+#include <skia/include/core/SkPath.h>
 #include <skia/include/core/SkPoint.h>
 #include <skia/include/core/SkShader.h>
+#include <skia/include/core/SkSpan.h>
 #include <skia/include/core/SkTypeface.h>
 #include <skia/include/core/SkFontMgr.h>
 #include <skia/include/core/SkRRect.h>
 
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <sstream>
 #include <utility>
@@ -85,6 +88,40 @@ public:
 
     void drawText(const std::string& text, const float x, const float y, const SkPaint& paint, const SkFont& font) const {
         canvas->drawString(text.c_str(), x, y, font, paint);
+    }
+
+    // Draw a SINGLE glyph as its outline path instead of through Skia's glyph-mask cache.
+    //
+    // Mask drawing rounds a glyph's device origin to a whole pixel (SkFont::isSubpixel() is off,
+    // and even with it on the y axis still rounds) and re-grid-fits the outline through the
+    // hinter at every device scale. Under an animated transform that turns continuous motion into
+    // 1px steps with the stems shimmering between them — the visible jitter of char-level text
+    // animations, worst during the slow settle at the end of an ease, where the true per-frame
+    // motion is smaller than the rounding.
+    //
+    // A path is filled at the exact subpixel position from an unhinted, scale-invariant outline
+    // (SkFont::getPath bakes it at Skia's canonical path size with hinting off), so a glyph moves
+    // and scales smoothly. This is the same route Skia takes on its own above a 256px device text
+    // size (SkStrikeSpec::ShouldDrawAsPath), so it makes small text behave the way large text
+    // already did rather than introducing a new look. Synthetic bold/italic (embolden / skewX)
+    // are preserved — they live on the font, not the rasterizer.
+    //
+    // Returns false when the text isn't exactly one glyph or that glyph has no outline
+    // (bitmap-only faces, e.g. colour emoji), so the caller can fall back to drawText.
+    bool drawTextAsPath(const std::string& text, const float x, const float y,
+                        const SkPaint& paint, const SkFont& font) const {
+        if (!canvas || text.empty()) return false;
+        SkGlyphID glyphs[2] = {0, 0};
+        const size_t count = font.textToGlyphs(
+            text.c_str(), text.length(), SkTextEncoding::kUTF8, SkSpan<SkGlyphID>(glyphs));
+        if (count != 1) return false;
+        const std::optional<SkPath> path = font.getPath(glyphs[0]);
+        if (!path.has_value()) return false;
+        canvas->save();
+        canvas->translate(x, y);
+        canvas->drawPath(*path, paint);
+        canvas->restore();
+        return true;
     }
 
     void drawPath(const SkPath& path, const SkPaint& paint) const {
