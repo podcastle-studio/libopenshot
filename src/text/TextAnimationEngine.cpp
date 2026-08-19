@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <numeric>
 
 namespace openshot {
 namespace text {
@@ -163,16 +164,68 @@ ActiveRange presetActiveRange(const PresetKeyframeSet& preset) {
     return {start, end};
 }
 
-CharStagger computeCharStagger(double duration, int n, bool isLoop) {
-    if (n <= 1) return {duration, 0.0};
-    if (isLoop) {
-        const double stagger = std::min(duration * 0.15, duration / n);
-        return {duration, stagger};
+// ── Stagger order ────────────────────────────────────────────────────────────
+
+double SplitMix32::next() {
+    // All operations are unsigned 32-bit; the multiplies WRAP (JS Math.imul).
+    auto mul32 = [](std::uint32_t a, std::uint32_t b) -> std::uint32_t {
+        return static_cast<std::uint32_t>(a * b);
+    };
+    state_ = static_cast<std::uint32_t>(state_ + 0x6d2b79f5u);
+    std::uint32_t e = state_;
+    e = mul32(e ^ (e >> 15), e | 1u);
+    e ^= static_cast<std::uint32_t>(e + mul32(e ^ (e >> 7), e | 61u));
+    return static_cast<double>(e ^ (e >> 14)) / 4294967296.0;
+}
+
+std::vector<int> staggerOrderIndices(int n, StaggerFrom from, std::uint32_t seed) {
+    if (n <= 0) return {};
+    std::vector<int> out(static_cast<size_t>(n), 0);
+    switch (from) {
+        case StaggerFrom::FIRST:
+            for (int i = 0; i < n; ++i) out[i] = i;
+            break;
+        case StaggerFrom::LAST:
+            for (int i = 0; i < n; ++i) out[i] = n - i - 1;
+            break;
+        case StaggerFrom::CENTER:
+            // Middle unit first, spreading outwards. Repeats indices on purpose (units start in
+            // pairs), so the highest step is about n/2. At n == 2 both collapse to 0.
+            for (int i = 0; i < n; ++i)
+                out[i] = static_cast<int>(std::floor(std::abs(i - (n - 1) / 2.0)));
+            break;
+        case StaggerFrom::EDGES:
+            // Both ends first, converging on the middle. Also repeats indices on purpose.
+            for (int i = 0; i < n; ++i) out[i] = std::min(i, n - i - 1);
+            break;
+        case StaggerFrom::RANDOM: {
+            // Fisher-Yates yields unit-per-step; what's needed is step-per-unit, so invert it.
+            std::vector<int> permutation(static_cast<size_t>(n));
+            std::iota(permutation.begin(), permutation.end(), 0);
+            SplitMix32 rng(seed);
+            for (int i = n - 1; i > 0; --i) {
+                const int j = static_cast<int>(std::floor(rng.next() * (i + 1)));
+                std::swap(permutation[i], permutation[std::min(std::max(j, 0), i)]);
+            }
+            for (int step = 0; step < n; ++step) out[permutation[step]] = step;
+            break;
+        }
     }
-    constexpr double CHAR_ANIM_FRACTION = 0.55;
-    const double perCharDuration = duration * CHAR_ANIM_FRACTION;
-    const double stagger = (duration - perCharDuration) / (n - 1);
-    return {perCharDuration, stagger};
+    return out;
+}
+
+UnitStagger computeUnitStagger(double duration, int unitCount, bool isLoop,
+                               double fraction, int steps) {
+    // Checked FIRST: a single unit has no stagger to make room for, so it gets the whole slot
+    // whatever the fraction says.
+    if (unitCount <= 1) return {duration, 0.0};
+    // A loop already gives every unit the full cycle and only offsets them, so the fraction has
+    // nothing to divide up.
+    if (isLoop) return {duration, std::min(duration * 0.15, duration / unitCount)};
+
+    const double perUnitDuration = duration * std::max(0.0, std::min(1.0, fraction));
+    const double stagger = steps > 0 ? (duration - perUnitDuration) / steps : 0.0;
+    return {perUnitDuration, stagger};
 }
 
 std::optional<AnimationTimeline> buildAnimationTimeline(const TextAnimations& anims, double textDurationSec) {
@@ -190,16 +243,27 @@ std::optional<AnimationTimeline> buildAnimationTimeline(const TextAnimations& an
 
 namespace {
 
-AnimationMode presetMode(const std::optional<std::string>& presetId, const AnimationPresetMap& presets) {
-    if (!presetId.has_value()) return AnimationMode::NONE;
+const AnimationPreset* findPreset(const std::optional<std::string>& presetId,
+                                  const AnimationPresetMap& presets) {
+    if (!presetId.has_value()) return nullptr;
     const auto it = presets.find(*presetId);
-    if (it == presets.end()) return AnimationMode::NONE;
-    return it->second.level == AnimationPresetLevel::CHAR ? AnimationMode::CHAR : AnimationMode::WORD;
+    return it == presets.end() ? nullptr : &it->second;
+}
+
+// level `box` -> block mode; char / word / line -> unit mode with that granularity.
+bool unitGranularityForLevel(AnimationPresetLevel level, UnitGranularity& out) {
+    switch (level) {
+        case AnimationPresetLevel::CHAR: out = UnitGranularity::CHAR; return true;
+        case AnimationPresetLevel::WORD: out = UnitGranularity::WORD; return true;
+        case AnimationPresetLevel::LINE: out = UnitGranularity::LINE; return true;
+        case AnimationPresetLevel::BOX:  return false;
+    }
+    return false;
 }
 
 } // namespace
 
-FramePlan planFrame(double elapsedSec, const AnimationTimeline& timeline, int charCount,
+FramePlan planFrame(double elapsedSec, const AnimationTimeline& timeline, const UnitCounts& counts,
                     const AnimationPresetMap& presets) {
     const double elapsed = std::max(0.0, std::min(elapsedSec, timeline.textDuration));
 
@@ -227,37 +291,58 @@ FramePlan planFrame(double elapsedSec, const AnimationTimeline& timeline, int ch
         phaseDur = timeline.loopDuration;
     }
 
-    const AnimationMode mode = presetMode(plan.presetId, presets);
-    if (mode == AnimationMode::NONE) {
+    const AnimationPreset* preset = findPreset(plan.presetId, presets);
+    UnitGranularity granularity = UnitGranularity::CHAR;
+    if (!preset) {
         plan.presetId.reset();
         plan.mode = AnimationMode::NONE;
         return plan;
     }
 
     const bool isLoop = plan.phase == AnimationPhase::LOOP;
-    if (mode == AnimationMode::WORD) {
+    if (!unitGranularityForLevel(preset->level, granularity)) {
         const double d = phaseDur > 0.0 ? phaseDur : 1.0;
-        double wp;
+        double bp;
         if (isLoop) {
-            wp = std::fmod(elapsed - phaseStartSec, d) / d;
-            if (wp < 0.0) wp += 1.0;
+            bp = std::fmod(elapsed - phaseStartSec, d) / d;
+            if (bp < 0.0) bp += 1.0;
         } else {
-            wp = std::max(0.0, std::min(1.0, (elapsed - phaseStartSec) / d));
+            bp = std::max(0.0, std::min(1.0, (elapsed - phaseStartSec) / d));
         }
-        plan.mode = AnimationMode::WORD;
-        plan.wordProgress = wp;
+        plan.mode = AnimationMode::BLOCK;
+        plan.blockProgress = bp;
         return plan;
     }
 
-    const CharStagger cs = computeCharStagger(phaseDur, charCount, isLoop);
-    plan.mode = AnimationMode::CHAR;
-    plan.charTiming = CharTiming{phaseStartSec, cs.perCharDuration, cs.stagger, isLoop};
+    const PresetKeyframeSet& ks = preset->keyframes;
+    int unitCount = counts.forGranularity(granularity);
+    std::vector<int> order;
+    int steps = unitCount - 1;
+
+    if (ks.staggerFrom.has_value()) {
+        // A NAMED order is looked up by ordinal in the DRAWN index space (see UnitCounts).
+        unitCount = granularity == UnitGranularity::CHAR ? counts.charsDrawn
+                                                         : counts.forGranularity(granularity);
+        order = staggerOrderIndices(unitCount, *ks.staggerFrom, ks.staggerSeed);
+        steps = order.empty() ? 0 : *std::max_element(order.begin(), order.end());
+    }
+
+    const UnitStagger us = computeUnitStagger(phaseDur, unitCount, isLoop,
+                                              ks.unitFraction.value_or(DEFAULT_UNIT_FRACTION), steps);
+    plan.mode = AnimationMode::UNIT;
+    plan.granularity = granularity;
+    plan.unitTiming = UnitTiming{phaseStartSec, us.perUnitDuration, us.stagger, isLoop, std::move(order)};
     return plan;
 }
 
-double charProgressAt(double elapsedSec, const CharTiming& timing, int charIndex) {
-    const double e = elapsedSec - timing.phaseStartSec - charIndex * timing.stagger;
-    const double d = timing.perCharDuration > 0.0 ? timing.perCharDuration : 1.0;
+double unitProgressAt(double elapsedSec, const UnitTiming& timing, int unitIndex, int ordinal) {
+    int step = unitIndex;
+    if (!timing.order.empty()) {
+        step = (ordinal >= 0 && ordinal < static_cast<int>(timing.order.size()))
+            ? timing.order[static_cast<size_t>(ordinal)] : 0;
+    }
+    const double e = elapsedSec - timing.phaseStartSec - step * timing.stagger;
+    const double d = timing.perUnitDuration > 0.0 ? timing.perUnitDuration : 1.0;
     if (timing.isLoop) {
         double m = std::fmod(e, d);
         m = std::fmod(m + d, d);
@@ -283,22 +368,24 @@ std::optional<TextClipAnimationFrame> buildAnimationFrame(
         ? presetActiveRange(ks)
         : ActiveRange{0.0, 1.0};
 
-    if (plan.mode == AnimationMode::CHAR) {
-        const CharTiming timing = plan.charTiming;
+    if (plan.mode == AnimationMode::UNIT) {
+        const UnitTiming timing = plan.unitTiming;
         TextClipAnimationFrame frame;
-        frame.mode = AnimationMode::CHAR;
+        frame.mode = AnimationMode::UNIT;
         frame.flags = flags;
-        frame.getCharProps = [ks, range, timing, elapsedSec](int charIndex) {
-            const double p = range.start + charProgressAt(elapsedSec, timing, charIndex) * (range.end - range.start);
+        frame.granularity = plan.granularity;
+        frame.getUnitProps = [ks, range, timing, elapsedSec](int unitIndex, int ordinal) {
+            const double p = range.start
+                + unitProgressAt(elapsedSec, timing, unitIndex, ordinal) * (range.end - range.start);
             return evalKeyframes(ks, p);
         };
         return frame;
     }
 
-    if (plan.mode == AnimationMode::WORD) {
-        const double progress = range.start + plan.wordProgress * (range.end - range.start);
+    if (plan.mode == AnimationMode::BLOCK) {
+        const double progress = range.start + plan.blockProgress * (range.end - range.start);
         TextClipAnimationFrame frame;
-        frame.mode = AnimationMode::WORD;
+        frame.mode = AnimationMode::BLOCK;
         frame.flags = flags;
         frame.props = evalKeyframes(ks, progress);
         frame.clipPolygon = evalPolygon(ks.polyTrack, progress);

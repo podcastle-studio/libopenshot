@@ -108,8 +108,8 @@ TextGlowRenderer::GlowMargin TextGlowRenderer::glowMarginFor(
     // silhouette at a slightly different size each frame and make the text visibly jump ~1px.
     const double rectPad = std::ceil(glow.rayLen * (halfExtent + offMax) + offMax);
 
-    // Stable silhouette padding: stroke overhang + fixed beam-blur softening + word-mode spread +
-    // per-char overshoot (extraPad). Independent of rayLen / light offset, so the image is stable.
+    // Stable silhouette padding: stroke overhang + fixed beam-blur softening + block-mode spread +
+    // per-unit overshoot (extraPad). Independent of rayLen / light offset, so the image is stable.
     const double strokeOverhang = style.stroke.has_value() ? style.stroke->width : 0.0;
     const double imageMargin =
         std::ceil(strokeOverhang + beamBlurSigma * 3.0 + spreadMargin + extraPad + 4.0);
@@ -180,7 +180,7 @@ sk_sp<SkImage> TextGlowRenderer::renderGlowSilhouette(
 }
 
 void TextGlowRenderer::drawAnimatedGlowLayer(
-    const std::vector<AnimatedCharItem>& items,
+    const std::vector<AnimatedUnitItem>& items,
     const TextClipPaintStyle& style,
     const TextClipGlowStyle& glow,
     double contentWidth, double contentHeight,
@@ -195,7 +195,7 @@ void TextGlowRenderer::drawAnimatedGlowLayer(
     glowScale_ = glowScaleSetting();
     glowStepCap_ = glowStepCapSetting();
 
-    // Char-mode glyphs pop/slide past the resting box; pad the silhouette by an extra fontSize to
+    // Unit-mode glyphs pop/slide past the resting box; pad the silhouette by an extra fontSize to
     // absorb that overshoot (this silhouette is rebuilt every frame anyway, so a bigger stable
     // margin costs nothing and prevents the transformed glyphs from clipping).
     const GlowMargin geom = glowMarginFor(contentWidth, contentHeight, style, glow, 0.0, style.fontSize);
@@ -219,13 +219,13 @@ void TextGlowRenderer::drawAnimatedGlowLayer(
         target->translate(static_cast<float>(imageMargin - originX), static_cast<float>(imageMargin - originY));
         for (const auto& item : items) {
             target->save();
-            applyCharTransform(renderer, target, item, style.fontSize, animation);
+            applyUnitTransform(renderer, target, item, style.fontSize, animation);
             if (style.stroke.has_value()) {
                 withAnimatedPaint(renderer, {glow.color, 1.0, style.stroke->width}, item.opacity, 0.0,
-                    [&](const SkPaint& paint) { drawAnimatedLetter(renderer, item, 0.0, 0.0, paint, style); });
+                    [&](const SkPaint& paint) { drawAnimatedUnit(renderer, item, 0.0, 0.0, paint, style); });
             }
             withAnimatedPaint(renderer, {glow.color, 1.0, std::nullopt}, item.opacity, 0.0,
-                [&](const SkPaint& paint) { drawAnimatedLetter(renderer, item, 0.0, 0.0, paint, style); });
+                [&](const SkPaint& paint) { drawAnimatedUnit(renderer, item, 0.0, 0.0, paint, style); });
             target->restore();
         }
         target->restore();

@@ -348,11 +348,11 @@ void TextClipReader::buildPlan() {
     //    a positive duration, and preset keyframe data is available to drive it.
     timeline.reset();
     has_animation = false;
-    anim_char_count = 0;
+    anim_unit_counts = text::UnitCounts{};
     if (animations.hasActive() && anim_duration_sec > 0.0 && !presets.empty()) {
         timeline = text::buildAnimationTimeline(animations, anim_duration_sec);
         has_animation = timeline.has_value();
-        for (const auto& line : layout.lines) anim_char_count += static_cast<int>(text::utf8Length(line.text));
+        anim_unit_counts = text::countAnimationUnits(layout);
     }
 
     // Cache the plan for per-frame rendering. Origin = top-left of the content box; the
@@ -377,7 +377,7 @@ void TextClipReader::buildPlan() {
     double animHalfW = 0.0, animHalfH = 0.0;
     if (has_animation) {
         const text::AnimatedExtent extent = text::computeAnimatedExtent(
-            layout, paint, boundingWidth, boundingHeight, *timeline, presets, anim_char_count);
+            layout, paint, boundingWidth, boundingHeight, *timeline, presets, anim_unit_counts);
         animHalfW = extent.halfWidth;
         animHalfH = extent.halfHeight;
     }
@@ -600,7 +600,7 @@ std::shared_ptr<Frame> TextClipReader::GetFrame(int64_t requested_frame) {
     std::optional<text::TextClipAnimationFrame> animFrame;
     if (has_animation && timeline.has_value()) {
         const double elapsedSec = std::max(0.0, static_cast<double>(requested_frame - 1) / anim_fps);
-        const text::FramePlan plan = text::planFrame(elapsedSec, *timeline, anim_char_count, presets);
+        const text::FramePlan plan = text::planFrame(elapsedSec, *timeline, anim_unit_counts, presets);
         if (plan.presetId.has_value()) {
             const auto it = presets.find(*plan.presetId);
             if (it != presets.end()) {
@@ -620,7 +620,7 @@ std::shared_ptr<Frame> TextClipReader::GetFrame(int64_t requested_frame) {
         // Per-frame render. Resolve the style keyframe overlay (if any), else reuse the cached plan.
         // No single-image cache here — the content varies frame to frame.
         const ResolvedPlan rp = has_style_keyframes ? resolvePlanAtFrame(requested_frame) : cachedPlan();
-        // A clip that EVER uses the confined word-texture / char path (any active animation, or any
+        // A clip that EVER uses the confined block-texture / unit path (any active animation, or any
         // static/keyframed 3D tilt) renders its drop shadow bounded to the block; the flat/live path
         // draws it unbounded into the full frame buffer. If a clip mixes the two — e.g. a resting frame
         // with tilt == 0, then a nonzero-tilt frame, or a flat body then an animation — the shadow
@@ -633,13 +633,13 @@ std::shared_ptr<Frame> TextClipReader::GetFrame(int64_t requested_frame) {
         const bool tilt = rp.tiltX != 0.0 || rp.tiltY != 0.0 || forceTexture;
         std::optional<text::TextClipAnimationFrame> frame = animFrame;
         if (frame.has_value()) {
-            // Fold the (static or keyframed) 3D tilt into the active animation frame: word frames add
-            // it to their props; char frames carry it separately (baked flat then tilted as one unit).
+            // Fold the (static or keyframed) 3D tilt into the active animation frame: block frames add
+            // it to their props; unit frames carry it separately (baked flat then tilted as one piece).
             if (tilt) {
-                if (frame->mode == text::AnimationMode::WORD) {
-                    text::composeStatic3DIntoWordFrame(*frame, rp.tiltX, rp.tiltY);
+                if (frame->mode == text::AnimationMode::BLOCK) {
+                    text::composeStatic3DIntoBlockFrame(*frame, rp.tiltX, rp.tiltY);
                     if (forceTexture) frame->forceBlockTexture = true;
-                } else if (frame->mode == text::AnimationMode::CHAR) {
+                } else if (frame->mode == text::AnimationMode::UNIT) {
                     frame->static3D = std::make_pair(rp.tiltX, rp.tiltY);
                 }
             }

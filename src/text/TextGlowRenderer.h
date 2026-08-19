@@ -22,7 +22,7 @@ namespace openshot {
 namespace subtitle { class SkiaRenderer; }
 namespace text {
 
-struct AnimatedCharItem;
+struct AnimatedUnitItem;
 
 class TextGlowRenderer {
 public:
@@ -30,7 +30,7 @@ public:
 
     // Draw the volumetric glow layer beneath the crisp text. `curved` non-null routes the
     // silhouette through the arc geometry; otherwise the flat block is used. `opacityMul`
-    // fades the glow with an animated block opacity. `extraLetterSpacing` (word-mode spread)
+    // fades the glow with an animated block opacity. `extraLetterSpacing` (block-mode spread)
     // repositions the silhouette glyphs to track the live text.
     void drawGlowLayer(
         const TextClipLayout& layout,
@@ -46,7 +46,7 @@ public:
     // colour under its per-char transform) and run the shared god-ray shader over it, so the
     // beams emanate from the one shared block light source exactly like the resting glow.
     void drawAnimatedGlowLayer(
-        const std::vector<AnimatedCharItem>& items,
+        const std::vector<AnimatedUnitItem>& items,
         const TextClipPaintStyle& style,
         const TextClipGlowStyle& glow,
         double contentWidth, double contentHeight,
@@ -55,7 +55,7 @@ public:
 
 private:
     // The silhouette image is sized ONLY by glyph geometry (imageMargin: stroke overhang + fixed
-    // beam-blur softening + word-mode spread + per-char overshoot) so it stays a stable size while
+    // beam-blur softening + block-mode spread + per-unit overshoot) so it stays a stable size while
     // an animating rayLen/light-offset changes only shader uniforms — no per-frame re-rasterize,
     // no ~1px jump. `rectPad` carries the beam reach and only widens the ray-march draw surface
     // (sampled beyond the image via Decal), never the image. `renderScale` folds the quality

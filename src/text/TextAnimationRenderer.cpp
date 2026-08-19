@@ -31,7 +31,6 @@ namespace text {
 
 namespace {
 
-constexpr char SPACE = ' ';
 constexpr double DEG = M_PI / 180.0;
 
 // CSS perspective(d) rotateX/rotateY translateZ(tz) as a 3x3 projective matrix (exact for a
@@ -65,7 +64,7 @@ SkMatrix concatRotation3D(const ResolvedAnimProps& props, double fontSize, bool 
     return m;
 }
 
-// Cap on the offscreen word-block texture (px). The block margin (uncapped glow/spread
+// Cap on the offscreen block texture (px). The block margin (uncapped glow/spread
 // reservation) × the size scale could otherwise request a multi-thousand-px surface, which
 // aborts the raster heap or makes SkSurfaces::Raster return null and silently drop the whole
 // block+glow. Beyond this, the raster is downscaled (and drawn back into the same dst rect).
@@ -165,10 +164,11 @@ void applyPolygonClip(SkCanvas* canvas, const std::vector<std::pair<double, doub
     canvas->clipPath(builder.detach(), SkClipOp::kIntersect, true);
 }
 
-// ── Per-glyph primitives ─────────────────────────────────────────────────────
+// ── Per-unit primitives ──────────────────────────────────────────────────────
 
-void applyCharTransform(subtitle::SkiaRenderer* renderer, SkCanvas* canvas,
-                        const AnimatedCharItem& item, double fontSize, const AnimationTransformFlags& flags) {
+void applyUnitTransform(subtitle::SkiaRenderer* renderer, SkCanvas* canvas,
+                        const AnimatedUnitItem& item, double fontSize, const AnimationTransformFlags& flags) {
+    // Curved: (1) translate to the arc anchor, rotate by its tangent, shift baseline -> box centre.
     if (item.curve.has_value()) {
         canvas->translate(static_cast<float>(item.curve->arcX), static_cast<float>(item.curve->arcY));
         canvas->rotate(static_cast<float>(item.curve->rotationDeg));
@@ -176,14 +176,53 @@ void applyCharTransform(subtitle::SkiaRenderer* renderer, SkCanvas* canvas,
     } else {
         canvas->translate(static_cast<float>(item.centerX), static_cast<float>(item.centerY));
     }
+    // (2) the unit's animation transform, then (3) the inset clip — deliberately BEFORE the
+    // per-glyph local placement (step 4, in drawAnimatedUnit) so it masks the unit as a whole
+    // rather than each glyph separately.
     applyAnimationTransform(canvas, item.props, fontSize, item.boxWidth, item.boxHeight, flags);
     applyInsetClip(canvas, item.props, item.boxWidth, item.boxHeight);
     (void)renderer;
 }
 
-void drawAnimatedLetter(subtitle::SkiaRenderer* renderer, const AnimatedCharItem& item,
-                        double dx, double dy, const SkPaint& paint, const TextClipPaintStyle& style) {
-    drawLetter(renderer, item.letter, item.x - item.centerX + dx, item.baselineY - item.centerY + dy, paint, style);
+void drawAnimatedUnit(subtitle::SkiaRenderer* renderer, const AnimatedUnitItem& item,
+                      double dx, double dy, const SkPaint& paint, const TextClipPaintStyle& style) {
+    SkCanvas* canvas = renderer->getCanvas();
+    for (const AnimatedUnitGlyph& glyph : item.glyphs) {
+        if (!glyph.local.has_value()) {
+            drawLetter(renderer, glyph.letter, glyph.offsetX + dx, glyph.offsetY + dy, paint, style);
+            continue;
+        }
+        // (4) multi-glyph curved unit: step this glyph back out to its own arc position inside the
+        // (already animated) anchor frame, so the group moves rigidly without flattening the curve.
+        const double pivotOffsetY = item.curve.has_value() ? item.curve->pivotOffsetY : 0.0;
+        canvas->save();
+        canvas->translate(static_cast<float>(glyph.local->dx),
+                          static_cast<float>(glyph.local->dy + pivotOffsetY));
+        canvas->rotate(static_cast<float>(glyph.local->rotationDeg));
+        canvas->translate(0.0f, static_cast<float>(-pivotOffsetY));
+        drawLetter(renderer, glyph.letter, glyph.offsetX + dx, glyph.offsetY + dy, paint, style);
+        canvas->restore();
+    }
+}
+
+// ── Unit model ───────────────────────────────────────────────────────────────
+
+UnitCounts countAnimationUnits(const TextClipLayout& layout) {
+    UnitCounts counts;
+    for (const TextClipLine& line : layout.lines) {
+        if (line.text.empty()) continue;
+        bool lineHasInk = false;
+        bool inWord = false;
+        forEachUtf8(line.text, [&](const std::string& letter, SkUnichar) {
+            ++counts.chars;
+            if (isSpaceGlyph(letter)) { inWord = false; return; }
+            ++counts.charsDrawn;
+            lineHasInk = true;
+            if (!inWord) { ++counts.words; inWord = true; }   // a word never crosses a line
+        });
+        if (lineHasInk) ++counts.lines;
+    }
+    return counts;
 }
 
 void withAnimatedPaint(subtitle::SkiaRenderer* renderer, const AnimatedPaintBase& base,
@@ -203,10 +242,10 @@ void withAnimatedPaint(subtitle::SkiaRenderer* renderer, const AnimatedPaintBase
     draw(paint);
 }
 
-// ── Word-mode renderer ───────────────────────────────────────────────────────
+// ── Block-mode renderer ──────────────────────────────────────────────────────
 
-void WordAnimationRenderer::renderWordAnimatedBlock(
-    const WordAnimationContent& content,
+void BlockAnimationRenderer::renderBlockAnimated(
+    const BlockAnimationContent& content,
     const TextClipPaintStyle& style,
     const std::optional<TextClipBackgroundStyle>& background,
     double originX, double originY, double scale,
@@ -257,7 +296,7 @@ void WordAnimationRenderer::renderWordAnimatedBlock(
     // so its (confined) shadow matches the neighbouring tilted frames instead of popping to the flat
     // full-buffer shadow.
     if (is3D || animation.forceBlockTexture || (animation.scaleAnimated && !hasGlitch)) {
-        drawWordBlockTexture(content, paddingX, paddingY, scale, props, fontSize);
+        drawBlockTexture(content, paddingX, paddingY, scale, props, fontSize);
         canvas->restore();
         return;
     }
@@ -304,8 +343,8 @@ void WordAnimationRenderer::renderWordAnimatedBlock(
     canvas->restore();
 }
 
-void WordAnimationRenderer::drawWordBlockTexture(
-    const WordAnimationContent& content,
+void BlockAnimationRenderer::drawBlockTexture(
+    const BlockAnimationContent& content,
     double paddingX, double paddingY, double scale,
     const ResolvedAnimProps& props, double fontSize) {
     SkCanvas* canvas = renderer->getCanvas();
@@ -418,16 +457,36 @@ void WordAnimationRenderer::drawWordBlockTexture(
     drawLayerImage(bakeLayer(BlockDrawLayer::AboveGlow));                 // stroke + fill
 }
 
-// ── Char-mode renderer ───────────────────────────────────────────────────────
+// ── Unit-mode renderer ───────────────────────────────────────────────────────
 
 namespace {
 
-std::vector<AnimatedCharItem> collectAnimatedChars(
+// One glyph accumulated while grouping a unit, before the unit box is known.
+struct PendingGlyph {
+    std::string letter;
+    double x = 0.0;         // draw origin (baseline-left), layout coordinates
+    double advance = 0.0;
+};
+
+// Grouping granularity -> whether a unit is flushed on every glyph / on spaces / at end of line.
+bool isPerGlyphGranularity(UnitGranularity g) { return g == UnitGranularity::CHAR; }
+
+// Flat text: group the laid-out glyphs into stagger units and resolve each unit's props + box.
+// Glyphs are laid out FIRST and grouped SECOND — the granularity only decides which glyphs share
+// one stagger index and one pivot box, so a `word` preset is a `char` preset whose glyphs were
+// bundled together. Spaces and empty units are never emitted, so a unit index always addresses a
+// unit that actually draws.
+std::vector<AnimatedUnitItem> collectAnimatedUnits(
     const TextClipLayout& layout, const TextClipPaintStyle& style,
     double originX, double originY, const TextClipAnimationFrame& animation) {
-    std::vector<AnimatedCharItem> items;
+    std::vector<AnimatedUnitItem> items;
+    const UnitGranularity granularity = animation.granularity;
     const double firstBaselineY = originY + layout.firstLineAscent;
-    int charIndex = 0;
+    int slot = 0;          // char SLOT position — keeps counting through spaces
+    int drawnIndex = 0;    // position among the glyphs that actually draw
+    int unitOrdinal = 0;   // consecutive index over the emitted word / line units
+
+    std::vector<PendingGlyph> pending;
 
     for (size_t li = 0; li < layout.lines.size(); ++li) {
         const TextClipLine& line = layout.lines[li];
@@ -435,74 +494,149 @@ std::vector<AnimatedCharItem> collectAnimatedChars(
         const double baselineY = firstBaselineY + static_cast<double>(li) * layout.lineHeight;
         double cursor = originX + getLineStartX(line, layout, style.alignment, 0.0);
 
+        // Emit the accumulated glyphs as one unit. `index` drives the default stagger order,
+        // `ordinal` is the index a NAMED order is looked up by (see UnitCounts).
+        auto flush = [&](int index, int ordinal) {
+            if (pending.empty()) return;
+            const ResolvedAnimProps props = animation.getUnitProps(index, ordinal);
+            const double opacity = clamp01(props.opacity());
+            if (opacity > 0.0) {   // skip the entire unit when its opacity clamps to 0
+                // Interior spaces count towards the box; leading / trailing ones don't.
+                const double left  = pending.front().x;
+                const double right = pending.back().x + pending.back().advance;
+                AnimatedUnitItem item;
+                item.centerX = (left + right) / 2.0;
+                item.centerY = baselineY - (line.ascent - line.descent) / 2.0;
+                item.boxWidth = right - left;
+                item.boxHeight = line.ascent + line.descent;   // ink box of the line the unit sits on
+                item.props = props;
+                item.opacity = opacity;
+                item.glyphs.reserve(pending.size());
+                for (const PendingGlyph& g : pending) {
+                    item.glyphs.push_back(AnimatedUnitGlyph{
+                        g.letter, g.x - item.centerX, baselineY - item.centerY, std::nullopt});
+                }
+                items.push_back(std::move(item));
+            }
+            pending.clear();
+        };
+
         size_t i = 0;
         forEachUtf8(line.text, [&](const std::string& letter, SkUnichar) {
             const double advance = i < line.letterAdvances.size() ? line.letterAdvances[i] : 0.0;
-            const int index = charIndex++;
-            if (letter != std::string(1, SPACE)) {
-                const ResolvedAnimProps props = animation.getCharProps(index);
-                const double opacity = clamp01(props.opacity());
-                if (opacity > 0.0) {
-                    AnimatedCharItem item;
-                    item.letter = letter;
-                    item.x = cursor;
-                    item.baselineY = baselineY;
-                    item.centerX = cursor + advance / 2.0;
-                    item.centerY = baselineY - (line.ascent - line.descent) / 2.0;
-                    item.boxWidth = advance;
-                    item.boxHeight = line.ascent + line.descent;
-                    item.props = props;
-                    item.opacity = opacity;
-                    items.push_back(std::move(item));
+            const int slotIndex = slot++;
+            if (isSpaceGlyph(letter)) {
+                // A word never crosses a space (nor a line).
+                if (granularity == UnitGranularity::WORD && !pending.empty()) {
+                    const int o = unitOrdinal++;
+                    flush(o, o);
                 }
+            } else {
+                const int ordinal = drawnIndex++;
+                pending.push_back(PendingGlyph{letter, cursor, advance});
+                // char granularity: the unit index is the SLOT position, the ordinal the drawn one.
+                if (isPerGlyphGranularity(granularity)) flush(slotIndex, ordinal);
             }
             cursor += advance;
             ++i;
         });
+        // End of line closes any open word unit, and the line unit.
+        if (!pending.empty()) { const int o = unitOrdinal++; flush(o, o); }
     }
     return items;
 }
 
-std::vector<AnimatedCharItem> collectCurvedAnimatedChars(
+// Curved text: same grouping, but a multi-glyph unit pivots about a single ANCHOR point on the arc
+// and each of its glyphs is stepped back out to its own arc position AFTER the animation transform.
+std::vector<AnimatedUnitItem> collectCurvedAnimatedUnits(
     const CurvedTextGeometry& geometry, const TextClipLine& line,
     double originX, double originY, const TextClipAnimationFrame& animation) {
-    std::vector<AnimatedCharItem> items;
+    std::vector<AnimatedUnitItem> items;
+    const UnitGranularity granularity = animation.granularity;
     const double pivotOffsetY = (line.ascent - line.descent) / 2.0;
     const double boxHeight = line.ascent + line.descent;
-    int charIndex = 0;
+    int slot = 0;
+    int drawnIndex = 0;
+    int unitOrdinal = 0;
 
-    for (const auto& placement : geometry.placements) {
-        const int index = charIndex++;
-        if (isSpaceGlyph(placement.letter)) continue;
-        const ResolvedAnimProps props = animation.getCharProps(index);
+    std::vector<const CurvedGlyphPlacement*> pending;
+
+    auto flush = [&](int index, int ordinal) {
+        if (pending.empty()) return;
+        const ResolvedAnimProps props = animation.getUnitProps(index, ordinal);
         const double opacity = clamp01(props.opacity());
-        if (opacity <= 0.0) continue;
+        if (opacity > 0.0) {
+            // Anchor = the middle placement, or the mean of the two middle ones. Position and
+            // tangent both vary affinely along the arc, so this sits at the unit's arc midpoint to
+            // within half a glyph advance.
+            const double middle = static_cast<double>(pending.size() - 1) / 2.0;
+            const CurvedGlyphPlacement& low = *pending[static_cast<size_t>(std::floor(middle))];
+            const CurvedGlyphPlacement& high = *pending[static_cast<size_t>(std::ceil(middle))];
+            const double anchorCx = (&low == &high) ? low.cx : (low.cx + high.cx) / 2.0;
+            const double anchorCy = (&low == &high) ? low.cy : (low.cy + high.cy) / 2.0;
+            const double anchorRot = (&low == &high) ? low.rotation : (low.rotation + high.rotation) / 2.0;
 
-        AnimatedCharItem item;
-        item.letter = placement.letter;
-        item.x = -placement.advance / 2.0;
-        item.baselineY = pivotOffsetY;
-        item.centerX = 0.0;
-        item.centerY = 0.0;
-        item.boxWidth = placement.advance;
-        item.boxHeight = boxHeight;
-        item.props = props;
-        item.opacity = opacity;
-        item.curve = CurvedCharPlacement{
-            originX + placement.cx,
-            originY + placement.cy,
-            placement.rotation * 180.0 / M_PI,
-            pivotOffsetY,
-        };
-        items.push_back(std::move(item));
+            double arcLength = 0.0;
+            for (const CurvedGlyphPlacement* p : pending) arcLength += p->advance;
+
+            AnimatedUnitItem item;
+            item.centerX = 0.0;
+            item.centerY = 0.0;
+            item.boxWidth = arcLength;   // the unit's ARC length (the chord it encloses is shorter)
+            item.boxHeight = boxHeight;
+            item.props = props;
+            item.opacity = opacity;
+            item.curve = CurvedUnitAnchor{
+                originX + anchorCx, originY + anchorCy, anchorRot * 180.0 / M_PI, pivotOffsetY};
+
+            const bool multi = pending.size() > 1;
+            const double cosA = std::cos(anchorRot);
+            const double sinA = std::sin(anchorRot);
+            item.glyphs.reserve(pending.size());
+            for (const CurvedGlyphPlacement* p : pending) {
+                AnimatedUnitGlyph glyph;
+                glyph.letter = p->letter;
+                // Offsets relative to the (own) box centre, so the shared letter-drawing code
+                // works unchanged inside the rotated frame.
+                glyph.offsetX = -p->advance / 2.0;
+                glyph.offsetY = pivotOffsetY;
+                if (multi) {
+                    // Local placement measured in the anchor's ROTATED frame.
+                    const double ddx = p->cx - anchorCx;
+                    const double ddy = p->cy - anchorCy;
+                    glyph.local = CurvedGlyphLocal{
+                        cosA * ddx + sinA * ddy,
+                        -sinA * ddx + cosA * ddy,
+                        (p->rotation - anchorRot) * 180.0 / M_PI};
+                }
+                item.glyphs.push_back(std::move(glyph));
+            }
+            items.push_back(std::move(item));
+        }
+        pending.clear();
+    };
+
+    for (const CurvedGlyphPlacement& placement : geometry.placements) {
+        const int slotIndex = slot++;
+        if (isSpaceGlyph(placement.letter)) {
+            if (granularity == UnitGranularity::WORD && !pending.empty()) {
+                const int o = unitOrdinal++;
+                flush(o, o);
+            }
+            continue;
+        }
+        const int ordinal = drawnIndex++;
+        pending.push_back(&placement);
+        if (isPerGlyphGranularity(granularity)) flush(slotIndex, ordinal);
     }
+    if (!pending.empty()) { const int o = unitOrdinal++; flush(o, o); }
     return items;
 }
 
 } // namespace
 
-void CharAnimationRenderer::drawAnimatedCharItems(
-    std::vector<AnimatedCharItem>& items, const TextClipPaintStyle& style,
+void UnitAnimationRenderer::drawAnimatedUnitItems(
+    std::vector<AnimatedUnitItem>& items, const TextClipPaintStyle& style,
     const AnimationTransformFlags& flags,
     double contentWidth, double contentHeight, double originX, double originY, bool skipGlow,
     BlockDrawLayer layer) {
@@ -528,13 +662,13 @@ void CharAnimationRenderer::drawAnimatedCharItems(
                 std::sqrt(shadow.blur * shadow.blur + animBlur * animBlur + style.blur * style.blur)
                 * SHADOW_BLUR_SIGMA_SCALE;
             canvas->save();
-            applyCharTransform(renderer, canvas, item, fontSize, flags);
+            applyUnitTransform(renderer, canvas, item, fontSize, flags);
             if (style.stroke.has_value()) {
                 withAnimatedPaint(renderer, {shadow.color, shadow.opacity, style.stroke->width}, item.opacity, combinedBlur,
-                    [&](const SkPaint& paint) { drawAnimatedLetter(renderer, item, dx, dy, paint, style); });
+                    [&](const SkPaint& paint) { drawAnimatedUnit(renderer, item, dx, dy, paint, style); });
             }
             withAnimatedPaint(renderer, {shadow.color, shadow.opacity, std::nullopt}, item.opacity, combinedBlur,
-                [&](const SkPaint& paint) { drawAnimatedLetter(renderer, item, dx, dy, paint, style); });
+                [&](const SkPaint& paint) { drawAnimatedUnit(renderer, item, dx, dy, paint, style); });
             canvas->restore();
         }
     }
@@ -549,9 +683,9 @@ void CharAnimationRenderer::drawAnimatedCharItems(
             for (const auto& item : items) {
                 const double animBlur = item.props.blur() > 0.0 ? item.props.blur() * fontSize : 0.0;
                 canvas->save();
-                applyCharTransform(renderer, canvas, item, fontSize, flags);
+                applyUnitTransform(renderer, canvas, item, fontSize, flags);
                 withAnimatedPaint(renderer, {stroke.color, 1.0, stroke.width}, item.opacity, combineBlur(animBlur, calibratedTextBlur(style.blur)),
-                    [&](const SkPaint& paint) { drawAnimatedLetter(renderer, item, 0.0, 0.0, paint, style); });
+                    [&](const SkPaint& paint) { drawAnimatedUnit(renderer, item, 0.0, 0.0, paint, style); });
                 canvas->restore();
             }
         };
@@ -570,10 +704,10 @@ void CharAnimationRenderer::drawAnimatedCharItems(
         for (const auto& item : items) {
             const double animBlur = item.props.blur() > 0.0 ? item.props.blur() * fontSize : 0.0;
             canvas->save();
-            applyCharTransform(renderer, canvas, item, fontSize, flags);
+            applyUnitTransform(renderer, canvas, item, fontSize, flags);
             withAnimatedPaint(renderer, {style.color, coreOpacity, std::nullopt}, item.opacity,
                 combineBlur(combineBlur(animBlur, calibratedTextBlur(style.blur)), coreSoftBlur),
-                [&](const SkPaint& paint) { drawAnimatedLetter(renderer, item, 0.0, 0.0, paint, style); });
+                [&](const SkPaint& paint) { drawAnimatedUnit(renderer, item, 0.0, 0.0, paint, style); });
             canvas->restore();
         }
     };
@@ -586,7 +720,7 @@ void CharAnimationRenderer::drawAnimatedCharItems(
     }
 }
 
-void CharAnimationRenderer::renderCharAnimated(
+void UnitAnimationRenderer::renderUnitAnimated(
     const TextClipLayout& layout, const TextClipPaintStyle& style,
     const std::optional<TextClipBackgroundStyle>& background,
     double originX, double originY, const TextClipAnimationFrame& animation, bool skipGlow,
@@ -594,11 +728,11 @@ void CharAnimationRenderer::renderCharAnimated(
     if (layer != BlockDrawLayer::AboveGlow && background.has_value()) {
         drawBackgroundRect(renderer, *background, originX, originY, layout.layoutWidth, layout.textHeight);
     }
-    std::vector<AnimatedCharItem> items = collectAnimatedChars(layout, style, originX, originY, animation);
-    drawAnimatedCharItems(items, style, animation.flags, layout.layoutWidth, layout.textHeight, originX, originY, skipGlow, layer);
+    std::vector<AnimatedUnitItem> items = collectAnimatedUnits(layout, style, originX, originY, animation);
+    drawAnimatedUnitItems(items, style, animation.flags, layout.layoutWidth, layout.textHeight, originX, originY, skipGlow, layer);
 }
 
-void CharAnimationRenderer::renderCurvedCharAnimated(
+void UnitAnimationRenderer::renderCurvedUnitAnimated(
     const CurvedTextGeometry& geometry, const TextClipLine& line, const TextClipPaintStyle& style,
     const std::optional<TextClipBackgroundStyle>& background,
     double originX, double originY, const TextClipAnimationFrame& animation, bool skipGlow,
@@ -606,25 +740,25 @@ void CharAnimationRenderer::renderCurvedCharAnimated(
     if (layer != BlockDrawLayer::AboveGlow && background.has_value()) {
         drawBackgroundRect(renderer, *background, originX, originY, geometry.width, geometry.height);
     }
-    std::vector<AnimatedCharItem> items = collectCurvedAnimatedChars(geometry, line, originX, originY, animation);
-    drawAnimatedCharItems(items, style, animation.flags, geometry.width, geometry.height, originX, originY, skipGlow, layer);
+    std::vector<AnimatedUnitItem> items = collectCurvedAnimatedUnits(geometry, line, originX, originY, animation);
+    drawAnimatedUnitItems(items, style, animation.flags, geometry.width, geometry.height, originX, originY, skipGlow, layer);
 }
 
-void CharAnimationRenderer::drawCharAnimatedGlowOnly(
+void UnitAnimationRenderer::drawUnitAnimatedGlowOnly(
     const TextClipLayout& layout, const TextClipPaintStyle& style,
     double originX, double originY, const TextClipAnimationFrame& animation) {
     if (!style.glow.has_value()) return;
-    std::vector<AnimatedCharItem> items = collectAnimatedChars(layout, style, originX, originY, animation);
+    std::vector<AnimatedUnitItem> items = collectAnimatedUnits(layout, style, originX, originY, animation);
     if (items.empty()) return;
     glowRenderer->drawAnimatedGlowLayer(items, style, *style.glow, layout.layoutWidth, layout.textHeight,
                                         originX, originY, animation.flags);
 }
 
-void CharAnimationRenderer::drawCurvedCharAnimatedGlowOnly(
+void UnitAnimationRenderer::drawCurvedUnitAnimatedGlowOnly(
     const CurvedTextGeometry& geometry, const TextClipLine& line, const TextClipPaintStyle& style,
     double originX, double originY, const TextClipAnimationFrame& animation) {
     if (!style.glow.has_value()) return;
-    std::vector<AnimatedCharItem> items = collectCurvedAnimatedChars(geometry, line, originX, originY, animation);
+    std::vector<AnimatedUnitItem> items = collectCurvedAnimatedUnits(geometry, line, originX, originY, animation);
     if (items.empty()) return;
     glowRenderer->drawAnimatedGlowLayer(items, style, *style.glow, geometry.width, geometry.height,
                                         originX, originY, animation.flags);
@@ -634,13 +768,13 @@ void CharAnimationRenderer::drawCurvedCharAnimatedGlowOnly(
 
 namespace {
 
-void renderWordAnimatedFlat(
+void renderBlockAnimatedFlat(
     subtitle::SkiaRenderer* renderer, const TextClipLayout& layout, const TextClipPaintStyle& style,
     const std::optional<TextClipBackgroundStyle>& background, double originX, double originY, double scale,
     const TextClipAnimationFrame& animation) {
     const double extraLetterSpacing = animation.props.letterSpacing() * style.fontSize;
     TextGlowRenderer glow(renderer);
-    WordAnimationContent content;
+    BlockAnimationContent content;
     content.contentWidth = layout.layoutWidth;
     content.contentHeight = layout.textHeight;
     content.hasGlow = style.glow.has_value();
@@ -658,16 +792,16 @@ void renderWordAnimatedFlat(
     content.drawShadow = [renderer, &layout, &style, extraLetterSpacing](double ox, double oy) {
         renderShadowLayer(layout, style, ox, oy, renderer, extraLetterSpacing);
     };
-    WordAnimationRenderer(renderer).renderWordAnimatedBlock(content, style, background, originX, originY, scale, animation);
+    BlockAnimationRenderer(renderer).renderBlockAnimated(content, style, background, originX, originY, scale, animation);
 }
 
-void renderWordAnimatedCurved(
+void renderBlockAnimatedCurved(
     subtitle::SkiaRenderer* renderer, const CurvedTextGeometry& geometry, const TextClipLayout& layout,
     const TextClipPaintStyle& style, const std::optional<TextClipBackgroundStyle>& background,
     double originX, double originY, double scale, const TextClipAnimationFrame& animation) {
     TextGlowRenderer glow(renderer);
     CurvedTextPainter painter(renderer, &glow);
-    WordAnimationContent content;
+    BlockAnimationContent content;
     content.contentWidth = geometry.width;
     content.contentHeight = geometry.height;
     content.hasGlow = style.glow.has_value();
@@ -685,20 +819,20 @@ void renderWordAnimatedCurved(
     content.drawShadow = [&painter, &geometry, &style](double ox, double oy) {
         painter.drawCurvedShadowOnly(geometry, style, ox, oy);
     };
-    WordAnimationRenderer(renderer).renderWordAnimatedBlock(content, style, background, originX, originY, scale, animation);
+    BlockAnimationRenderer(renderer).renderBlockAnimated(content, style, background, originX, originY, scale, animation);
 }
 
-// Char-mode animation composed with a static 3D tilt: paint the per-letter animation FLAT into
-// the word-mode composited texture (skipGlow), then draw that whole texture under the block's 3D
-// rotation — reusing the word texture+3D core with a buildStatic3DFrame frame. The glow is drawn
-// live afterwards under the same transform (matches the word path).
-void renderCharAnimated3D(
+// Unit-mode animation composed with a static 3D tilt: paint the per-unit animation FLAT into
+// the block-mode composited texture (skipGlow), then draw that whole texture under the block's 3D
+// rotation — reusing the block texture+3D core with a buildStatic3DFrame frame. The glow is drawn
+// live afterwards under the same transform (matches the block path).
+void renderUnitAnimated3D(
     subtitle::SkiaRenderer* renderer, const TextClipLayout& layout, const TextClipPaintStyle& style,
     const std::optional<TextClipBackgroundStyle>& background, double originX, double originY,
     double scale, const TextClipAnimationFrame& animation) {
     if (!animation.static3D.has_value()) return;
     TextGlowRenderer glow(renderer);
-    WordAnimationContent content;
+    BlockAnimationContent content;
     content.contentWidth = layout.layoutWidth;
     content.contentHeight = layout.textHeight;
     content.hasGlow = style.glow.has_value();
@@ -706,24 +840,24 @@ void renderCharAnimated3D(
         return blockMargin(style, blurSigma, 0.0, layout);
     };
     content.draw = [renderer, &glow, &layout, &style, &background, &animation](double ox, double oy, BlockDrawLayer layer, bool /*skipShadow*/) {
-        // Char + 3D keeps the shadow baked into the texture (no live drawShadow set below).
-        CharAnimationRenderer(renderer, &glow).renderCharAnimated(layout, style, background, ox, oy, animation, /*skipGlow*/ false, layer);
+        // Unit + 3D keeps the shadow baked into the texture (no live drawShadow set below).
+        UnitAnimationRenderer(renderer, &glow).renderUnitAnimated(layout, style, background, ox, oy, animation, /*skipGlow*/ false, layer);
     };
     content.drawGlow = [renderer, &glow, &layout, &style, &animation](double ox, double oy, double /*opacityMul*/) {
-        CharAnimationRenderer(renderer, &glow).drawCharAnimatedGlowOnly(layout, style, ox, oy, animation);
+        UnitAnimationRenderer(renderer, &glow).drawUnitAnimatedGlowOnly(layout, style, ox, oy, animation);
     };
     const TextClipAnimationFrame tiltFrame = buildStatic3DFrame(animation.static3D->first, animation.static3D->second);
-    WordAnimationRenderer(renderer).renderWordAnimatedBlock(content, style, background, originX, originY, scale, tiltFrame);
+    BlockAnimationRenderer(renderer).renderBlockAnimated(content, style, background, originX, originY, scale, tiltFrame);
 }
 
-void renderCurvedCharAnimated3D(
+void renderCurvedUnitAnimated3D(
     subtitle::SkiaRenderer* renderer, const CurvedTextGeometry& geometry, const TextClipLine& line,
     const TextClipLayout& layout, const TextClipPaintStyle& style,
     const std::optional<TextClipBackgroundStyle>& background, double originX, double originY,
     double scale, const TextClipAnimationFrame& animation) {
     if (!animation.static3D.has_value()) return;
     TextGlowRenderer glow(renderer);
-    WordAnimationContent content;
+    BlockAnimationContent content;
     content.contentWidth = geometry.width;
     content.contentHeight = geometry.height;
     content.hasGlow = style.glow.has_value();
@@ -731,21 +865,21 @@ void renderCurvedCharAnimated3D(
         return curvedBlockMargin(style, geometry, blurSigma);
     };
     content.draw = [renderer, &glow, &geometry, &line, &style, &background, &animation](double ox, double oy, BlockDrawLayer layer, bool /*skipShadow*/) {
-        CharAnimationRenderer(renderer, &glow).renderCurvedCharAnimated(geometry, line, style, background, ox, oy, animation, /*skipGlow*/ false, layer);
+        UnitAnimationRenderer(renderer, &glow).renderCurvedUnitAnimated(geometry, line, style, background, ox, oy, animation, /*skipGlow*/ false, layer);
     };
     content.drawGlow = [renderer, &glow, &geometry, &line, &style, &animation](double ox, double oy, double /*opacityMul*/) {
-        CharAnimationRenderer(renderer, &glow).drawCurvedCharAnimatedGlowOnly(geometry, line, style, ox, oy, animation);
+        UnitAnimationRenderer(renderer, &glow).drawCurvedUnitAnimatedGlowOnly(geometry, line, style, ox, oy, animation);
     };
     (void)layout;
     const TextClipAnimationFrame tiltFrame = buildStatic3DFrame(animation.static3D->first, animation.static3D->second);
-    WordAnimationRenderer(renderer).renderWordAnimatedBlock(content, style, background, originX, originY, scale, tiltFrame);
+    BlockAnimationRenderer(renderer).renderBlockAnimated(content, style, background, originX, originY, scale, tiltFrame);
 }
 
 } // namespace
 
 TextClipAnimationFrame buildStatic3DFrame(double tiltX, double tiltY) {
     TextClipAnimationFrame frame;
-    frame.mode = AnimationMode::WORD;
+    frame.mode = AnimationMode::BLOCK;
     frame.props = identityProps();
     frame.props[AnimProp::rotateX] = tiltX;
     frame.props[AnimProp::rotateY] = tiltY;
@@ -754,7 +888,7 @@ TextClipAnimationFrame buildStatic3DFrame(double tiltX, double tiltY) {
     return frame;
 }
 
-void composeStatic3DIntoWordFrame(TextClipAnimationFrame& frame, double tiltX, double tiltY) {
+void composeStatic3DIntoBlockFrame(TextClipAnimationFrame& frame, double tiltX, double tiltY) {
     frame.props[AnimProp::rotateX] = frame.props.rotateX() + tiltX;
     frame.props[AnimProp::rotateY] = frame.props.rotateY() + tiltY;
     // Supply a perspective only if the preset doesn't animate its own, so flat presets read as 3D.
@@ -773,43 +907,43 @@ void renderTextFrame(
     SkCanvas* canvas = renderer->getCanvas();
     if (!canvas) return;
 
-    const bool hasCharAnim = animation.has_value() && animation->mode == AnimationMode::CHAR;
-    const bool hasWordAnim = animation.has_value() && animation->mode == AnimationMode::WORD;
-    // Char mode has no block-level transform to hang a tilt on, so a char frame carrying a static
-    // 3D tilt is baked flat then tilted as one unit (renderCharAnimated3D). Word/flat frames carry
-    // the tilt folded into props and flow through the normal texture+3D word path.
-    const bool charStatic3D = hasCharAnim && animation->static3D.has_value();
+    const bool hasUnitAnim = animation.has_value() && animation->mode == AnimationMode::UNIT;
+    const bool hasBlockAnim = animation.has_value() && animation->mode == AnimationMode::BLOCK;
+    // Unit mode has no block-level transform to hang a tilt on, so a unit frame carrying a static
+    // 3D tilt is baked flat then tilted as one piece (renderUnitAnimated3D). Block/flat frames carry
+    // the tilt folded into props and flow through the normal texture+3D block path.
+    const bool unitStatic3D = hasUnitAnim && animation->static3D.has_value();
 
     if (paint.curveAngle.has_value()) {
         const CurvedTextGeometry geometry = curvedGeometryForLayout(layout, paint);
         TextGlowRenderer glow(renderer);
-        if (hasCharAnim) {
+        if (hasUnitAnim) {
             const TextClipLine* line = nullptr;
             for (const auto& l : layout.lines) { if (!l.text.empty()) { line = &l; break; } }
             if (!line) return;
-            if (charStatic3D) {
-                renderCurvedCharAnimated3D(renderer, geometry, *line, layout, paint, background, originX, originY, scale, *animation);
+            if (unitStatic3D) {
+                renderCurvedUnitAnimated3D(renderer, geometry, *line, layout, paint, background, originX, originY, scale, *animation);
             } else {
-                CharAnimationRenderer(renderer, &glow).renderCurvedCharAnimated(
+                UnitAnimationRenderer(renderer, &glow).renderCurvedUnitAnimated(
                     geometry, *line, paint, background, originX, originY, *animation);
             }
-        } else if (hasWordAnim) {
-            renderWordAnimatedCurved(renderer, geometry, layout, paint, background, originX, originY, scale, *animation);
+        } else if (hasBlockAnim) {
+            renderBlockAnimatedCurved(renderer, geometry, layout, paint, background, originX, originY, scale, *animation);
         } else {
             CurvedTextPainter(renderer, &glow).drawCurvedStatic(geometry, layout, paint, background, originX, originY);
         }
         return;
     }
 
-    if (hasCharAnim) {
-        if (charStatic3D) {
-            renderCharAnimated3D(renderer, layout, paint, background, originX, originY, scale, *animation);
+    if (hasUnitAnim) {
+        if (unitStatic3D) {
+            renderUnitAnimated3D(renderer, layout, paint, background, originX, originY, scale, *animation);
         } else {
             TextGlowRenderer glow(renderer);
-            CharAnimationRenderer(renderer, &glow).renderCharAnimated(layout, paint, background, originX, originY, *animation);
+            UnitAnimationRenderer(renderer, &glow).renderUnitAnimated(layout, paint, background, originX, originY, *animation);
         }
-    } else if (hasWordAnim) {
-        renderWordAnimatedFlat(renderer, layout, paint, background, originX, originY, scale, *animation);
+    } else if (hasBlockAnim) {
+        renderBlockAnimatedFlat(renderer, layout, paint, background, originX, originY, scale, *animation);
     } else {
         renderLayout(layout, paint, background, originX, originY, renderer);
     }
@@ -820,14 +954,41 @@ void renderTextFrame(
 AnimatedExtent computeAnimatedExtent(
     const TextClipLayout& layout, const TextClipPaintStyle& paint,
     double contentWidth, double contentHeight,
-    const AnimationTimeline& timeline, const AnimationPresetMap& presets, int charCount) {
+    const AnimationTimeline& timeline, const AnimationPresetMap& presets, const UnitCounts& counts) {
     const double fontSize = paint.fontSize;
     double halfW = contentWidth / 2.0;
     double halfH = contentHeight / 2.0;
 
-    // Nominal glyph box used to bound char-mode per-letter transforms.
+    // Nominal unit box used to bound unit-mode per-unit transforms. A word / line unit is far wider
+    // than one glyph, so the box is sized from the widest unit of that granularity — otherwise the
+    // frame buffer would be too small for a rotating/scaling word and clip it.
     const double glyphBoxW = std::max(fontSize, contentHeight);
     const double glyphBoxH = layout.lines.empty() ? fontSize : std::max(fontSize, layout.lines.front().ascent + layout.lines.front().descent);
+
+    double widestWord = 0.0;
+    double widestLine = 0.0;
+    for (const TextClipLine& line : layout.lines) {
+        if (line.text.empty()) continue;
+        double lineRun = 0.0, wordRun = 0.0;
+        size_t i = 0;
+        forEachUtf8(line.text, [&](const std::string& letter, SkUnichar) {
+            const double advance = i < line.letterAdvances.size() ? line.letterAdvances[i] : 0.0;
+            lineRun += advance;
+            if (isSpaceGlyph(letter)) { widestWord = std::max(widestWord, wordRun); wordRun = 0.0; }
+            else wordRun += advance;
+            ++i;
+        });
+        widestWord = std::max(widestWord, wordRun);
+        widestLine = std::max(widestLine, lineRun);
+    }
+    auto unitBoxW = [&](UnitGranularity g) {
+        switch (g) {
+            case UnitGranularity::WORD: return std::max(glyphBoxW, widestWord);
+            case UnitGranularity::LINE: return std::max(glyphBoxW, widestLine);
+            case UnitGranularity::CHAR: break;
+        }
+        return glyphBoxW;
+    };
 
     auto mapBoxHalf = [](const SkMatrix& m, double boxW, double boxH, double& outHalfW, double& outHalfH) {
         SkRect r = SkRect::MakeLTRB(static_cast<float>(-boxW / 2.0), static_cast<float>(-boxH / 2.0),
@@ -841,27 +1002,35 @@ AnimatedExtent computeAnimatedExtent(
     constexpr int SAMPLES = 24;
     for (int s = 0; s <= SAMPLES; ++s) {
         const double elapsed = timeline.textDuration * (static_cast<double>(s) / SAMPLES);
-        const FramePlan plan = planFrame(elapsed, timeline, charCount, presets);
+        const FramePlan plan = planFrame(elapsed, timeline, counts, presets);
         if (!plan.presetId.has_value()) continue;
         const auto it = presets.find(*plan.presetId);
         if (it == presets.end()) continue;
         const auto frame = buildAnimationFrame(plan, it->second, elapsed);
         if (!frame.has_value()) continue;
 
-        if (frame->mode == AnimationMode::WORD) {
+        if (frame->mode == AnimationMode::BLOCK) {
             const SkMatrix m = animationMatrix(frame->props, fontSize, contentWidth, contentHeight, frame->flags);
             double hw, hh;
             mapBoxHalf(m, contentWidth, contentHeight, hw, hh);
             const double blurExtra = frame->props.blur() > 0.0 ? frame->props.blur() * fontSize * 3.0 : 0.0;
             halfW = std::max(halfW, hw + blurExtra);
             halfH = std::max(halfH, hh + blurExtra);
-        } else if (frame->mode == AnimationMode::CHAR && charCount > 0) {
-            const int idxs[3] = {0, charCount / 2, charCount - 1};
+        } else if (frame->mode == AnimationMode::UNIT) {
+            // Sample the first / middle / last unit, addressing each in BOTH index spaces so a
+            // named order (looked up by ordinal, in drawn space) is probed correctly too.
+            const int nIndex = counts.forGranularity(frame->granularity);
+            if (nIndex <= 0) continue;
+            const int nOrdinal = frame->granularity == UnitGranularity::CHAR ? counts.charsDrawn : nIndex;
+            const double boxW = unitBoxW(frame->granularity);
+            const int idxs[3] = {0, nIndex / 2, nIndex - 1};
             for (int idx : idxs) {
-                const ResolvedAnimProps props = frame->getCharProps(std::clamp(idx, 0, charCount - 1));
-                const SkMatrix m = animationMatrix(props, fontSize, glyphBoxW, glyphBoxH, frame->flags);
+                const int i = std::clamp(idx, 0, nIndex - 1);
+                const int ordinal = nOrdinal > 0 ? std::min(i, nOrdinal - 1) : 0;
+                const ResolvedAnimProps props = frame->getUnitProps(i, ordinal);
+                const SkMatrix m = animationMatrix(props, fontSize, boxW, glyphBoxH, frame->flags);
                 double hw, hh;
-                mapBoxHalf(m, glyphBoxW, glyphBoxH, hw, hh);
+                mapBoxHalf(m, boxW, glyphBoxH, hw, hh);
                 const double blurExtra = props.blur() > 0.0 ? props.blur() * fontSize * 3.0 : 0.0;
                 halfW = std::max(halfW, contentWidth / 2.0 + hw + blurExtra);
                 halfH = std::max(halfH, contentHeight / 2.0 + hh + blurExtra);

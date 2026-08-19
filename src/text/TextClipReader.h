@@ -167,7 +167,7 @@ private:
     double anim_duration_sec{0.0};
     bool has_animation{false};
     std::optional<text::AnimationTimeline> timeline;
-    int anim_char_count{0};
+    text::UnitCounts anim_unit_counts;  ///< Stagger-unit tallies over the laid-out lines
 
     // ---- Style keyframe overlay (glow/blur/curve/colours/tilt) ---------------
     text::TextStyleKeyframes style_keyframes;

@@ -7,6 +7,7 @@
 // text-animation-engine.ts + text-animation-preset.types.ts.
 
 #include <array>
+#include <cstdint>
 #include <functional>
 #include <map>
 #include <optional>
@@ -88,6 +89,13 @@ struct PresetPolygonKeyframe {
     std::vector<std::pair<double, double>> points;     // fractions of the text box
 };
 
+// Order the stagger units start in. Absent on a preset = FIRST *and* the legacy (slot) index
+// space — see the two-index-space note on UnitCounts below.
+enum class StaggerFrom { FIRST, LAST, CENTER, EDGES, RANDOM };
+
+// Default share of a phase slot that one unit animates for (the rest is spent staggering).
+constexpr double DEFAULT_UNIT_FRACTION = 0.55;
+
 struct PresetKeyframeSet {
     double pivotX = 0.0;
     double pivotY = 0.0;
@@ -95,11 +103,46 @@ struct PresetKeyframeSet {
     bool rotXFirst = false;
     bool txScaled = false;
     std::optional<CubicBezier> easing;
+    // Stagger order. nullopt = FIRST order AND the legacy slot index space (spaces counted).
+    // Naming an order switches char granularity to the drawn index space (spaces excluded).
+    std::optional<StaggerFrom> staggerFrom;
+    std::uint32_t staggerSeed = 1;              // only consumed by StaggerFrom::RANDOM
+    std::optional<double> unitFraction;         // nullopt = DEFAULT_UNIT_FRACTION; ignored by LOOP
     std::vector<PresetPolygonKeyframe> polyTrack;
     std::array<std::vector<PresetKeyframe>, kAnimPropCount> tracks;
 };
 
-enum class AnimationPresetLevel { CHAR, BOX };
+// `box` animates the whole text box under one transform (block mode); char/word/line group the
+// laid-out glyphs into staggered units (unit mode).
+enum class AnimationPresetLevel { CHAR, WORD, LINE, BOX };
+
+// Which glyphs share one stagger index and one pivot box in unit mode.
+enum class UnitGranularity { CHAR, WORD, LINE };
+
+// Unit tallies over the LAID-OUT lines (post-wrap), the input the timing planner sizes its
+// stagger from.
+//
+// Two index spaces (the easiest thing to get wrong):
+//  * slot space  (`chars`, spaces counted)  — used when the preset names NO staggerFrom, so the
+//    legacy wave crosses word gaps at the same rate it crosses letters.
+//  * drawn space (`charsDrawn`, spaces excluded) — used when a staggerFrom IS named, because
+//    `center` must mean the centre of the VISIBLE glyphs.
+// For word / line granularity the two spaces coincide (blanks are skipped by construction).
+struct UnitCounts {
+    int chars = 0;        // laid-out characters, spaces INCLUDED
+    int charsDrawn = 0;   // characters that actually draw (spaces excluded)
+    int words = 0;        // runs of non-space characters, per line (never crossing a line)
+    int lines = 0;        // laid-out lines that contain ink
+
+    int forGranularity(UnitGranularity g) const {
+        switch (g) {
+            case UnitGranularity::CHAR: return chars;
+            case UnitGranularity::WORD: return words;
+            case UnitGranularity::LINE: return lines;
+        }
+        return chars;
+    }
+};
 
 struct AnimationPreset {
     AnimationPresetLevel level = AnimationPresetLevel::BOX;
@@ -137,8 +180,31 @@ std::optional<std::vector<std::pair<double, double>>> evalPolygon(
 struct ActiveRange { double start; double end; };
 ActiveRange presetActiveRange(const PresetKeyframeSet& preset);
 
-struct CharStagger { double perCharDuration; double stagger; };
-CharStagger computeCharStagger(double duration, int n, bool isLoop);
+// Stagger order as STEP-PER-UNIT: entry `i` is how many stagger steps after the first unit that
+// unit begins. NOT a permutation in general — `center` and `edges` repeat indices on purpose
+// (units start in pairs), so their highest step is about n/2, not n-1. Size the stagger step from
+// max(indices), never from n-1, or those two orders play roughly twice as fast as they should.
+//
+//   n=5  first  -> [0,1,2,3,4]     last   -> [4,3,2,1,0]
+//        center -> [2,1,0,1,2]     edges  -> [0,1,2,1,0]
+std::vector<int> staggerOrderIndices(int n, StaggerFrom from, std::uint32_t seed);
+
+// splitmix32, inlined bit-for-bit from the web preview so the same seed yields the same shuffle in
+// every renderer (a platform RNG cannot guarantee that). Returns a double in [0, 1).
+class SplitMix32 {
+public:
+    explicit SplitMix32(std::uint32_t seed) : state_(seed) {}
+    double next();
+private:
+    std::uint32_t state_;
+};
+
+struct UnitStagger { double perUnitDuration; double stagger; };
+
+// `steps` = how many stagger steps separate the first unit from the last one to START:
+// unitCount-1 for the default order, max(orderIndices) for a named one.
+UnitStagger computeUnitStagger(double duration, int unitCount, bool isLoop,
+                               double fraction, int steps);
 
 // ── Timeline planning ────────────────────────────────────────────────────────
 
@@ -156,27 +222,35 @@ struct AnimationTimeline {
 
 std::optional<AnimationTimeline> buildAnimationTimeline(const TextAnimations& anims, double textDurationSec);
 
-struct CharTiming {
+struct UnitTiming {
     double phaseStartSec = 0.0;
-    double perCharDuration = 0.0;
+    double perUnitDuration = 0.0;
     double stagger = 0.0;
     bool isLoop = false;
+    // Step-per-unit order, indexed by ORDINAL. Empty = the default order, where the step is the
+    // unit's own index (slot position for glyph units).
+    std::vector<int> order;
 };
 
-enum class AnimationMode { NONE, WORD, CHAR };
+// BLOCK = the whole text box animates under one transform (preset level `box`).
+// UNIT  = the block's glyphs are grouped and animate with a stagger (level char / word / line).
+enum class AnimationMode { NONE, BLOCK, UNIT };
 
 struct FramePlan {
     AnimationPhase phase = AnimationPhase::LOOP;
     std::optional<std::string> presetId;   // nullopt -> draw resting (static) text
     AnimationMode mode = AnimationMode::NONE;
-    double wordProgress = 0.0;             // valid when mode == WORD
-    CharTiming charTiming;                 // valid when mode == CHAR
+    double blockProgress = 0.0;            // valid when mode == BLOCK
+    UnitTiming unitTiming;                 // valid when mode == UNIT
+    UnitGranularity granularity = UnitGranularity::CHAR;   // valid when mode == UNIT
 };
 
-FramePlan planFrame(double elapsedSec, const AnimationTimeline& timeline, int charCount,
+FramePlan planFrame(double elapsedSec, const AnimationTimeline& timeline, const UnitCounts& counts,
                     const AnimationPresetMap& presets);
 
-double charProgressAt(double elapsedSec, const CharTiming& timing, int charIndex);
+// `unitIndex` drives the default order (slot position for glyph units); `ordinal` is the unit's
+// position among the units that actually draw and is the index a NAMED order is looked up by.
+double unitProgressAt(double elapsedSec, const UnitTiming& timing, int unitIndex, int ordinal);
 
 // ── Per-frame animation input for the renderer ───────────────────────────────
 
@@ -191,23 +265,25 @@ struct AnimationTransformFlags {
 struct TextClipAnimationFrame {
     AnimationMode mode = AnimationMode::NONE;
     AnimationTransformFlags flags;
+    UnitGranularity granularity = UnitGranularity::CHAR;   // valid when mode == UNIT
 
-    // WORD mode:
+    // BLOCK mode:
     ResolvedAnimProps props;
     std::optional<std::vector<std::pair<double, double>>> clipPolygon;
     bool scaleAnimated = false;
-    // Force the composited word-block texture path even when the tilt currently evaluates to 0.
+    // Force the composited block texture path even when the tilt currently evaluates to 0.
     // Set for clips with KEYFRAMED tilt so the frame where tilt == 0 renders the shadow the same
     // (confined, baked-into-texture) way as neighbouring nonzero-tilt frames — otherwise the render
     // flips to the flat path at exactly-0 tilt and the drop shadow visibly pops larger for a frame.
     bool forceBlockTexture = false;
 
-    // CHAR mode: resolve evaluated keyframes for a character by its draw index.
-    std::function<ResolvedAnimProps(int)> getCharProps;
+    // UNIT mode: resolve evaluated keyframes for one stagger unit, addressed by BOTH of its
+    // indices — (unitIndex, ordinal). See UnitCounts for why two are needed.
+    std::function<ResolvedAnimProps(int unitIndex, int ordinal)> getUnitProps;
 
-    // Static 3D tilt {rotateX, rotateY} (degrees) applied to the whole block. In WORD mode the
-    // tilt is folded into `props`; in CHAR mode there is no block-level transform, so it is
-    // carried here and the char-animated glyphs are baked flat then tilted as one unit.
+    // Static 3D tilt {rotateX, rotateY} (degrees) applied to the whole block. In BLOCK mode the
+    // tilt is folded into `props`; in UNIT mode there is no block-level transform, so it is
+    // carried here and the unit-animated glyphs are baked flat then tilted as one unit.
     std::optional<std::pair<double, double>> static3D;
 };
 
