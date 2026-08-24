@@ -898,6 +898,7 @@ std::string Clip::PropertiesJSON(int64_t requested_frame) const {
 	root["blur_enabled"] = add_property_json("Blur", blur, "int", "", NULL, 0, 1, false, requested_frame);
 	root["flip_horizontal"] = add_property_json("Flip Horizontal", flip_horizontal, "int", "", NULL, 0, 1, false, requested_frame);
 	root["flip_vertical"] = add_property_json("Flip Vertical", flip_vertical, "int", "", NULL, 0, 1, false, requested_frame);
+	root["blend_mode"] = add_property_json("Blend Mode", blend_mode, "int", "", NULL, 0, BLEND_MODE_COUNT - 1, false, requested_frame);
 	root["parentObjectId"] = add_property_json("Parent", 0.0, "string", parentObjectId, NULL, -1, -1, false, requested_frame);
 
 	// Add gravity choices (dropdown style)
@@ -910,6 +911,10 @@ std::string Clip::PropertiesJSON(int64_t requested_frame) const {
 	root["gravity"]["choices"].append(add_property_choice_json("Bottom Left", GRAVITY_BOTTOM_LEFT, gravity));
 	root["gravity"]["choices"].append(add_property_choice_json("Bottom Center", GRAVITY_BOTTOM, gravity));
 	root["gravity"]["choices"].append(add_property_choice_json("Bottom Right", GRAVITY_BOTTOM_RIGHT, gravity));
+
+	// Add blend mode choices (dropdown style)
+	for (const auto mode : BlendModeList())
+		root["blend_mode"]["choices"].append(add_property_choice_json(BlendModeLabel(mode), mode, blend_mode));
 
 	// Add scale choices (dropdown style)
 	root["scale"]["choices"].append(add_property_choice_json("Crop", SCALE_CROP, scale));
@@ -1043,6 +1048,12 @@ Json::Value Clip::JsonValue() const {
 	root["flip_horizontal"] = flip_horizontal;
 	root["flip_vertical"] = flip_vertical;
 
+	// Blend mode. Written as the canonical CSS / canvas / PixiJS name ("multiply",
+	// "color-dodge", ...) so the value round-trips through the front-end unchanged; the
+	// numeric enum is emitted alongside it for the properties/dropdown UI.
+	root["blendMode"] = BlendModeToString(blend_mode);
+	root["blend_mode"] = blend_mode;
+
 	// Drop shadow (nested "boxShadow" object, matching the rendering service's contract)
 	Json::Value box_shadow;
 	box_shadow["enabled"] = shadow;
@@ -1153,6 +1164,22 @@ void Clip::SetJsonValue(const Json::Value root) {
 		flip_horizontal = root["flip_horizontal"].asBool();
 	if (!root["flip_vertical"].isNull())
 		flip_vertical = root["flip_vertical"].asBool();
+
+	// Blend mode. Accepts a name ("multiply", "color-dodge", "colorDodge", "source-over", ...)
+	// or the numeric BlendMode enum, under either the camelCase key the rendering service uses
+	// or the snake_case key the properties UI uses. An unknown name leaves the mode as-is.
+	for (const char* blend_key : { "blendMode", "blend_mode" }) {
+		const Json::Value blend_value = root[blend_key];
+		if (blend_value.isNull())
+			continue;
+		if (blend_value.isString())
+			blend_mode = BlendModeFromString(blend_value.asString(), blend_mode);
+		else if (blend_value.isNumeric()) {
+			const int index = blend_value.asInt();
+			if (index >= 0 && index < BLEND_MODE_COUNT)
+				blend_mode = (BlendMode) index;
+		}
+	}
 
 	// Drop shadow ("boxShadow" object: { color, blur, distance, angle, enabled }).
 	// blur/distance/angle accept either a plain number or a full Keyframe object.
@@ -1421,12 +1448,19 @@ void Clip::apply_background(std::shared_ptr<openshot::Frame> frame, std::shared_
 	// Retrieve the background image
     const std::shared_ptr<QImage> background_canvas = background_frame->GetImage();
 
-    // Standard procedure for drawing the frame's image onto the background
-    QPainter painter(background_canvas.get());
-    painter.setRenderHints(QPainter::Antialiasing | QPainter::SmoothPixmapTransform | QPainter::TextAntialiasing, true);
-    painter.setCompositionMode(composition_mode);
-    painter.drawImage(0, 0, *frame->GetImage());
-    painter.end();
+    // Blend this clip's image onto the background. BLEND_NORMAL takes the plain QPainter
+    // source-over path; every other mode needs the backdrop read back per pixel, which
+    // BlendImages() does following the W3C compositing/blending spec.
+    if (blend_mode == BLEND_NORMAL) {
+        QPainter painter(background_canvas.get());
+        painter.setRenderHints(QPainter::Antialiasing | QPainter::SmoothPixmapTransform | QPainter::TextAntialiasing, true);
+        painter.setCompositionMode(QPainter::CompositionMode_SourceOver);
+        painter.drawImage(0, 0, *frame->GetImage());
+        painter.end();
+    } else {
+        BlendImages(*background_canvas, *frame->GetImage(), blend_mode);
+    }
+
     // Add the modified image back to the frame
     frame->AddImage(background_canvas);
 }

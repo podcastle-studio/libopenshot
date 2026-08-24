@@ -22,6 +22,7 @@ file(TO_NATIVE_PATH "${PROJECT_SOURCE_DIR}/examples/" TEST_MEDIA_PATH)
 set(OPENSHOT_TESTS
   AudioDeviceManager
   AudioWaveformer
+  BlendModes
   CacheDisk
   CacheMemory
   Caption
