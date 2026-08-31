@@ -73,7 +73,7 @@ void TextGlowRenderer::drawGlowLayer(
     // reserve that spread so the silhouette captures them at the drawn positions.
     double maxLineLen = 0.0;
     if (!curved) {
-        for (const auto& line : layout.lines) maxLineLen = std::max(maxLineLen, static_cast<double>(utf8Length(line.text)));
+        for (const auto& line : layout.lines) maxLineLen = std::max(maxLineLen, static_cast<double>(clusterCount(line.text)));
     }
     const double spreadMargin = std::abs(extraLetterSpacing) * std::max(0.0, maxLineLen - 1.0);
 
@@ -159,8 +159,13 @@ sk_sp<SkImage> TextGlowRenderer::renderGlowSilhouette(
             ? renderer->getPaint(subtitle::PaintProps{glowColor, 1.0, style.stroke->width, std::nullopt})
             : nullptr;
 
+        // The silhouette is what the glow shader smears, so an emoji has to contribute its shape
+        // in the GLOW colour — drawn in its own colours it would leak the emoji artwork into the
+        // bloom instead of lighting it.
+        const EmojiPass emojiSilhouette{EmojiPass::Kind::Silhouette};
         if (curved) {
-            forEachCurvedGlyph(renderer, *curved, imageMargin, imageMargin, style, strokePaint, *fillPaint);
+            forEachCurvedGlyph(renderer, *curved, imageMargin, imageMargin, style, strokePaint, *fillPaint,
+                               emojiSilhouette);
         } else {
             const double firstBaselineY = imageMargin + layout.firstLineAscent;
             for (size_t li = 0; li < layout.lines.size(); ++li) {
@@ -169,8 +174,10 @@ sk_sp<SkImage> TextGlowRenderer::renderGlowSilhouette(
                 const double baselineY = firstBaselineY + static_cast<double>(li) * layout.lineHeight;
                 const double x = imageMargin + getLineStartX(line, layout, style.alignment, extraLetterSpacing);
                 forEachLetter(line, x, extraLetterSpacing, [&](const std::string& letter, double letterX) {
-                    if (strokePaint) drawLetter(renderer, letter, letterX, baselineY, *strokePaint, style);
-                    drawLetter(renderer, letter, letterX, baselineY, *fillPaint, style);
+                    if (strokePaint) {
+                        drawLetter(renderer, letter, letterX, baselineY, *strokePaint, style, {EmojiPass::Kind::Skip});
+                    }
+                    drawLetter(renderer, letter, letterX, baselineY, *fillPaint, style, emojiSilhouette);
                 });
             }
         }
@@ -222,10 +229,15 @@ void TextGlowRenderer::drawAnimatedGlowLayer(
             applyUnitTransform(renderer, target, item, style.fontSize, animation);
             if (style.stroke.has_value()) {
                 withAnimatedPaint(renderer, {glow.color, 1.0, style.stroke->width}, item.opacity, 0.0,
-                    [&](const SkPaint& paint) { drawAnimatedUnit(renderer, item, 0.0, 0.0, paint, style); });
+                    [&](const SkPaint& paint) {
+                        drawAnimatedUnit(renderer, item, 0.0, 0.0, paint, style, {EmojiPass::Kind::Skip});
+                    });
             }
+            // As in the static silhouette: an emoji contributes its shape in the glow colour.
             withAnimatedPaint(renderer, {glow.color, 1.0, std::nullopt}, item.opacity, 0.0,
-                [&](const SkPaint& paint) { drawAnimatedUnit(renderer, item, 0.0, 0.0, paint, style); });
+                [&](const SkPaint& paint) {
+                    drawAnimatedUnit(renderer, item, 0.0, 0.0, paint, style, {EmojiPass::Kind::Silhouette});
+                });
             target->restore();
         }
         target->restore();

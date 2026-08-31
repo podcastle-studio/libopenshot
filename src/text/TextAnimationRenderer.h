@@ -94,9 +94,11 @@ void applyUnitTransform(subtitle::SkiaRenderer* renderer, SkCanvas* canvas,
                         const AnimatedUnitItem& item, double fontSize, const AnimationTransformFlags& flags);
 
 // Draw every glyph of the unit inside the already-applied unit transform. `dx`/`dy` shift the draw
-// origin (used by the drop-shadow pass).
+// origin (used by the drop-shadow pass). `emoji` says what this pass does with a colour-emoji
+// cluster (see subtitle::EmojiPass).
 void drawAnimatedUnit(subtitle::SkiaRenderer* renderer, const AnimatedUnitItem& item,
-                      double dx, double dy, const SkPaint& paint, const TextClipPaintStyle& style);
+                      double dx, double dy, const SkPaint& paint, const TextClipPaintStyle& style,
+                      const EmojiPass& emoji = {});
 
 // Tally the stagger units over the laid-out lines. Feeds the timing planner.
 UnitCounts countAnimationUnits(const TextClipLayout& layout);

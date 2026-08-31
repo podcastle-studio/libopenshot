@@ -386,6 +386,137 @@ void buildPayload8(Timeline& timeline, int W, int H, const std::string& /*fontsD
     timeline.AddClip(clip);
 }
 
+
+// ── Payload 10 (colour emoji: fallback + cluster shaping + every draw pass) ──────────
+// Three clips over one frame, each stressing a different part of the emoji path:
+//   A  mixed text + emoji with a drop shadow AND a stroke — the passes that ignore a colour
+//      glyph's paint. The shadow must be a soft silhouette in the shadow colour (not a colour
+//      duplicate of the emoji), and the stroke pass must not draw the emoji a second time.
+//   B  the sequence classes that only work with a shaper: VS16 (❤️), skin tone (👍🏽), ZWJ
+//      family (👨‍👩‍👧), regional-indicator flag (🇺🇸), keycap (1️⃣). Each must be ONE glyph.
+//   C  a gradient fill: the emoji is expected to take the gradient (the coverage layer masks the
+//      ramp by glyph alpha), which is what background-clip:text does in the browser.
+void buildPayload10(Timeline& timeline, int W, int H, const std::string& /*fontsDir*/) {
+    const std::string kFont = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf";
+
+    // A: shadow + stroke.
+    {
+        text::TextClipStyle s;
+        s.fontFamily = kFont;
+        s.textAlign = text::TextAlignment::CENTER;
+        s.color = "#FFFFFF";
+        s.strokeColor = "#1E293B";
+        s.strokeWidthRatio = 0.06;
+        s.shadowColor = "#000000";
+        s.shadowBlurRatio = 0.18;
+        s.shadowDistanceRatio = 0.22;
+        s.shadowAngle = 45.0;
+        s.lineHeight = 1.1;
+        s.fontWeight = 700;
+
+        text::TextTransformation t;
+        t.size = 9.0;
+        t.maxWidth = 20.0;
+
+        timeline.AddClip(makeTextClip(W, H, kFont, "HI \U0001F600 THERE \u2764\uFE0F", s, t, 0.5, 0.22));
+    }
+
+    // B: the shaped sequence classes.
+    {
+        text::TextClipStyle s;
+        s.fontFamily = kFont;
+        s.textAlign = text::TextAlignment::CENTER;
+        s.color = "#FFFFFF";
+        s.lineHeight = 1.1;
+        s.fontWeight = 700;
+
+        text::TextTransformation t;
+        t.size = 9.0;
+        t.maxWidth = 20.0;
+
+        timeline.AddClip(makeTextClip(
+            W, H, kFont,
+            "\u2764\uFE0F \U0001F44D\U0001F3FD \U0001F468\u200D\U0001F469\u200D\U0001F467 "
+            "\U0001F1FA\U0001F1F8 1\uFE0F\u20E3",
+            s, t, 0.5, 0.5));
+    }
+
+    // C: gradient fill over text + emoji.
+    {
+        text::TextClipStyle s;
+        s.fontFamily = kFont;
+        s.textAlign = text::TextAlignment::CENTER;
+        s.color = "linear-gradient(90deg, #FF3B30 0%, #0A84FF 100%)";
+        s.lineHeight = 1.1;
+        s.fontWeight = 700;
+
+        text::TextTransformation t;
+        t.size = 9.0;
+        t.maxWidth = 20.0;
+
+        timeline.AddClip(makeTextClip(W, H, kFont, "GRAD \U0001F680 \U0001F308", s, t, 0.5, 0.78));
+    }
+}
+
+// ── Payload 11 (colour emoji under a char-level animation + glow) ────────────────────
+// Emoji clusters must count as ONE animation unit (so the stagger indices of the letters after
+// them do not shift), must fade with the unit opacity, and must feed the glow silhouette in the
+// GLOW colour rather than leaking their own artwork into the bloom.
+void buildPayload11(Timeline& timeline, int W, int H, const std::string& /*fontsDir*/) {
+    const std::string kFont = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf";
+    const double fps = 30.0;
+
+    text::TextClipStyle s;
+    s.fontFamily = kFont;
+    s.textAlign = text::TextAlignment::CENTER;
+    s.color = "#FFFFFF";
+    s.glowColor = "#37F0C8";
+    s.glowIntensityRatio = 0.8;
+    s.glowRangeRatio = 0.5;
+    s.glowDirectionX = 0.0;
+    s.glowDirectionY = 0.0;
+    s.lineHeight = 1.1;
+    s.fontWeight = 700;
+
+    text::TextClipData data;
+    data.value = "A\U0001F600B\U0001F44D\U0001F3FDC";
+    data.style = s;
+    data.transformation.size = 12.0;
+    data.transformation.maxWidth = 18.0;
+
+    auto* reader = new TextClipReader(W, H, data);
+
+    text::AnimationPreset pop;
+    pop.level = text::AnimationPresetLevel::CHAR;
+    auto& ks = pop.keyframes;
+    ks.easing = text::CubicBezier{0.22, 0.61, 0.36, 1.0};
+    auto track = [](std::initializer_list<std::pair<double,double>> pts) {
+        std::vector<text::PresetKeyframe> t;
+        for (auto [pct, val] : pts) { text::PresetKeyframe k; k.pct = pct; k.value = val; t.push_back(k); }
+        return t;
+    };
+    ks.tracks[(size_t)text::AnimProp::opacity] = track({{0,0},{100,1}});
+    ks.tracks[(size_t)text::AnimProp::sx]      = track({{0,0.2},{100,1}});
+    ks.tracks[(size_t)text::AnimProp::sy]      = track({{0,0.2},{100,1}});
+    ks.tracks[(size_t)text::AnimProp::ty]      = track({{0,0.5},{100,0}});
+
+    text::TextAnimations anims;
+    anims.inAnimationId = "pop";
+    anims.inAnimationDuration = 1.5;
+    text::AnimationPresetMap presets{{"pop", pop}};
+    reader->SetAnimations(anims, presets, fps, 3.0);
+
+    auto* clip = new Clip(reader);
+    clip->Position(0.0);
+    clip->Start(0.0);
+    clip->End(3.0);
+    clip->gravity = GRAVITY_CENTER;
+    clip->scale   = SCALE_NONE;
+    clip->location_x = Keyframe(0.0);
+    clip->location_y = Keyframe(0.0);
+    timeline.AddClip(clip);
+}
+
 // ── Payload 9 (the user's provided payload: full style + shadow/glow/tilt keyframes + Tumble Out) ──
 Clip* buildPayload9(int W, int H, const std::string& fontsDir) {
     const std::string kFont = fontsDir + "irish_grover.woff";
@@ -532,6 +663,10 @@ int main(int argc, char** argv) {
 
     if (which == "9") {
         timeline.AddClip(buildPayload9(W, H, fontsDir));
+    } else if (which == "11") {
+        buildPayload11(timeline, W, H, fontsDir);
+    } else if (which == "10") {
+        buildPayload10(timeline, W, H, fontsDir);
     } else if (which == "8") {
         buildPayload8(timeline, W, H, fontsDir);
     } else if (which == "7") {
@@ -641,9 +776,15 @@ int main(int argc, char** argv) {
         return 0;
     }
 
-    // Keyframed payload: render several frames across the clip so the interpolation is visible.
-    if (which == "7" || which == "8") {
-        for (int fn : {1, 30, 60}) {
+    // Keyframed / animated payloads: render several frames across the clip so the interpolation
+    // (payload 11: the per-character stagger) is visible.
+    if (which == "7" || which == "8" || which == "11") {
+        // Payload 11's stagger is over in 45 frames, so sample it densely enough to see a unit
+        // mid-fade (an emoji has to honour the unit opacity like any other glyph).
+        const std::vector<int> frames = (which == "11")
+            ? std::vector<int>{1, 8, 15, 22, 30, 45, 60}
+            : std::vector<int>{1, 30, 60};
+        for (int fn : frames) {
             auto fr = timeline.GetFrame(fn);
             const std::string p = base + "-f" + std::to_string(fn) + ".png";
             fr->Save(p, 1.0, "PNG", 100);

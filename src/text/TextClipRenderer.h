@@ -49,7 +49,8 @@ std::vector<double> measureLetterWidths(
     const TextClipPaintStyle& style,
     subtitle::SkiaRenderer* renderer);
 
-/// Per-codepoint advances suitable for `TextClipLine::letterAdvances`.
+/// Per-letter advances suitable for `TextClipLine::letterAdvances` (one entry per cluster —
+/// see openshot::text::forEachCluster).
 /// advances[i] = glyphWidth + letterSpacing, except the last entry which is glyphWidth only.
 std::vector<double> computeLetterAdvances(
     const std::string& text,

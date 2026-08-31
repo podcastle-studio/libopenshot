@@ -29,6 +29,7 @@ set(OPENSHOT_TESTS
   Color
   Coordinate
   DummyReader
+  EmojiFont
   FFmpegReader
   FFmpegWriter
   Fraction

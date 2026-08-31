@@ -89,6 +89,30 @@ if(SKIA_FOUND)
                             "Set -DSKIA_SOURCE_DIR to your Skia source tree.")
         endif()
     endif()
+    # HarfBuzz headers for colour-emoji shaping. No new runtime dependency: Skia is built with
+    # HarfBuzz inside it and exports the hb_* symbols from libskia, so only the declarations are
+    # missing. The system harfbuzz headers are preferred (the hb API is ABI-stable, so they work
+    # against Skia's bundled build); the Skia source tree's copy is the fallback.
+    find_path(SKIA_HARFBUZZ_INCLUDE_DIR
+            NAMES hb.h
+            HINTS ${HARFBUZZ_INCLUDE_DIRS}
+            PATHS
+            /usr/include/harfbuzz
+            /usr/local/include/harfbuzz
+            ${SKIA_SOURCE_DIR}/third_party/externals/harfbuzz/src
+            $ENV{SKIA_SOURCE_DIR}/third_party/externals/harfbuzz/src
+            ${SKIA_MODULES_ROOT}/third_party/externals/harfbuzz/src
+    )
+    if(SKIA_HARFBUZZ_INCLUDE_DIR)
+        set(SKIA_HARFBUZZ_FOUND TRUE)
+        message(STATUS "Found HarfBuzz headers for emoji shaping: ${SKIA_HARFBUZZ_INCLUDE_DIR}")
+    else()
+        set(SKIA_HARFBUZZ_FOUND FALSE)
+        message(WARNING "HarfBuzz headers not found; multi-codepoint emoji (ZWJ sequences, skin "
+                        "tones, flags) will fall back to their base codepoint. Install "
+                        "libharfbuzz-dev or set -DSKIA_SOURCE_DIR to your Skia source tree.")
+    endif()
+
     set(SKIA_LIBRARIES
             ${SKIA_LIBRARY}
             ${FREETYPE_LIBRARIES}

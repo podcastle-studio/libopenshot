@@ -5,9 +5,10 @@
 // primitives the TypeScript reference exposes on its CanvasKitRenderer
 // (toFontProps / drawLetter / getTextWidth) plus the small color/blur helpers
 // from text-clip-style.helpers.ts, so every painter draws glyphs the same way:
-// per-codepoint font fallback, letter-spacing-aware advances, mask-blur paints.
+// per-cluster font fallback, letter-spacing-aware advances, mask-blur paints.
 
 #include "TextClipTypes.h"
+#include "../subtitle/EmojiFont.h"
 #include "../subtitle/SkiaRenderer.h"
 
 #include <skia/include/core/SkFont.h>
@@ -62,28 +63,34 @@ inline SkUnichar utf8Decode(const std::string& s, size_t i, size_t len) {
            (static_cast<unsigned char>(p[3]) & 0x3F);
 }
 
-// Iterate UTF-8 codepoints. `cb(letter, unichar)` is invoked once per codepoint.
+// Iterate the text one LETTER at a time, where a letter is an emoji-aware cluster:
+// ordinary text yields one codepoint per step exactly as before, while an emoji sequence
+// (❤️ 👍🏽 👨‍👩‍👧 🇺🇸 1️⃣) is kept together as the single unit it renders as. `cb(letter, unichar)`
+// receives the cluster's bytes and its base codepoint.
+//
+// This is the ONLY place the text layer splits a string into letters, so measurement, wrapping,
+// drawing and the per-character animation index space all count the same units — see
+// subtitle::emojiClusterLen for the segmentation rule the front end has to mirror.
 template <typename Cb>
-inline void forEachUtf8(const std::string& text, Cb&& cb) {
+inline void forEachCluster(const std::string& text, Cb&& cb) {
     size_t i = 0;
     while (i < text.size()) {
-        const size_t len = utf8CharLen(text, i);
+        const size_t len = subtitle::emojiClusterLen(text, i);
         if (len == 0) break;
-        const std::string letter = text.substr(i, len);
-        const SkUnichar uc = utf8Decode(text, i, len);
-        cb(letter, uc);
+        const SkUnichar uc = utf8Decode(text, i, utf8CharLen(text, i));
+        cb(text.substr(i, len), uc);
         i += len;
     }
 }
 
-// Number of codepoints in a UTF-8 string (the unit the char-stagger counts in).
-inline size_t utf8Length(const std::string& text) {
+// Number of letters in a string (the unit the char-stagger counts in).
+inline size_t clusterCount(const std::string& text) {
     size_t n = 0;
-    forEachUtf8(text, [&](const std::string&, SkUnichar) { ++n; });
+    forEachCluster(text, [&](const std::string&, SkUnichar) { ++n; });
     return n;
 }
 
-// Walk a line's codepoints left to right, calling `draw(letter, letterX)` with each glyph's
+// Walk a line's letters left to right, calling `draw(letter, letterX)` with each glyph's
 // start X. `extraLetterSpacing` (animated word-mode spread) widens every gap except the last.
 // Mirrors forEachLetter in text-layout-engine.ts.
 template <typename Draw>
@@ -92,7 +99,7 @@ inline void forEachLetter(const TextClipLine& line, double x, double extraLetter
     const size_t n = line.letterAdvances.size();
     double cursor = x;
     size_t i = 0;
-    forEachUtf8(line.text, [&](const std::string& letter, SkUnichar) {
+    forEachCluster(line.text, [&](const std::string& letter, SkUnichar) {
         draw(letter, cursor);
         const double advance = i < n ? line.letterAdvances[i] : 0.0;
         cursor += advance + (i + 1 < n ? extraLetterSpacing : 0.0);
@@ -118,6 +125,12 @@ inline SkFont getFontForChar(subtitle::SkiaRenderer* renderer, const TextClipPai
     return renderer->getFontForCharacter(toFontProps(style), uc);
 }
 
+// Base codepoint of a letter (its first codepoint), which is what selects the text font.
+inline SkUnichar letterBaseChar(const std::string& letter) {
+    const size_t len = letter.empty() ? 0 : utf8CharLen(letter, 0);
+    return len ? utf8Decode(letter, 0, len) : 0;
+}
+
 // Sum of glyph widths for a single-codepoint `letter` in the given font.
 inline double measureLetterAdvance(const SkFont& font, const std::string& letter) {
     SkGlyphID glyphs[8];
@@ -135,7 +148,20 @@ inline double measureLetterAdvance(const SkFont& font, const std::string& letter
     return advance;
 }
 
-// Draw one codepoint `letter` (with per-character fallback font) at the given
+// Advance width of one letter: the shaped advance from the emoji face when the letter is an
+// emoji cluster, otherwise its glyph widths in the text font. Emoji clusters must be measured
+// through the shaper, not per codepoint — U+1F44D U+1F3FD is ONE glyph one em wide, but two
+// cmap lookups would report two.
+inline double measureLetter(subtitle::SkiaRenderer* renderer, const TextClipPaintStyle& style,
+                            const std::string& letter) {
+    if (subtitle::isEmojiCluster(letter)) {
+        const double advance = renderer->measureEmojiCluster(letter, static_cast<float>(style.fontSize));
+        if (advance > 0.0) return advance;
+    }
+    return measureLetterAdvance(getFontForChar(renderer, style, letterBaseChar(letter)), letter);
+}
+
+// Draw one letter (with per-letter fallback font) at the given
 // baseline-left position. Mirrors CanvasKitRenderer.drawLetter in the reference.
 //
 // The glyph goes out as an outline PATH (drawTextAsPath), not through Skia's glyph-mask cache,
@@ -144,21 +170,29 @@ inline double measureLetterAdvance(const SkFont& font, const std::string& letter
 // letters jitter as they settle; a path lands at the exact subpixel position with a shape that
 // does not change with scale. Every text-clip painter (static block, curved, glow, animated)
 // draws through here, so all of them stay pixel-consistent with each other — a resting frame
-// can't shift against the animated frame before it. Faces with no outline (colour emoji) fall
-// back to the mask draw.
+// can't shift against the animated frame before it. Faces with no outline fall back to the mask
+// draw (colour emoji are handled before that, on their own path).
 inline void drawLetter(
     subtitle::SkiaRenderer* renderer,
     const std::string& letter,
     double x,
     double baselineY,
     const SkPaint& paint,
-    const TextClipPaintStyle& style)
+    const TextClipPaintStyle& style,
+    const EmojiPass& emoji = {})
 {
-    const size_t len = letter.empty() ? 0 : utf8CharLen(letter, 0);
-    const SkUnichar uc = len ? utf8Decode(letter, 0, len) : 0;
-    const SkFont font = getFontForChar(renderer, style, uc);
     const float fx = static_cast<float>(x);
     const float fy = static_cast<float>(baselineY);
+
+    // Colour emoji: shaped as one cluster and drawn from the emoji face, with the pass telling it
+    // what to do about colour and blur. Falls through to the text font when the letter is not
+    // emoji, or when the emoji face cannot draw it.
+    if (subtitle::isEmojiCluster(letter) &&
+        renderer->drawEmojiCluster(letter, fx, fy, paint, static_cast<float>(style.fontSize), emoji)) {
+        return;
+    }
+
+    const SkFont font = getFontForChar(renderer, style, letterBaseChar(letter));
     if (renderer->drawTextAsPath(letter, fx, fy, paint, font)) return;
     renderer->drawText(letter, fx, fy, paint, font);
 }

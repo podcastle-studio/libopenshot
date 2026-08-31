@@ -46,6 +46,7 @@ add_feature_info("IWYU (include-what-you-use)" ENABLE_IWYU "Scan all source file
 
 # Main library sources
 set(OPENSHOT_SOURCES
+  subtitle/EmojiFont.cpp
   subtitle/Helpers.cpp
   subtitle/SkiaRenderer.cpp
   subtitle/SubtitleManager.cpp
@@ -566,6 +567,14 @@ endif()
 
 target_include_directories(openshot PUBLIC ${SKIA_INCLUDE_DIRS})
 target_link_libraries(openshot PUBLIC ${SKIA_LIBRARIES})
+
+# HarfBuzz shapes colour-emoji clusters (src/subtitle/EmojiFont.cpp). Skia already contains the
+# hb_* implementation, so this only adds its headers; without them emoji still render, but a
+# multi-codepoint sequence degrades to its base codepoint.
+if(SKIA_HARFBUZZ_FOUND)
+  target_include_directories(openshot PRIVATE ${SKIA_HARFBUZZ_INCLUDE_DIR})
+  target_compile_definitions(openshot PRIVATE OPENSHOT_HAVE_HARFBUZZ=1)
+endif()
 
 ###############  LINK LIBRARY  #################
 # Link remaining dependency libraries

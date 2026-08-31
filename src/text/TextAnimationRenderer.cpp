@@ -83,7 +83,7 @@ double blockMargin(const TextClipPaintStyle& style, double blurSigma, double ext
         glowMargin = style.glow->rayLen * (halfExtent + offMax) + offMax + GLOW_BEAM_BLUR_RATIO * style.fontSize * 3.0;
     }
     double maxLineLen = 0.0;
-    for (const auto& line : layout.lines) maxLineLen = std::max(maxLineLen, static_cast<double>(utf8Length(line.text)));
+    for (const auto& line : layout.lines) maxLineLen = std::max(maxLineLen, static_cast<double>(clusterCount(line.text)));
     const double spreadMargin = std::abs(extraLetterSpacing) * maxLineLen;
     return std::ceil(std::max({shadowMargin, strokeMargin, glowMargin}) + (blurSigma + style.blur) * 3.0 + spreadMargin + 4.0);
 }
@@ -185,11 +185,12 @@ void applyUnitTransform(subtitle::SkiaRenderer* renderer, SkCanvas* canvas,
 }
 
 void drawAnimatedUnit(subtitle::SkiaRenderer* renderer, const AnimatedUnitItem& item,
-                      double dx, double dy, const SkPaint& paint, const TextClipPaintStyle& style) {
+                      double dx, double dy, const SkPaint& paint, const TextClipPaintStyle& style,
+                      const EmojiPass& emoji) {
     SkCanvas* canvas = renderer->getCanvas();
     for (const AnimatedUnitGlyph& glyph : item.glyphs) {
         if (!glyph.local.has_value()) {
-            drawLetter(renderer, glyph.letter, glyph.offsetX + dx, glyph.offsetY + dy, paint, style);
+            drawLetter(renderer, glyph.letter, glyph.offsetX + dx, glyph.offsetY + dy, paint, style, emoji);
             continue;
         }
         // (4) multi-glyph curved unit: step this glyph back out to its own arc position inside the
@@ -200,7 +201,7 @@ void drawAnimatedUnit(subtitle::SkiaRenderer* renderer, const AnimatedUnitItem& 
                           static_cast<float>(glyph.local->dy + pivotOffsetY));
         canvas->rotate(static_cast<float>(glyph.local->rotationDeg));
         canvas->translate(0.0f, static_cast<float>(-pivotOffsetY));
-        drawLetter(renderer, glyph.letter, glyph.offsetX + dx, glyph.offsetY + dy, paint, style);
+        drawLetter(renderer, glyph.letter, glyph.offsetX + dx, glyph.offsetY + dy, paint, style, emoji);
         canvas->restore();
     }
 }
@@ -213,7 +214,7 @@ UnitCounts countAnimationUnits(const TextClipLayout& layout) {
         if (line.text.empty()) continue;
         bool lineHasInk = false;
         bool inWord = false;
-        forEachUtf8(line.text, [&](const std::string& letter, SkUnichar) {
+        forEachCluster(line.text, [&](const std::string& letter, SkUnichar) {
             ++counts.chars;
             if (isSpaceGlyph(letter)) { inWord = false; return; }
             ++counts.charsDrawn;
@@ -522,7 +523,7 @@ std::vector<AnimatedUnitItem> collectAnimatedUnits(
         };
 
         size_t i = 0;
-        forEachUtf8(line.text, [&](const std::string& letter, SkUnichar) {
+        forEachCluster(line.text, [&](const std::string& letter, SkUnichar) {
             const double advance = i < line.letterAdvances.size() ? line.letterAdvances[i] : 0.0;
             const int slotIndex = slot++;
             if (isSpaceGlyph(letter)) {
@@ -665,10 +666,15 @@ void UnitAnimationRenderer::drawAnimatedUnitItems(
             applyUnitTransform(renderer, canvas, item, fontSize, flags);
             if (style.stroke.has_value()) {
                 withAnimatedPaint(renderer, {shadow.color, shadow.opacity, style.stroke->width}, item.opacity, combinedBlur,
-                    [&](const SkPaint& paint) { drawAnimatedUnit(renderer, item, dx, dy, paint, style); });
+                    [&](const SkPaint& paint) {
+                        drawAnimatedUnit(renderer, item, dx, dy, paint, style, {EmojiPass::Kind::Skip});
+                    });
             }
             withAnimatedPaint(renderer, {shadow.color, shadow.opacity, std::nullopt}, item.opacity, combinedBlur,
-                [&](const SkPaint& paint) { drawAnimatedUnit(renderer, item, dx, dy, paint, style); });
+                [&](const SkPaint& paint) {
+                    drawAnimatedUnit(renderer, item, dx, dy, paint, style,
+                                     {EmojiPass::Kind::Silhouette, combinedBlur});
+                });
             canvas->restore();
         }
     }
@@ -685,7 +691,9 @@ void UnitAnimationRenderer::drawAnimatedUnitItems(
                 canvas->save();
                 applyUnitTransform(renderer, canvas, item, fontSize, flags);
                 withAnimatedPaint(renderer, {stroke.color, 1.0, stroke.width}, item.opacity, combineBlur(animBlur, calibratedTextBlur(style.blur)),
-                    [&](const SkPaint& paint) { drawAnimatedUnit(renderer, item, 0.0, 0.0, paint, style); });
+                    [&](const SkPaint& paint) {
+                        drawAnimatedUnit(renderer, item, 0.0, 0.0, paint, style, {EmojiPass::Kind::Skip});
+                    });
                 canvas->restore();
             }
         };
@@ -705,9 +713,12 @@ void UnitAnimationRenderer::drawAnimatedUnitItems(
             const double animBlur = item.props.blur() > 0.0 ? item.props.blur() * fontSize : 0.0;
             canvas->save();
             applyUnitTransform(renderer, canvas, item, fontSize, flags);
-            withAnimatedPaint(renderer, {style.color, coreOpacity, std::nullopt}, item.opacity,
-                combineBlur(combineBlur(animBlur, calibratedTextBlur(style.blur)), coreSoftBlur),
-                [&](const SkPaint& paint) { drawAnimatedUnit(renderer, item, 0.0, 0.0, paint, style); });
+            const double fillBlur = combineBlur(combineBlur(animBlur, calibratedTextBlur(style.blur)), coreSoftBlur);
+            withAnimatedPaint(renderer, {style.color, coreOpacity, std::nullopt}, item.opacity, fillBlur,
+                [&](const SkPaint& paint) {
+                    drawAnimatedUnit(renderer, item, 0.0, 0.0, paint, style,
+                                     {EmojiPass::Kind::Colour, fillBlur});
+                });
             canvas->restore();
         }
     };
@@ -971,7 +982,7 @@ AnimatedExtent computeAnimatedExtent(
         if (line.text.empty()) continue;
         double lineRun = 0.0, wordRun = 0.0;
         size_t i = 0;
-        forEachUtf8(line.text, [&](const std::string& letter, SkUnichar) {
+        forEachCluster(line.text, [&](const std::string& letter, SkUnichar) {
             const double advance = i < line.letterAdvances.size() ? line.letterAdvances[i] : 0.0;
             lineRun += advance;
             if (isSpaceGlyph(letter)) { widestWord = std::max(widestWord, wordRun); wordRun = 0.0; }
