@@ -198,7 +198,14 @@ namespace openshot {
 		openshot::FrameDisplayType display; ///< The format to display the frame number (if any)
 		openshot::VolumeMixType mixing;  ///< What strategy should be followed when mixing audio with other clips
 
+        /// Repeat the clip's first source frame for this many frames at the start of the clip
+        /// (used by overlapping transitions, which pull Position back by the same amount).
         long mFreezeFramesCountAtBeginning = 0;
+        /// Repeat the clip's last source frame for this many frames at the end of the clip.
+        /// The mirror of mFreezeFramesCountAtBeginning: an overlapping transition grows End()
+        /// to make room for the hold, and without this the extra length reads real source
+        /// content past the trim-out point instead of holding.
+        long mFreezeFramesCountAtEnd = 0;
 
 		#ifdef USE_OPENCV
 			bool COMPILED_WITH_CV = true;

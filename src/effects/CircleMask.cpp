@@ -52,7 +52,9 @@ std::shared_ptr<openshot::Frame> CircleMask::GetFrame(std::shared_ptr<openshot::
         return frame;
     }
 	auto imageCv = frame->GetImageCV();
-	Podcastle::Effects::applyCircleMaskEffect(imageCv, circleRadiusValue);
+	// openshot::Frame images are premultiplied (see Frame::Mat2Qimage), so the mask has to scale
+	// every channel by its coverage -- scaling alpha alone leaves a bright fringe on the edge.
+	Podcastle::Effects::applyCircleMaskEffect(imageCv, circleRadiusValue, /*premultipliedAlpha=*/true);
 	frame->SetImageCV(imageCv);
 
 	// return the modified frame

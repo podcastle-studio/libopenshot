@@ -476,7 +476,26 @@ std::shared_ptr<Frame> Clip::GetFrame(std::shared_ptr<openshot::Frame> backgroun
 
 // Use an existing openshot::Frame object and draw this Clip's frame onto it
 std::shared_ptr<Frame> Clip::GetFrame(std::shared_ptr<openshot::Frame> background_frame, int64_t requested_clip_frame_number, openshot::TimelineInfoStruct* options) {
-	int64_t actual_clip_frame_number = std::max((int64_t)1, requested_clip_frame_number - mFreezeFramesCountAtBeginning);
+	// Map the requested clip frame onto the source frame to display, honouring the freeze holds.
+	//
+	// Clip frame numbers start at Start() * fps + 1 (see Timeline::GetFrame), so a head hold has to
+	// clamp to that first source frame -- clamping to 1 would step *before* the trim-in point and
+	// play content the clip does not include. The tail hold pins the source frame at the last
+	// moving frame, so the extra length an overlapping transition adds to End() repeats that frame
+	// instead of reading past the trim-out point.
+	int64_t actual_clip_frame_number = requested_clip_frame_number - mFreezeFramesCountAtBeginning;
+	if (reader) {
+		const double clip_fps = reader->info.fps.ToDouble();
+		if (mFreezeFramesCountAtEnd > 0) {
+			const int64_t last_moving_clip_frame =
+				(int64_t) std::llround(End() * clip_fps) - mFreezeFramesCountAtEnd;
+			actual_clip_frame_number = std::min(
+				actual_clip_frame_number, last_moving_clip_frame - mFreezeFramesCountAtBeginning);
+		}
+		const int64_t first_source_frame = (int64_t)(Start() * clip_fps) + 1;
+		actual_clip_frame_number = std::max(first_source_frame, actual_clip_frame_number);
+	}
+	actual_clip_frame_number = std::max((int64_t)1, actual_clip_frame_number);
 	// Check for open reader (or throw exception)
 	if (!is_open)
 		throw ReaderClosed("The Clip is closed.  Call Open() before calling this method.");
@@ -536,8 +555,17 @@ std::shared_ptr<Frame> Clip::GetFrame(std::shared_ptr<openshot::Frame> backgroun
 					const auto currentClipFps = reader->info.fps.ToFloat();
 					const auto overlayedClipFps = overlayedClip->info.fps.ToFloat();
 					const auto overlayClipDuration = overlayedClip->end - overlayedClip->start;
-					const int64_t transitionClipStartFrame = isOverlayAtEnd ? (end - overlayClipDuration) * currentClipFps : 1;
-					const int64_t transitionClipEndFrame = (isOverlayAtEnd ? end : overlayClipDuration) * currentClipFps;
+					// Clip frame numbers start at start * fps + 1, so an overlay at the head of the
+					// clip has to be anchored there -- hardcoding 1 puts the window before the
+					// clip's own first frame whenever it has a trimStart, and the overlay never
+					// gets drawn.
+					const int64_t clipFirstFrame = (int64_t)(start * currentClipFps) + 1;
+					const int64_t transitionClipStartFrame = isOverlayAtEnd
+						? (int64_t)((end - overlayClipDuration) * currentClipFps)
+						: clipFirstFrame;
+					const int64_t transitionClipEndFrame = isOverlayAtEnd
+						? (int64_t)(end * currentClipFps)
+						: clipFirstFrame + (int64_t)(overlayClipDuration * currentClipFps);
 
 					// Check if the requested main clip frame falls inside the transition region.
 					if (requested_clip_frame_number > transitionClipStartFrame && requested_clip_frame_number < transitionClipEndFrame) {

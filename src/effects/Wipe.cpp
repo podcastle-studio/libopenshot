@@ -44,7 +44,10 @@ std::shared_ptr<openshot::Frame> Wipe::GetFrame(std::shared_ptr<openshot::Frame>
     const auto highPercentage = mLevelsHighPercentage.GetValue(frame_number);
 
     auto imageCv = frame->GetImageCV();
-    Podcastle::Effects::applyThresholdWipeMaskEffect(imageCv, lowPercentage, highPercentage);
+    // openshot::Frame images are premultiplied (see Frame::Mat2Qimage), so the wipe has to scale
+    // every channel by its coverage -- scaling alpha alone leaves a bright fringe on the edge.
+    Podcastle::Effects::applyThresholdWipeMaskEffect(imageCv, lowPercentage, highPercentage,
+                                                     /*premultipliedAlpha=*/true);
 
     // return the modified frame
     frame->SetImageCV(imageCv);
