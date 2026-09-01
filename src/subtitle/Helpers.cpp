@@ -103,7 +103,11 @@ std::string transformText(const std::string& text, const SubtitleTextStyle& styl
     }
 
     if (!containerStyle.punctuation) {
-        result = std::regex_replace(result, std::regex("^[.,/!^;:\\-_`~]+|[.,/#!^;:\\-_`~]+$"), "");
+        // Built once. Constructing a std::regex costs ~28 us, and this runs for every word of
+        // every active segment twice per frame (line-discovery pass + current-frame pass), which
+        // made regex compilation alone the largest remaining slice of subtitle render time.
+        static const std::regex kPunctuationEdges("^[.,/!^;:\\-_`~]+|[.,/#!^;:\\-_`~]+$");
+        result = std::regex_replace(result, kPunctuationEdges, "");
     }
     return result;
 }

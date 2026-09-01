@@ -22,16 +22,36 @@
 namespace openshot {
 namespace subtitle {
 
+// Cache keys used to be std::stringstream-formatted strings. Building one allocated and
+// formatted two doubles, and the measure/draw paths ask for the same font and paint thousands
+// of times per frame (once per glyph, per pass), so the key construction itself showed up as
+// a measurable slice of subtitle rendering. Comparing the fields directly costs nothing and
+// keeps the maps ordered without touching the heap.
 struct FontProps {
     std::string fontFamily;
     double fontSize;
     int fontWeight = 400;
     bool italic = false;
 
-    std::string getKey() const {
-        std::stringstream ss;
-        ss << fontFamily << "_" << fontSize << "_" << fontWeight << "_" << italic;
-        return ss.str();
+    // Ordering only — the exact order is irrelevant, it just has to be a strict weak ordering
+    // over every field that changes the resulting SkFont.
+    bool operator<(const FontProps& o) const {
+        if (fontSize != o.fontSize) return fontSize < o.fontSize;
+        if (fontWeight != o.fontWeight) return fontWeight < o.fontWeight;
+        if (italic != o.italic) return italic < o.italic;
+        return fontFamily < o.fontFamily;
+    }
+};
+
+// A FontProps plus the specific character the font has to cover (fallback resolution is
+// per-character, so the same request can resolve to different typefaces per glyph).
+struct FontCharKey {
+    FontProps font;
+    SkUnichar character = 0;
+
+    bool operator<(const FontCharKey& o) const {
+        if (character != o.character) return character < o.character;
+        return font < o.font;
     }
 };
 
@@ -41,10 +61,13 @@ struct PaintProps {
     std::optional<double> strokeWidth;
     std::optional<double> maskBlur;
 
-    std::string getKey() const {
-        std::stringstream ss;
-        ss << color << "_" << opacity << "_" << strokeWidth.value_or(0) << "_" << maskBlur.value_or(0);
-        return ss.str();
+    bool operator<(const PaintProps& o) const {
+        if (opacity != o.opacity) return opacity < o.opacity;
+        const double sw = strokeWidth.value_or(-1.0), osw = o.strokeWidth.value_or(-1.0);
+        if (sw != osw) return sw < osw;
+        const double mb = maskBlur.value_or(-1.0), omb = o.maskBlur.value_or(-1.0);
+        if (mb != omb) return mb < omb;
+        return color < o.color;
     }
 };
 
@@ -140,23 +163,18 @@ public:
     }
 
 private:
-    sk_sp<SkTypeface> getTypeface(const std::string& familyOrPath, const SkFontStyle& style);
-
-    // Resolve a single family name or font-file path to the typeface whose design most
-    // closely matches `style`. For an installed family this returns the real bold / italic
-    // cut when the family ships one; for a variable-font file it pins the weight axis to
-    // the requested weight. No synthetic styling happens here.
-    sk_sp<SkTypeface> matchTypeface(const std::string& familyOrPath, const SkFontStyle& style);
-
     SkColor parseColorString(const std::string& colorStr, const float opacity = 1.0f);
 
 private:
     SkCanvas* canvas;
-    sk_sp<SkFontMgr> fontMgr;
-    std::map<std::string, SkFont> fontCache;
-    std::map<std::string, std::unique_ptr<SkPaint>> paintCache;
-    std::map<std::string, sk_sp<SkTypeface>> typefaceCache;
-
+    // Per-instance, cheap-to-rebuild caches. The expensive half — the fontconfig SkFontMgr
+    // (~16 ms to build) and typeface resolution (opens/decompresses the font file and probes
+    // glyph coverage) — lives in the process-wide SkiaFontResources cache in the .cpp, because
+    // both callers construct a SkiaRenderer per rendered frame. These only ever hold SkFont /
+    // SkPaint value objects, so throwing them away with the renderer costs nothing.
+    std::map<FontProps, SkFont> fontCache;
+    std::map<FontCharKey, SkFont> fontCharCache;
+    std::map<PaintProps, std::unique_ptr<SkPaint>> paintCache;
 };
 
 } // namespace subtitle
