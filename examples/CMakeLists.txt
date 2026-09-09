@@ -37,6 +37,18 @@ target_link_libraries(openshot-text-payload openshot Qt5::Gui)
 add_executable(openshot-subtitle-payload SubtitlePayloadExample.cpp)
 target_link_libraries(openshot-subtitle-payload openshot Qt5::Gui)
 
+# Demo harness for the clip blend modes: renders the same two images composited with every
+# openshot::BlendMode, for side-by-side comparison against a canvas / PixiJS render.
+add_executable(openshot-blend-modes BlendModeExample.cpp)
+target_link_libraries(openshot-blend-modes openshot Qt5::Gui)
+
+# Rendering sample for the clip blend modes: renders real footage through
+# Timeline -> FFmpegWriter (H.264 MP4), once per openshot::BlendMode.
+add_executable(openshot-blend-render BlendModeRenderExample.cpp)
+target_compile_definitions(openshot-blend-render PRIVATE
+	-DTEST_MEDIA_PATH="${TEST_MEDIA_PATH}" )
+target_link_libraries(openshot-blend-render openshot Qt5::Gui)
+
 ############### PLAYER EXECUTABLE ################
 # Create test executable
 add_executable(openshot-player qt-demo/main.cpp)

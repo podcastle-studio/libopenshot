@@ -30,6 +30,7 @@
 #include "ClipBase.h"
 #include "ReaderBase.h"
 
+#include "BlendModes.h"
 #include "Color.h"
 #include "Enums.h"
 #include "EffectBase.h"
@@ -352,6 +353,10 @@ namespace openshot {
 		bool Blur() { return blur; } ///< Get the blur property of this clip
 		void Blur(bool value) { blur = value; } ///< Set the blur property of this clip
 
+		// Blend mode property
+		openshot::BlendMode Blend() { return blend_mode; } ///< Get the blend mode used to composite this clip onto the layers below it
+		void Blend(openshot::BlendMode value) { blend_mode = value; } ///< Set the blend mode used to composite this clip onto the layers below it
+
 		// Flip (mirror) properties
 		bool FlipHorizontal() { return flip_horizontal; } ///< Get the horizontal-flip (mirror) property of this clip
 		void FlipHorizontal(bool value) { flip_horizontal = value; } ///< Set the horizontal-flip (mirror) property of this clip
@@ -383,7 +388,12 @@ namespace openshot {
 		// Blur curve (only used when Blur() is enabled)
 		openshot::Keyframe blur_amount; ///< Curve representing the clip blur radius in pixels (0 = none)
 
-        QPainter::CompositionMode composition_mode = QPainter::CompositionMode_SourceOver; ///< Composition mode for blending this clip with the background
+		/// Blend mode used when this clip's image is flattened onto the layers beneath it.
+		/// Follows the W3C "Compositing and Blending Level 1" spec (the same one behind CSS
+		/// `mix-blend-mode`, canvas `globalCompositeOperation` and PixiJS blend modes), so the
+		/// result matches a front-end composite of the same images. BLEND_NORMAL (the default)
+		/// is a plain source-over composite and costs nothing extra.
+		openshot::BlendMode blend_mode = openshot::BLEND_NORMAL;
 
         openshot::Keyframe horizontal_displacement; ///< Horizontal displacement for displacement map
         openshot::Keyframe vertical_displacement; ///< Vertical displacement for displacement map

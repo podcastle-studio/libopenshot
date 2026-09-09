@@ -62,6 +62,7 @@ set(OPENSHOT_SOURCES
   text/TextAnimationEngine.cpp
   text/TextAnimationRenderer.cpp
   AudioBufferSource.cpp
+  BlendModes.cpp
   AudioDevices.cpp
   AudioReaderSource.cpp
   AudioResampler.cpp
