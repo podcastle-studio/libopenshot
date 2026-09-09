@@ -56,6 +56,32 @@ enum FrameDisplayType
 	FRAME_DISPLAY_BOTH      ///< Display both the clip's and timeline's frame number
 };
 
+/// This enumeration determines how a clip's image is blended with the layers beneath it.
+///
+/// The modes, their names and their formulas all follow the W3C "Compositing and Blending
+/// Level 1" specification - the same spec implemented by the HTML canvas
+/// `globalCompositeOperation` property, by CSS `mix-blend-mode` and by PixiJS' blend modes -
+/// so a libopenshot composite matches a front-end composite of the same two images.
+enum BlendMode
+{
+	BLEND_NORMAL,       ///< Draw the clip over the backdrop, unmodified (plain source-over)
+	BLEND_MULTIPLY,     ///< Multiply backdrop and source (always darkens)
+	BLEND_SCREEN,       ///< Multiply the complements (always lightens)
+	BLEND_OVERLAY,      ///< Multiply or screen depending on the backdrop (hard-light, swapped)
+	BLEND_DARKEN,       ///< Keep the darker of backdrop and source, per channel
+	BLEND_LIGHTEN,      ///< Keep the lighter of backdrop and source, per channel
+	BLEND_COLOR_DODGE,  ///< Brighten the backdrop in proportion to the source
+	BLEND_COLOR_BURN,   ///< Darken the backdrop in proportion to the inverted source
+	BLEND_HARD_LIGHT,   ///< Multiply or screen depending on the source
+	BLEND_SOFT_LIGHT,   ///< Darken or lighten depending on the source, like a diffused spotlight
+	BLEND_DIFFERENCE,   ///< Absolute difference of backdrop and source
+	BLEND_EXCLUSION,    ///< Like difference, but with lower contrast
+	BLEND_HUE,          ///< Source hue, with the backdrop's saturation and luminosity
+	BLEND_SATURATION,   ///< Source saturation, with the backdrop's hue and luminosity
+	BLEND_COLOR,        ///< Source hue and saturation, with the backdrop's luminosity
+	BLEND_LUMINOSITY    ///< Source luminosity, with the backdrop's hue and saturation
+};
+
 /// This enumeration determines the strategy when mixing audio with other clips.
 enum VolumeMixType
 {
