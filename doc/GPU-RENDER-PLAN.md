@@ -642,7 +642,69 @@ L4 each ≥ 2× realtime; no VRAM growth over 10,000 frames.
 
 ---
 
-## 4. Parity policy (applies to every step)
+## 4. System requirements for N parallel exports
+
+The service runs several export processes per pod (`start_multiple.sh`, `SERVICE_NUM_INSTANCES_PARALLEL`,
+default 2) and each process today sets 16 FFmpeg threads and 16 OpenMP threads regardless of the pod's
+CPU quota. Sizing therefore has to be done per process and multiplied.
+
+### 4.1 Measured per process (one 1080p export, one clip, no effects, dev laptop, 2026-09-10)
+
+| Configuration | CPU used | Peak RSS | VRAM | fps |
+|---|---|---|---|---|
+| 720p source → 1080p, libx264 preset fast (≈ service) | 8.3 cores | 0.74 GB | – | 96 |
+| 720p source → 1080p, h264_nvenc | 1.6 cores | 0.54 GB | 0.25 GB | 120 |
+| 4K source → 1080p, libx264 | 7.3 cores | 1.5 GB | – | 46 |
+| 4K source → 1080p, h264_nvenc | 2.7 cores | 1.4 GB | ~0.3 GB | 63 |
+| 720p source → 4K output, libx264 | 6.5 cores | 2.2 GB | – | 27 |
+
+One 1080p nvenc stream at 120 fps kept the A2000's single NVENC engine 73 % busy, so that engine
+sustains about 165 fps of 1080p H.264, i.e. 5–6 exports running at real time. Memory grows with the
+number of clips (each open reader holds decode buffers and a small cache; each project-size RGBA
+frame is 8 MB at 1080p, 33 MB at 4K) and with text glow/3D surfaces; budget +150 MB per additional
+video clip at 1080p.
+
+### 4.2 CPU path (today, R1)
+
+- Cores: each process wants `FF_THREADS + 1` cores while encoding. Rule: `FF_THREADS = OMP_THREADS =
+  max(2, floor(cpu_quota / N) - 1)` (plan step 1.2). x264 loses efficiency above ~6 threads at 1080p,
+  so more processes with fewer threads beat fewer processes with 16 threads once N ≥ 2.
+- Memory: `N × (0.8 GB at 1080p | 1.6 GB with 4K sources | 2.3 GB for 4K output) + 1 GB` for the
+  process images and the muxing ffmpeg.
+- Recommended pod shapes: 8 vCPU / 8 GB → N = 2, 3 threads each (4K output: N = 1);
+  16 vCPU / 16 GB → N = 4, 3 threads each; requests = limits so OpenMP does not see host cores.
+
+### 4.3 GPU path (R2 onwards)
+
+Per process: 1–3 CPU cores (demux, audio, Skia command recording, control), 0.5–1.4 GB RAM,
+and VRAM roughly: timeline canvas ring 4 × 8 MB (RGBA8) or 4 × 16 MB (RGBA16F) at 1080p; one
+texture per active clip (8 MB, 33 MB at 4K); NVDEC surface pool 8–16 × 3 MB per 1080p stream
+(12 MB each at 4K); NVENC input pool 20 × 3 MB; Skia resource cache (cap it at 64 MB); text bakes
+and glow surfaces (tens of MB). Expect **0.5–0.8 GB per 1080p export, 1.5–2.5 GB per 4K export**,
+plus ~0.3 GB fixed per process for the CUDA and Vulkan contexts.
+
+Fixed-function limits per GPU:
+- NVENC: one engine ≈ 165 fps 1080p H.264 (measured); L4 has two engines, L40S three; HEVC/AV1
+  cost more. Consumer GeForce cards cap concurrent encode sessions (3–8 depending on driver);
+  RTX A-series and data-centre cards have no cap.
+- NVDEC: comparable throughput per engine; 4K sources use ~4× the budget of 1080p.
+- Shader cores: the compositor is far below saturation at 1080p; it becomes the limit only with many
+  heavy effects or 4K. Several processes share the GPU by time-slicing; there is no per-process VRAM
+  isolation, so the sum of the estimates above must fit with ~20 % headroom.
+
+Recommended density on an L4 (24 GB, 2 NVENC): N = 4 concurrent 1080p exports or N = 2 4K exports
+per GPU, one process each, `nvidia.com/gpu: 1` with the device plugin's time-slicing replicas = N,
+pod cpu request = `N × 3 + 1`, memory request = `N × 1.5 GB + 2 GB`. Measure GPU busy %, NVENC
+utilisation (NVML) and VRAM under load in Phase 6 before raising N.
+
+### 4.4 What the service must expose
+
+- `SERVICE_NUM_INSTANCES_PARALLEL` already exists; derive `FF_THREADS`/`OMP_THREADS` from it and the
+  cgroup quota (step 1.2), and later `OPENSHOT_GPU=vulkan|off` plus the GPU device index per process.
+- A per-export resource line in the logs (peak RSS, CPU seconds, GPU busy %, VRAM peak, NVENC
+  utilisation) so the density numbers above can be re-derived from production instead of a laptop.
+
+## 5. Parity policy (applies to every step)
 
 - **exact**: PSNR = inf or max diff ≤ 1 LSB. Required for copy removals, format changes,
   blend modes, separable colour effects.
@@ -656,7 +718,7 @@ L4 each ≥ 2× realtime; no VRAM growth over 10,000 frames.
 Anything that fails its parity gate is reverted or feature-flagged; it does not stay
 merged "to fix later".
 
-## 5. Things to keep in mind
+## 6. Things to keep in mind
 
 - Skia Graphite's `Context` is single-threaded; parallelism comes from depth
   (frames in flight) and from one `Recorder` per thread, not from rendering two frames
