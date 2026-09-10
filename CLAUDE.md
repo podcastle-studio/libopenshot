@@ -13,6 +13,13 @@ the transition effects in `src/effects/image-processing-lib` (shared with the we
    Sections 0–2 are background (measurements, GPU primer, Qt inventory); section 3 is the step list;
    section 4 sizes CPU/RAM/VRAM/NVENC for N parallel export processes.
 3. `tests/golden/README.md` — the regression suite that gates every change.
+4. `doc/PERFORMANCE-BASELINE.md` — benchmark history (`tests/bench`, `openshot-bench`). Re-run at the
+   end of every optimisation phase, commit the JSON under `tests/bench/results/`, append the table.
+
+## How to communicate
+
+- Keep replies short. Lead with the result, a few bullets at most, tables only when numbers matter.
+  Details belong in the docs (`STATUS.md`, `doc/*.md`), not in chat.
 
 ## Non-negotiable workflow
 
@@ -31,8 +38,9 @@ the transition effects in `src/effects/image-processing-lib` (shared with the we
 
 ```bash
 cmake -S . -B cmake-build-release -DCMAKE_BUILD_TYPE=Release   # Skia in /usr/local/include/skia, FFmpeg in /usr/local
-ninja -C cmake-build-release openshot openshot-golden
+ninja -C cmake-build-release openshot openshot-golden openshot-bench
 tools/golden.sh check
+tests/bench/media/generate.sh && cmake-build-release/tests/bench/openshot-bench --quick   # 1080p perf smoke
 ```
 Submodules `src/effects/image-processing-lib` and `external/godot-cpp` must be initialised
 (`git submodule update --init`). `ENABLE_TESTS` (Catch2) is off and Catch2 is not installed;

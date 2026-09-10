@@ -53,7 +53,9 @@ struct Opts {
     std::vector<std::string> modes = {"render", "x264"};
     std::string scenarioFilter;
     int threads = 0;              // 0 = library defaults (what the service runs with)
+    int parallel = 1;             // N identical processes per case, started together
     std::string jsonOut, mdOut;
+    std::string resumeFrom;       // JSON of an interrupted run: cases present there are skipped and kept
     std::string goldenMedia = BENCH_GOLDEN_MEDIA_DIR;
     std::string benchMedia = BENCH_MEDIA_DIR;
     std::string outDir = "/tmp/openshot-bench";
@@ -150,44 +152,77 @@ struct CaseResult {
     bool ok = false; std::string error;
     int frames = 0; double wall = 0, fps = 0, avgMs = 0, p50Ms = 0, p95Ms = 0, maxMs = 0, buildMs = 0;
     double cpuSeconds = 0, cpuCores = 0; long maxRssKb = 0;
+    int parallel = 1; double aggFps = 0;
 };
 
-CaseResult spawnCase(const Opts& o, const std::string& scenario, const Res& r, const std::string& mode, const char* self) {
-    CaseResult cr; cr.scenario = scenario; cr.res = r.name; cr.mode = mode; cr.w = r.w; cr.h = r.h;
+struct Child { pid_t pid = -1; int fd = -1; std::string out; };
+
+Child startChild(const Opts& o, const std::string& spec, const char* self, int index) {
+    Child c;
     int pipefd[2];
-    if (pipe(pipefd) != 0) { cr.error = "pipe failed"; return cr; }
-    const std::string spec = scenario + ":" + std::to_string(r.w) + "x" + std::to_string(r.h) + ":" + mode;
+    if (pipe(pipefd) != 0) return c;
     const std::string frames = std::to_string(o.frames), threads = std::to_string(o.threads);
+    const std::string outDir = o.outDir + "/p" + std::to_string(index);
     const pid_t pid = fork();
     if (pid == 0) {
         dup2(pipefd[1], STDOUT_FILENO); close(pipefd[0]); close(pipefd[1]);
         int devnull = open("/dev/null", O_WRONLY); if (devnull >= 0) dup2(devnull, STDERR_FILENO);
         execl(self, self, "--case", spec.c_str(), "--frames", frames.c_str(), "--threads", threads.c_str(),
-              "--media", o.goldenMedia.c_str(), "--bench-media", o.benchMedia.c_str(), "--out", o.outDir.c_str(), (char*)nullptr);
+              "--media", o.goldenMedia.c_str(), "--bench-media", o.benchMedia.c_str(), "--out", outDir.c_str(), (char*)nullptr);
         _exit(127);
     }
     close(pipefd[1]);
-    std::string out; char buf[512]; ssize_t n;
-    while ((n = read(pipefd[0], buf, sizeof buf)) > 0) out.append(buf, n);
-    close(pipefd[0]);
-    int status = 0; struct rusage ru{};
-    wait4(pid, &status, 0, &ru);
-    cr.cpuSeconds = ru.ru_utime.tv_sec + ru.ru_utime.tv_usec / 1e6 + ru.ru_stime.tv_sec + ru.ru_stime.tv_usec / 1e6;
-    cr.maxRssKb = ru.ru_maxrss;
-    const auto pos = out.find("RESULT ");
-    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0 || pos == std::string::npos) {
-        cr.error = WIFSIGNALED(status) ? "signal " + std::to_string(WTERMSIG(status)) : "exit " + std::to_string(WEXITSTATUS(status));
-        return cr;
+    c.pid = pid; c.fd = pipefd[0];
+    return c;
+}
+
+// Runs o.parallel identical processes for one case at the same time. Per-process metrics are
+// averaged; aggregate fps = total frames / wall time of the slowest process.
+CaseResult spawnCase(const Opts& o, const std::string& scenario, const Res& r, const std::string& mode, const char* self) {
+    CaseResult cr; cr.scenario = scenario; cr.res = r.name; cr.mode = mode; cr.w = r.w; cr.h = r.h; cr.parallel = o.parallel;
+    const std::string spec = scenario + ":" + std::to_string(r.w) + "x" + std::to_string(r.h) + ":" + mode;
+    std::vector<Child> kids;
+    const auto t0 = std::chrono::steady_clock::now();
+    for (int i = 0; i < o.parallel; ++i) kids.push_back(startChild(o, spec, self, i));
+    // read all pipes to EOF (children block on a full pipe otherwise)
+    for (auto& k : kids) {
+        char buf[512]; ssize_t n;
+        while (k.fd >= 0 && (n = read(k.fd, buf, sizeof buf)) > 0) k.out.append(buf, n);
+        if (k.fd >= 0) close(k.fd);
     }
-    std::istringstream in(out.substr(pos + 7)); std::string kv;
-    while (in >> kv) {
-        const auto eq = kv.find('='); if (eq == std::string::npos) continue;
-        const std::string k = kv.substr(0, eq); const double v = std::atof(kv.c_str() + eq + 1);
-        if (k == "frames") cr.frames = int(v); else if (k == "wall") cr.wall = v; else if (k == "fps") cr.fps = v;
-        else if (k == "avg_ms") cr.avgMs = v; else if (k == "p50_ms") cr.p50Ms = v; else if (k == "p95_ms") cr.p95Ms = v;
-        else if (k == "max_ms") cr.maxMs = v; else if (k == "build_ms") cr.buildMs = v;
+    double cpuTotal = 0; long rssTotal = 0; int okCount = 0;
+    double fpsSum = 0, avgSum = 0, p50Sum = 0, p95Sum = 0, maxSum = 0, buildSum = 0, wallMax = 0;
+    for (auto& k : kids) {
+        int status = 0; struct rusage ru{};
+        wait4(k.pid, &status, 0, &ru);
+        cpuTotal += ru.ru_utime.tv_sec + ru.ru_utime.tv_usec / 1e6 + ru.ru_stime.tv_sec + ru.ru_stime.tv_usec / 1e6;
+        rssTotal += ru.ru_maxrss;
+        const auto pos = k.out.find("RESULT ");
+        if (!WIFEXITED(status) || WEXITSTATUS(status) != 0 || pos == std::string::npos) {
+            cr.error = WIFSIGNALED(status) ? "signal " + std::to_string(WTERMSIG(status)) : "exit " + std::to_string(WEXITSTATUS(status));
+            continue;
+        }
+        std::istringstream in(k.out.substr(pos + 7)); std::string kv;
+        double wall = 0;
+        while (in >> kv) {
+            const auto eq = kv.find('='); if (eq == std::string::npos) continue;
+            const std::string key = kv.substr(0, eq); const double v = std::atof(kv.c_str() + eq + 1);
+            if (key == "frames") cr.frames = int(v); else if (key == "wall") wall = v; else if (key == "fps") fpsSum += v;
+            else if (key == "avg_ms") avgSum += v; else if (key == "p50_ms") p50Sum += v; else if (key == "p95_ms") p95Sum += v;
+            else if (key == "max_ms") maxSum += v; else if (key == "build_ms") buildSum += v;
+        }
+        wallMax = std::max(wallMax, wall);
+        ++okCount;
     }
-    cr.cpuCores = cr.wall > 0 ? cr.cpuSeconds / cr.wall : 0;
+    const double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+    cr.cpuSeconds = cpuTotal;
+    cr.maxRssKb = rssTotal;                       // sum over processes = what the pod needs
+    if (okCount != o.parallel) return cr;
+    cr.wall = wallMax;
+    cr.fps = fpsSum / okCount;                    // per-process fps
+    cr.aggFps = double(cr.frames) * okCount / wallMax;
+    cr.avgMs = avgSum / okCount; cr.p50Ms = p50Sum / okCount; cr.p95Ms = p95Sum / okCount; cr.maxMs = maxSum / okCount; cr.buildMs = buildSum / okCount;
+    cr.cpuCores = elapsed > 0 ? cpuTotal / elapsed : 0;   // cores busy across all processes
     cr.ok = true;
     return cr;
 }
@@ -222,7 +257,9 @@ std::string markdown(const Json::Value& run) {
     const auto& m = run["machine"];
     md << "Run `" << run["label"].asString() << "` on " << run["date"].asString() << ", commit " << m["git"].asString()
        << " (" << m["git_branch"].asString() << "), " << m["build_type"].asString() << " build, " << run["frames"].asInt()
-       << " frames per case at 30 fps, threads: " << m["threads_setting"].asString() << ".\n\n"
+       << " frames per case at 30 fps, threads: " << m["threads_setting"].asString()
+       << (run["parallel"].asInt() > 1 ? ", **" + std::to_string(run["parallel"].asInt()) + " identical processes per case run concurrently** (fps = per process, agg = all processes together; cores/RSS summed)" : "")
+       << ".\n\n"
        << "Machine: " << m["cpu"].asString() << " (" << m["hardware_threads"].asInt() << " threads), "
        << m["mem_total"].asString() << " RAM, GPU " << m["gpu"].asString() << ", FFmpeg " << m["ffmpeg"].asString()
        << ", kernel " << m["kernel"].asString() << ".\n\n";
@@ -249,7 +286,8 @@ std::string markdown(const Json::Value& run) {
                 if (!c) { md << " – |"; continue; }
                 if (!(*c)["ok"].asBool()) { md << " FAIL |"; continue; }
                 md << " **" << fmt((*c)["fps"].asDouble(), 1) << "**";
-                if (mode == "render") md << " (p95 " << fmt((*c)["p95_ms"].asDouble(), 1) << ")";
+                if ((*c)["parallel"].asInt() > 1) md << " (agg " << fmt((*c)["agg_fps"].asDouble(), 1) << ")";
+                else if (mode == "render") md << " (p95 " << fmt((*c)["p95_ms"].asDouble(), 1) << ")";
                 md << " |";
             }
             md << "\n";
@@ -294,7 +332,8 @@ Json::Value loadJson(const std::string& path) {
 
 void usage() {
     std::cout << "openshot-bench [--label L] [--frames N] [--res 540p,720p,1080p,1440p,2160p] [--modes render,x264,nvenc]\n"
-                 "               [--scenario substr] [--threads N] [--quick] [--json out.json] [--md out.md] [--out dir]\n"
+                 "               [--scenario substr] [--threads N] [--parallel N] [--quick] [--json out.json] [--md out.md] [--out dir]\n"
+                 "               [--resume interrupted.json]   (results are written after every case; resume skips finished cases)\n"
                  "openshot-bench compare old.json new.json [--md out.md]\n"
                  "openshot-bench --list\n";
 }
@@ -315,7 +354,9 @@ int main(int argc, char** argv) {
         else if (a == "--modes") o.modes = split(next(), ',');
         else if (a == "--scenario") o.scenarioFilter = next();
         else if (a == "--threads") o.threads = std::stoi(next());
+        else if (a == "--parallel") o.parallel = std::max(1, std::stoi(next()));
         else if (a == "--json") o.jsonOut = next();
+        else if (a == "--resume") o.resumeFrom = next();
         else if (a == "--md") o.mdOut = next();
         else if (a == "--out") o.outDir = next();
         else if (a == "--media") o.goldenMedia = next();
@@ -349,8 +390,25 @@ int main(int argc, char** argv) {
     for (const auto& r : o.res) for (const auto& k : kAllRes) if (k.name == r || k.name == r + "p") resList.push_back(k);
 
     Json::Value run;
-    run["label"] = o.label; run["date"] = isoNow(); run["frames"] = o.frames; run["machine"] = machineInfo(o);
+    run["label"] = o.label; run["date"] = isoNow(); run["frames"] = o.frames; run["parallel"] = o.parallel; run["machine"] = machineInfo(o);
     Json::Value cases(Json::arrayValue);
+    if (!o.resumeFrom.empty() && std::filesystem::exists(o.resumeFrom)) {
+        const Json::Value prev = loadJson(o.resumeFrom);
+        for (const auto& c : prev["cases"]) if (c["ok"].asBool()) cases.append(c);
+        std::cout << "resuming: " << cases.size() << " finished cases kept from " << o.resumeFrom << "\n";
+    }
+    auto alreadyDone = [&](const std::string& sc, const std::string& res, const std::string& mode) {
+        for (const auto& c : cases) if (c["scenario"] == sc && c["res"] == res && c["mode"] == mode) return true;
+        return false;
+    };
+    std::string jsonPath = o.jsonOut;
+    if (jsonPath.empty()) { std::filesystem::create_directories(BENCH_RESULTS_DIR); jsonPath = std::string(BENCH_RESULTS_DIR) + "/" + nowStamp() + "_" + o.label + ".json"; }
+    std::filesystem::create_directories(std::filesystem::path(jsonPath).parent_path());
+    auto flush = [&]() {
+        run["cases"] = cases;
+        Json::StreamWriterBuilder wb; wb["indentation"] = "  ";
+        std::ofstream(jsonPath) << Json::writeString(wb, run);
+    };
     int total = 0, done = 0;
     for (const auto& s : bench::scenarios()) if (o.scenarioFilter.empty() || s.name.find(o.scenarioFilter) != std::string::npos) total += int(resList.size() * o.modes.size());
     const auto tRun0 = std::chrono::steady_clock::now();
@@ -358,29 +416,27 @@ int main(int argc, char** argv) {
         if (!o.scenarioFilter.empty() && s.name.find(o.scenarioFilter) == std::string::npos) continue;
         for (const auto& r : resList) {
             for (const auto& mode : o.modes) {
-                const CaseResult cr = spawnCase(o, s.name, r, mode, argv[0]);
                 ++done;
+                if (alreadyDone(s.name, r.name, mode)) { std::printf("[%3d/%3d] %-22s %-6s %-7s (kept from resume)\n", done, total, s.name.c_str(), r.name.c_str(), mode.c_str()); continue; }
+                const CaseResult cr = spawnCase(o, s.name, r, mode, argv[0]);
                 Json::Value c;
                 c["scenario"] = cr.scenario; c["description"] = s.description; c["res"] = cr.res; c["width"] = cr.w; c["height"] = cr.h; c["mode"] = cr.mode;
                 c["ok"] = cr.ok; c["error"] = cr.error; c["frames"] = cr.frames; c["wall_s"] = cr.wall; c["fps"] = cr.fps;
                 c["avg_ms"] = cr.avgMs; c["p50_ms"] = cr.p50Ms; c["p95_ms"] = cr.p95Ms; c["max_ms"] = cr.maxMs; c["build_ms"] = cr.buildMs;
                 c["cpu_seconds"] = cr.cpuSeconds; c["cpu_cores"] = cr.cpuCores; c["max_rss_kb"] = static_cast<Json::Int64>(cr.maxRssKb);
+                c["parallel"] = cr.parallel; c["agg_fps"] = cr.aggFps;
                 cases.append(c);
+                flush();
                 std::printf("[%3d/%3d] %-22s %-6s %-7s %s\n", done, total, cr.scenario.c_str(), cr.res.c_str(), cr.mode.c_str(),
-                            cr.ok ? (fmt(cr.fps, 1) + " fps  " + fmt(cr.cpuCores, 1) + " cores  " + fmt(cr.maxRssKb / 1048576.0, 2) + " GB" +
+                            cr.ok ? (fmt(cr.fps, 1) + " fps" + (cr.parallel > 1 ? "/proc (agg " + fmt(cr.aggFps, 1) + ")" : "") + "  " + fmt(cr.cpuCores, 1) + " cores  " + fmt(cr.maxRssKb / 1048576.0, 2) + " GB" +
                                      (mode == "render" ? "  p95 " + fmt(cr.p95Ms, 1) + " ms" : "")).c_str()
                                   : ("FAILED " + cr.error).c_str());
                 std::fflush(stdout);
             }
         }
     }
-    run["cases"] = cases;
     run["total_seconds"] = std::chrono::duration<double>(std::chrono::steady_clock::now() - tRun0).count();
-
-    std::string jsonPath = o.jsonOut;
-    if (jsonPath.empty()) { std::filesystem::create_directories(BENCH_RESULTS_DIR); jsonPath = std::string(BENCH_RESULTS_DIR) + "/" + nowStamp() + "_" + o.label + ".json"; }
-    std::filesystem::create_directories(std::filesystem::path(jsonPath).parent_path());
-    { Json::StreamWriterBuilder wb; wb["indentation"] = "  "; std::ofstream(jsonPath) << Json::writeString(wb, run); }
+    flush();
     std::cout << "results: " << jsonPath << "\n";
     if (!o.mdOut.empty()) { std::ofstream(o.mdOut) << markdown(run); std::cout << "markdown: " << o.mdOut << "\n"; }
     return 0;
