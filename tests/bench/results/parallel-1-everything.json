@@ -1,0 +1,46 @@
+{
+  "cases" : 
+  [
+    {
+      "agg_fps" : 1.5818112793689627,
+      "avg_ms" : 632.18700000000001,
+      "build_ms" : 156.5,
+      "cpu_cores" : 1.1492777848626217,
+      "cpu_seconds" : 33.099984000000006,
+      "description" : "two videos side by side, chroma-keyed clip with LUT, animated glow text, subtitles, PiP with shadow",
+      "error" : "",
+      "fps" : 1.5820000000000001,
+      "frames" : 45,
+      "height" : 1080,
+      "max_ms" : 0.0,
+      "max_rss_kb" : 1942456,
+      "mode" : "x264",
+      "ok" : true,
+      "p50_ms" : 0.0,
+      "p95_ms" : 0.0,
+      "parallel" : 1,
+      "res" : "1080p",
+      "scenario" : "everything",
+      "wall_s" : 28.448399999999999,
+      "width" : 1920
+    }
+  ],
+  "date" : "2026-09-10T14:58:43",
+  "frames" : 45,
+  "label" : "parallel-1-every",
+  "machine" : 
+  {
+    "build_type" : "Release",
+    "cpu" : "12th Gen Intel(R) Core(TM) i7-12700H",
+    "ffmpeg" : "6.1",
+    "git" : "493f88bf",
+    "git_branch" : "feature/gpu-rendering",
+    "gpu" : "NVIDIA RTX A2000 8GB Laptop GPU, 580.126.20, 8192 MiB",
+    "hardware_threads" : 20,
+    "kernel" : "7.0.0-31-generic",
+    "mem_total" : "32521720 kB",
+    "threads_setting" : "library defaults (FF_THREADS=16, OMP_THREADS=16)"
+  },
+  "parallel" : 1,
+  "total_seconds" : 28.800870756999998
+}

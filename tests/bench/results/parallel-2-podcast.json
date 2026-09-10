@@ -1,0 +1,69 @@
+{
+  "cases" : 
+  [
+    {
+      "agg_fps" : 31.4828418511911,
+      "avg_ms" : 63.424000000000007,
+      "build_ms" : 141.19999999999999,
+      "cpu_cores" : 6.2840302243852468,
+      "cpu_seconds" : 25.540434999999999,
+      "description" : "podcast layout: main video with colour filters + LUT, PiP with crop radius + shadow, logo, lower third",
+      "error" : "",
+      "fps" : 15.766999999999999,
+      "frames" : 60,
+      "height" : 1080,
+      "max_ms" : 214.04349999999999,
+      "max_rss_kb" : 1425904,
+      "mode" : "render",
+      "ok" : true,
+      "p50_ms" : 59.353499999999997,
+      "p95_ms" : 82.141500000000008,
+      "parallel" : 2,
+      "res" : "1080p",
+      "scenario" : "podcast_pip",
+      "wall_s" : 3.8115999999999999,
+      "width" : 1920
+    },
+    {
+      "agg_fps" : 28.378186633874094,
+      "avg_ms" : 70.400000000000006,
+      "build_ms" : 138.60000000000002,
+      "cpu_cores" : 7.0465088119889288,
+      "cpu_seconds" : 31.806466999999998,
+      "description" : "podcast layout: main video with colour filters + LUT, PiP with crop radius + shadow, logo, lower third",
+      "error" : "",
+      "fps" : 14.204499999999999,
+      "frames" : 60,
+      "height" : 1080,
+      "max_ms" : 0.0,
+      "max_rss_kb" : 2717588,
+      "mode" : "x264",
+      "ok" : true,
+      "p50_ms" : 0.0,
+      "p95_ms" : 0.0,
+      "parallel" : 2,
+      "res" : "1080p",
+      "scenario" : "podcast_pip",
+      "wall_s" : 4.2286000000000001,
+      "width" : 1920
+    }
+  ],
+  "date" : "2026-09-10T14:58:23",
+  "frames" : 60,
+  "label" : "parallel-2-heavy",
+  "machine" : 
+  {
+    "build_type" : "Release",
+    "cpu" : "12th Gen Intel(R) Core(TM) i7-12700H",
+    "ffmpeg" : "6.1",
+    "git" : "493f88bf",
+    "git_branch" : "feature/gpu-rendering",
+    "gpu" : "NVIDIA RTX A2000 8GB Laptop GPU, 580.126.20, 8192 MiB",
+    "hardware_threads" : 20,
+    "kernel" : "7.0.0-31-generic",
+    "mem_total" : "32521720 kB",
+    "threads_setting" : "library defaults (FF_THREADS=16, OMP_THREADS=16)"
+  },
+  "parallel" : 2,
+  "total_seconds" : 8.578479325
+}

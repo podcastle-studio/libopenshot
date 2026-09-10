@@ -15,40 +15,12 @@ Phase 0 of `doc/GPU-RENDER-PLAN.md` is mostly done:
 - Per-process resource numbers measured for parallel-export sizing (plan section 4): a 1080p
   libx264 export uses ~8 cores / 0.75 GB; with nvenc 1.6 cores / 0.55 GB / 0.25 GB VRAM; 4K sources
   ~1.5 GB, 4K output ~2.2 GB. One NVENC engine ≈ 165 fps of 1080p.
-- Performance benchmark built (`tests/bench`, `openshot-bench`): 13 scenarios × 5 resolutions ×
-  render/x264/nvenc, per-case fps, p95 latency, cores, RSS; `compare` prints deltas between runs.
-  Baseline of the current CPU pipeline recorded in `doc/PERFORMANCE-BASELINE.md` and
-  `tests/bench/results/baseline-cpu.json`.
+- Performance benchmark built and **baseline complete**: `tests/bench/results/baseline-cpu.json`
+  (195 cases, 89 min) plus `parallel-{1,2,4}-*.json`, written up in `doc/PERFORMANCE-BASELINE.md`.
+  Headlines at 1080p: single video 81 fps x264, podcast layout 20 fps, animated glow text 1.4 fps
+  (p95 952 ms, 1 core), everything-at-once 1.8 fps; 4K glow text needs 9.6 GB. Four concurrent
+  1080p exports give 1.8x aggregate throughput, not 4x.
 - All of the above is committed on `feature/gpu-rendering`.
-
-## PAUSED MID-RUN (laptop suspend, 2026-09-10) — resume here
-
-The full CPU performance baseline (`openshot-bench --label baseline-cpu --frames 150 --modes render,x264,nvenc`)
-was running in the background: **~103 of 195 cases done** (all scenarios up to `text_animated_glow_3`;
-that one is very slow: 5 fps at 540p, 1.4 fps at 1080p, 0.8 fps at 1440p). Remaining: rest of
-`text_animated_glow_3`, `transitions_chain`, `blend_stack_5`, `heavy_effects`, `chroma_key_green`,
-`source_4k`, `everything` (× 5 resolutions × 3 modes).
-
-The running binary writes its JSON only at the very end, so if the process died with the suspend the
-finished cases exist only in the console log, copied to `tests/bench/results/baseline-cpu.partial.log`
-(one line per case: fps, cores, RSS, p95).
-
-Source changes made while the run was going, **not yet built or tested**: `tests/bench/main.cpp` gained
-`--parallel N` (N identical processes per case, aggregate fps) and incremental JSON writing +
-`--resume <json>`. To continue:
-
-1. `ninja -C cmake-build-release openshot-bench` (fix any compile errors in the new code).
-2. Re-run the full matrix with the rebuilt binary (results now flush after every case, so a second
-   interruption costs one case): `cmake-build-release/tests/bench/openshot-bench --label baseline-cpu
-   --frames 150 --modes render,x264,nvenc --json tests/bench/results/baseline-cpu.json --md /tmp/baseline-cpu.md
-   --out /tmp/openshot-bench > /tmp/bench-run.log 2>&1 &` (about 1.5 h; add `--resume tests/bench/results/baseline-cpu.json`
-   after any interruption). If the old process finished before the suspend, its JSON is already at that path — check first.
-3. Parallel measurement for the sizing table: `--parallel 2` and `--parallel 4` at `--res 1080p` for
-   `single_video,podcast_pip,text_animated_glow_3,everything` in all three modes (`--json
-   tests/bench/results/parallel-{2,4}.json`).
-4. Paste both Markdown tables into `doc/PERFORMANCE-BASELINE.md` (section "2026-09-10 · baseline-cpu"),
-   add a short narrative (bottlenecks per resolution, the animated-glow-text outlier, throttling caveat),
-   commit JSON + doc, update this file, delete this PAUSED section.
 
 ## Open decisions (record in `doc/GPU-DECISIONS.md` when taken)
 
@@ -82,4 +54,4 @@ Source changes made while the run was going, **not yet built or tested**: `tests
 
 - 2026-09-10 — analysis, plan, golden suite; first commit on `feature/gpu-rendering`.
 - 2026-09-10 — CLAUDE.md + STATUS.md; plan section 4 (sizing for N parallel exports).
-- 2026-09-10 — openshot-bench committed; CPU baseline run started (paused mid-run for laptop suspend, see above).
+- 2026-09-10 — openshot-bench committed; full CPU baseline + concurrency measurements recorded in doc/PERFORMANCE-BASELINE.md.
