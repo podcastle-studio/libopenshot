@@ -134,6 +134,13 @@ endif()
 ###
 add_subdirectory(src)
 add_subdirectory(examples)
+
+################ GOLDEN-FRAME REGRESSION HARNESS ################
+option(ENABLE_GOLDEN_TESTS "Build the golden-frame visual regression harness (openshot-golden)" ON)
+if(ENABLE_GOLDEN_TESTS)
+  add_subdirectory(tests/golden)
+endif()
+add_feature_info("Golden tests" ENABLE_GOLDEN_TESTS "openshot-golden visual regression harness")
 add_subdirectory(bindings)
 
 ###

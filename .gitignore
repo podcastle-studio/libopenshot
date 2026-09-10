@@ -16,3 +16,5 @@ tags
 *~
 **/.claude/*
 /tmp
+/golden-out
+/golden-report
