@@ -192,6 +192,7 @@ enum class SubtitleVariant { PerTime, OneWordContainer, AnimatedInOut };
 std::string subtitlesJson(const std::string& fontPath, int exportWidth, SubtitleVariant v);
 
 // ── writer (renderVideo) ─────────────────────────────────────────────────────────────────────
-void configureWriter(openshot::FFmpegWriter& w, int width, int height, openshot::Fraction fps, int bitrate = 5000000);
+void configureWriter(openshot::FFmpegWriter& w, int width, int height, openshot::Fraction fps, int bitrate = 5000000,
+                     const std::string& codec = "libx264");
 
 } // namespace golden::recipes

@@ -18,3 +18,5 @@ tags
 /tmp
 /golden-out
 /golden-report
+/tests/bench/media/*.mp4
+/tests/bench/media/*.png

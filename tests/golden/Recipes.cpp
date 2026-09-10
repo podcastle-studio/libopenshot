@@ -596,16 +596,21 @@ std::string subtitlesJson(const std::string& fontPath, int exportWidth, Subtitle
 }
 
 // ── writer ───────────────────────────────────────────────────────────────────────────────────
-void configureWriter(FFmpegWriter& w, int width, int height, Fraction fps, int bitrate) {
+void configureWriter(FFmpegWriter& w, int width, int height, Fraction fps, int bitrate, const std::string& codec) {
     w.SetSilentAudioMode(true);
     w.SetSkipClipAudioProcessing(true);
     w.SetPipelineMode(true);
     w.SetAudioOptions(true, "aac", 48000, 2, LAYOUT_STEREO, 128000);
-    w.SetVideoOptions("libx264", width, height, fps, bitrate);
+    w.SetVideoOptions(codec, width, height, fps, bitrate);
     w.PrepareStreams();
-    w.SetOption(VIDEO_STREAM, "crf", "18");
-    w.SetOption(VIDEO_STREAM, "preset", "medium");
-    w.SetOption(VIDEO_STREAM, "x264-params", "colorprim=bt709:transfer=bt709:colormatrix=bt709");
+    if (codec.find("nvenc") != std::string::npos) {
+        // Hardware encoder: x264-only options throw InvalidOptions. p4 is the balanced NVENC preset.
+        w.SetOption(VIDEO_STREAM, "preset", "p4");
+    } else {
+        w.SetOption(VIDEO_STREAM, "crf", "18");
+        w.SetOption(VIDEO_STREAM, "preset", "medium");
+        w.SetOption(VIDEO_STREAM, "x264-params", "colorprim=bt709:transfer=bt709:colormatrix=bt709");
+    }
     w.SetOption(VIDEO_STREAM, "g", "30");
     w.SetOption(VIDEO_STREAM, "use_editlist", "0");
 }
