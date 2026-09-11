@@ -46,6 +46,22 @@ Submodules `src/effects/image-processing-lib` and `external/godot-cpp` must be i
 (`git submodule update --init`). `ENABLE_TESTS` (Catch2) is off and Catch2 is not installed;
 the golden suite is the test suite.
 
+### Skia
+
+Skia is built out of tree by a script at the repository root and installed as a static library.
+
+| script | backend | output | installs to |
+|---|---|---|---|
+| `skia_build_script.sh` | CPU raster only (all GPU backends off) | `~/skia-stable/out/Release-CPU/libskia.a` | `/usr/local` via the `install_skia.sh` it emits |
+| `skia_build_script_gpu.sh` *(added in plan step 2.1)* | Graphite + Vulkan | `~/skia-stable/out/Release-GPU/libskia.a` | `/usr/local/skia-gpu` via `install_skia_gpu.sh` |
+
+Rules: **never edit `skia_build_script.sh` to add GPU support** — the CPU build must stay
+reproducible as the no-GPU fallback. The two scripts share everything except the output directory,
+the GPU GN args and the install prefix; keep the rest byte-identical so text rendering does not
+drift. Both pin `SKIA_MILESTONE=m147` to match the front end's CanvasKit. Select a build at
+configure time with `-DSkia_ROOT=/usr/local/skia-gpu` (or leave it unset for the CPU one) and record
+which one a build used in `doc/GPU-DECISIONS.md`.
+
 ## Facts that are easy to get wrong
 
 - The service never touches `openshot::Settings`; `HARDWARE_DECODER` is 0 and the codec is

@@ -482,14 +482,38 @@ each. *Risk:* base-image drift — pin the digest.
 Split into two releasable stops. R2a exists because 72 % of the worst scenario is one shader; it is
 worth shipping on its own before touching the rest of the text engine.
 
-**2.1 Skia with a GPU backend.** In `skia_build_script.sh` set `skia_enable_graphite = true` and
-`skia_use_vulkan = true`, keep milestone m147 (the front end's CanvasKit version), keep the raster
-backend compiled in. Install the `skcms` headers alongside the rest so `FindSkia.cmake` stops
-hunting for them.
-*Verify:* a 30-line test creates a Vulkan device, a Graphite `Context`, draws a gradient into a
-64×64 `SkSurface`, reads it back and saves a PNG — on the dev laptop and, with
-`VK_ICD_FILENAMES` pointing at lavapipe, on a machine with no GPU. `tools/golden.sh check` green
-(nothing uses the GPU yet). *Risk:* Skia build time and GN argument drift; pin the milestone.
+**2.1 Skia with a GPU backend — a second build script, beside the existing one.**
+The CPU Skia build is `skia_build_script.sh` at the repository root: it clones Skia at
+`$SKIA_MILESTONE` (m147) into `$HOME/skia-stable`, builds `out/Release-CPU/libskia.a` with every GPU
+backend disabled, and emits `install_skia.sh`, which installs the static library plus headers into
+`/usr/local` (`INSTALL_PREFIX` overridable). `cmake/Modules/FindSkia.cmake` then finds it at
+`/usr/local/include/skia` and `/usr/local/lib`.
+
+**Do not modify that script.** The CPU build stays exactly as it is so the raster path (and the
+no-GPU fallback of step 5.4) remains reproducible and we can flip back at any point. Instead add a
+sibling at the root:
+
+- `skia_build_script_gpu.sh` — same structure, same pinned `SKIA_MILESTONE=m147` (keep it in lockstep
+  with the front end's CanvasKit), same checkout reused, but a separate output directory
+  `out/Release-GPU` and GN args `skia_enable_graphite = true`, `skia_use_vulkan = true`,
+  `skia_enable_ganesh = false` (flip to `true` only if a Graphite feature gap forces it; see the
+  4.0 decision), everything else unchanged from the CPU args so text rendering stays identical.
+- `install_skia_gpu.sh` — emitted by that script, installing to a **separate prefix**,
+  `INSTALL_PREFIX` defaulting to `/usr/local/skia-gpu`, so both Skias coexist on one machine.
+  It must also install the `skcms` headers (`modules/skcms`), which `FindSkia.cmake` currently has
+  to hunt for.
+
+CMake selects the build with `-DSkia_ROOT=/usr/local/skia-gpu` (CMP0074 makes `find_path`/
+`find_library` honour it); no `find_package` change is needed. Record which prefix a given build
+used in `doc/GPU-DECISIONS.md`, and keep both scripts listed in `CLAUDE.md`.
+
+*Verify:* both scripts produce a `libskia.a`; a 30-line test links against the GPU one, creates a
+Vulkan device and a Graphite `Context`, draws a gradient into a 64×64 `SkSurface`, reads it back and
+saves a PNG — on the dev laptop and, with `VK_ICD_FILENAMES` pointing at lavapipe, on a machine with
+no GPU; a build configured with the CPU prefix still passes `tools/golden.sh check`.
+*Flag:* the prefix itself — reconfiguring with the CPU `Skia_ROOT` reverts the whole phase.
+*Risk:* GN argument drift between the two scripts silently changing text rendering; keep the shared
+args identical and diff the two files in review.
 
 **2.2 `src/gpu`: device, frame, surface pool.** `GpuDevice` (singleton: instance, physical device
 chosen by `Settings::HW_EN_DEVICE_SET`, device, one queue, Graphite `Context`, `thread_local
