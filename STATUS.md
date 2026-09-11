@@ -8,7 +8,9 @@ Phase 0 of `doc/GPU-RENDER-PLAN.md` is mostly done:
 
 - Baseline measured (plan section 0.3): codecs are not the bottleneck; Qt raster compositing and
   single-threaded swscale are. GPU encode alone gives ~1.3x; hardware decode crashes in the fork.
-- Plan written and reviewed (`doc/GPU-RENDER-PLAN.md`, draft 2).
+- Plan reviewed a second time and rewritten around the measured data (`doc/GPU-RENDER-PLAN.md`,
+  draft 3): every step now has a numeric gate tied to the 1080p baseline, every phase a releasable
+  stop, and Phase 2 is split so the single highest-value change ships on its own.
 - Golden-frame regression suite built and baselined: `tests/golden`, 95 scenarios, 292 frames,
   green and bit-stable across thread counts; a deliberate 1 px composite shift fails 282 frames.
   Run with `tools/golden.sh check`.
@@ -28,14 +30,24 @@ Phase 0 of `doc/GPU-RENDER-PLAN.md` is mostly done:
 - Timeline canvas precision for the GPU compositor: RGBA8 or RGBA16F (RGBA16F recommended).
 - Reference for LUT rounding: native `ColorMap.cpp` or the WASM `LutApply.cpp` path.
 
+## Key finding from the second pass
+
+gdb sampling attributes the worst scenario precisely: `text_animated_glow_3` (1.4 fps at 1080p,
+952 ms/frame, 1.0 core) spends ~72 % of its time in `TextGlowRenderer::paintGlowFromSilhouette`,
+running the **already-SkSL** glow ray-march on Skia's CPU raster pipeline because Skia is built
+without a GPU backend. `everything` spends 65 % there too. Moving that one pass to the GPU needs no
+new algorithm — hence the new **R2a** stop (Skia Vulkan build + glow surfaces only, gate ≥ 4 fps).
+`grid_3x3` and `heavy_effects` are instead dominated by Qt raster `drawImage`, which is R3.
+
 ## Next step
 
 **Plan step 0.2 / 0.3, then Phase 1 (R1, CPU quick wins).**
 
 1. Collect 6 production payloads + media into a corpus and add a service-level end-to-end check
    (the golden suite covers the library; the corpus covers the service's JSON → timeline code).
-2. Phase 1 steps in order, each validated with `tools/golden.sh check` and `openshot-bench --quick`,
-   with a full `openshot-bench` run + `compare` against `baseline-cpu.json` at the end of the phase:
+2. Phase 1 steps in order (see the plan for per-step gates), each validated with
+   `tools/golden.sh check` and `openshot-bench --quick`, with a full run + `compare` against
+   `baseline-cpu.json` at the R1 gate:
    1.1 service: one `WriteFrame` call instead of 8-frame chunks;
    1.2 service: thread budgets from the cgroup quota / process count;
    1.3 writer: RGBA straight into nvenc, no swscale/memcpy, BT.709 tags;
@@ -55,3 +67,4 @@ Phase 0 of `doc/GPU-RENDER-PLAN.md` is mostly done:
 - 2026-09-10 — analysis, plan, golden suite; first commit on `feature/gpu-rendering`.
 - 2026-09-10 — CLAUDE.md + STATUS.md; plan section 4 (sizing for N parallel exports).
 - 2026-09-10 — openshot-bench committed; full CPU baseline + concurrency measurements recorded in doc/PERFORMANCE-BASELINE.md.
+- 2026-09-11 — second pass over the plan (draft 3): numeric gates per step, R2a split out after profiling showed the glow shader is 72 % of the worst scenario.

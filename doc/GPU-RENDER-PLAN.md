@@ -1,6 +1,7 @@
 # GPU Render Pipeline — Build Plan
 
-Status: draft 2, 2026-09-10. Branch: `feature/gpu-rendering` (from fork `develop` 1d82adc9). Owner: rendering team.
+Status: draft 3, 2026-09-11 (second pass: rewritten around the measured baseline in
+`doc/PERFORMANCE-BASELINE.md`; every step now has a numeric gate and every phase a releasable stop). Branch: `feature/gpu-rendering` (from fork `develop` 1d82adc9). Owner: rendering team.
 Scope: the podcastle-studio libopenshot fork + video-rendering-service.
 Goal: every pixel operation between "packet demuxed" and "packet muxed" runs on the GPU,
 Qt is gone, and the library is a headless JSON-in / MP4-out renderer.
@@ -101,6 +102,45 @@ serial. It is not in the tree; step 1.5 re-applies it.
 
 Conclusion: the codecs are not the bottleneck. The compositor and the two colour
 conversions are, and they are single-threaded CPU code.
+
+### 0.4 Full scenario baseline and cost attribution (2026-09-10/11)
+
+`doc/PERFORMANCE-BASELINE.md` holds the complete matrix (13 production-style scenarios ×
+5 resolutions × render/x264/nvenc, `tests/bench/results/baseline-cpu.json`). The numbers this
+plan is measured against, all 1080p:
+
+| scenario | render fps | x264 fps | dominant cost (gdb stack sampling, render mode) |
+|---|---:|---:|---|
+| `single_video` | 116.7 | 81.0 | decode + swscale + one composite |
+| `grid_2x2` | 40.8 | 32.2 | Qt raster `drawImage` per layer |
+| `grid_3x3` | 23.3 | 20.5 | **Qt raster `drawImage` + `apply_background` (12/19 samples)** |
+| `podcast_pip` | 22.9 | 19.9 | Qt raster composite + per-pixel filters |
+| `subtitles_words` | 56.3 | 31.2 | Skia CPU raster per frame |
+| `text_static_4` | 59.2 | 48.4 | Skia CPU raster (cached between frames) |
+| `text_animated_glow_3` | **1.4** | **1.4** | **glow SkSL shader on Skia's CPU raster pipeline: 29/40 samples in `TextGlowRenderer::paintGlowFromSilhouette`, 31/40 inside `SkRasterPipeline` stages** |
+| `transitions_chain` | 27.4 | 23.5 | OpenCV transition effects + `GetImageCV` round trips |
+| `blend_stack_5` | 19.1 | 16.2 | `BlendModes.cpp` OpenMP loops + composite |
+| `heavy_effects` | 11.5 | 10.7 | **Qt `drawImage` + `LightAdjustment`/`Enhancement` per-pixel loops** |
+| `chroma_key_green` | 12.9 | 11.9 | `ChromaKey` per-scanline loop |
+| `source_4k` | 60.9 | 47.5 | decode + pre-scale |
+| `everything` | **1.8** | **1.8** | **glow shader (26/40 samples) + chroma key** |
+
+Three facts drive every decision below.
+
+1. **The single worst scenario is one shader running in software.** `text_animated_glow_3`
+   renders at 1.4 fps (952 ms per frame, 1.0 core) and roughly 72 % of that is the glow
+   ray-march — which is *already written in SkSL* (`src/text/TextGlowShader.cpp`) and is being
+   interpreted by Skia's CPU raster pipeline because Skia is built without a GPU backend. Moving
+   that one pass to the GPU needs no new algorithm, only a GPU surface. It is the cheapest large
+   win in the whole plan, and `everything` (26/40 samples) gets it too.
+   Reducing glow quality is **not** an option: matching in-motion glow to resting glow was a
+   deliberate earlier product decision.
+2. **Qt raster compositing dominates everything with more than one layer** (`grid_3x3`,
+   `heavy_effects`, `blend_stack_5`). That is the GPU compositor phase.
+3. **The machine is idle while this happens.** Heavy scenarios use 1.0–1.2 cores of 20 because
+   `Timeline::GetFrame` is serialised behind one mutex and both Skia and the effect loops are
+   single-threaded per frame. Concurrency measurements: four simultaneous 1080p exports return
+   1.8× aggregate throughput, and each runs at 46 % of its solo speed.
 
 ---
 
@@ -299,348 +339,351 @@ step and delete once nothing else references them.
 
 ## 3. Phases, steps, validation, releasable builds
 
-Releasable builds, in order. Each is a tagged libopenshot + service pair that can run in
-production behind a flag.
+### 3.0 How a step is done
 
-| Build | What ships | User-visible change |
-|---|---|---|
-| **R0** | corpus, harness, CI parity job | none |
-| **R1** | CPU quick wins, nvenc option, threading fixes | 1.5–2× faster exports on CPU nodes; GPU nodes optional |
-| **R2** | text + subtitles rendered by Skia on the GPU, rest unchanged | animated text and glow stop being the slow clip type |
-| **R3** | Skia GPU compositor, image/SVG readers on Skia, codecs still through CPU memory | compositing cost gone; Qt off the render path |
-| **R4** | NVDEC surfaces straight into the compositor, NVENC straight out; effects and transitions as shaders | full GPU pipeline; ~9 CPU cores per 4K stream freed |
-| **R5** | Qt, ImageMagick, babl, render-path OpenCV removed; CPU path deleted or kept as software fallback | smaller image, headless-only library |
-| **R6** | depth scheduling, multi-export density tuning | GPU kept busy; cost per export drops |
+Every step below is small enough to be one pull request and carries the same four things:
 
-Effort column is engineer-weeks for one senior C++ engineer familiar with the fork.
+- **Change** — what code moves, in which files.
+- **Verify** — the exact commands that must pass. Always `tools/golden.sh check` (95 scenarios,
+  292 frames; green = no visual regression) plus a named `openshot-bench` case with a **numeric
+  gate** taken from the 1080p baseline in section 0.4.
+- **Flag** — how the change is switched off in production without a revert.
+- **Risk** — what can go wrong and what it looks like.
 
-### Phase 0 — Baseline (R0) · 1 week · everything sequential
+A step is not "done" until the golden suite is green. When a change is *intended* to alter pixels,
+inspect every failing triptych in the report, re-baseline only those scenarios
+(`tools/golden.sh update <filter>`) and commit the PNGs with the code. Phase-end gates are measured
+with a full `openshot-bench --label <phase>` run compared against `baseline-cpu.json` using
+`openshot-bench compare`.
 
-**0.1 Base branch.** Record the section 0.1 decision (A or B) in `doc/GPU-DECISIONS.md`.
-If A, do the upstream merge as one PR now.
-**Validate:** for A, listed in 0.1; for B, nothing to validate.
+### 3.1 Releasable builds and their acceptance gates
 
-**0.2 Corpus.** Collect 6 production payloads and their media into a bucket, with a
-script `tools/corpus/fetch.sh`. Required coverage: (a) text-heavy with glow + 3D tilt +
-keyframed style, (b) transition-heavy (every effect name in `Transition.cpp` at least
-once, one overlay clip of each type), (c) 4K source into 1080p, (d) subtitle-heavy,
-(e) every blend mode, (f) shapes + LINE reveal + crop with corner radius + mask matte.
-**Validate:** all 6 render on `develop` without error; note fps and wall time.
+Each row is a shippable libopenshot + service pair, behind a flag, with a measurable gate. Targets
+are 1080p render-mode fps unless stated; the baseline column is from section 0.4.
 
-**0.3 Harness.** Move the session's `hwbench.cpp` into `examples/openshot-bench.cpp`
-with modes `decode`, `render`, `export`, options for codec, `--pipeline`, `--hwdec`,
-`--frames`, `--dump-every N` (PNG dump). Add `tools/parity.py`: given two PNG sets,
-report PSNR, SSIM (text frames), max abs diff, and per-region exact-match on flat colour.
-**Validate:** `openshot-bench export corpus/a.json --frames 300` prints fps; `parity.py`
-of a render against itself reports PSNR = inf.
+| Build | Ships | Key gate (1080p) | baseline → target |
+|---|---|---|---|
+| **R0** ✅ | golden suite, `openshot-bench`, baseline | suite green, baseline recorded | done |
+| **R1** | CPU quick wins, working nvenc, thread budgets | `single_video` nvenc export | 75 → **≥ 105 fps** |
+| **R2a** | Skia Vulkan build; the **glow pass only** on the GPU | `text_animated_glow_3` | 1.4 → **≥ 4 fps** |
+| **R2b** | all text + subtitle rendering on GPU surfaces | `subtitles_words` | 56 → **≥ 85 fps** |
+| **R3** | Skia GPU compositor; Qt off the render path | `grid_3x3` | 23 → **≥ 60 fps** |
+| **R4** | NVDEC/NVENC frames stay on the GPU; effects as shaders | `heavy_effects`; CPU per export | 11.5 → **≥ 60 fps**; **< 2 cores** |
+| **R5** | Qt, ImageMagick, babl, render-path OpenCV removed | no pixel change; image size | −300 MB |
+| **R6** | frames in flight, density tuning | `everything` 1080p; GPU busy | 1.8 → **≥ 30 fps**; **≥ 70 %** |
 
-**0.4 Golden set.** Render every 10th frame of the 6 payloads on `develop` to PNG,
-store under `corpus/golden/<payload>/<commit>/`. This is the oracle that survives the
-deletion of the CPU path.
-**Validate:** re-rendering `develop` twice gives bit-identical PNGs (it should; if not,
-find the nondeterminism now — candidates: OpenMP reductions, uninitialised padding).
+Effort is engineer-weeks for one senior C++ engineer who knows the fork.
 
-**0.5 CI job.** A GitHub Actions job on the `cpp-runner-8c-16gb-300gb` runner: build,
-run the corpus in render mode with `--dump-every 10`, run `parity.py` against golden,
-fail below PSNR 45 dB / SSIM 0.98. GPU jobs come later on a GPU runner.
-**Validate:** job green on `develop`; job red when a deliberate 1-pixel shift is
-introduced in `apply_background`.
+**What R1 will and will not do.** The baseline says the encoder is 0–30 % of wall time depending on
+the scenario, so R1 helps light scenarios (`single_video`, `source_4k`) and does essentially nothing
+for `everything`, `text_animated_glow_3` or `heavy_effects`. Do not promise "1.5–2× exports" from
+R1. Note also that `openshot-bench` already calls `WriteFrame` once for the whole range, so the
+service-side chunking fix (1.1) is a real production gain that the bench cannot show; measure that
+one on the service.
 
-### Phase 1 — CPU quick wins (R1) · 1 week · steps marked [parallel] are independent
+**Considered and rejected: parallel frame rendering on the CPU.** Rendering frames N and N+1 on two
+CPU threads would exploit the 19 idle cores, but Skia Graphite uses one `Context` per process and
+gets its parallelism from pipeline depth rather than width, so that machinery would be thrown away
+at R3/R6. Process-level parallelism already exists in the service (measured in section 4). The
+plan therefore invests in **depth** (decode-ahead, encode-ahead, frames in flight) which survives
+the GPU move, and leaves width to the process manager.
 
-**1.1 Service: one `WriteFrame` call.** Replace the 8-frame chunk loop with a single
-`WriteFrame(&timeline, start, end)`; publish progress from a `std::atomic<int64_t>`
-that `FFmpegWriter` increments (add `SetProgressCallback`). Raise
-`pipeline_queue_capacity_` to 16.
-**Validate:** bench export on payload (c): ≥ +15 % fps vs R0; progress messages still
-arrive at ≤ 1 s intervals.
+### Phase 0 — Baseline and safety net (R0) · **done**
 
-**1.2 Service: thread budgets.** [parallel] Read the cgroup CPU quota
-(`/sys/fs/cgroup/cpu.max`), divide by `SERVICE_NUM_INSTANCES_PARALLEL`, set
-`Settings::FF_THREADS` and `OMP_THREADS`.
-**Validate:** in an 8-CPU container with 2 processes, `top` shows no process above
-400 % CPU; export wall time does not regress.
+- **0.1 Base branch.** `feature/gpu-rendering` is branched from the fork's `develop`. The upstream
+  question (section 0.1) is still open but no longer blocking; if upstream is ever merged it must
+  happen *before* R3, because R3 rewrites the same files.
+- **0.2 Golden suite.** ✅ `tests/golden`, 95 scenarios / 292 frames mirroring every API the service
+  uses, committed PNG goldens, HTML diff report, `tools/golden.sh`. Proven to catch a one-pixel
+  composite shift (282 of 292 frames fail).
+- **0.3 Benchmark.** ✅ `tests/bench`, `openshot-bench`: 13 scenarios × 5 resolutions ×
+  render/x264/nvenc, per-case fps, p50/p95 latency, cores, peak RSS, `--parallel N`, `--resume`,
+  `compare`.
+- **0.4 Baseline recorded.** ✅ `doc/PERFORMANCE-BASELINE.md` + `tests/bench/results/baseline-cpu.json`.
+- **0.5 Still open — production corpus.** Six real payloads with their media, rendered through the
+  *service* (not just the library), to catch JSON→timeline regressions the golden suite cannot see.
+  *Verify:* all six render without error; frame hashes stable across two runs.
+- **0.6 Still open — CI.** Run `tools/golden.sh check` on every PR on the 8-core runner; publish the
+  report as an artifact. `openshot-bench --quick` on merges to `develop`, appended to a trend file.
 
-**1.3 Writer: nvenc without swscale.** [parallel] nvenc lists `rgba` among its input
-formats (`ffmpeg -h encoder=h264_nvenc`). When the codec name contains `_nvenc`, set
-`video_codec_ctx->pix_fmt = AV_PIX_FMT_RGBA`, skip `hw_frames_ctx` and the manual
-`av_hwframe_transfer_data`, hand libavcodec an `AVFrame` that wraps
-`Frame::GetPixels()` directly, and let the encoder do the upload and the RGB→YUV
-conversion on the GPU. Set `colorspace = AVCOL_SPC_BT709`, `color_primaries`, `color_trc`.
-Delete the `av_malloc` + `memcpy` in `process_video_packet`. Do not drain
-`avcodec_receive_packet` to empty after every frame; poll it.
-**Validate:** bench export with `h264_nvenc`: ≥ 130 fps on the dev box for payload (a)
-at 1080p (was 112). Output colour matches the libx264 output within 1 LSB on a
-BT.709 test chart (`ffmpeg -lavfi psnr`).
+### Phase 1 — CPU quick wins (R1) · 1 week
 
-**1.4 Writer: encoder options.** [parallel] For nvenc use `preset p5`, `tune hq`,
-`rc vbr`, `cq 19`, `b_ref_mode middle`, `spatial-aq 1`; remove the forced baseline
-profile, `max_b_frames = 0`, `tune zerolatency`. Keep `crf 18 / preset medium` for x264.
-Make `SetOption("crf")` stop overriding bitrate when hardware encode is on.
-**Validate:** VMAF of nvenc output vs source ≥ x264 output − 2 points on payload (c);
-file size within ±20 %.
+Independent steps, any order; all are pure CPU and none needs a GPU node.
 
-**1.5 Reader: remove copies.** [parallel] Drop the `memset` and the `av_image_copy`
-in `GetAVFrame`/`ProcessVideoPacket` (the decoded `AVFrame` is already a private
-ref-counted buffer); run swscale with `sws_alloc_context` + `av_opt_set_int("threads", n)`.
-Fix the hardware decode path so it no longer throws: in `get_hw_dec_format` pick the
+**1.1 Service: one `WriteFrame` call.** Replace the 8-frame chunk loop in `VideoRenderingImpl.cpp`
+with a single `WriteFrame(&timeline, start, end)`; add `FFmpegWriter::SetProgressCallback` and drive
+progress from it; raise `pipeline_queue_capacity_` from 8 to 16.
+*Verify:* service-side only. One export of a production payload ≥ 15 % faster wall-clock; progress
+messages still arrive at least every second; `tools/golden.sh check` green (library unchanged).
+*Flag:* `RENDER_SINGLE_WRITEFRAME=0` restores chunking. *Risk:* progress granularity regressions.
+
+**1.2 Service: thread budgets.** Derive `Settings::FF_THREADS` and `OMP_THREADS` from
+`/sys/fs/cgroup/cpu.max` divided by `SERVICE_NUM_INSTANCES_PARALLEL`, minimum 2.
+*Verify:* in an 8-CPU container with 2 processes no process exceeds ~400 % CPU and wall time does
+not regress. On the dev box `openshot-bench --threads 4` must not regress versus `--threads 16` by
+more than 10 % on `single_video`. *Flag:* env override `OPENSHOT_THREADS`.
+
+**1.3 Writer: nvenc without the CPU conversion.** nvenc accepts `rgba`. When the codec name contains
+`_nvenc`, set `video_codec_ctx->pix_fmt = AV_PIX_FMT_RGBA`, drop `hw_frames_ctx` and the manual
+`av_hwframe_transfer_data`, wrap `Frame::GetPixels()` in an `AVFrame` and let libavcodec upload and
+convert on the GPU. Delete the per-frame `av_malloc` + `memcpy` in `process_video_packet`. Stop
+draining `avcodec_receive_packet` after every frame. Set `colorspace`/`color_primaries`/`color_trc`
+to BT.709 on the codec context (the `x264-params` string does nothing for nvenc).
+*Verify:* `openshot-bench --scenario single_video --res 1080p --modes nvenc` ≥ **105 fps** (75);
+`--scenario source_4k --modes nvenc` ≥ **60 fps** (46); `tools/golden.sh check --filter export`
+green; nvenc output vs x264 output on a BT.709 chart within 2 LSB mean.
+*Flag:* `OPENSHOT_NVENC_RGBA=0`. *Risk:* colour shift if the range/matrix tags are wrong — the chart
+check catches it.
+
+**1.4 Writer: sane nvenc rate control.** Replace `preset slow` + `tune zerolatency` + baseline
+profile + `max_b_frames = 0` with `preset p5`, `tune hq`, `rc vbr`, `cq 19`, `b_ref_mode middle`,
+`spatial-aq 1`. Stop `SetOption("crf")` hijacking the bitrate when hardware encode is on, and guard
+the `hw_en_on`-only branches with `hw_en_supported`.
+*Verify:* VMAF of the nvenc output ≥ VMAF of the x264 output − 2 points on `podcast_pip`; file size
+within ±20 %; `single_video` nvenc fps does not regress below the 1.3 gate.
+
+**1.5 Reader: remove copies, thread swscale, fix hardware decode.** Drop the `memset` and the
+`av_image_copy` in `GetAVFrame`/`ProcessVideoPacket`; build the scaler with `sws_alloc_context` +
+`av_opt_set_int(ctx, "threads", n)`. Fix the hardware-decode crash: in `get_hw_dec_format` choose the
 pixel format whose `AVCodecHWConfig::device_type` matches `ctx->hw_device_ctx`; set
-`next_frame->format = AV_PIX_FMT_NONE` before `av_hwframe_transfer_data` so FFmpeg
-downloads in the surface's native format (NV12); use `next_frame->format` (not
-`pCodecCtx->pix_fmt`) for `av_image_alloc`, `av_image_copy` and the swscale source
-format; treat a failed transfer as a failed frame instead of continuing. Equivalent to
-upstream 1.0.0's `sw_pix_fmt` handling. Leave `HARDWARE_DECODER = 0` as default; the
-path is needed in 4.2 and is only a CPU-budget win until then.
-**Validate:** bench decode 4K: ≥ 100 fps (was 59). PSNR vs R0 frames = inf (pure copy
-removal must be bit-identical). `openshot-bench decode --hwdec 2` on a 720p and a 4K
-H.264 file no longer throws; frame 100 vs software PSNR ≥ 48 dB (NV12 chroma rounding).
+`next_frame->format = AV_PIX_FMT_NONE` before `av_hwframe_transfer_data`; use `next_frame->format`
+(not `pCodecCtx->pix_fmt`) for `av_image_alloc`, `av_image_copy` and the swscale source; treat a
+failed transfer as a failed frame. Keep `HARDWARE_DECODER = 0` as the default — the path is needed by
+4.2 and is only a CPU-budget win before then.
+*Verify:* `tools/golden.sh check` green **with no golden updates** (copy removal must be
+bit-identical — if swscale threading changes output, that is a finding, investigate before
+re-baselining); `--scenario source_4k --res 1080p --modes render` ≥ **70 fps** (61);
+`--scenario single_video --modes render` ≥ **125 fps** (117); hardware decode of a 720p and a 4K
+H.264 file no longer throws and matches software decode at PSNR ≥ 48 dB.
+*Flag:* `HARDWARE_DECODER` stays 0. *Risk:* `pFrame` lifetime — the decoded frame must outlive the
+scale; run the suite under ASan once.
 
-**1.6 Frame: memoise `GetImageCV`.** [parallel] Cache `imagecv` with a dirty flag set
-by `AddImage`; make `SetImageCV` reuse the buffer.
-**Validate:** payload (b) render-only fps ≥ +20 %; parity PSNR = inf.
+**1.6 `Frame::GetImageCV` memoisation.** Cache `imagecv` with a dirty flag set by `AddImage`; let
+`SetImageCV` reuse the buffer instead of allocating two conversions per call.
+*Verify:* `--scenario transitions_chain --res 1080p --modes render` ≥ **33 fps** (27.4);
+`--scenario heavy_effects` ≥ **13 fps** (11.5); golden green with no updates.
+*Risk:* a stale cache shows up as a frozen frame inside an effect chain — the `effects.*` and
+`transitions.*` golden scenarios cover it.
 
-**1.7 Service + infra: GPU-capable image, optional.** [parallel] Switch the service
-Dockerfile base to `Dockerfile_cuda12.8.1-cudnn9.7.1-ffmpeg6.1-nvidia24.04`; add
-`ENCODER=libx264|h264_nvenc` env with fallback to x264 when `nvidia-smi` is absent.
-Do not yet request GPUs in Helm; this just proves the image.
-**Validate:** container starts on a CPU node and on a GPU node; `ffmpeg -encoders`
-inside lists `h264_nvenc`; an export completes on each.
+**1.7 Infrastructure: GPU-capable image (no GPU requested yet).** Switch the service Dockerfile to
+`cpp-base-dockerfiles/Dockerfile_cuda12.8.1-cudnn9.7.1-ffmpeg6.1-nvidia24.04`, add `graphics` to
+`NVIDIA_DRIVER_CAPABILITIES`, install `libvulkan1` + `vulkan-tools`, drop Google Chrome (unused,
+~130 MB). Add `ENCODER=libx264|h264_nvenc` with automatic fallback when no GPU is present.
+*Verify:* the container starts on a CPU node and on a GPU node; `ffmpeg -encoders` lists
+`h264_nvenc`; `vulkaninfo --summary` reports the NVIDIA ICD on the GPU node; one export completes on
+each. *Risk:* base-image drift — pin the digest.
 
-**Releasable build R1.** Tag, run the corpus in shadow mode for one week.
+> **Release gate R1.** Full `openshot-bench --label r1` run; `compare baseline-cpu.json r1.json`
+> shows `single_video` nvenc ≥ 105 fps, `source_4k` render ≥ 70 fps, no scenario slower than
+> baseline by more than 5 %, golden suite green. Ship behind `ENCODER=` and run in shadow for a week.
 
-### Phase 2 — Skia on the GPU for text and subtitles (R2) · 3 weeks · sequential
+### Phase 2 — Skia on the GPU, smallest useful slice first · 3 weeks
 
-This is the first GPU code. It touches only `src/text`, `src/subtitle` and the build.
-Everything else keeps working on QImages; the GPU result is read back into a QImage
-per text frame. That readback (about 2–3 ms at 1080p) is the price of shipping early;
-it disappears in R3.
+Split into two releasable stops. R2a exists because 72 % of the worst scenario is one shader; it is
+worth shipping on its own before touching the rest of the text engine.
 
-**2.1 Skia build.** In `skia_build_script.sh`: `skia_enable_graphite = true`,
-`skia_use_vulkan = true`, keep `skia_enable_ganesh = false`, keep m147. Install skcms
-headers with the rest (`FindSkia.cmake` currently hunts for them). Add `libvulkan-dev`,
-`glslang` not needed (Skia ships its compiler).
-**Validate:** `libskia.a` links into libopenshot; a 20-line test creates a Vulkan
-device, a Graphite `Context`, draws a gradient into a 64×64 `SkSurface`, reads it back,
-saves PNG. Runs on the dev laptop (RTX A2000) and, with `VK_ICD_FILENAMES` pointing at
-lavapipe, on a machine with no GPU.
+**2.1 Skia with a GPU backend.** In `skia_build_script.sh` set `skia_enable_graphite = true` and
+`skia_use_vulkan = true`, keep milestone m147 (the front end's CanvasKit version), keep the raster
+backend compiled in. Install the `skcms` headers alongside the rest so `FindSkia.cmake` stops
+hunting for them.
+*Verify:* a 30-line test creates a Vulkan device, a Graphite `Context`, draws a gradient into a
+64×64 `SkSurface`, reads it back and saves a PNG — on the dev laptop and, with
+`VK_ICD_FILENAMES` pointing at lavapipe, on a machine with no GPU. `tools/golden.sh check` green
+(nothing uses the GPU yet). *Risk:* Skia build time and GN argument drift; pin the milestone.
 
-**2.2 `src/gpu/GpuDevice`.** Singleton per process: `VkInstance`, physical device
-chosen by `Settings::HW_EN_DEVICE_SET`, `VkDevice`, one queue, Graphite `Context`, a
-`Recorder` per calling thread (`thread_local`), `flush()`. Environment switch
-`OPENSHOT_GPU=off|vulkan|lavapipe`. Fails soft: if creation fails, `available() == false`
-and callers use CPU raster.
-**Validate:** unit test creates and destroys the device 100 times without leaks
-(`valgrind` or VRAM via NVML flat); `OPENSHOT_GPU=off` forces CPU.
+**2.2 `src/gpu`: device, frame, surface pool.** `GpuDevice` (singleton: instance, physical device
+chosen by `Settings::HW_EN_DEVICE_SET`, device, one queue, Graphite `Context`, `thread_local
+Recorder`, `available()`), `GpuFrame` (texture-backed `SkSurface`/`SkImage` + `readback()` +
+`upload()`), `GpuSurfacePool` (keyed by size and colour type; never allocate per frame).
+Environment switch `OPENSHOT_GPU=off|vulkan|lavapipe`, default `off`.
+*Verify:* create/destroy the device 100 times with flat VRAM (NVML) and no leaks; upload→readback of
+1000 random RGBA images is bit-identical; the pool returns the same allocation on the second
+request. *Flag:* `OPENSHOT_GPU=off` is the default until R2a's gate is met.
 
-**2.3 `src/gpu/GpuFrame`.** Holds `sk_sp<SkSurface>` (GPU) or `SkBitmap` (CPU),
-size, `SkColorType`, `readback() -> std::shared_ptr<QImage>` (for now), `upload(QImage)`.
-Surface pool keyed by size and colour type; never allocate per frame.
-**Validate:** round trip upload → readback is bit-identical for 1000 random RGBA8
-images; pool returns the same allocation on the second request.
+**2.3 Glow pass on the GPU.** `TextGlowRenderer` allocates its silhouette, ray-march and bloom
+surfaces from the pool as `SkSurfaces::RenderTarget` when the device is available, runs the existing
+SkSL unchanged, and the caller reads the result back into the CPU text image. Nothing else in the
+text engine changes yet. Choose `kRGBA_8888` for GPU surfaces and remove the R/B swap in
+`SkiaRenderer::parseColorString` on that path (raster N32 is BGRA on x86; a GPU RGBA surface is not).
+*Verify:* `--scenario text_animated_glow_3 --res 1080p --modes render` ≥ **4 fps** (1.4);
+`--scenario everything` ≥ **3 fps** (1.8); `tools/golden.sh check --filter glow` and `--filter text`
+within the Loose tolerance (SSIM ≥ 0.95) — a red glyph must still be red, which is the channel-swap
+check. *Flag:* `OPENSHOT_GPU=off` falls back to raster. *Risk:* the swap fix is easy to half-apply;
+the golden text scenarios are the guard.
 
-**2.4 Text renderer on a GPU surface.** In `TextClipReader::renderToQImage`: request a
-pooled GPU surface, build `SkCanvas` from it, keep every call into
-`renderTextFrame` unchanged, then `readback()` into the Frame. Replace each
-`SkSurfaces::Raster` in `TextGlowRenderer`, `TextAnimationRenderer`,
-`TextClipRenderer` with a helper `gpu::makeSurface(w,h)` that returns a GPU surface
-when the device is available and raster otherwise. Remove the R/B swap in
-`SkiaRenderer::parseColorString` only when the surface is `kRGBA_8888`; choose
-`kRGBA_8888` for all GPU surfaces.
-**Validate:** payload (a): parity vs golden SSIM ≥ 0.98 on text frames, no colour
-channel swap (a red glyph is red); bench render-only for payload (a) ≥ 2× R1 fps.
-If slower than R1 for static text (readback overhead), keep the `rendered_image`
-cache path on CPU raster for static clips.
+> **Release gate R2a.** `text_animated_glow_3` ≥ 4 fps and `everything` ≥ 3 fps at 1080p, golden
+> green (text scenarios may be re-baselined once, after visual review of every triptych). This is
+> the first build that needs a GPU node; keep `OPENSHOT_GPU=off` on CPU nodes.
 
-**2.5 Delete the σ>120 shadow workaround** in `TextClipRenderer` on the GPU path
-(GPU mask blur has no 128 px clamp).
-**Validate:** payload (a) at 4K: 4K shadow blur identical in shape to the 1080p one
-scaled (compare downscaled 4K vs 1080p golden, SSIM ≥ 0.97).
+**2.4 Whole text engine on GPU surfaces.** Every remaining `SkSurfaces::Raster` in
+`TextClipRenderer`, `TextAnimationRenderer` and `TextClipReader::renderToQImage` comes from the pool;
+the reader returns a `GpuFrame` with one readback at the boundary instead of `image->copy()`.
+*Verify:* `--scenario text_static_4` no worse than baseline; `--scenario text_animated_glow_3` ≥
+**8 fps**; golden text scenarios green.
 
-**2.6 Long-lived `SkiaRenderer`.** One instance per `TextClipReader` and one per
-`SubtitleManager`, so the font and paint caches survive across frames.
-**Validate:** frame time for a static-style animated clip drops (measure with
-`--frames 300`); no behaviour change in parity.
+**2.5 Delete the CPU-blur workaround.** The σ > 120 downscale branch in `TextClipRenderer` exists
+only because Skia's CPU mask blur clamps at 128 px; the GPU has no such clamp.
+*Verify:* a 4K text shadow matches the 1080p shadow scaled up (SSIM ≥ 0.97); `text_static_4` at
+2160p ≥ **15 fps** (11.8).
 
-**2.7 Subtitles.** `SubtitleManager::renderAtFrame` draws into a GPU surface that is
-initialised from the timeline QImage (`upload`) and read back after drawing. This is
-temporary and only worth it if payload (d) gets faster; otherwise leave subtitles on CPU
-raster until R3, where they draw into the GPU timeline canvas for free.
-**Validate:** payload (d) render-only fps not lower than R1; parity SSIM ≥ 0.98.
+**2.6 Long-lived `SkiaRenderer` and cross-frame caches.** One renderer per reader instead of one per
+frame, so the font and paint caches survive; cache the glow silhouette and the 3D block bake as GPU
+textures keyed by the plan hash and the animation-independent style.
+*Verify:* `text_animated_glow_3` ≥ **12 fps**; golden text scenarios unchanged.
 
-**2.8 Glow and bake caches.** Cache the glow silhouette texture and the 3D block bake
-texture across frames, keyed by the resolved plan hash without the per-frame animation
-transform. Invalidate on any style keyframe change.
-**Validate:** payload (a) animated glow clip: per-frame time ≤ 40 % of 2.4; visual
-parity unchanged.
+**2.7 Subtitles.** `SubtitleManager::renderAtFrame` draws into a GPU surface; cache the per-word
+`buildCharRenderInfo` work per segment.
+*Verify:* `--scenario subtitles_words --res 1080p --modes render` ≥ **85 fps** (56);
+`tools/golden.sh check --filter subtitles` green.
 
-**Releasable build R2.** Flag `OPENSHOT_GPU=vulkan` on GPU nodes only; CPU nodes
-unchanged. First Helm change: a small GPU node pool (2× L4), `nvidia.com/gpu: 1`,
-`NVIDIA_DRIVER_CAPABILITIES=compute,utility,video,graphics`.
+> **Release gate R2b.** `text_animated_glow_3` ≥ 12 fps, `subtitles_words` ≥ 85 fps,
+> `text_static_4` not slower, `everything` ≥ 4 fps, golden green. First Helm change: a small GPU
+> node pool with `nvidia.com/gpu: 1` and `NVIDIA_DRIVER_CAPABILITIES=compute,utility,video,graphics`.
 
-### Phase 3 — Skia GPU compositor and Qt-free readers (R3) · 4 weeks
+### Phase 3 — GPU compositor and Qt off the render path (R3) · 4 weeks
 
-Steps 3.1–3.4 sequential; 3.5–3.7 [parallel] with each other after 3.2.
+Steps 3.1–3.4 are sequential; 3.5–3.7 can run in parallel once 3.2 lands.
 
-**3.1 Timeline canvas on the GPU.** `Timeline::GetFrame` allocates the output as a
-pooled GPU `SkSurface` (`kRGBA_F16` recommended; decide in 3.0 below) and passes its
-`SkCanvas` down through `add_layer` instead of a QImage. `Frame` gains `GpuFrame`;
-`GetImage()` on a GPU frame does a one-time `readback()`. The writer still consumes
-`GetPixels()`, so it reads back once per frame (this is the last CPU copy; removed in R4).
-**Validate:** payload (e) with all clips forced to `BLEND_NORMAL`: renders; parity
-PSNR ≥ 50 dB vs golden. Fps not lower than R2 (readback replaces the canvas fill).
+**3.1 Timeline canvas on the GPU.** `Timeline::GetFrame` takes its output surface from the pool
+(`kRGBA_F16`, decision 4.0) and passes its `SkCanvas` down through `add_layer`. `Frame` gains a
+`GpuFrame`; `GetImage()` on a GPU frame performs one cached readback so every unported path still
+works. The writer still reads back once per frame — the last CPU copy, removed in 4.4.
+*Verify:* golden green across the board (PSNR ≥ 50 dB vs the CPU goldens, which is the whole point of
+the suite); `--scenario single_video --modes render` not slower than baseline.
 
-**3.2 `Clip::draw(SkCanvas&)`.** Replace `apply_keyframes` + `apply_background` with
-one draw: `get_transform` returns `SkMatrix` (same arithmetic; write a unit test that
-feeds 200 random keyframe sets to both the old `QTransform` and the new `SkMatrix` and
-compares the 6 affine coefficients to 1e-6); paint alpha from the opacity curve;
-`SkBlendMode` from `blend_mode`; `SkSamplingOptions(kLinear, kLinear)`. Source is the
-clip's texture (`upload()` of the reader's CPU frame in this phase).
-**Validate:** payload (e): every blend mode PSNR ≥ 48 dB vs golden (the W3C formulas
-are the same; differences are 8-bit rounding); payload (f) crop and rotation edges
-SSIM ≥ 0.98.
+**3.2 `Clip::draw(SkCanvas&)`.** Collapse `apply_keyframes` + `apply_background` into one draw:
+`get_transform` returns an `SkMatrix` built from the same arithmetic, paint alpha from the opacity
+curve, `SkBlendMode` from `blend_mode`, `SkSamplingOptions(kLinear, kLinear)`.
+*Verify:* a unit test feeds 200 random keyframe sets to the old `QTransform` and the new `SkMatrix`
+and compares the six affine coefficients to 1e-6; `tools/golden.sh check --filter compositing` — all
+16 blend modes within PSNR 48 dB; `--scenario grid_3x3 --modes render` ≥ **45 fps** (23).
 
-**3.3 Blur, shadow, flip, crop on the paint.** `SkImageFilters::Blur` with the existing
-`sigma_for_box` mapping; `SkImageFilters::DropShadowOnly` + image draw for the shadow
-with the same sigma, offset and colour; flip as negative scale in the matrix;
-`Crop` effect becomes `clipRRect` before the draw (keep `Crop` as an effect class so the
-JSON path is unchanged).
-**Validate:** payload (f): shadow position and softness vs golden SSIM ≥ 0.97; blurred
-clip PSNR ≥ 40 dB (Gaussian vs Gaussian, different kernels). Delete `get_shadow_image`,
-`gaussian_blur`, and the opacity loop.
+**3.3 Blur, shadow, crop, flip on the paint.** `SkImageFilters::Blur` with the existing
+box→sigma mapping, `SkImageFilters::DropShadowOnly` with the same offset and colour, `clipRRect` for
+crop, negative scale for flip. Delete `get_shadow_image`, the local `gaussian_blur` and the scalar
+opacity loop.
+*Verify:* `tools/golden.sh check --filter clipfx` (SSIM ≥ 0.97 on shadows, PSNR ≥ 40 dB on blur);
+`--scenario podcast_pip --modes render` ≥ **45 fps** (23).
 
-**3.4 Delete `BlendModes.cpp`** and the `GetImageCV` calls in `Clip.cpp`.
-**Validate:** grep confirms no `QPainter` in `Clip.cpp`/`Timeline.cpp`; corpus parity
-unchanged from 3.3.
+**3.4 Delete `BlendModes.cpp` and the `GetImageCV` calls in `Clip.cpp`.**
+*Verify:* `grep -c QPainter src/Clip.cpp src/Timeline.cpp` is 0; `--scenario blend_stack_5 --modes
+render` ≥ **50 fps** (19); golden green.
 
-**3.5 Image reader on Skia codecs.** [parallel] New `ImageReader` (rename after
-deleting the Magick one): `SkCodec::MakeFromData` → `SkBitmap` → one texture per
-reader, honouring EXIF orientation; SVG through Skia's SVG module
-(`SkSVGDOM::MakeFromStream` → render into a pooled surface at the requested size) or
-resvg if the shapes need features Skia's module lacks (test with 20 production shape
-SVGs first). Replace `openshotImageReader` in the service.
-**Validate:** 20 PNG/JPEG + 20 shape SVGs: PSNR ≥ 50 dB vs `QtImageReader` output;
-transparent PNG edges show no fringing over a coloured background (premultiplication
-correct).
+**3.5 Image and SVG readers on Skia.** `SkCodec` for PNG/JPEG (honouring EXIF orientation), Skia's
+SVG module or resvg for shapes, one texture cached per reader. Replaces `QtImageReader`.
+*Verify:* 20 production PNG/JPEG files and 20 shape SVGs at PSNR ≥ 50 dB vs `QtImageReader`;
+transparent PNG edges show no fringing over a coloured background; `tools/golden.sh check --filter
+readers`.
 
-**3.6 Subtitles into the timeline canvas.** [parallel] `renderAtFrame(SkCanvas&)`;
-delete the QImage wrap.
-**Validate:** payload (d) parity SSIM ≥ 0.98; render-only fps ≥ R2.
+**3.6 Subtitles and text draw straight into the timeline canvas** — no intermediate surface, no
+readback. *Verify:* `--scenario subtitles_words --modes render` ≥ **120 fps**; golden green.
 
-**3.7 Text clips return textures.** [parallel] `TextClipReader::GetFrame` returns a
-`GpuFrame` (no readback, no `image->copy()`); `Clip::draw` samples it.
-**Validate:** payload (a) render-only fps ≥ 1.5× R2.
+**3.7 Qt off the render path.** Build options `ENABLE_PLAYER=OFF` and `ENABLE_MAGICK=OFF`; replace
+`QString`/`QDir`/`QFile`/`QRegularExpression` in `Timeline`, `Profiles`, `ColorMap`, `ChunkReader/Writer`
+with the standard library; `Color` without `QColor`.
+*Verify:* unit tests for path rewriting, `.cube` parsing and hex colour round-trips; golden green;
+`grep -rn QPainter src/*.cpp src/effects/*.cpp` only matches files behind `ENABLE_LEGACY_EFFECTS`.
 
-**3.8 Qt off the render path.** Apply section 2.7 steps 1–3 and 5 (build options,
-std-library replacements, `Color`). Qt still links for `Frame::GetImage()` readback
-returning `QImage` and for unported effects.
-**Validate:** `grep -rn QPainter src/*.cpp` returns only files behind
-`ENABLE_LEGACY_EFFECTS`/`ENABLE_PLAYER`; corpus parity unchanged.
+> **Release gate R3.** `grid_3x3` ≥ 60 fps, `blend_stack_5` ≥ 50 fps, `podcast_pip` ≥ 45 fps,
+> `single_video` ≥ 200 fps, `everything` ≥ 8 fps, all at 1080p; golden green; no `QPainter` on the
+> render path. Default `OPENSHOT_GPU=vulkan` on GPU nodes.
 
-**Releasable build R3.** Default `OPENSHOT_GPU=vulkan` on GPU nodes. Expected export
-fps on the dev box for payload (a): ≥ 250 (readback + nvenc bound).
+### Phase 4 — Frames never leave the GPU (R4) · 6 weeks
 
-### Phase 4 — Codecs on the GPU and effects as shaders (R4) · 6 weeks
+4.1–4.4 sequential (interop first); 4.5–4.7 parallel with them and with each other.
 
-4.1–4.4 sequential (interop first), 4.5–4.7 [parallel] with 4.1–4.4 and each other.
+**4.0 Record the decisions** in `doc/GPU-DECISIONS.md` before starting: canvas precision
+(`kRGBA_F16` recommended), Graphite-only or Ganesh fallback, LUT rounding reference (native
+`ColorMap.cpp` or the WASM `LutApply.cpp` the front end uses), whether nearest-neighbour sampling is
+preserved in `BORDER_REFLECTED_ROTATION` and `DISPLACEMENT_MAP`, GPU SKU (L4).
 
-**3.0/4.0 Decisions to record before starting** (in `doc/GPU-DECISIONS.md`):
-canvas precision (`kRGBA_F16` recommended), Graphite-only or Ganesh fallback, reference
-for LUT rounding (native `ColorMap.cpp` or WASM `LutApply.cpp`), whether nearest-neighbour
-sampling is kept in `BORDER_REFLECTED_ROTATION` and `DISPLACEMENT_MAP`, GPU SKU (L4).
+**4.1 `src/gpu/CudaInterop`.** Import a Vulkan image's memory and semaphore into CUDA
+(`vkGetMemoryFdKHR` → `cuImportExternalMemory`, `cuImportExternalSemaphore`) and provide
+`copyNV12(AVFrame* cudaFrame, GpuImage& y, GpuImage& uv, stream)` as two device-to-device
+`cuMemcpy2DAsync`.
+*Verify:* fill a CUDA NV12 buffer with a known pattern, copy, sample both planes in a trivial SkSL
+shader, read back, compare exactly; clean under `compute-sanitizer`; ≤ 0.3 ms per 4K frame.
 
-**4.1 `src/gpu/CudaInterop`.** Import a Vulkan image's memory into CUDA
-(`vkGetMemoryFdKHR` → `cuImportExternalMemory` → `cuExternalMemoryGetMappedMipmappedArray`
-or a linear buffer) and a Vulkan semaphore into CUDA (`cuImportExternalSemaphore`).
-Provide `copyNV12(AVFrame* cudaFrame, GpuImage& dstY, GpuImage& dstUV, stream)` doing
-two `cuMemcpy2DAsync` device-to-device, then signal.
-**Validate:** unit test: fill a CUDA NV12 buffer with a known pattern, copy, sample the
-Vulkan textures in a trivial SkSL shader, read back, compare exactly. Run under
-`compute-sanitizer`. Time per 4K frame ≤ 0.3 ms.
+**4.2 Reader keeps frames on the GPU.** Decoder output stays `AV_PIX_FMT_CUDA`; YUV→RGBA becomes an
+SkSL pass (matrix and range from the stream, defaulting to BT.709 at ≥ 720p) that also applies the
+pre-scale. Extend `IsHardwareDecodeSupported` to HEVC, VP9, AV1 and MPEG-4; remove `DE_LIMIT_*`;
+software decode + `upload()` remains the fallback for codecs NVDEC lacks.
+*Verify:* decode-only 4K ≥ **120 fps** and < 1 core; decoded frame vs software decode PSNR ≥ 48 dB;
+a BT.709 chart decodes to the right sRGB values — note in `GPU-DECISIONS.md` that this intentionally
+*differs* from the CPU goldens, which apply swscale's BT.601 default, and re-baseline the affected
+`readers.*` scenarios once.
 
-**4.2 Reader keeps frames on the GPU.** With `HARDWARE_DECODER=2` do not call
-`av_hwframe_transfer_data`; hand the `AVFrame` (format `AV_PIX_FMT_CUDA`) to 4.1 and
-produce a `GpuFrame` whose image is built with an SkSL YUV→RGBA shader (matrix and range
-from `AVFrame::colorspace`/`color_range`, defaulting to BT.709 for ≥ 720p as the front
-end does), downscaled to project size in the same pass. Extend
-`IsHardwareDecodeSupported` to HEVC, VP9, AV1, MPEG-4; remove `DE_LIMIT_*`. Unsupported
-codecs: software decode + `upload()`.
-**Validate:** bench decode 4K with `--hwdec 2`: ≥ 120 fps and < 1 CPU core; PSNR of
-decoded frame vs software path ≥ 48 dB (chroma upsampling differs); a BT.709 colour
-chart decodes to the right sRGB values (today's BT.601 mistake is gone; document the
-intentional difference vs golden).
+**4.3 Decode read-ahead.** One thread per reader keeps four decoded surfaces ahead for sequential
+access; seeks flush it.
+*Verify:* decode no longer appears in a `nsys`/gdb profile of `source_4k`; `--scenario source_4k
+--modes x264` ≥ **90 fps** (47.5).
 
-**4.3 Decode read-ahead.** One thread per `FFmpegReader` keeps 4 decoded surfaces ahead
-for sequential access; seeks flush it.
-**Validate:** bench export payload (c): decode no longer appears in the main-thread
-profile (gdb sampling or `nsys`); total fps ≥ 1.3× 4.2.
+**4.4 Writer consumes textures.** Allocate `hw_frames_ctx` (NV12, or P010 for 10-bit), convert
+RGBA→NV12 with an SkSL pass into a CUDA-mapped buffer, send `AV_PIX_FMT_CUDA` frames, keep the
+encoder queue four deep. Software encoders keep the readback path.
+*Verify:* `--scenario single_video --res 1080p --modes nvenc` ≥ **250 fps**; 2160p ≥ **60 fps**;
+CPU per export < 2 cores; RGBA→NV12→RGBA round trip within 1 LSB.
 
-**4.4 Writer consumes textures.** For `*_nvenc`: allocate `hw_frames_ctx`
-(`sw_format` NV12, or P010 when the timeline canvas is F16 and 10-bit is requested), an
-SkSL RGBA→NV12 pass into two Vulkan images exported to CUDA, `cuMemcpy2DAsync` into the
-`av_hwframe_get_buffer` frame, `avcodec_send_frame`. Queue depth 4; receive packets on
-the consumer thread. For software encoders keep `readback()` + swscale.
-**Validate:** bench export payload (a) at 1080p ≥ 300 fps on the dev box; 4K ≥ 60 fps;
-CPU per export < 2 cores; NV12 round trip (RGBA → NV12 → RGBA) within 1 LSB on the chart.
+**4.5 `GpuEffect` base and the per-pixel shaders.** One SkSL fragment each, with a parity test
+against the C++ twin: Alpha, Brightness, Exposure, ColorShift, Bars, ChromaKey, ColorAdjustment,
+LightAdjustment, Enhancement, ColorMap (3-D LUT texture), Mask, Crop, CameraMovement.
+*Verify per effect:* PSNR ≥ 48 dB vs the CPU effect on eight test images including transparent and
+semi-transparent pixels, ≤ 0.2 ms at 1080p; `tools/golden.sh check --filter effects`.
+*Gate:* `--scenario heavy_effects --modes render` ≥ **60 fps** (11.5); `chroma_key_green` ≥ **70 fps**
+(12.9).
 
-**4.5 `GpuEffect` base and the simple fragments.** [parallel] `GpuEffect::filter(frame)
--> sk_sp<SkImageFilter>` (composable) or `draw(SkCanvas&, sk_sp<SkImage>)`. Port, one
-PR each, with a parity test against the C++ twin on the effect's own test images:
-Alpha, Brightness, Exposure, ColorShift, Bars, ChromaKey, ColorAdjustment,
-LightAdjustment, Enhancement, ColorMap (3D LUT texture, trilinear or tetrahedral per the
-4.0 decision), Mask (second texture), Crop (already clip), CameraMovement (matrix only).
-**Validate per effect:** PSNR ≥ 48 dB vs the CPU effect on 8 test images including
-fully transparent and semi-transparent pixels; runtime ≤ 0.2 ms at 1080p.
+**4.6 Transition shaders.** Port the `image-processing-lib` vocabulary (box/diagonal/rotational/zoom
+blur, zoom, border-reflected move and rotation, threshold wipe, circle mask, split shift, colour
+shift) to SkSL, keeping the sources in `image-processing-lib/shaders/` so CanvasKit can load the same
+code later. The C++ stays as the oracle.
+*Verify:* PSNR ≥ 45 dB against the OpenCV version at three parameter values each;
+`--scenario transitions_chain --modes render` ≥ **70 fps** (27.4).
 
-**4.6 Transition shaders.** [parallel] For each `image-processing-lib` function used by
-`Transition.cpp`: BLUR (two-pass box), DIAGONAL_BLUR, ROTATIONAL_BLUR (N angular taps),
-ZOOM_BLUR (N radial taps, mirror wrap), ZOOM (matrix + `kMirror` tile), 
-BORDER_REFLECTED_MOVE (`kMirror`), BORDER_REFLECTED_ROTATION (nearest if decided),
-THRESHOLD_WIPE_MASK, CIRCLE_MASK (AA clip path or SDF), SPLIT_SHIFT (two clipped draws),
-overlay ADDITIVE_BLEND (`kPlus` on RGB via `SkBlenders`/runtime blender), overlay
-DISPLACEMENT_MAP (two-texture SkSL). Put the SkSL sources in
-`image-processing-lib/shaders/` so the front end can load them through CanvasKit later.
-**Validate per effect:** PSNR ≥ 45 dB vs the OpenCV version at three parameter values
-(low/mid/high) on payload (b) frames; the box/mirror/nearest choices documented where
-parity is by design "close" not "exact".
+**4.7 Overlay clips as textures.** The overlay renders to a pooled surface; additive blend becomes
+`kPlus` on RGB via a runtime blender, displacement map a two-texture shader. Deletes the last
+`GetImageCV` round trips. *Verify:* `tools/golden.sh check --filter overlay`; a transition frame
+costs no more than a plain two-clip frame ±10 %.
 
-**4.7 Overlay clips as textures.** [parallel] The overlay clip renders to a pooled
-surface; `Clip::draw` applies the blend shader. Delete the `GetImageCV` round trips.
-**Validate:** payload (b) light-leak transition: parity ≥ 45 dB; frame time equals a
-plain two-clip frame within 10 %.
+> **Release gate R4.** `heavy_effects` ≥ 60 fps, `chroma_key_green` ≥ 70 fps, `transitions_chain`
+> ≥ 70 fps, `grid_3x3` ≥ 90 fps, `everything` ≥ 20 fps, all 1080p; CPU per export < 2 cores; golden
+> green with only the documented BT.709 re-baseline.
 
-**Releasable build R4.** Full GPU path on GPU nodes; software path on CPU nodes.
+### Phase 5 — Remove Qt and the rest of the CPU stack (R5) · 2 weeks
 
-### Phase 5 — Remove Qt and the rest of the CPU stack (R5) · 2 weeks · sequential
-
-**5.1** `Frame` drops `QImage` from its API: `readback()` returns `SkPixmap`/`SkBitmap`;
-the writer's software encoder path and `tools/parity.py` dumps use `SkPngEncoder`.
-**5.2** Delete `BlendModes.cpp`, `QtImageReader`, `QtTextReader`, `QtHtmlReader`,
-`TextReader`, `ImageReader`(Magick), `ImageWriter`, `MagickUtilities`, `CacheDisk`,
-`ScreenCaptureReader*`, `src/Qt/*`, `QtPlayer`, `PlayerBase`, `RendererBase`,
-`FrameScope`, unported effects (2.4 list) unless product asked for them.
-**5.3** Remove `find_package(Qt…)`, ImageMagick, babl from `src/CMakeLists.txt`; remove
-`Qt5::Widgets/Gui` from the service; rebuild the Docker image without Qt, Chrome,
-ImageMagick.
-**5.4** Decide whether the CPU compositor stays as the no-GPU fallback (Skia raster
-backend, same code, slow) or is removed. Recommendation: keep it, it costs nothing and
-keeps laptops and CI working.
-**Validate:** `ldd libopenshot.so | grep -ci qt` = 0; image size reduced by ≥ 300 MB;
-corpus parity vs R4 = inf (no visual change is expected in this phase); the service
-still builds on a machine without Qt installed.
+**5.1** `Frame` drops `QImage` from its API; `readback()` returns an `SkPixmap`, and the golden
+harness's `Image.cpp` switches to `SkPngEncoder`/`SkPngDecoder` (that file is the only Qt user in the
+suite, by design).
+**5.2** Delete `BlendModes.cpp`, `QtImageReader`, `QtTextReader`, `QtHtmlReader`, `TextReader`,
+ImageMagick `ImageReader`/`ImageWriter`/`MagickUtilities`, `CacheDisk`, `ScreenCaptureReader*`,
+`src/Qt/*`, `QtPlayer`, `PlayerBase`, `RendererBase`, `FrameScope`, and the unported effects in
+section 2.4 unless product asks for them.
+**5.3** Remove `find_package(Qt…)`, ImageMagick and babl from `src/CMakeLists.txt`, and
+`Qt5::Widgets/Gui` from the service; rebuild the image without Qt, Chrome and ImageMagick.
+**5.4** Keep the Skia raster backend as the no-GPU fallback (it costs nothing and keeps laptops and
+CI working).
+*Verify:* `ldd libopenshot.so | grep -ci qt` is 0; image at least 300 MB smaller; golden green with
+**zero** pixel change versus R4 (this phase must not alter rendering); the service builds on a
+machine with no Qt installed.
 
 ### Phase 6 — Depth and density (R6) · 2 weeks
 
-**6.1** Frames in flight: record frame n+2 while n+1 executes and n encodes, using a
-ring of 4 pooled canvases and a fence per frame. Remove `Timeline::getFrameMutex` from
-the read path (keep it for edits).
-**6.2** Density: measure NVENC sessions, VRAM and GPU busy % per concurrent export on an
-L4; set `SERVICE_NUM_INSTANCES_PARALLEL` and the Helm GPU time-slicing replica count.
-**6.3** Observability: per export publish frames, wall ms, GPU busy %, NVENC/NVDEC
-utilisation (NVML), VRAM peak, fallback events.
-**Validate:** GPU busy ≥ 70 % during a 1080p export; 4 concurrent 1080p exports on one
-L4 each ≥ 2× realtime; no VRAM growth over 10,000 frames.
+**6.1 Frames in flight.** A ring of four pooled canvases with a fence each: record frame n+2 while
+n+1 executes and n encodes. Remove `Timeline::getFrameMutex` from the read path (keep it for edits).
+*Verify:* `everything` 1080p ≥ **30 fps**; GPU busy ≥ 70 % during a 1080p export (NVML); no VRAM
+growth over 10 000 frames.
 
----
+**6.2 Density.** Re-run `openshot-bench --parallel 1,2,4` on the target GPU SKU and set
+`SERVICE_NUM_INSTANCES_PARALLEL`, the GPU time-slicing replica count and the pod requests from the
+measurements; update section 4 of this document with real numbers.
+*Verify:* four concurrent 1080p exports each ≥ 2× real time on an L4; aggregate ≥ 3.2× a single
+export.
+
+**6.3 Observability.** Per export: frames, wall time, GPU busy %, NVENC/NVDEC utilisation, VRAM
+peak, fallback events. *Verify:* the numbers appear for a production export and match `nvidia-smi`
+within 10 %.
+
+> **Release gate R6 / end state.** 1080p `everything` ≥ 30 fps (real time, a 17× improvement),
+> 4K `everything` ≥ 10 fps, CPU per export < 2 cores, four concurrent 1080p exports per L4.
 
 ## 4. System requirements for N parallel exports
 
@@ -706,6 +749,10 @@ utilisation (NVML) and VRAM under load in Phase 6 before raising N.
 
 ## 5. Parity policy (applies to every step)
 
+The oracle is `tests/golden` (95 scenarios, 292 committed frames). `tools/golden.sh check` must be
+green before any commit; when a change is meant to alter pixels, review every failing triptych in
+the report and re-baseline only those scenarios.
+
 - **exact**: PSNR = inf or max diff ≤ 1 LSB. Required for copy removals, format changes,
   blend modes, separable colour effects.
 - **close**: PSNR ≥ 45 dB or SSIM ≥ 0.98. Accepted where the algorithm legitimately
@@ -733,3 +780,11 @@ merged "to fix later".
   `image-processing-lib` already encodes this divergence.
 - The editor renders text with CanvasKit m147 (Skia in the browser). Keep the Skia
   milestone in lockstep so glyph rendering, blur sigma and blend maths agree.
+- **Glow quality is fixed.** Matching in-motion glow to resting glow was a deliberate earlier
+  product decision; lowering the glow resolution or ray-march step count to buy speed is not an
+  option. The glow gets faster by running the existing shader on the GPU, not by doing less of it.
+- Memory is a first-class constraint, not an afterthought: `text_animated_glow_3` peaks at 9.6 GB
+  and `everything` at 7.0 GB at 4K today. Every phase must re-check peak RSS (the bench records it),
+  and the GPU phases must re-check VRAM.
+- `openshot-bench` calls `WriteFrame` once for the whole range, so service-side scheduling fixes
+  (step 1.1) are invisible to it. Measure those on the service.

@@ -22,6 +22,7 @@ extern "C" {
 #include <json/json.h>
 
 #include <fcntl.h>
+#include <sys/prctl.h>
 #include <sys/resource.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -88,6 +89,9 @@ std::string trim(std::string s) { while (!s.empty() && isspace(s.front())) s.era
 
 // ── child: run one case in-process ─────────────────────────────────────────────────────────────
 int runCase(const Opts& o) {
+#ifdef PR_SET_PTRACER
+    prctl(PR_SET_PTRACER, PR_SET_PTRACER_ANY, 0, 0, 0);   // allow the poor-man's profiler to attach
+#endif
     const auto parts = split(o.caseSpec, ':');
     if (parts.size() != 3) { std::cerr << "bad --case\n"; return 2; }
     const std::string scenarioName = parts[0], mode = parts[2];
