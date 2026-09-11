@@ -14,7 +14,9 @@
 /.metadata/
 tags
 *~
-**/.claude/*
+# Claude Code: share settings.json and commands, keep personal overrides local
+.claude/settings.local.json
+.claude/*.local.json
 /tmp
 /golden-out
 /golden-report

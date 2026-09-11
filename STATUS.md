@@ -1,5 +1,10 @@
 # Status
 
+> **Resuming?** Run `/resume`. In short: branch `feature/gpu-rendering`, the golden suite must be
+> green (`tools/golden.sh check`) before and after every change, performance is tracked with
+> `openshot-bench` against `tests/bench/results/baseline-cpu.json`, and the work plan with its
+> numeric gates is `doc/GPU-RENDER-PLAN.md` section 3.
+
 Last updated: 2026-09-10 · branch `feature/gpu-rendering` (from fork `develop` 1d82adc9)
 
 ## Where we are

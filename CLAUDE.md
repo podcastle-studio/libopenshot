@@ -5,6 +5,12 @@ This is podcastle-studio's fork of libopenshot: a headless, JSON-driven video re
 (`src/text`), subtitles (`src/subtitle`), W3C blend modes, clip shadow/blur/flip, overlay clips, and
 the transition effects in `src/effects/image-processing-lib` (shared with the web front end via WASM).
 
+## Resume in one command
+
+Run `/resume`. It reads the state, builds, runs the regression suite and tells you what is next.
+Other project commands: `/check` (golden suite + visual diff), `/bench` (performance vs baseline),
+`/wrap-up` (close the session so the next one can continue).
+
 ## Read first
 
 1. `STATUS.md` — where the work is right now and what the next step is. **Read it before doing
@@ -15,6 +21,25 @@ the transition effects in `src/effects/image-processing-lib` (shared with the we
 3. `tests/golden/README.md` — the regression suite that gates every change.
 4. `doc/PERFORMANCE-BASELINE.md` — benchmark history (`tests/bench`, `openshot-bench`). Re-run at the
    end of every optimisation phase, commit the JSON under `tests/bench/results/`, append the table.
+5. `doc/GPU-DECISIONS.md` — decisions already taken (do not re-litigate) and the ones still open.
+
+## Repo map
+
+| path | what |
+|---|---|
+| `src/` | the library. Upstream OpenShot plus this fork's additions |
+| `src/text/` | **fork**: Skia text engine (layout, animation, glow, 3D tilt, curved text) |
+| `src/subtitle/` | **fork**: Skia subtitle renderer driven by JSON |
+| `src/effects/` | effect classes; the ones the service uses are listed in plan section 2.4 |
+| `src/effects/image-processing-lib/` | **submodule**, shared with the web front end through WASM: transition algorithms and colour grading |
+| `src/BlendModes.cpp`, `Clip.cpp` | **fork**: W3C blend modes, clip shadow/blur/flip, overlay clips |
+| `src/FFmpegReader/Writer.cpp` | demux, decode, scale, encode, mux |
+| `tests/golden/` | the regression suite and its committed reference frames |
+| `tests/bench/` | the performance benchmark and its recorded results |
+| `tools/golden.sh` | build + run + report wrapper |
+| `doc/` | the plan, the baseline, the decisions |
+| `skia_build_script.sh` | out-of-tree Skia build (see below) |
+| `../video-rendering-service` | the only consumer: JSON payload in, MP4 out |
 
 ## How to communicate
 
