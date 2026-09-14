@@ -28,6 +28,7 @@ namespace subtitle { class SkiaRenderer; }
 namespace text {
 
 class TextGlowRenderer;
+struct GlowFrameCache;
 
 // ── Transforms ───────────────────────────────────────────────────────────────
 
@@ -214,13 +215,17 @@ void composeStatic3DIntoBlockFrame(TextClipAnimationFrame& frame, double tiltX, 
 
 // Draw one text frame: static when `animation` is nullopt, otherwise the same block content
 // under the frame's block- or unit-level transforms. Dispatches flat vs curved (paint.curveAngle).
+// `glowCache` is offered only by a caller that knows this clip's glow is frame-invariant apart
+// from the block's animated opacity and letter spacing (see GlowFrameCache); null disables it, and
+// only the BLOCK-mode paths ever use it — a unit-mode silhouette is rebuilt from moving glyphs.
 void renderTextFrame(
     const TextClipLayout& layout,
     const TextClipPaintStyle& paint,
     const std::optional<TextClipBackgroundStyle>& background,
     double originX, double originY, double scale,
     const std::optional<TextClipAnimationFrame>& animation,
-    subtitle::SkiaRenderer* renderer);
+    subtitle::SkiaRenderer* renderer,
+    GlowFrameCache* glowCache = nullptr);
 
 // Half-extents (from the content-box centre) the animation reaches across the whole timeline,
 // so the reader can size a fixed frame buffer that never clips the animated glyphs.

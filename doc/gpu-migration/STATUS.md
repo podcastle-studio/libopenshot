@@ -27,7 +27,8 @@ Stated by the project owner, 2026-09-14. This overrides anything in
 
 Last updated: 2026-09-14 · branch `feature/gpu-rendering`.
 **R2a complete** (2.1, 2.2, 2.3); **2.4 done, gate met**; worklist **A done**, **B rejected on
-measurement**; **2.0 still owed**. Next: the Phase 2 worklist below, item **C** (plan step 2.6).
+measurement**, **C done differently**; **2.0 still owed**. Next: the Phase 2 worklist below, item
+**D** (plan step 2.7), or item **E** (2.0), which is what actually blocks shipping.
 
 ## Where we are
 
@@ -231,11 +232,58 @@ amortised to ~0.8 ms over 150 frames), and timing the scenario's four clips at 2
 0.98 / 0.04 / 0.10 / 0.01 ms per steady-state frame — about **1 % of its ~90 ms frame**. The rest is
 decode and Qt compositing.
 
-**C. 2.6 — long-lived `SkiaRenderer` and cross-frame caches.** One renderer per reader instead of
-one per frame, so the font and paint caches survive; cache the glow silhouette and the 3D block
-bake, keyed by the plan hash, the animation-independent style **and** `GpuDevice::Generation()`
-(see `CLAUDE.md` — a GPU object cached across a device teardown crashes in the driver). Helps both
-paths. *Verify:* `text_animated_glow_3` ≥ 12 fps; text goldens unchanged.
+**C. 2.6 — long-lived `SkiaRenderer` and cross-frame caches.** — ⚠️ **measured; done differently.**
+The two halves as written were worth ~0.5 % and ~4 %. What the measurement pointed at instead is
+committed: a cross-frame cache for the **composited glow image** on block-mode animations, worth
+**+19 % / +22 %** on the CPU path.
+
+*Why the plan's version is not worth doing.* At 1080p on the raster path, per frame:
+
+| clip of `text_animated_glow_3` | with glow | glow removed |
+|---|---|---|
+| a "Rise and shine" (glyphs move) | 231 ms | **0.15 ms** |
+| b "PULSE" (block scale + static tilt) | 81 ms | **1.08 ms** |
+| c "KEYFRAMED" (glyphs still, style keyframes) | 103 ms | **1.04 ms** |
+
+The glow is ~99 % of every frame. Sweeping `OPENSHOT_GLOW_STEPS`, which changes only the march step
+count: 4 → 58 ms, 8 → 104, 16 → 158, 24 → 243, 32 → 318 — linear at 9.3 ms/step with a ~21 ms
+intercept, so **the ray-march is ~91 %** and everything else is ~9 %. That caps a long-lived
+`SkiaRenderer` (the whole non-glow frame is ≤ 1.1 ms, and `SkiaRenderer.h` already documents that
+the expensive half — fontconfig `SkFontMgr`, typeface resolution — lives in the `SkiaFontResources`
+singleton) and caps a silhouette/bake cache at the ~9 % non-march share.
+
+*What was done instead.* A block-mode animation concats its transform onto the **canvas** before
+the block is drawn, so the glow is marched in block-local space and composited with a single
+`drawImage`. Caching that composited image and redrawing it is therefore **bit-identical** — the
+same draw call with the same image — not an approximation, and it skips the march entirely.
+`text::GlowFrameCache` lives on `TextClipReader`, which is what makes the key three fields: within
+one reader with no glow-affecting style keyframe the layout, paint and glow style are fixed by
+construction, so only the block's animated opacity and letter spacing remain. A miss costs exactly
+what the uncached path cost before.
+
+GPU images are deliberately **not** cached: `GpuFrame::snapshot()` comes off a pooled surface that
+returns to the pool when the frame dies, and a cached texture would also have to be dropped before
+the Graphite context goes away. `paintGlowFromSilhouette` returns null on the GPU path so this
+cannot be got wrong by accident.
+
+*Result,* back to back on one machine, 1080p render, GPU off:
+
+| scenario | before | after |
+|---|---|---|
+| `text_animated_glow_3` | 3.1 fps | **3.7 fps** (+19 %) |
+| `everything` | 3.6 fps | **4.4 fps** (+22 %) |
+| `subtitles_words` | 96.7 fps | 96.6 fps (untouched) |
+
+Vulkan is unchanged at 26.7 fps, by design. Golden **292/292 in all four configurations with no
+re-baseline** — `text.anim_loop_pulse_with_glow` is exactly the cache-hit case, so the suite is
+what proves the bit-identity.
+
+*Left on the table:* the cache misses whenever the block's opacity animates (a fade), because the
+glow's alpha is folded into the ray and bloom paints before they are Screen-composited together.
+Caching the ray layer at alpha 1 and applying the alpha at composite time would cover fades too,
+but it needs an extra surface per frame, which would cost every cache **miss** — and the standing
+constraint says the CPU path must not get slower. Clips with a glow-affecting style keyframe
+(clip c above) also never hit; decoupling colour from the silhouette would fix that.
 
 **D. 2.7 — subtitles on GPU surfaces.** `SubtitleManager::renderAtFrame` draws into a
 `GpuOffscreen`; cache the per-word `buildCharRenderInfo` work per segment (a CPU-path win too).
@@ -274,6 +322,11 @@ Remaining: 1.1 single `WriteFrame` call; 1.2 thread budgets; 1.3 RGBA straight i
 
 ## Log
 
+- 2026-09-14 — worklist item C (plan step 2.6): the plan's two halves measured at ~0.5 % and ~4 %
+  (the glow is ~99 % of an animated glow frame and the ray-march ~91 % of that). Shipped instead a
+  cross-frame cache for the composited glow image on block-mode animations, where the march is
+  frame-invariant: CPU path `text_animated_glow_3` +19 %, `everything` +22 %, Vulkan unchanged,
+  golden 292/292 four ways with no re-baseline.
 - 2026-09-14 — worklist item B (plan step 2.5): written, verified four-way green, measured,
   **reverted**. The large-sigma shadow downscale is an optimisation, not just a CPU-clamp
   workaround — skipping it on GPU surfaces gains nothing on Vulkan and costs ~30 % on lavapipe. Its

@@ -775,9 +775,9 @@ namespace {
 void renderBlockAnimatedFlat(
     subtitle::SkiaRenderer* renderer, const TextClipLayout& layout, const TextClipPaintStyle& style,
     const std::optional<TextClipBackgroundStyle>& background, double originX, double originY, double scale,
-    const TextClipAnimationFrame& animation) {
+    const TextClipAnimationFrame& animation, GlowFrameCache* glowCache) {
     const double extraLetterSpacing = animation.props.letterSpacing() * style.fontSize;
-    TextGlowRenderer glow(renderer);
+    TextGlowRenderer glow(renderer, glowCache);
     BlockAnimationContent content;
     content.contentWidth = layout.layoutWidth;
     content.contentHeight = layout.textHeight;
@@ -802,8 +802,9 @@ void renderBlockAnimatedFlat(
 void renderBlockAnimatedCurved(
     subtitle::SkiaRenderer* renderer, const CurvedTextGeometry& geometry, const TextClipLayout& layout,
     const TextClipPaintStyle& style, const std::optional<TextClipBackgroundStyle>& background,
-    double originX, double originY, double scale, const TextClipAnimationFrame& animation) {
-    TextGlowRenderer glow(renderer);
+    double originX, double originY, double scale, const TextClipAnimationFrame& animation,
+    GlowFrameCache* glowCache) {
+    TextGlowRenderer glow(renderer, glowCache);
     CurvedTextPainter painter(renderer, &glow);
     BlockAnimationContent content;
     content.contentWidth = geometry.width;
@@ -907,7 +908,8 @@ void renderTextFrame(
     const std::optional<TextClipBackgroundStyle>& background,
     double originX, double originY, double scale,
     const std::optional<TextClipAnimationFrame>& animation,
-    subtitle::SkiaRenderer* renderer) {
+    subtitle::SkiaRenderer* renderer,
+    GlowFrameCache* glowCache) {
     SkCanvas* canvas = renderer->getCanvas();
     if (!canvas) return;
 
@@ -932,7 +934,7 @@ void renderTextFrame(
                     geometry, *line, paint, background, originX, originY, *animation);
             }
         } else if (hasBlockAnim) {
-            renderBlockAnimatedCurved(renderer, geometry, layout, paint, background, originX, originY, scale, *animation);
+            renderBlockAnimatedCurved(renderer, geometry, layout, paint, background, originX, originY, scale, *animation, glowCache);
         } else {
             CurvedTextPainter(renderer, &glow).drawCurvedStatic(geometry, layout, paint, background, originX, originY);
         }
@@ -947,7 +949,7 @@ void renderTextFrame(
             UnitAnimationRenderer(renderer, &glow).renderUnitAnimated(layout, paint, background, originX, originY, *animation);
         }
     } else if (hasBlockAnim) {
-        renderBlockAnimatedFlat(renderer, layout, paint, background, originX, originY, scale, *animation);
+        renderBlockAnimatedFlat(renderer, layout, paint, background, originX, originY, scale, *animation, glowCache);
     } else {
         renderLayout(layout, paint, background, originX, originY, renderer);
     }

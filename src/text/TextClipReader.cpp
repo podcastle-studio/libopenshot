@@ -230,6 +230,7 @@ TextClipReader::~TextClipReader() = default;
 void TextClipReader::Open() {
     if (is_open) return;
     buildPlan();       // computes frame_width / frame_height + cached render plan
+    glow_cache.reset();   // the plan the cached glow was built from is gone
     initInfo();
     dirty = false;
     is_open = true;
@@ -578,8 +579,12 @@ std::shared_ptr<QImage> TextClipReader::renderToQImage(
         if (data.transformation.rotation != 0.0) {
             canvas->rotate(static_cast<float>(data.transformation.rotation));
         }
+        // A style keyframe can move the glow's colour, intensity or geometry between frames, so
+        // only a clip without one gets the cache; everything else it depends on is fixed by the
+        // plan. renderTextFrame narrows this further — only the BLOCK-mode paths take it.
         text::renderTextFrame(plan_layout, plan.paint, plan.background,
-                              plan.origin_x, plan.origin_y, 1.0, animation, &renderer);
+                              plan.origin_x, plan.origin_y, 1.0, animation, &renderer,
+                              has_style_keyframes ? nullptr : &glow_cache);
         canvas->restore();
     };
 
@@ -650,6 +655,7 @@ std::shared_ptr<Frame> TextClipReader::GetFrame(int64_t requested_frame) {
         buildPlan();
         initInfo();
         rendered_image.reset();
+        glow_cache.reset();
         dirty = false;
     }
 

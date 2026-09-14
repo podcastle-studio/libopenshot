@@ -84,15 +84,53 @@ void TextGlowRenderer::drawGlowLayer(
     const GlowMargin geom = glowMarginFor(contentWidth, contentHeight, style, glow, spreadMargin);
     if (!geom.valid) return;
 
+    // A block-mode animation concats its transform onto the canvas before the block is drawn, so
+    // everything below — silhouette, ray-march, bloom — happens in block-local space and the result
+    // is composited with one drawImage under whatever transform the canvas carries. When the
+    // owner says the glow is frame-invariant and the per-frame inputs match, redrawing the stored
+    // image is the same draw call with the same image: bit-identical, and it skips the march that
+    // is ~91 % of the frame on the raster path.
+    if (cache && cache->matches(opacityMul, extraLetterSpacing)) {
+        compositeGlow(cache->image, geom.imageMargin, geom.rectPadX, geom.rectPadY,
+                      geom.renderScale, originX, originY);
+        return;
+    }
+
     const sk_sp<SkImage> image = renderGlowSilhouette(
         layout, style, glow.color, geom.imageMargin, geom.width, geom.height, geom.renderScale,
         curved, extraLetterSpacing);
     if (!image) return;
 
-    paintGlowFromSilhouette(
+    sk_sp<SkImage> combined = paintGlowFromSilhouette(
         image, glow, style, contentWidth, contentHeight,
         geom.imageMargin, geom.rectPadX, geom.rectPadY, geom.width, geom.height, geom.renderScale,
         originX, originY, opacityMul);
+
+    // Null means the glow was composited straight out of a pooled GPU surface, which must not
+    // outlive this frame — drop whatever was held rather than serve it next frame.
+    if (cache) {
+        if (combined) cache->store(std::move(combined), opacityMul, extraLetterSpacing);
+        else cache->reset();
+    }
+}
+
+void TextGlowRenderer::compositeGlow(const sk_sp<SkImage>& combined,
+                                     double imageMargin, double rectPadX, double rectPadY,
+                                     double renderScale, double originX, double originY) const {
+    SkCanvas* canvas = renderer->getCanvas();
+    if (!canvas || !combined) return;
+
+    // Upscale the combined glow onto the canvas (screen-blended, beneath the text). Working-surface
+    // (0,0) is (rectPadX, rectPadY) + imageMargin left/up of the content-box top-left, which maps
+    // to origin.
+    SkPaint up;
+    up.setBlendMode(SkBlendMode::kScreen);
+    canvas->save();
+    canvas->translate(static_cast<float>(originX - rectPadX - imageMargin),
+                      static_cast<float>(originY - rectPadY - imageMargin));
+    canvas->scale(static_cast<float>(1.0 / renderScale), static_cast<float>(1.0 / renderScale));
+    canvas->drawImage(combined.get(), 0, 0, SkSamplingOptions(SkFilterMode::kLinear), &up);
+    canvas->restore();
 }
 
 TextGlowRenderer::GlowMargin TextGlowRenderer::glowMarginFor(
@@ -265,7 +303,7 @@ void TextGlowRenderer::drawAnimatedGlowLayer(
                             originX, originY, 1.0);
 }
 
-void TextGlowRenderer::paintGlowFromSilhouette(
+sk_sp<SkImage> TextGlowRenderer::paintGlowFromSilhouette(
     const sk_sp<SkImage>& image,
     const TextClipGlowStyle& glow,
     const TextClipPaintStyle& style,
@@ -276,7 +314,7 @@ void TextGlowRenderer::paintGlowFromSilhouette(
 {
     SkCanvas* canvas = renderer->getCanvas();
     SkRuntimeEffect* effect = getGlowEffect();
-    if (!canvas || !effect) return;
+    if (!canvas || !effect) return nullptr;
 
     // Work in the reduced glow resolution; the ray-march and blurs run on the small surface, and
     // light position / blur sigmas scale with it. The working surface is the silhouette image
@@ -345,7 +383,7 @@ void TextGlowRenderer::paintGlowFromSilhouette(
     sk_sp<SkShader> shader = effect->makeShader(
         SkData::MakeWithCopy(uniforms, sizeof(uniforms)),
         SkSpan<const SkRuntimeEffect::ChildPtr>(children, 1));
-    if (!shader) return;
+    if (!shader) return nullptr;
 
     // Compose ray-march + local bloom into a small offscreen with their alphas baked.
     // Screen blending is associative, so screening this combined layer onto the canvas
@@ -357,10 +395,10 @@ void TextGlowRenderer::paintGlowFromSilhouette(
         gc = gpuFrame->canvas();
     } else {
         glowSurface = SkSurfaces::Raster(SkImageInfo::MakeN32Premul(gsw, gsh));
-        if (!glowSurface) return;
+        if (!glowSurface) return nullptr;
         gc = glowSurface->getCanvas();
     }
-    if (!gc) return;
+    if (!gc) return nullptr;
     // Pooled GPU surfaces are recycled, so this clear is load-bearing there, not
     // just tidiness as it is for a fresh raster surface.
     gc->clear(SK_ColorTRANSPARENT);
@@ -394,28 +432,22 @@ void TextGlowRenderer::paintGlowFromSilhouette(
         combined = gpuFrame->snapshot();
     } else if (gpuFrame) {
         SkBitmap readback;
-        if (!readback.tryAllocN32Pixels(gsw, gsh)) return;
+        if (!readback.tryAllocN32Pixels(gsw, gsh)) return nullptr;
         SkPixmap pixels;
-        if (!readback.peekPixels(&pixels)) return;
-        if (!gpuFrame->readback(pixels)) return;
+        if (!readback.peekPixels(&pixels)) return nullptr;
+        if (!gpuFrame->readback(pixels)) return nullptr;
         readback.setImmutable();
         combined = readback.asImage();
     } else {
         combined = glowSurface->makeImageSnapshot();
     }
-    if (!combined) return;
+    if (!combined) return nullptr;
 
-    // Upscale the combined glow onto the canvas (screen-blended, beneath the text). Working-surface
-    // (0,0) is (rectPadX, rectPadY) + imageMargin left/up of the content-box top-left, which maps
-    // to origin.
-    SkPaint up;
-    up.setBlendMode(SkBlendMode::kScreen);
-    canvas->save();
-    canvas->translate(static_cast<float>(originX - rectPadX - imageMargin),
-                      static_cast<float>(originY - rectPadY - imageMargin));
-    canvas->scale(static_cast<float>(1.0 / s), static_cast<float>(1.0 / s));
-    canvas->drawImage(combined.get(), 0, 0, linear, &up);
-    canvas->restore();
+    compositeGlow(combined, imageMargin, rectPadX, rectPadY, s, originX, originY);
+
+    // Only a raster image is safe to hand back for caching: `gpuFrame`'s surface goes back to the
+    // pool when it dies here, so its snapshot must not outlive the frame.
+    return gpuFrame ? nullptr : combined;
 }
 
 } // namespace text

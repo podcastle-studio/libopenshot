@@ -195,6 +195,12 @@ sizing fix, worklist item A in `doc/gpu-migration/STATUS.md`).
 - Animation preset `tx`/`ty`/`tz` tracks are in **fontSize units**, passed through unscaled by the
   service. Production values are fractions (`ty` ∈ [−0.27, 0.5], `tx` ∈ [−2, 0]); a value of 40 is
   40 font sizes, which silently sizes the text frame buffer in the hundreds of MB.
+- The glow is ~99 % of an animated glow frame on the raster path, and the ray-march is ~91 % of
+  that (sweep `OPENSHOT_GLOW_STEPS` to measure — it changes only the step count). Optimise the
+  march or skip it; nothing else in the text engine is worth measuring against it.
+- A **block-mode** animation concats its transform onto the canvas, so the glow is marched in
+  block-local space and is frame-invariant. `text::GlowFrameCache` on `TextClipReader` reuses the
+  composited image — bit-identical, raster only (a pooled GPU snapshot must not outlive its frame).
 - The glow's beam reach is **per axis** — the ray-march is a homothety about the light source, so
   the x reach depends only on the content width and the y reach only on the height. Do not go back
   to padding both from `max(w, h)`.

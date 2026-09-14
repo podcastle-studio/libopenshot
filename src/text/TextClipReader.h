@@ -4,6 +4,7 @@
 #include "TextAnimationEngine.h"
 #include "TextClipRenderer.h"
 #include "TextClipTypes.h"
+#include "TextGlowRenderer.h"
 #include "TextStyleKeyframes.h"
 
 #include <memory>
@@ -156,6 +157,12 @@ private:
     double frame_center_project_y{0.0};
     text::TextClipData data;
     std::shared_ptr<QImage> rendered_image;
+
+    /// One composited glow image reused across frames of a block-mode animation, where the glow is
+    /// marched in block-local space and so does not depend on the frame (see text::GlowFrameCache).
+    /// Offered to the renderer only when no style keyframe can move the glow; cleared whenever the
+    /// plan is rebuilt. A hit is bit-identical to a march — the same image drawn the same way.
+    text::GlowFrameCache glow_cache;
     bool is_open;
     bool dirty;            ///< True when data changed and the plan / rendered_image is stale
     bool has_tilt{false};  ///< True when transformation.tiltX/tiltY carry a static 3D tilt
