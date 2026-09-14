@@ -5,7 +5,7 @@
 > `openshot-bench` against `tests/bench/results/baseline-cpu.json`, and the work plan with its
 > numeric gates is `doc/gpu-migration/GPU-RENDER-PLAN.md` section 3.
 
-Last updated: 2026-09-10 · branch `feature/gpu-rendering` (from fork `develop` 1d82adc9)
+Last updated: 2026-09-14 · branch `merge/upstream-develop` (from `feature/gpu-rendering`)
 
 ## Where we are
 
@@ -29,6 +29,15 @@ Phase 0 of `doc/gpu-migration/GPU-RENDER-PLAN.md` is mostly done:
   1080p exports give 1.8x aggregate throughput, not 4x.
 - All of the above is committed on `feature/gpu-rendering`.
 
+**2026-09-14 — upstream merged.** `upstream/develop` (341 commits / 220 files ahead of the
+2025-06-07 merge base) is merged on `merge/upstream-develop`, as a real merge commit so the next
+sync has a proper base. 24 conflicted paths, 82 hunks, ~2,322 lines. Golden suite green and stable
+across 3 runs, with exactly one deliberate re-baseline (`compositing.layer_order`, see below).
+Every per-file decision and the remaining checklist are in `doc/gpu-migration/UPSTREAM-MERGE.md`.
+
+This brings in plan step 1.5's hardware-decode fix (better than the plan proposed), FFmpeg 8
+support, opt-in Qt6, thread-budget settings that overlap step 1.2, and ~15 crash fixes.
+
 ## Open decisions (record in `doc/gpu-migration/GPU-DECISIONS.md` when taken)
 
 - Base branch: stay on the fork (recommended) or merge upstream 1.0.0 first (plan step 0.1).
@@ -43,6 +52,20 @@ running the **already-SkSL** glow ray-march on Skia's CPU raster pipeline becaus
 without a GPU backend. `everything` spends 65 % there too. Moving that one pass to the GPU needs no
 new algorithm — hence the new **R2a** stop (Skia Vulkan build + glow surfaces only, gate ≥ 4 fps).
 `grid_3x3` and `heavy_effects` are instead dominated by Qt raster `drawImage`, which is R3.
+
+## Blocking before the merge branch lands
+
+1. **Performance is not validated.** The A/B was attempted on a thermally throttled machine (CPU at
+   400 MHz, `single_video` 1080p render varying 74–87 fps across three consecutive runs). Re-run
+   `openshot-bench` on a quiet machine and `compare` against `baseline-cpu.json` before merging
+   `merge/upstream-develop` into `develop`. Gate: no scenario more than 5 % slower.
+2. **`compositing.layer_order` was re-baselined.** Clip sort order is now insertion-stable rather
+   than address-tie-broken (see `doc/gpu-migration/GPU-DECISIONS.md`). A clip sharing a layer *and*
+   position with another now draws on top if it was added later; previously it could be hidden, and
+   which happened varied run to run. Confirm this is the behaviour the service wants — or fix the
+   layer collision so it cannot arise.
+3. **libopenshot-audio is pinned at 0.6.0**, below upstream's 1.0.0 requirement. It compiles and
+   links; it is not proven at runtime beyond the silent-audio smoke test.
 
 ## Next step
 
