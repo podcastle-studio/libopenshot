@@ -1,5 +1,6 @@
 #include "TextAnimationRenderer.h"
 
+#include "../gpu/GpuOffscreen.h"
 #include "../subtitle/SkiaRenderer.h"
 #include "TextClipRenderer.h"
 #include "TextDrawShared.h"
@@ -402,9 +403,12 @@ void BlockAnimationRenderer::drawBlockTexture(
     // The shadow stays baked so the warp tilts it with the glyphs (matching the front end, which
     // transforms one composited flat layer).
     auto bakeLayer = [&](BlockDrawLayer layer) -> sk_sp<SkImage> {
-        sk_sp<SkSurface> surface = SkSurfaces::Raster(SkImageInfo::MakeN32Premul(texWidth, texHeight));
-        if (!surface) return nullptr;
-        SkCanvas* offscreen = surface->getCanvas();
+        // Matched to the destination canvas: this texture is drawn straight back onto it
+        // below, so a mismatch would cost an upload (or a readback) of the whole block once
+        // per z-layer per frame — and the block carries the glow, which is already there.
+        GpuOffscreen bake = GpuOffscreen::Match(canvas, texWidth, texHeight);
+        if (!bake) return nullptr;
+        SkCanvas* offscreen = bake.canvas();
         offscreen->clear(SK_ColorTRANSPARENT);
         offscreen->save();
         offscreen->scale(static_cast<float>(renderScale), static_cast<float>(renderScale));
@@ -412,7 +416,7 @@ void BlockAnimationRenderer::drawBlockTexture(
             content.draw(margin + paddingX + bakeOffsetX, margin + paddingY + bakeOffsetY, layer, false);
         });
         offscreen->restore();
-        return surface->makeImageSnapshot();
+        return bake.snapshot();
     };
     auto drawLayerImage = [&](const sk_sp<SkImage>& image) {
         if (!image) return;

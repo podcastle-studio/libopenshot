@@ -196,6 +196,43 @@ silently make every blend gamma-correct and change the output.
 
 *Revisit if:* the silhouette itself moves onto the GPU (it is still rasterised on the CPU and
 uploaded once per frame), which is the obvious next gain and belongs with R2b.
+*Resolved by step 2.4:* the silhouette is now drawn on the GPU and the upload is gone.
+
+### Step 2.4 — the whole text engine on GPU surfaces (2026-09-14)
+
+**Where an offscreen lives is a property of its destination, not of the offscreen.** The text
+engine builds several offscreens per frame — two glow silhouettes, the baked 3D block textures, the
+large-sigma shadow — and every one is snapshotted and drawn onto a destination canvas. Putting them
+on the "wrong" side costs a full copy per frame each way, and for a shader child Graphite does not
+copy at all, it drops the draw. So they all go through `GpuOffscreen::Match(destination, w, h)`,
+which hands back a pooled `GpuFrame` for a GPU canvas and `SkSurfaces::Raster` for a raster one —
+both `kN32` premultiplied, exactly the `SkImageInfo::MakeN32Premul` the call sites used before.
+`TextClipReader::renderToQImage` picks the side once, for the frame, and nothing below it crosses
+back.
+
+**A pooled surface carries the previous user's CANVAS STATE, and clearing the pixels does not
+reset it.** This cost most of the step's debugging time. `SkSurfaces::Raster` hands out a fresh
+canvas every time, so call sites written against it apply `scale()` or `translate()` at the base
+level with no matching `restore()` — correct for a surface used once, silently compounding for a
+recycled one. The glow silhouette drawn at scale `s` came back at `s²` on the second frame and `s³`
+on the third: `text.anim_loop_pulse_with_glow` frame 1 passed and every later frame failed, with
+the glow shrinking and drifting. `GpuSurfacePool::acquire` now does `restoreToCount(1)` +
+`resetMatrix()` before handing a surface back, and `openshot-gpu-checks` has a `pool-canvas` check
+that fails without it. Treat "contents undefined, canvas state fresh" as the pool's contract.
+
+**`SkSurface::readPixels` is not implemented for Graphite** — it returns false immediately rather
+than failing loudly, so a caller that uses it silently falls back to its raster path and looks
+merely slow. `Context::asyncRescaleAndReadPixels` + `submit(SyncToCpu::kYes)` is the only readback
+route. Its cost is pure bandwidth (~6 GB/s measured), not per-call overhead.
+
+**The R2a-era glow readback is conditional now.** `paintGlowFromSilhouette` keeps its GPU working
+surface for a raster destination (it is worth a readback on its own), but when the destination is
+GPU-backed it snapshots straight into VRAM and never touches the CPU.
+
+*Not done here, and it blocks the step's gate:* `TextClipReader` sizes one clip's frame buffer at
+2536 × 16969 (164 MB), because `computeAnimatedExtent` bounds a perspective animation matrix with
+`SkMatrix::mapRect`, which blows up as a corner approaches the vanishing point. That buffer is
+allocated, filled and now read back every frame. See STATUS.md.
 
 
 ## Open — decide before plan phase 4

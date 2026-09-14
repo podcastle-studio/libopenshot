@@ -8,6 +8,7 @@
  *   1. device    create/destroy the device 100 times, no leak, no VRAM growth
  *   2. transfer  upload -> readback of 1000 random RGBA images is bit-identical
  *   3. pool      the second acquire of a given size returns the same allocation
+ *   4. canvas    a recycled surface's canvas comes back in a new surface's state
  *
  * VRAM is read via nvidia-smi when it is present; on lavapipe or a machine with
  * no NVIDIA driver that part reports "skipped" rather than failing.
@@ -20,10 +21,13 @@
 #include "gpu/GpuSurfacePool.h"
 
 #include "skia/include/core/SkAlphaType.h"
+#include "skia/include/core/SkCanvas.h"
 #include "skia/include/core/SkColorSpace.h"
 #include "skia/include/core/SkColorType.h"
 #include "skia/include/core/SkImageInfo.h"
+#include "skia/include/core/SkMatrix.h"
 #include "skia/include/core/SkPixmap.h"
+#include "skia/include/core/SkRect.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -221,6 +225,56 @@ void checkPoolReuse() {
                    " other_size_is_new=" + (differentIsNew ? "yes" : "no"));
 }
 
+/// A surface carries its canvas, so a recycled one carries the previous user's
+/// transform and save stack — which clearing the pixels does not touch. Several
+/// call sites scale or translate their offscreen without a matching restore (they
+/// were written against SkSurfaces::Raster, which is fresh every time), so a pool
+/// that hands the state back compounds it: the glow silhouette rendered at scale s
+/// came out at s^2 on the second frame and s^3 on the third.
+void checkPoolResetsCanvasState() {
+    openshot::GpuDevice& device = openshot::GpuDevice::Instance();
+    if (!device.available()) {
+        report("pool-canvas", false, "GPU unavailable: " + device.lastError());
+        return;
+    }
+
+    openshot::GpuSurfacePool& pool = openshot::GpuSurfacePool::Instance();
+    pool.clear();
+
+    // Leave the canvas as dirty as a caller plausibly can: an unbalanced save with
+    // a clip inside it, plus a scale applied at the base level where there is
+    // nothing to restore to.
+    sk_sp<SkSurface> first = pool.acquire(64, 64, kN32_SkColorType);
+    if (!first) {
+        report("pool-canvas", false, "first acquire returned null");
+        return;
+    }
+    SkCanvas* dirty = first->getCanvas();
+    dirty->save();
+    dirty->clipRect(SkRect::MakeWH(8, 8));
+    dirty->translate(17.0f, 4.0f);
+    dirty->scale(3.0f, 3.0f);
+    pool.release(first);
+    first.reset();
+
+    sk_sp<SkSurface> second = pool.acquire(64, 64, kN32_SkColorType);
+    if (!second) {
+        report("pool-canvas", false, "second acquire returned null");
+        return;
+    }
+    SkCanvas* canvas = second->getCanvas();
+    const bool identity = canvas->getLocalToDeviceAs3x3().isIdentity();
+    const bool unclipped = canvas->getDeviceClipBounds() == SkIRect::MakeWH(64, 64);
+    const bool unwound = canvas->getSaveCount() == 1;
+    pool.release(second);
+
+    const bool ok = identity && unclipped && unwound;
+    report("pool-canvas", ok,
+           std::string("identity=") + (identity ? "yes" : "no") +
+                   " unclipped=" + (unclipped ? "yes" : "no") +
+                   " save_count=" + std::to_string(canvas->getSaveCount()));
+}
+
 /// The pool caches surfaces that belong to the device's Graphite context, so a
 /// device teardown has to invalidate it. Without GpuDevice::Generation() this
 /// hands back a surface from a destroyed context and crashes.
@@ -290,6 +344,7 @@ int main() {
     checkDeviceCycles();
     checkTransferRoundTrip();
     checkPoolReuse();
+    checkPoolResetsCanvasState();
     checkPoolSurvivesDeviceRestart();
 
     std::printf("\n%d failure(s)\n", failures);

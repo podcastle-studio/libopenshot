@@ -48,6 +48,7 @@ add_feature_info("IWYU (include-what-you-use)" ENABLE_IWYU "Scan all source file
 set(OPENSHOT_SOURCES
   gpu/GpuDevice.cpp
   gpu/GpuFrame.cpp
+  gpu/GpuOffscreen.cpp
   gpu/GpuSurfacePool.cpp
   subtitle/Helpers.cpp
   subtitle/SkiaRenderer.cpp

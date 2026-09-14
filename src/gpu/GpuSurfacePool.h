@@ -56,6 +56,12 @@ namespace openshot
 		/// A render target of this size, colour type and colour space, or null when
 		/// the GPU is unavailable or allocation failed. Call release() when finished.
 		///
+		/// The surface's canvas comes back in the state a new surface's would be —
+		/// identity transform, no clip, empty save stack — because a recycled
+		/// surface otherwise carries the previous user's transform, which is not
+		/// part of the pixels and so survives clearing them. Its CONTENTS are still
+		/// undefined; clear them.
+		///
 		/// @a color_space defaults to null, which is Skia's legacy mode: no gamma
 		/// conversion on blending or on readback. That is deliberate — the raster
 		/// surfaces this replaces are built with SkImageInfo::MakeN32Premul, which
@@ -89,6 +95,9 @@ namespace openshot
 			sk_sp<SkSurface> surface;
 			bool in_use = false;
 		};
+
+		/// Put a recycled surface's canvas back into a new surface's state
+		static void resetCanvas(SkSurface* surface);
 
 		/// Drop everything if the device has been rebuilt since we last looked
 		void discardIfStale();

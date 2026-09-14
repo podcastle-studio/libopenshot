@@ -3,6 +3,8 @@
 #include "../Exceptions.h"
 #include "../Frame.h"
 #include "../Json.h"
+#include "../gpu/GpuDevice.h"
+#include "../gpu/GpuFrame.h"
 #include "../subtitle/SkiaRenderer.h"
 #include "TextAnimationRenderer.h"
 #include "TextClipRenderer.h"
@@ -11,7 +13,9 @@
 
 #include <skia/include/core/SkBitmap.h>
 #include <skia/include/core/SkCanvas.h>
+#include <skia/include/core/SkColor.h>
 #include <skia/include/core/SkImageInfo.h>
+#include <skia/include/core/SkPixmap.h>
 
 #include <QColor>
 #include <QImage>
@@ -539,24 +543,58 @@ std::shared_ptr<QImage> TextClipReader::renderToQImage(
     auto img = std::make_shared<QImage>(frame_width, frame_height, QImage::Format_RGBA8888_Premultiplied);
     img->fill(QColor(0, 0, 0, 0));
 
-    SkBitmap bitmap;
+    // The whole frame is drawn through this, onto whichever canvas it is handed. Everything
+    // below it — the glow silhouettes, the baked 3D block textures, the large-sigma shadow —
+    // matches its offscreens to that canvas (GpuOffscreen), so the choice made here decides
+    // where the entire text engine renders, and there is no crossing back and forth inside it.
+    auto drawFrame = [&](SkCanvas* canvas) {
+        subtitle::SkiaRenderer renderer(canvas);
+
+        // Centre the content box at the frame's centre; rotate around that centre.
+        canvas->save();
+        canvas->translate(static_cast<float>(frame_width)  / 2.0f,
+                          static_cast<float>(frame_height) / 2.0f);
+        if (data.transformation.rotation != 0.0) {
+            canvas->rotate(static_cast<float>(data.transformation.rotation));
+        }
+        text::renderTextFrame(plan_layout, plan.paint, plan.background,
+                              plan.origin_x, plan.origin_y, 1.0, animation, &renderer);
+        canvas->restore();
+    };
+
+    // N32 premultiplied over the QImage's own buffer. A GPU frame is kRGBA_8888 and this is
+    // BGRA on x86, but that is exactly why the readback below lands the same bytes as drawing
+    // straight into it: SkiaRenderer::parseColorString swaps R and B as a LOGICAL colour
+    // convention, and converting kRGBA_8888 -> N32 on the way out undoes it once, just as
+    // storing a swapped colour into a BGRA surface does. See plan step 2.3.
     const SkImageInfo skiaInfo = SkImageInfo::MakeN32Premul(frame_width, frame_height);
+
+    // One GPU surface for the frame, read back once at the end — instead of a raster canvas
+    // that has to upload every offscreen the text engine builds. Falls back silently: with the
+    // GPU off, or if anything in the round trip fails, the raster path below runs unchanged.
+    if (GpuDevice::Instance().available()) {
+        if (std::shared_ptr<GpuFrame> gpu = GpuFrame::Create(frame_width, frame_height, kN32_SkColorType)) {
+            SkCanvas* canvas = gpu->canvas();
+            if (canvas) {
+                // Pooled surfaces are recycled, so this is load-bearing, not tidiness.
+                canvas->clear(SK_ColorTRANSPARENT);
+                drawFrame(canvas);
+                SkPixmap pixels(skiaInfo, img->bits(), img->bytesPerLine());
+                if (gpu->readback(pixels))
+                    return img;
+                // Readback failed after drawing, so the QImage may hold a partial frame.
+                // Start again on the raster path rather than return it.
+                img->fill(QColor(0, 0, 0, 0));
+            }
+        }
+    }
+
+    SkBitmap bitmap;
     if (!bitmap.installPixels(skiaInfo, img->bits(), img->bytesPerLine())) {
         return img;
     }
     SkCanvas canvas(bitmap);
-    subtitle::SkiaRenderer renderer(&canvas);
-
-    // Centre the content box at the frame's centre; rotate around that centre.
-    canvas.save();
-    canvas.translate(static_cast<float>(frame_width)  / 2.0f,
-                     static_cast<float>(frame_height) / 2.0f);
-    if (data.transformation.rotation != 0.0) {
-        canvas.rotate(static_cast<float>(data.transformation.rotation));
-    }
-    text::renderTextFrame(plan_layout, plan.paint, plan.background,
-                          plan.origin_x, plan.origin_y, 1.0, animation, &renderer);
-    canvas.restore();
+    drawFrame(&canvas);
 
     return img;
 }
@@ -610,12 +648,16 @@ std::shared_ptr<Frame> TextClipReader::GetFrame(int64_t requested_frame) {
     }
 
     std::shared_ptr<QImage> image;
+    // Whether `image` is the shared resting-frame cache (which must not be handed to a Frame
+    // that may draw over it) or a render made for this frame alone (which can be).
+    bool image_is_cached = false;
     if (!has_style_keyframes && !animFrame.has_value()) {
         // Static / resting phase: the frame is pixel-identical every frame (incl. any static 3D
         // tilt). Render ONCE and reuse the cache — this skips recomputing the (expensive) glow for
         // every resting frame. For a 5s clip with a 1.5s IN that's ~70% of frames served from cache.
         if (!rendered_image) renderToImage();
         image = rendered_image;
+        image_is_cached = true;
     } else {
         // Per-frame render. Resolve the style keyframe overlay (if any), else reuse the cached plan.
         // No single-image cache here — the content varies frame to frame.
@@ -659,7 +701,10 @@ std::shared_ptr<Frame> TextClipReader::GetFrame(int64_t requested_frame) {
     auto frame = std::make_shared<Frame>(
         requested_frame, image->width(), image->height(),
         "#00000000", sample_count, info.channels);
-    frame->AddImage(std::make_shared<QImage>(image->copy()));
+    // The cached resting image is shared with every later frame, so the Frame gets a copy of
+    // it. A per-frame render has no other owner — copying it would duplicate a full-resolution
+    // buffer (~8 MB at 1080p) for nothing, which is most of what an animated text clip costs.
+    frame->AddImage(image_is_cached ? std::make_shared<QImage>(image->copy()) : image);
     return frame;
 }
 

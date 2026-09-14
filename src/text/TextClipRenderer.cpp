@@ -1,5 +1,6 @@
 #include "TextClipRenderer.h"
 
+#include "../gpu/GpuOffscreen.h"
 #include "../subtitle/SkiaRenderer.h"
 #include "TextCurvedText.h"
 #include "TextDrawShared.h"
@@ -865,18 +866,21 @@ void renderShadowLayer(
     const int sw = std::max(2, static_cast<int>(std::ceil(blockW * s)));
     const int sh = std::max(2, static_cast<int>(std::ceil(blockH * s)));
 
-    sk_sp<SkSurface> surface = SkSurfaces::Raster(SkImageInfo::MakeN32Premul(sw, sh));
-    if (!surface) { drawLines(originX, originY, shadowBlur); return; }   // fallback: clamped, but drawn
-    SkCanvas* offscreen = surface->getCanvas();
+    // Matched to the destination so the downscaled shadow is composited without a copy across
+    // the boundary. The whole branch is only here for the CPU mask-blur clamp, which the GPU
+    // does not have — plan step 2.5 deletes it rather than keeping a GPU version of it.
+    SkCanvas* canvas = renderer->getCanvas();
+    GpuOffscreen shadowSurface = GpuOffscreen::Match(canvas, sw, sh);
+    if (!shadowSurface) { drawLines(originX, originY, shadowBlur); return; }   // fallback: clamped, but drawn
+    SkCanvas* offscreen = shadowSurface.canvas();
     offscreen->clear(SK_ColorTRANSPARENT);
     offscreen->scale(static_cast<float>(s), static_cast<float>(s));   // draw full-coord glyphs downscaled
     renderer->renderToCanvas(offscreen, [&] {
         drawLines(margin, margin, shadowBlur * s);   // offscreen sigma == MAX_CPU_MASK_BLUR_SIGMA, under cap
     });
-    sk_sp<SkImage> image = surface->makeImageSnapshot();
+    sk_sp<SkImage> image = shadowSurface.snapshot();
     if (!image) return;
 
-    SkCanvas* canvas = renderer->getCanvas();
     canvas->save();
     canvas->translate(static_cast<float>(originX - margin), static_cast<float>(originY - margin));
     canvas->scale(static_cast<float>(1.0 / s), static_cast<float>(1.0 / s));

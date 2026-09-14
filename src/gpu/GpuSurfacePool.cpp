@@ -7,6 +7,7 @@
 #include <mutex>
 
 #include "skia/include/core/SkAlphaType.h"
+#include "skia/include/core/SkCanvas.h"
 #include "skia/include/core/SkColorSpace.h"
 #include "skia/include/core/SkImageInfo.h"
 
@@ -99,6 +100,7 @@ sk_sp<SkSurface> GpuSurfacePool::acquire(int width, int height, SkColorType colo
 			SkColorSpace::Equals(entry.color_space.get(), color_space.get())) {
 			entry.in_use = true;
 			counters.reused++;
+			resetCanvas(entry.surface.get());
 			return entry.surface;
 		}
 	}
@@ -127,6 +129,29 @@ sk_sp<SkSurface> GpuSurfacePool::acquire(int width, int height, SkColorType colo
 #else
 	return nullptr;
 #endif
+}
+
+void GpuSurfacePool::resetCanvas(SkSurface* surface)
+{
+	if (!surface)
+		return;
+	SkCanvas* canvas = surface->getCanvas();
+	if (!canvas)
+		return;
+	// A surface carries its canvas, and a recycled surface carries the previous
+	// user's canvas STATE with it — the transform and clip are not part of the
+	// pixels, so clearing the surface does not touch them. SkSurfaces::Raster
+	// hands out a fresh canvas every time, so the call sites this pool replaced
+	// were entitled to assume an identity transform, and several of them scale or
+	// translate without a matching save/restore. Left alone, those compound on
+	// every acquire: a glow silhouette drawn at scale s comes out at s^2 on the
+	// second frame and s^3 on the third.
+	//
+	// restoreToCount(1) unwinds any unbalanced save, and resetMatrix() clears a
+	// transform applied at the base level, where there is nothing to restore to.
+	// Together they give back the same canvas state a new surface would.
+	canvas->restoreToCount(1);
+	canvas->resetMatrix();
 }
 
 void GpuSurfacePool::release(sk_sp<SkSurface> surface)

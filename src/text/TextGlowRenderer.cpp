@@ -2,6 +2,7 @@
 
 #include "../gpu/GpuDevice.h"
 #include "../gpu/GpuFrame.h"
+#include "../gpu/GpuOffscreen.h"
 #include "../subtitle/SkiaRenderer.h"
 #include "TextAnimationRenderer.h"
 #include "TextClipRenderer.h"
@@ -150,9 +151,11 @@ sk_sp<SkImage> TextGlowRenderer::renderGlowSilhouette(
     const double s = renderScale;
     const int sw = std::max(1, static_cast<int>(std::ceil(width * s)));
     const int sh = std::max(1, static_cast<int>(std::ceil(height * s)));
-    sk_sp<SkSurface> surface = SkSurfaces::Raster(SkImageInfo::MakeN32Premul(sw, sh));
-    if (!surface) return nullptr;
-    SkCanvas* offscreen = surface->getCanvas();
+    // Match the destination canvas: on the GPU this both rasterises the glyphs there and saves
+    // paintGlowFromSilhouette the per-frame upload of the silhouette it uses as a shader child.
+    GpuOffscreen offscreenSurface = GpuOffscreen::Match(renderer->getCanvas(), sw, sh);
+    if (!offscreenSurface) return nullptr;
+    SkCanvas* offscreen = offscreenSurface.canvas();
     offscreen->clear(SK_ColorTRANSPARENT);
     offscreen->scale(static_cast<float>(s), static_cast<float>(s));  // draw full-coord glyphs downscaled
 
@@ -179,7 +182,7 @@ sk_sp<SkImage> TextGlowRenderer::renderGlowSilhouette(
         }
     });
 
-    return surface->makeImageSnapshot(SkIRect::MakeWH(sw, sh));
+    return offscreenSurface.snapshot(SkIRect::MakeWH(sw, sh));
 }
 
 void TextGlowRenderer::drawAnimatedGlowLayer(
@@ -207,9 +210,10 @@ void TextGlowRenderer::drawAnimatedGlowLayer(
     const double s = geom.renderScale;
     const int sw = std::max(1, static_cast<int>(std::ceil(geom.width * s)));
     const int sh = std::max(1, static_cast<int>(std::ceil(geom.height * s)));
-    sk_sp<SkSurface> surface = SkSurfaces::Raster(SkImageInfo::MakeN32Premul(sw, sh));
-    if (!surface) return;
-    SkCanvas* offscreen = surface->getCanvas();
+    // As in renderGlowSilhouette: the silhouette lives wherever the glow will be composited.
+    GpuOffscreen offscreenSurface = GpuOffscreen::Match(renderer->getCanvas(), sw, sh);
+    if (!offscreenSurface) return;
+    SkCanvas* offscreen = offscreenSurface.canvas();
     offscreen->clear(SK_ColorTRANSPARENT);
     offscreen->scale(static_cast<float>(s), static_cast<float>(s));  // draw full-coord glyphs downscaled
 
@@ -234,7 +238,7 @@ void TextGlowRenderer::drawAnimatedGlowLayer(
         target->restore();
     });
 
-    sk_sp<SkImage> image = surface->makeImageSnapshot(SkIRect::MakeWH(sw, sh));
+    sk_sp<SkImage> image = offscreenSurface.snapshot(SkIRect::MakeWH(sw, sh));
     if (!image) return;
 
     paintGlowFromSilhouette(image, glow, style, contentWidth, contentHeight,
@@ -291,6 +295,11 @@ void TextGlowRenderer::paintGlowFromSilhouette(
     // GPU it is the same SkSL over the same silhouette. With OPENSHOT_GPU off,
     // GpuFrame::Create returns null and everything below runs exactly as it did
     // before — the golden suite depends on that staying true.
+    //
+    // The ray-march earns a GPU surface even when the destination is raster, because it
+    // is worth a readback on its own. When the destination is GPU-backed too (step 2.4)
+    // that readback goes away and the glow is composited straight from VRAM.
+    const bool gpuDestination = GpuOffscreen::IsGpuBacked(canvas);
     std::shared_ptr<GpuFrame> gpuFrame;
     sk_sp<SkImage> source = image;
     if (GpuDevice::Instance().available())
@@ -299,7 +308,8 @@ void TextGlowRenderer::paintGlowFromSilhouette(
         // Graphite will not upload the raster silhouette on our behalf: a raster image
         // used as a shader is dropped with "Couldn't convert SkImage to a
         // Graphite-backed representation" and the draw vanishes. If the upload fails,
-        // give up the GPU surface rather than the glow.
+        // give up the GPU surface rather than the glow. With a GPU destination the
+        // silhouette was drawn on the GPU already, and this is a no-op.
         source = GpuFrame::ToTexture(image);
         if (!source) {
             gpuFrame.reset();
@@ -353,12 +363,16 @@ void TextGlowRenderer::paintGlowFromSilhouette(
         gc->drawImage(source.get(), offsetPx, offsetPx, SkSamplingOptions(), &bloomPaint);
     }
 
-    // Back to the CPU: the destination canvas is the raster text image. Reading into
-    // an N32 pixmap converts from the surface's kRGBA_8888, so the platform BGR swap
-    // that SkiaRenderer::parseColorString bakes into every colour stays consistent —
-    // it is a logical-colour convention, not a byte order, and survives the round trip.
+    // Collect the finished glow. Back to the CPU only when the destination canvas is
+    // raster: reading into an N32 pixmap converts from the surface's kRGBA_8888, so the
+    // platform BGR swap that SkiaRenderer::parseColorString bakes into every colour stays
+    // consistent — it is a logical-colour convention, not a byte order, and survives the
+    // round trip.
     sk_sp<SkImage> combined;
-    if (gpuFrame) {
+    if (gpuFrame && gpuDestination) {
+        // Both sides are in VRAM: no round trip at all, just a texture draw below.
+        combined = gpuFrame->snapshot();
+    } else if (gpuFrame) {
         SkBitmap readback;
         if (!readback.tryAllocN32Pixels(gsw, gsh)) return;
         SkPixmap pixels;

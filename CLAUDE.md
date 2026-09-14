@@ -151,6 +151,12 @@ Rules that are easy to get wrong and crash in the NVIDIA driver rather than anyw
   it changes.
 - `GpuSurfacePool` is **per thread**, because a Graphite surface belongs to the recorder that made
   it. Never move a surface between threads.
+- A recycled surface hands back the **previous user's canvas transform, clip and save stack** —
+  clearing the pixels does not touch them. `acquire()` resets it (`pool-canvas` in
+  `openshot-gpu-checks` guards this), so code written against `SkSurfaces::Raster`, which is fresh
+  every time, keeps working. Do not reintroduce a path that skips the reset.
+- Graphite has **no synchronous `SkSurface::readPixels`** — it returns false immediately, so a
+  caller silently falls back and merely looks slow. `GpuFrame::readback` is the only route.
 - **Graphite never uploads a raster image for you.** A raster `SkImage` used as a shader — a
   runtime-effect child included — is dropped with `Couldn't convert SkImage to a Graphite-backed
   representation` and the draw silently disappears; Ganesh did upload automatically. Put every image
@@ -161,9 +167,12 @@ Rules that are easy to get wrong and crash in the NVIDIA driver rather than anyw
   `SkiaRenderer::parseColorString` for the GPU path. It is a logical `SkColor` convention, not a
   byte order; Skia converts correctly in both directions on readback, so it survives the round trip.
 
-The glow ray-march (`TextGlowRenderer::paintGlowFromSilhouette`) is the one thing on the GPU today:
-`text_animated_glow_3` 1.3 → 4.5 fps, `everything` 1.8 → 4.3 fps at 1080p. The silhouette is still
-rasterised on the CPU and uploaded once per frame.
+The whole text engine renders on the GPU when one is available. `TextClipReader::renderToQImage`
+picks GPU or raster once per frame and reads back once at the end; every offscreen below it goes
+through `GpuOffscreen::Match(destination, w, h)`, which puts it in the same memory as the canvas it
+will be drawn onto. `text_animated_glow_3` 1.3 → 6.4 fps, `everything` 1.8 → 4.3 fps at 1080p.
+The glow gate (≥ 8 fps) is held up by an unrelated frame-sizing defect — see
+`doc/gpu-migration/STATUS.md`.
 
 ## Facts that are easy to get wrong
 

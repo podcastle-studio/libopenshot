@@ -5,7 +5,7 @@
 > `openshot-bench` against `tests/bench/results/baseline-cpu.json`, and the work plan with its
 > numeric gates is `doc/gpu-migration/GPU-RENDER-PLAN.md` section 3.
 
-Last updated: 2026-09-14 · branch `feature/gpu-rendering` (**R2a complete** — steps 2.1, 2.2, 2.3 done; 2.0 still owed)
+Last updated: 2026-09-14 · branch `feature/gpu-rendering` (**R2a complete** — steps 2.1, 2.2, 2.3 done; 2.0 still owed. **R2b started**: 2.4 done bar its gate)
 
 ## Where we are
 
@@ -113,6 +113,45 @@ and step numbers are stable identifiers, not sequence.
 > configurations green: CPU Skia; GPU Skia with the GPU off; GPU Skia on Vulkan; GPU Skia on
 > lavapipe.
 
+5. **2.4 Whole text engine on GPU surfaces** — ✅ **code done, gate blocked by a sizing bug.**
+   `GpuOffscreen::Match(destination, w, h)` puts every remaining offscreen in the same memory as
+   the canvas it will be drawn onto — the two glow silhouettes, the baked 3D block textures and
+   the large-sigma shadow — and `TextClipReader::renderToQImage` renders the frame on a GPU
+   surface with one readback at the boundary. The glow no longer round-trips at all when its
+   destination is GPU-backed, and a per-frame render is handed to the `Frame` without the
+   `image->copy()` the plan called out. Golden **292/292 in all four configurations with no
+   re-baseline** (CPU Skia; GPU Skia off; Vulkan; lavapipe), plus a new `pool-canvas` check in
+   `openshot-gpu-checks`. Two findings in `GPU-DECISIONS.md`: a pooled surface hands back the
+   previous user's canvas transform, and Graphite has no synchronous `readPixels`.
+
+> **Gate 2.4: not met — blocked on a pre-existing frame-sizing defect, not on the GPU work.**
+> `text_animated_glow_3` 4.5 → **6.4 fps** (gate ≥ 8); `text_static_4` 62 → 56 fps at the bench's
+> 150 frames, but p50 is unchanged (15.17 → 15.23 ms) and at 600 frames it is 135.5 vs 133.1 — the
+> whole gap is one ~425 ms Graphite pipeline compile that amortises away over a real export.
+>
+> The glow gate misses for one reason: **`TextClipReader` sizes the "Rise and shine" clip's frame
+> buffer at 2536 × 16969 = 164 MB** for 920 × 101 of content. `computeAnimatedExtent`
+> (`TextAnimationRenderer.cpp`) bounds each sampled animation matrix with `SkMatrix::mapRect`,
+> which blows up when a perspective corner approaches the vanishing point. That buffer is
+> allocated, cleared and — now — read back over PCIe every frame; it is ~90 % of the scenario.
+> Clamping the mapped extent to 4× the box (a throwaway probe, **not** a correct fix) takes the
+> same build from 6.3 → **34.7 fps** and RSS 2.29 → 0.68 GB. So the gate is comfortably reachable;
+> what it needs is a correct bound on the perspective mapping, which is its own change with its own
+> re-baseline risk, not part of 2.4.
+
+**Decide next**, in this order:
+
+- **The animated-extent bound** (see the 2.4 gate above). It is the single largest win measured so
+  far on the worst scenario — 5.5x, and 3.4x less memory — it is a pre-existing correctness-adjacent
+  defect rather than GPU work, and it costs the raster path just as much as the GPU one. It needs a
+  real fix (bound the perspective mapping, e.g. clip to the near plane before `mapRect`) plus a look
+  at every animation golden, since under-sizing clips the animation and over-sizing is what we have
+  now. Not yet a numbered plan step.
+- **2.5 delete the CPU-blur workaround**, which 2.4 deliberately left in place (`TextClipRenderer`
+  still carries the σ > 120 downscale branch, now merely running on a GPU offscreen).
+- **2.6 long-lived `SkiaRenderer`** and **2.7 subtitles**, then re-measure gate R2b.
+- **2.0 GPU-capable image**, still owed, and still the thing that stops any of this shipping.
+
 Still open from Phase 0, not blocking Phase 2: **0.5** the six-payload production corpus and
 **0.6** CI running `tools/golden.sh check` per PR.
 
@@ -130,6 +169,10 @@ Remaining: 1.1 single `WriteFrame` call; 1.2 thread budgets; 1.3 RGBA straight i
 
 ## Log
 
+- 2026-09-14 — plan step 2.4: whole text engine on GPU surfaces (`GpuOffscreen`, one readback at
+  the reader boundary, no `image->copy()` for per-frame renders). Golden 292/292 in all four
+  configurations, no re-baseline. Gate blocked by the 164 MB animated-extent buffer, not by the
+  GPU path; a probe clamp shows 6.3 → 34.7 fps once that is sized correctly.
 - 2026-09-14 — plan step 2.3: glow ray-march on the GPU. R2a's two gates met, golden green with no
   re-baseline. Graphite needs explicit image uploads; the planned R/B swap removal was wrong.
 - 2026-09-14 — plan step 2.2: `src/gpu` (GpuDevice, GpuSurfacePool, GpuFrame) +
