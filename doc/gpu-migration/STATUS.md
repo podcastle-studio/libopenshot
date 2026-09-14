@@ -31,8 +31,8 @@ Phase 0 of `doc/gpu-migration/GPU-RENDER-PLAN.md` is mostly done:
 
 **2026-09-14 — upstream merged.** `upstream/develop` (341 commits / 220 files ahead of the
 2025-06-07 merge base) is merged and folded into `feature/gpu-rendering` (fast-forward; the
-`merge/upstream-develop` branch is now just a marker at the same commit and can be deleted). It is
-a real merge commit, so the next sync has a proper base. 24 conflicted paths, 82 hunks, ~2,322 lines. Golden suite green and stable
+`merge/upstream-develop` branch has been deleted). It is a real merge commit, so the next sync has
+a proper base. 24 conflicted paths, 82 hunks, ~2,322 lines. Golden suite green and stable
 across 3 runs, with exactly one deliberate re-baseline (`compositing.layer_order`, see below).
 Every per-file decision and the remaining checklist are in `doc/gpu-migration/UPSTREAM-MERGE.md`.
 
