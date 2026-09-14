@@ -57,11 +57,12 @@ private:
     // The silhouette image is sized ONLY by glyph geometry (imageMargin: stroke overhang + fixed
     // beam-blur softening + block-mode spread + per-unit overshoot) so it stays a stable size while
     // an animating rayLen/light-offset changes only shader uniforms — no per-frame re-rasterize,
-    // no ~1px jump. `rectPad` carries the beam reach and only widens the ray-march draw surface
+    // no ~1px jump. `rectPadX`/`rectPadY` carry the beam reach — per-axis, because the ray-march is
+    // a homothety about the light source — and only widen the ray-march draw surface
     // (sampled beyond the image via Decal), never the image. `renderScale` folds the quality
     // downscale (GLOW_RENDER_SCALE) with an extra downscale when the surface would exceed the
     // texture cap — so large text keeps its full beam extent instead of being truncated/skipped.
-    struct GlowMargin { double imageMargin; double rectPad; int width; int height; double renderScale; bool valid; };
+    struct GlowMargin { double imageMargin; double rectPadX; double rectPadY; int width; int height; double renderScale; bool valid; };
 
     // Size the silhouette image + separate beam-reach draw padding. `extraPad` adds per-char
     // overshoot room for the char-mode animated silhouette (rebuilt every frame anyway).
@@ -76,7 +77,7 @@ private:
         const TextClipGlowStyle& glow,
         const TextClipPaintStyle& style,
         double contentWidth, double contentHeight,
-        double imageMargin, double rectPad, int width, int height, double renderScale,
+        double imageMargin, double rectPadX, double rectPadY, int width, int height, double renderScale,
         double originX, double originY,
         double opacityMul);
 

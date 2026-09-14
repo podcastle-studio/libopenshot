@@ -25,9 +25,9 @@ Stated by the project owner, 2026-09-14. This overrides anything in
    GPU Skia with the GPU off; GPU Skia on Vulkan; GPU Skia on lavapipe) is the acceptance test,
    and all four must be 292/292. Commands are in `CLAUDE.md` under "GPU rendering (`src/gpu`)".
 
-Last updated: 2026-09-14 · branch `feature/gpu-rendering`, working tree clean at `fae61407`.
-**R2a complete** (2.1, 2.2, 2.3); **2.4 done bar its gate**; **2.0 still owed**.
-Next: the Phase 2 worklist below, item **A** first.
+Last updated: 2026-09-14 · branch `feature/gpu-rendering`.
+**R2a complete** (2.1, 2.2, 2.3); **2.4 done, gate met**; worklist **A done**; **2.0 still owed**.
+Next: the Phase 2 worklist below, item **B** (plan step 2.5).
 
 ## Where we are
 
@@ -145,20 +145,11 @@ identifiers, not sequence. **What is still to do is the worklist further down, n
    `openshot-gpu-checks`. Two findings in `GPU-DECISIONS.md`: a pooled surface hands back the
    previous user's canvas transform, and Graphite has no synchronous `readPixels`.
 
-> **Gate 2.4: not met — blocked on a pre-existing frame-sizing defect, not on the GPU work.**
-> `text_animated_glow_3` 4.5 → **6.4 fps** (gate ≥ 8); `text_static_4` 62 → 56 fps at the bench's
-> 150 frames, but p50 is unchanged (15.17 → 15.23 ms) and at 600 frames it is 135.5 vs 133.1 — the
-> whole gap is one ~425 ms Graphite pipeline compile that amortises away over a real export.
->
-> The glow gate misses for one reason: **`TextClipReader` sizes the "Rise and shine" clip's frame
-> buffer at 2536 × 16969 = 164 MB** for 920 × 101 of content. `computeAnimatedExtent`
-> (`TextAnimationRenderer.cpp`) bounds each sampled animation matrix with `SkMatrix::mapRect`,
-> which blows up when a perspective corner approaches the vanishing point. That buffer is
-> allocated, cleared and — now — read back over PCIe every frame; it is ~90 % of the scenario.
-> Clamping the mapped extent to 4× the box (a throwaway probe, **not** a correct fix) takes the
-> same build from 6.3 → **34.7 fps** and RSS 2.29 → 0.68 GB. So the gate is comfortably reachable;
-> what it needs is a correct bound on the perspective mapping, which is its own change with its own
-> re-baseline risk, not part of 2.4.
+> **Gate 2.4: met**, once worklist item A below sized the frame buffer correctly.
+> `text_animated_glow_3` 7.3 → **26.7 fps** (gate ≥ 8); `text_static_4` unchanged within noise
+> (60.2/59.9/58.9 before vs 60.2/58.8/58.7 after, GPU off, same RSS). At the time 2.4 landed the
+> gate read 6.4 fps, blocked by a 164 MB frame buffer for 920 × 101 of content — see item A for
+> what that actually was.
 
 ## Phase 2 worklist — what a resuming session picks up
 
@@ -166,19 +157,60 @@ Do these in order. Each one ends with the four-way golden sweep green at 292/292
 claims a speed-up, a back-to-back `openshot-bench` measurement on one machine. Nothing here may
 regress the CPU path (see the standing constraint at the top).
 
-**A. Bound the animated frame extent.** *Not a numbered plan step; do it first.* The largest
-measured win available and a **pure CPU-path win** — it costs the raster path exactly as much as
-the GPU one. `computeAnimatedExtent` (`src/text/TextAnimationRenderer.cpp`) bounds each sampled
-animation matrix with `SkMatrix::mapRect`, which blows up as a perspective corner approaches the
-vanishing point; `TextClipReader` then sizes one `text_animated_glow_3` clip's buffer at
-2536 × 16969 = 164 MB for 920 × 101 of content, and allocates, clears and reads it back every
-frame. The same `mapRect` pattern is in `TextClipReader`'s own tilt branch and should be fixed with
-it. *Approach:* bound the mapping properly — clip the box against the near plane before mapping, or
-map the four corners and reject/clamp any with a non-positive `w` — rather than clamping the
-result, which is what the throwaway probe did. *Verify:* every `text.*` and `subtitles.*` golden
-reviewed by eye (under-sizing clips the animation, which the suite will show as missing pixels at
-the frame edge); `text_animated_glow_3` ≥ 8 fps, which also clears **gate 2.4**; RSS down from
-2.29 GB. Probe measured 6.3 → 34.7 fps and 2.29 → 0.68 GB.
+**A. Bound the animated frame extent.** — ✅ **done, 2026-09-14.**
+
+> **The diagnosis this item was written around was wrong, and the correction is worth keeping.**
+> It claimed `SkMatrix::mapRect` blew up as a perspective corner approached the vanishing point.
+> It does not. The 164 MB clip ("Rise and shine") uses the `rise-chars` / `drop-words` presets,
+> which carry only `opacity`, `ty` and 2D `rotate` — no `rotateX`, `rotateY` or `perspective`, so
+> `mapRect` never sees a projective matrix at all. Sweeping tilt from 0° to 89.9° over the clip
+> that *does* tilt holds its frame at 958 × 116 throughout; the perspective mapping never blew up.
+> There was no near-plane bug to fix.
+
+The 164 MB was two independent things, measured by decomposing the clip:
+
+| "Rise and shine" (content 920 × 101) | frame | size |
+|---|---|---|
+| no glow, no animation | 920 × 101 | 0.4 MB |
+| glow only | 2166 × 1346 | 11.1 MB |
+| animation only | 1291 × 15724 | 77.4 MB |
+| both (as benchmarked) | 2536 × 16969 | 164.2 MB |
+
+1. **The recipe, not the library.** `rise-chars` had `ty: 40` and `drop-words` `ty: 60`. `ty` is in
+   fontSize units and the service passes it straight through (`TextClipData.cpp:112`), so that was
+   12,288 px and 18,432 px of travel per glyph. Real payloads (`../text-metrics/examples`) use
+   `ty` ∈ [−0.27, 0.5] and `tx` ∈ [−2, 0]; the recipe was ~100× off, and the committed golden showed
+   it — at frame 15 only "R", "i", "s" were on screen, scattered, the rest thousands of pixels away.
+   Fixed to 0.4 / 0.6, which is what CLAUDE.md's "recipes mirror production" rule requires.
+   `tests/golden/Recipes.cpp` now says so at the preset, so the next value that lands there is
+   sanity-checked against the range.
+2. **A real library over-estimate.** `TextGlowRenderer::glowMarginFor` and `effectsMargin`
+   (`TextClipReader.cpp`) padded **both** axes with `max(contentW, contentH) / 2`. The ray-march is
+   a homothety about the light source — a silhouette pixel `d` from the light on one axis lands
+   `(1 + rayLen) · d` away **on that same axis** — so the reach is per-axis, and the short axis was
+   padded from the long one. Both now compute per axis, clamped to the old value, so whichever axis
+   bound the old margin keeps it to the bit. Widths came out byte-identical (2536 / 1478 / 2068 for
+   the scenario's three clips) and no glow golden moved, which is the proof the clamp holds.
+
+Combined, the scenario's three clips go 178.9 → **13.5 MB** of frame buffer.
+
+*Result,* back to back on one machine, GPU Skia build, 1080p render, 150 frames:
+
+| scenario | GPU off | Vulkan |
+|---|---|---|
+| `text_animated_glow_3` | 1.2 → **2.9 fps**, 1.88 → **0.41 GB** | 7.3 → **26.7 fps**, 1.91 → **0.51 GB** |
+| `everything` | 1.8 → **3.4 fps**, 1.71 → **1.02 GB** | 4.1 → **8.4 fps**, 1.92 → **1.16 GB** |
+| `text_static_4` | 60.1 → 56.2–60.2 fps (noise, RSS equal) | 45.5 → 46.2 fps |
+
+A pure CPU-path win as predicted: **GPU off it is 2.4× on the glow scenario and 1.9× on
+`everything`**, with RSS down 4.6× and 1.7×. Golden 292/292 in all four configurations; the only
+re-baseline was the two animation scenarios the recipe fix intentionally changed
+(`text.anim_in_rise_chars`, `text.anim_out_drop_words`, 5 PNGs), each triptych reviewed by eye with
+nothing clipped at the frame edge.
+
+**Note the headline the old diagnosis implied was inflated.** The "6.3 → 34.7 fps" probe number
+came from clamping an extent that was only that large because of the bad recipe; the honest figure
+for the library change is the table above.
 
 **B. 2.5 — skip the CPU-blur workaround on GPU surfaces.** *Rewritten by the standing constraint:
 the plan says "delete", which would break the CPU path.* The σ > 120 downscale branch in
@@ -232,6 +264,10 @@ Remaining: 1.1 single `WriteFrame` call; 1.2 thread budgets; 1.3 RGBA straight i
 
 ## Log
 
+- 2026-09-14 — worklist item A: frame-extent sizing. No perspective bug existed; the 164 MB buffer
+  was a ~100×-too-large `ty` in `tests/golden/Recipes.cpp` plus a glow margin that padded both axes
+  from the longer one. Per-axis glow margin (clamped, pixel-identical) + recipe fix. Glow scenario
+  2.4× faster with the GPU **off**, 3.7× with Vulkan; RSS 1.88 → 0.41 GB. Gate 2.4 now met.
 - 2026-09-14 — plan step 2.4: whole text engine on GPU surfaces (`GpuOffscreen`, one readback at
   the reader boundary, no `image->copy()` for per-frame renders). Golden 292/292 in all four
   configurations, no re-baseline. Gate blocked by the 164 MB animated-extent buffer, not by the

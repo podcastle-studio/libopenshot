@@ -43,26 +43,47 @@ std::string collapseNewlines(const std::string& value) {
     return std::regex_replace(value, re, " ");
 }
 
-// Outward margin (px) the text effects (shadow, stroke, gaussian blur, glow beams) extend
-// beyond the bounding box, so the frame buffer reserves room for them and nothing is clipped.
-double effectsMargin(const openshot::text::TextClipPaintStyle& paint,
-                     double contentWidth, double contentHeight) {
+// Outward margin (px) the text effects (shadow, stroke, gaussian blur, glow beams) extend beyond
+// the bounding box, so the frame buffer reserves room for them and nothing is clipped.
+//
+// Per axis: the glow's god-rays are a homothety about the light source, so their reach on one axis
+// depends only on that axis (see TextGlowRenderer::glowMarginFor). Sizing both axes from the longer
+// one padded a 920 x 101 block by 623 px vertically where ~199 px is the bound — 11 MB of frame
+// buffer for 0.4 MB of content, allocated, cleared and (with the GPU on) read back every frame.
+std::pair<double, double> effectsMargin(const openshot::text::TextClipPaintStyle& paint,
+                                        double contentWidth, double contentHeight) {
     const double strokeMargin = paint.stroke.has_value() ? paint.stroke->width : 0.0;
     double shadowMargin = 0.0;
     if (paint.dropShadow.has_value()) {
         shadowMargin = paint.dropShadow->distance + SHADOW_BLUR_SIGMA_MULTIPLIER * paint.dropShadow->blur;
     }
-    double glowMargin = 0.0;
+    double glowMarginX = 0.0, glowMarginY = 0.0;
     if (paint.glow.has_value()) {
         const double offX = paint.glow->sourceOffX * paint.fontSize;
         const double offY = paint.glow->sourceOffY * paint.fontSize;
         const double offMax = std::max(std::abs(offX), std::abs(offY));
-        const double halfExtent = std::max(contentWidth, contentHeight) / 2.0;
-        glowMargin = paint.glow->rayLen * (halfExtent + offMax) + offMax
-                     + openshot::text::GLOW_BEAM_BLUR_RATIO * paint.fontSize * 3.0;
+        const double beamBlur = openshot::text::GLOW_BEAM_BLUR_RATIO * paint.fontSize;
+        const double bloomPad = openshot::text::GLOW_BLOOM_BLUR_RATIO * paint.fontSize * 3.0;
+
+        // What both axes got before. The per-axis value is clamped to it so the axis that bound
+        // the old margin keeps it to the bit, and a glow that fitted before still fits.
+        const double legacy = paint.glow->rayLen * (std::max(contentWidth, contentHeight) / 2.0 + offMax)
+                              + offMax + beamBlur * 3.0;
+
+        // Mirrors glowMarginFor: the composited glow spans the content box expanded by the
+        // silhouette's own margin plus the beam reach measured from the light to the image corner.
+        const double imageMargin = std::ceil(strokeMargin + beamBlur * 3.0 + 4.0);
+        auto axis = [&](double extent, double off) {
+            const double reach = paint.glow->rayLen * (imageMargin + extent / 2.0 + std::abs(off))
+                                 + beamBlur * 3.0;
+            return std::min(legacy, imageMargin + std::ceil(std::max(reach, bloomPad)));
+        };
+        glowMarginX = axis(contentWidth, offX);
+        glowMarginY = axis(contentHeight, offY);
     }
     const double blurMargin = SHADOW_BLUR_SIGMA_MULTIPLIER * paint.blur;
-    return std::max({strokeMargin, shadowMargin, glowMargin}) + blurMargin;
+    return {std::max({strokeMargin, shadowMargin, glowMarginX}) + blurMargin,
+            std::max({strokeMargin, shadowMargin, glowMarginY}) + blurMargin};
 }
 
 text::TextAlignment parseAlignment(const std::string& s) {
@@ -405,9 +426,9 @@ void TextClipReader::buildPlan() {
             halfW = std::max({std::abs(static_cast<double>(mapped.fLeft)), std::abs(static_cast<double>(mapped.fRight)), halfW});
             halfH = std::max({std::abs(static_cast<double>(mapped.fTop)),  std::abs(static_cast<double>(mapped.fBottom)), halfH});
         }
-        const double pad = effectsMargin(p, cw, ch);
-        const double preW = 2.0 * halfW + 2.0 * pad;
-        const double preH = 2.0 * halfH + 2.0 * pad;
+        const auto [fxPadX, fxPadY] = effectsMargin(p, cw, ch);
+        const double preW = 2.0 * halfW + 2.0 * fxPadX;
+        const double preH = 2.0 * halfH + 2.0 * fxPadY;
         return {preW * rotC + preH * rotS, preW * rotS + preH * rotC};
     };
 

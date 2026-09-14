@@ -177,9 +177,8 @@ Rules that are easy to get wrong and crash in the NVIDIA driver rather than anyw
 The whole text engine renders on the GPU when one is available. `TextClipReader::renderToQImage`
 picks GPU or raster once per frame and reads back once at the end; every offscreen below it goes
 through `GpuOffscreen::Match(destination, w, h)`, which puts it in the same memory as the canvas it
-will be drawn onto. `text_animated_glow_3` 1.3 → 6.4 fps, `everything` 1.8 → 4.3 fps at 1080p.
-The glow gate (≥ 8 fps) is held up by an unrelated frame-sizing defect — see
-`doc/gpu-migration/STATUS.md`.
+will be drawn onto. `text_animated_glow_3` 1.3 → 26.7 fps, `everything` 1.8 → 8.4 fps at 1080p (after the frame-extent
+sizing fix, worklist item A in `doc/gpu-migration/STATUS.md`).
 
 ## Facts that are easy to get wrong
 
@@ -193,4 +192,12 @@ The glow gate (≥ 8 fps) is held up by an unrelated frame-sizing defect — see
   the reader it wraps) or teardown segfaults.
 - `BorderReflectedMove` dx/dy are fractions of width/height; `Zoom` 100 = no zoom; `Exposure`
   clamps to ≥ 1.0; `CameraMovement` zoom is a percentage.
+- Animation preset `tx`/`ty`/`tz` tracks are in **fontSize units**, passed through unscaled by the
+  service. Production values are fractions (`ty` ∈ [−0.27, 0.5], `tx` ∈ [−2, 0]); a value of 40 is
+  40 font sizes, which silently sizes the text frame buffer in the hundreds of MB.
+- The glow's beam reach is **per axis** — the ray-march is a homothety about the light source, so
+  the x reach depends only on the content width and the y reach only on the height. Do not go back
+  to padding both from `max(w, h)`.
+- `../text-metrics/vendor/text/` vendors this engine; `TextGlowRenderer.{h,cpp}` there is now behind
+  `src/text/`.
 - Qt PNG "quality" 100 means no compression; the harness saves with 10.

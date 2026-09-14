@@ -322,10 +322,13 @@ const text::AnimationPresetMap& presets() {
             p.keyframes.tracks[(size_t)AnimProp::opacity] = track({{0, 0}, {100, 1}});
             m["fade-in"] = p;
         }
-        {   // characters rise and fade in, staggered from the first character
+        {   // characters rise and fade in, staggered from the first character.
+            // tx/ty are in fontSize units, as the service passes them through (TextClipData.cpp):
+            // production payloads use fractions (ty in [-0.27, 0.5], tx in [-2, 0]), so keep these
+            // in that range — a value of 40 would translate each glyph 40 font sizes off screen.
             AnimationPreset p; p.level = AnimationPresetLevel::CHAR;
             p.keyframes.tracks[(size_t)AnimProp::opacity] = track({{0, 0}, {100, 1}});
-            p.keyframes.tracks[(size_t)AnimProp::ty] = track({{0, 40}, {100, 0}});
+            p.keyframes.tracks[(size_t)AnimProp::ty] = track({{0, 0.4}, {100, 0}});
             p.keyframes.staggerFrom = StaggerFrom::FIRST;
             p.keyframes.easing = CubicBezier{0.22, 1.0, 0.36, 1.0};
             m["rise-chars"] = p;
@@ -339,7 +342,7 @@ const text::AnimationPresetMap& presets() {
         {   // words drop out with rotation
             AnimationPreset p; p.level = AnimationPresetLevel::WORD;
             p.keyframes.tracks[(size_t)AnimProp::opacity] = track({{0, 1}, {100, 0}});
-            p.keyframes.tracks[(size_t)AnimProp::ty] = track({{0, 0}, {100, 60}});
+            p.keyframes.tracks[(size_t)AnimProp::ty] = track({{0, 0}, {100, 0.6}});
             p.keyframes.tracks[(size_t)AnimProp::rotate] = track({{0, 0}, {100, 25}});
             p.keyframes.staggerFrom = StaggerFrom::LAST;
             m["drop-words"] = p;

@@ -91,7 +91,7 @@ void TextGlowRenderer::drawGlowLayer(
 
     paintGlowFromSilhouette(
         image, glow, style, contentWidth, contentHeight,
-        geom.imageMargin, geom.rectPad, geom.width, geom.height, geom.renderScale,
+        geom.imageMargin, geom.rectPadX, geom.rectPadY, geom.width, geom.height, geom.renderScale,
         originX, originY, opacityMul);
 }
 
@@ -104,13 +104,6 @@ TextGlowRenderer::GlowMargin TextGlowRenderer::glowMarginFor(
     const double offX = glow.sourceOffX * style.fontSize;
     const double offY = glow.sourceOffY * style.fontSize;
     const double offMax = std::max(std::abs(offX), std::abs(offY));
-    const double halfExtent = std::max(contentWidth, contentHeight) / 2.0;
-
-    // Beam reach — how far the god-rays extend past the glyphs. This ONLY widens the ray-march
-    // draw surface (the shader samples the silhouette via Decal outside its bounds); it must NOT
-    // size the silhouette image, or an animating rayLen / light-offset would re-rasterize the
-    // silhouette at a slightly different size each frame and make the text visibly jump ~1px.
-    const double rectPad = std::ceil(glow.rayLen * (halfExtent + offMax) + offMax);
 
     // Stable silhouette padding: stroke overhang + fixed beam-blur softening + block-mode spread +
     // per-unit overshoot (extraPad). Independent of rayLen / light offset, so the image is stable.
@@ -121,19 +114,45 @@ TextGlowRenderer::GlowMargin TextGlowRenderer::glowMarginFor(
     const double width  = std::ceil(contentWidth  + 2.0 * imageMargin);
     const double height = std::ceil(contentHeight + 2.0 * imageMargin);
 
+    // Beam reach — how far the god-rays extend past the glyphs. This ONLY widens the ray-march
+    // draw surface (the shader samples the silhouette via Decal outside its bounds); it must NOT
+    // size the silhouette image, or an animating rayLen / light-offset would re-rasterize the
+    // silhouette at a slightly different size each frame and make the text visibly jump ~1px.
+    //
+    // The march is a homothety about the light source: a silhouette pixel d away from the light
+    // on one axis lands (1 + rayLen) * d away on that SAME axis, so the reach is per-axis. Padding
+    // both axes with the longer one wastes the short one badly — a 920 x 101 block was padded by
+    // 608 px vertically where 158 px is the bound. The farthest silhouette pixel is the image
+    // corner: imageMargin + half the content + the light offset from centre. The beam blur is
+    // applied after the march, and the local bloom spreads from the image itself, so each needs
+    // its own 3 sigma of room.
+    //
+    // Clamped to what padded both axes before, so whichever axis bound the old value keeps it
+    // unchanged and no glow that fitted before can be truncated now.
+    const double legacyPad =
+        std::ceil(glow.rayLen * (std::max(contentWidth, contentHeight) / 2.0 + offMax) + offMax);
+    const double bloomPad = GLOW_BLOOM_BLUR_RATIO * style.fontSize * 3.0;
+    auto beamReach = [&](double contentExtent, double off) {
+        const double reach =
+            glow.rayLen * (imageMargin + contentExtent / 2.0 + std::abs(off)) + beamBlurSigma * 3.0;
+        return std::min(legacyPad, std::ceil(std::max(reach, bloomPad)));
+    };
+    const double rectPadX = beamReach(contentWidth, offX);
+    const double rectPadY = beamReach(contentHeight, offY);
+
     // Downscale (never skip) when the ray-march surface would exceed the texture cap, preserving
     // the full beam extent instead of truncating it. The front end's GLOW_MAX_TEXTURE_DIM cap is
     // in reference space (it renders at reference size and GPU-scales the sprite by sizeScale);
     // the backend renders at actual size, so scale the cap by sizeScale, bounded by a ceiling.
     const double texCap = std::clamp(GLOW_MAX_TEXTURE_DIM * style.sizeScale,
                                      static_cast<double>(GLOW_MAX_TEXTURE_DIM), 4096.0);
-    const double fullMaxDim = std::max(width, height) + 2.0 * rectPad;
+    const double fullMaxDim = std::max(width + 2.0 * rectPadX, height + 2.0 * rectPadY);
     const double pixelMaxDim = fullMaxDim * glowScale_;
     const double downscale = pixelMaxDim > texCap ? texCap / pixelMaxDim : 1.0;
     const double renderScale = glowScale_ * downscale;
 
     return {
-        imageMargin, rectPad,
+        imageMargin, rectPadX, rectPadY,
         static_cast<int>(width), static_cast<int>(height),
         renderScale, true,
     };
@@ -242,7 +261,7 @@ void TextGlowRenderer::drawAnimatedGlowLayer(
     if (!image) return;
 
     paintGlowFromSilhouette(image, glow, style, contentWidth, contentHeight,
-                            geom.imageMargin, geom.rectPad, geom.width, geom.height, geom.renderScale,
+                            geom.imageMargin, geom.rectPadX, geom.rectPadY, geom.width, geom.height, geom.renderScale,
                             originX, originY, 1.0);
 }
 
@@ -251,7 +270,7 @@ void TextGlowRenderer::paintGlowFromSilhouette(
     const TextClipGlowStyle& glow,
     const TextClipPaintStyle& style,
     double contentWidth, double contentHeight,
-    double imageMargin, double rectPad, int width, int height, double renderScale,
+    double imageMargin, double rectPadX, double rectPadY, int width, int height, double renderScale,
     double originX, double originY,
     double opacityMul)
 {
@@ -261,25 +280,26 @@ void TextGlowRenderer::paintGlowFromSilhouette(
 
     // Work in the reduced glow resolution; the ray-march and blurs run on the small surface, and
     // light position / blur sigmas scale with it. The working surface is the silhouette image
-    // padded by the beam reach (rectPad) on every side so the god-rays have room to extend past
-    // the glyphs — the silhouette itself sits at (rectPad, rectPad) and is sampled via Decal, so
-    // everything outside it reads transparent.
+    // padded by the beam reach on every side so the god-rays have room to extend past the glyphs —
+    // the silhouette itself sits at (rectPadX, rectPadY) and is sampled via Decal, so everything
+    // outside it reads transparent. The reach is per-axis (see glowMarginFor).
     const double s = renderScale;
-    const double offset = rectPad;                    // full-coord offset of the silhouette
-    const double fullW = static_cast<double>(width)  + 2.0 * rectPad;
-    const double fullH = static_cast<double>(height) + 2.0 * rectPad;
+    const double fullW = static_cast<double>(width)  + 2.0 * rectPadX;
+    const double fullH = static_cast<double>(height) + 2.0 * rectPadY;
     const int gsw = std::max(1, static_cast<int>(std::ceil(fullW * s)));
     const int gsh = std::max(1, static_cast<int>(std::ceil(fullH * s)));
-    const float offsetPx = static_cast<float>(offset * s);
+    const float offsetPxX = static_cast<float>(rectPadX * s);
+    const float offsetPxY = static_cast<float>(rectPadY * s);
 
     const double beamBlurSigma = GLOW_BEAM_BLUR_RATIO * style.fontSize * s;
     const double bloomSigma    = GLOW_BLOOM_BLUR_RATIO * style.fontSize * s;
     const double offX = glow.sourceOffX * style.fontSize;
     const double offY = glow.sourceOffY * style.fontSize;
     // Light source in working-surface pixel space: the content-box top-left sits at
-    // (rectPad + imageMargin), so its centre is that plus half the content, plus the light offset.
-    const float lightX = static_cast<float>((offset + imageMargin + contentWidth / 2.0 + offX) * s);
-    const float lightY = static_cast<float>((offset + imageMargin + contentHeight / 2.0 + offY) * s);
+    // (rectPadX + imageMargin, rectPadY + imageMargin), so its centre is that plus half the
+    // content, plus the light offset.
+    const float lightX = static_cast<float>((rectPadX + imageMargin + contentWidth / 2.0 + offX) * s);
+    const float lightY = static_cast<float>((rectPadY + imageMargin + contentHeight / 2.0 + offY) * s);
     const float steps = static_cast<float>(std::min(glowStepCap_, glowSteps(glow.rayLen)));
 
     // Uniforms in SkSL declaration order: float2 lightPos, rayLen, steps, gain, falloff.
@@ -318,8 +338,8 @@ void TextGlowRenderer::paintGlowFromSilhouette(
     }
 
     const SkSamplingOptions linear(SkFilterMode::kLinear);
-    // Shift the silhouette shader so the image lands at (rectPad, rectPad) in the working surface.
-    const SkMatrix childMat = SkMatrix::Translate(offsetPx, offsetPx);
+    // Shift the silhouette shader so the image lands at (rectPadX, rectPadY) in the working surface.
+    const SkMatrix childMat = SkMatrix::Translate(offsetPxX, offsetPxY);
     sk_sp<SkShader> child = source->makeShader(SkTileMode::kDecal, SkTileMode::kDecal, linear, &childMat);
     SkRuntimeEffect::ChildPtr children[1] = { SkRuntimeEffect::ChildPtr(child) };
     sk_sp<SkShader> shader = effect->makeShader(
@@ -360,7 +380,7 @@ void TextGlowRenderer::paintGlowFromSilhouette(
         bloomPaint.setAlphaf(static_cast<float>(clamp01(glow.opacity * GLOW_BLOOM_ALPHA * opacityMul)));
         bloomPaint.setImageFilter(SkImageFilters::Blur(
             bloomSigma, bloomSigma, SkTileMode::kDecal, nullptr));
-        gc->drawImage(source.get(), offsetPx, offsetPx, SkSamplingOptions(), &bloomPaint);
+        gc->drawImage(source.get(), offsetPxX, offsetPxY, SkSamplingOptions(), &bloomPaint);
     }
 
     // Collect the finished glow. Back to the CPU only when the destination canvas is
@@ -386,12 +406,13 @@ void TextGlowRenderer::paintGlowFromSilhouette(
     if (!combined) return;
 
     // Upscale the combined glow onto the canvas (screen-blended, beneath the text). Working-surface
-    // (0,0) is (rectPad + imageMargin) left/up of the content-box top-left, which maps to origin.
+    // (0,0) is (rectPadX, rectPadY) + imageMargin left/up of the content-box top-left, which maps
+    // to origin.
     SkPaint up;
     up.setBlendMode(SkBlendMode::kScreen);
     canvas->save();
-    canvas->translate(static_cast<float>(originX - offset - imageMargin),
-                      static_cast<float>(originY - offset - imageMargin));
+    canvas->translate(static_cast<float>(originX - rectPadX - imageMargin),
+                      static_cast<float>(originY - rectPadY - imageMargin));
     canvas->scale(static_cast<float>(1.0 / s), static_cast<float>(1.0 / s));
     canvas->drawImage(combined.get(), 0, 0, linear, &up);
     canvas->restore();
