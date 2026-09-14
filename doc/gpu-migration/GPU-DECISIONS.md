@@ -287,6 +287,70 @@ its ~120 ms is amortised to ~0.8 ms over 150 frames. Timing each of the scenario
 ~90 ms frame**. The rest is decode and Qt compositing, which is R3.
 
 
+### One control for all GPU use (2026-09-14, project owner)
+
+Asked for directly: "keep all in single control so we can turn on or off gpu usage… later we'll add
+all remaining gpu logic to the same control". So:
+
+**`GpuDevice::SetBackend(Backend::Off|Vulkan|Lavapipe)` is the switch**, overriding `OPENSHOT_GPU`
+at runtime. It takes effect immediately by tearing down a device built for the old choice, which
+moves `Generation()` — which is already the signal every GPU cache must key on, so nothing new is
+needed to make the change safe. `RequestedBackend()` answers without creating the device;
+`BackendFromName`/`BackendName` convert to and from the `OPENSHOT_GPU` spelling.
+
+The switch only stays *single* because of an invariant, not because of the function: **every GPU
+path asks `GpuDevice::Instance().available()`** — or `GpuOffscreen::Match` / `GpuFrame::Create`,
+which ask for you — **and none reads the environment or keeps a flag of its own.** All ten GPU
+decision points in `src/` were audited against this. The `control` check in `openshot-gpu-checks`
+holds the line: it asserts that `Off` makes `GpuFrame::Create` return null and that re-enabling
+works, so future GPU logic with its own flag fails the checks.
+
+*Revisit if:* GPU use ever needs to be per-Timeline rather than per-process; the switch is global
+today because the Graphite context is.
+
+### Subtitles follow their destination; the Timeline keeps a raster canvas (2026-09-14)
+
+`src/subtitle` builds no offscreen of its own, so the whole pass runs wherever its canvas lives.
+`SubtitleManager::renderAtFrame(SkCanvas*, w, h, frame)` is the entry point and the `QImage`
+overload wraps it; a GPU canvas gives a bit-identical result (`subtitle-gpu` check, worst channel
+delta 0, on Vulkan and lavapipe).
+
+**The Timeline deliberately does not use it yet.** Subtitles composite onto an existing video frame,
+so a GPU pass means uploading that frame and reading it back: **5.6 ms at 1080p** (1.1 up + 4.4
+back) and **18.7 ms at 2160p** (3.8 + 15.0), against **0.27 ms / 0.61 ms** of actual drawing — 21×
+and 31× more than it saves. This is the same rule as step 2.4's "where an offscreen lives is a
+property of its destination", applied one level up. *Revisit when:* the compositor puts the frame on
+the GPU (phase 3); the caller then passes its canvas and the transfer disappears.
+
+### Cache the composited glow, not the silhouette (2026-09-14)
+
+Plan step 2.6 asked for a long-lived `SkiaRenderer` and caches for the glow silhouette and the 3D
+block bake. Measured, those are worth ~0.5 % and ~4 %: the glow is ~99 % of an animated glow frame
+and the ray-march is ~91 % of the glow (`OPENSHOT_GLOW_STEPS` sweep — 9.3 ms/step, ~21 ms
+intercept), the entire non-glow frame is ≤ 1.1 ms, and `SkiaRenderer`'s expensive half already lives
+in the `SkiaFontResources` singleton.
+
+What is cached instead is the **composited glow image**, because a block-mode animation concats its
+transform onto the *canvas* before the block is drawn — so the march happens in block-local space
+and the result is composited with a single `drawImage`. Redrawing the stored image is therefore the
+same draw call with the same image: **bit-identical**, not an approximation. `text::GlowFrameCache`
+lives on `TextClipReader`, which is what keeps the key to three fields (within one reader with no
+glow-affecting style keyframe, layout/paint/glow style are fixed by construction). A miss costs
+exactly what the uncached path cost, so nothing gets slower. Worth **+19 %** on
+`text_animated_glow_3` and **+22 %** on `everything`, on the CPU path.
+
+**GPU images are deliberately not cached.** `GpuFrame::snapshot()` comes off a pooled surface that
+returns to the pool when the frame dies, and a cached texture would also have to be dropped before
+the Graphite context goes away. `paintGlowFromSilhouette` returns null on the GPU path so this
+cannot be got wrong by accident. *Revisit if:* the pool grows a way to retain a surface safely
+across the context's lifetime.
+
+*Left on the table:* the cache misses when the block's **opacity** animates (a fade), because the
+alpha is folded into the ray and bloom paints before they are Screen-composited. Caching the ray
+layer at alpha 1 would cover fades, but needs an extra surface per frame — which would cost every
+cache *miss*, and the standing constraint forbids slowing the CPU path.
+
+
 ## Open — decide before plan phase 4
 
 - **Timeline canvas precision.** `kRGBA_8888` (matches today) or `kRGBA_F16` (better blending and

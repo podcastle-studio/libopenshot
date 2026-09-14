@@ -523,6 +523,11 @@ frames; the 150-frame bench shows a one-off Graphite pipeline compile); golden t
 (`computeAnimatedExtent` bounds a perspective matrix with `SkMatrix::mapRect`, giving one clip a
 164 MB buffer). Fixing that is worklist item **A** in `STATUS.md` and takes the same build to
 34.7 fps.
+>
+> **Closed 2026-09-14. Gate met: `text_animated_glow_3` 7.3 → 26.7 fps.** The `mapRect` diagnosis
+> above was wrong — that clip has no perspective at all. The 164 MB was a ~100×-too-large `ty` in
+> `tests/golden/Recipes.cpp` plus a glow margin that padded both axes from the longer one. See
+> worklist item A in `STATUS.md`.
 
 **2.5 ~~Delete~~ Skip the CPU-blur workaround on GPU surfaces.** ~~The σ > 120 downscale branch in
 `TextClipRenderer` exists only because Skia's CPU mask blur clamps at 128 px; the GPU has no such
@@ -534,19 +539,50 @@ constraint in `STATUS.md` and `GPU-DECISIONS.md`.
 *Verify:* a 4K text shadow on the GPU matches the 1080p shadow scaled up (SSIM ≥ 0.97);
 `text_static_4` at 2160p ≥ **15 fps** (11.8); CPU-path goldens bit-identical.
 
+> **Rejected on measurement 2026-09-14. Do not redo it.** Written, verified four-way green,
+> measured, reverted. Graphite really does draw the unclamped sigma (83.7 dB PSNR against the CPU
+> reconstruction), but the downscale is an **optimisation in its own right**, not only a workaround:
+> at σ = 384 it blurs ~10× fewer pixels. Skipping it gains nothing on Vulkan and costs **~30 % on
+> lavapipe**, a supported no-GPU configuration. The 2160p gate belongs to R3, not here: static text
+> is served from the resting-frame cache so the shadow renders **once**, and the whole text engine is
+> ~1 % of that scenario's frame. Full reasoning in `GPU-DECISIONS.md`.
+
 **2.6 Long-lived `SkiaRenderer` and cross-frame caches.** One renderer per reader instead of one per
 frame, so the font and paint caches survive; cache the glow silhouette and the 3D block bake as GPU
 textures keyed by the plan hash and the animation-independent style.
 *Verify:* `text_animated_glow_3` ≥ **12 fps**; golden text scenarios unchanged.
+
+> **Done differently 2026-09-14; gate already met (26.7 fps).** Both halves as written measure at
+> ~0.5 % and ~4 %: the glow is ~99 % of an animated glow frame and the ray-march ~91 % of that
+> (`OPENSHOT_GLOW_STEPS` sweep, 9.3 ms/step, ~21 ms intercept), the whole non-glow frame is ≤ 1.1 ms,
+> and `SkiaRenderer`'s expensive half already lives in the `SkiaFontResources` singleton. Shipped
+> instead: `text::GlowFrameCache` reuses the **composited glow image** across frames of a block-mode
+> animation, where the march happens in block-local space and so does not depend on the frame —
+> bit-identical, and worth **+19 % / +22 %** on the CPU path (`text_animated_glow_3`, `everything`).
 
 **2.7 Subtitles.** `SubtitleManager::renderAtFrame` draws into a GPU surface; cache the per-word
 `buildCharRenderInfo` work per segment.
 *Verify:* `--scenario subtitles_words --res 1080p --modes render` ≥ **85 fps** (56);
 `tools/golden.sh check --filter subtitles` green.
 
+> **Done 2026-09-14 as a capability; gate met (92–101 fps).** `src/subtitle` builds no offscreen of
+> its own, so the pass follows whatever canvas it is given: `renderAtFrame(SkCanvas*, w, h, frame)`
+> is now the entry point and the `QImage` overload wraps it. Bit-identical on GPU and raster
+> (`subtitle-gpu` check, worst channel delta 0). The Timeline deliberately still passes a raster
+> canvas — subtitles composite onto an existing frame, so a GPU pass costs an upload + readback
+> (5.6 ms at 1080p, 18.7 ms at 2160p) to save 0.27 / 0.61 ms of drawing. It pays off only once the
+> compositor puts the frame on the GPU (Phase 3), and then the caller just passes its canvas. The
+> `buildCharRenderInfo` cache is capped by the same 0.27 ms and was not done.
+
 > **Release gate R2b.** `text_animated_glow_3` ≥ 12 fps, `subtitles_words` ≥ 85 fps,
 > `text_static_4` not slower, `everything` ≥ 4 fps, golden green. Runs on the GPU node pool R2a
 > introduced; no further infrastructure change.
+>
+> **Met 2026-09-14**, on Vulkan at 1080p: `text_animated_glow_3` **26.7–33.7** (≥ 12),
+> `subtitles_words` **94.6** (≥ 85), `everything` **7.7–8.4** (≥ 4), `text_static_4` not slower
+> (its 150-frame deficit is a one-off Graphite pipeline compile: at 600 frames the GPU is 116.3 fps
+> against 113.0 raster), golden 292/292 in all four configurations. **R2b is code-complete and
+> blocked only on R2a's 2.0 GPU image**, which is what lets any of it run in production.
 
 ### Phase 1 — CPU quick wins (R1) · **runs after Phase 2** · 1 week
 

@@ -33,6 +33,37 @@ and it is what blocks shipping any of it.
 
 ## Where we are
 
+### What works today (verified 2026-09-14, all four configurations green)
+
+- **The Skia text engine renders entirely on the GPU** when one is enabled, with one readback at
+  the reader boundary (`TextClipReader::renderToQImage`). Steps 2.1–2.4 plus worklist items A and C.
+- **The Skia subtitle engine is GPU-capable**: `SubtitleManager::renderAtFrame(SkCanvas*, w, h, n)`
+  draws onto whatever surface the caller has, bit-identical on GPU and raster. The Timeline still
+  passes a raster canvas on purpose — see step 2.7. Step D.
+- **One control for all GPU use**: `GpuDevice::SetBackend(Backend::Off|Vulkan|Lavapipe)`, overriding
+  `OPENSHOT_GPU` at runtime. Every GPU path asks `GpuDevice::Instance().available()` and none reads
+  the environment itself; the `control` check in `openshot-gpu-checks` enforces that as more GPU
+  logic lands.
+- **The CPU path got faster too**, which matters because it is what production runs: the frame-extent
+  fix (item A) and the block-mode glow cache (item C) are both pure CPU wins.
+- `tools/golden.sh check` **292/292** on CPU Skia and on GPU Skia with the GPU off, on Vulkan and on
+  lavapipe. `openshot-gpu-checks` **7/7** on Vulkan and lavapipe.
+
+Measured at 1080p, `render` mode, back to back on one machine (an Intel Iris Xe iGPU — **not** the
+A2000; worth re-running on the discrete card):
+
+| scenario | baseline | CPU path now | Vulkan now |
+|---|---|---|---|
+| `text_animated_glow_3` | 1.4 fps | **3.7–3.8** | **26.7–33.7** |
+| `everything` | 1.8 fps | **4.4–4.5** | **7.7–8.4** |
+| `subtitles_words` | 56 fps | **92–101** | **94.6** |
+| `text_static_4` | 62 fps | ~57 (150 fr) / 113 (600 fr) | 48 (150 fr) / **116.3** (600 fr) |
+
+`text_static_4`'s GPU deficit at 150 frames is a fixed ~0.5 s Graphite pipeline compile, not a
+per-frame cost — at 600 frames the GPU is ahead. A real export is thousands of frames.
+
+### Phase 0 baseline (history)
+
 Phase 0 of `doc/gpu-migration/GPU-RENDER-PLAN.md` is mostly done:
 
 - Baseline measured (plan section 0.3): codecs are not the bottleneck; Qt raster compositing and
@@ -68,7 +99,7 @@ support, opt-in Qt6, thread-budget settings that overlap step 1.2, and ~15 crash
 - Timeline canvas precision for the GPU compositor: RGBA8 or RGBA16F (RGBA16F recommended).
 - Reference for LUT rounding: native `ColorMap.cpp` or the WASM `LutApply.cpp` path.
 
-## Key finding from the second pass
+## Key finding from the second pass (superseded in part — see the table above)
 
 gdb sampling attributes the worst scenario precisely: `text_animated_glow_3` (1.4 fps at 1080p,
 952 ms/frame, 1.0 core) spends ~72 % of its time in `TextGlowRenderer::paintGlowFromSilhouette`,
@@ -322,6 +353,26 @@ ask it for you) and none reads the environment for itself — the new `control` 
 
 > **Then re-measure gate R2b:** `text_animated_glow_3` ≥ 12 fps, `subtitles_words` ≥ 85 fps,
 > `text_static_4` not slower, `everything` ≥ 4 fps, golden green in all four configurations.
+>
+> **R2b met 2026-09-14** on Vulkan at 1080p: `text_animated_glow_3` **26.7–33.7**,
+> `subtitles_words` **94.6**, `everything` **7.7–8.4**, `text_static_4` not slower (its 150-frame
+> deficit is a one-off pipeline compile; at 600 frames the GPU leads 116.3 to 113.0), golden
+> 292/292 four ways. **R2b is code-complete and waits only on 2.0 below.**
+
+## Next step
+
+**Plan step 2.0 — the GPU-capable container image** (worklist item E). It is the only thing left in
+Phase 2 and the only thing stopping R2a *and* R2b from shipping: everything above runs on a
+developer machine and nowhere else, because the runtime image has no Vulkan.
+
+*Gate:* the container starts on a CPU node **and** a GPU node; `vulkaninfo --summary` shows the
+NVIDIA ICD; `ffmpeg -encoders` lists `h264_nvenc`; one export completes on each, and the CPU node
+renders **identically** (`OPENSHOT_GPU` stays `off` there — it is not a degraded mode).
+
+*It needs the owner's go-ahead first:* the work is in `../video-rendering-service` (branch `main`),
+a production repo, and verifying it needs a real GPU node. Nothing in this repo is blocked by it, so
+if that go-ahead is not coming, the next-best work is Phase 1 (CPU quick wins, all pure CPU and none
+needing a GPU node) or Phase 0's **0.6** — CI running `tools/golden.sh check` per PR.
 
 **E. 2.0 — GPU-capable image.** Still owed, and still the thing that stops any of this shipping.
 Lives in `../video-rendering-service` (branch `main`), not in this repo: CUDA/Vulkan base image,
@@ -351,6 +402,9 @@ Remaining: 1.1 single `WriteFrame` call; 1.2 thread budgets; 1.3 RGBA straight i
 
 ## Log
 
+- 2026-09-14 — session wrap-up: plan steps 2.5 / 2.6 / 2.7 annotated with what actually happened,
+  release gate R2b recorded as met, `GPU-DECISIONS.md` given the three decisions this session took.
+  Golden green, tree clean, four commits on `feature/gpu-rendering`.
 - 2026-09-14 — worklist item D (plan step 2.7) + the single GPU control. Subtitles gained a canvas
   entry point, so the whole pass follows its destination (bit-identical on GPU and raster); the
   Timeline keeps a raster canvas because a full-frame round trip is 5.6 ms at 1080p against 0.27 ms
