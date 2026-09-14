@@ -145,6 +145,14 @@ if(ENABLE_GOLDEN_TESTS)
   add_subdirectory(tests/bench)
 endif()
 add_feature_info("Golden tests" ENABLE_GOLDEN_TESTS "openshot-golden visual regression harness")
+
+# Graphite/Vulkan smoke test (plan step 2.1). Off by default: it needs a Skia
+# built by skia_build_script_gpu.sh, selected with -DSkia_ROOT=/usr/local/skia-gpu.
+option(ENABLE_GPU_SMOKE "Build the Skia Graphite/Vulkan smoke test (openshot-gpu-smoke); requires a GPU Skia prefix" OFF)
+if(ENABLE_GPU_SMOKE)
+  add_subdirectory(tests/gpu)
+endif()
+add_feature_info("GPU smoke test" ENABLE_GPU_SMOKE "openshot-gpu-smoke Graphite/Vulkan check")
 add_subdirectory(bindings)
 
 ###

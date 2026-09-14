@@ -5,7 +5,7 @@
 > `openshot-bench` against `tests/bench/results/baseline-cpu.json`, and the work plan with its
 > numeric gates is `doc/gpu-migration/GPU-RENDER-PLAN.md` section 3.
 
-Last updated: 2026-09-14 · branch `feature/gpu-rendering` (upstream merge folded in)
+Last updated: 2026-09-14 · branch `feature/gpu-rendering` (plan step 2.1 done)
 
 ## Where we are
 
@@ -84,10 +84,19 @@ and step numbers are stable identifiers, not sequence.
    `vulkan-tools`, `ENCODER=libx264|h264_nvenc` with CPU fallback.
    *Verify:* container starts on both a CPU and a GPU node; `vulkaninfo --summary` shows the NVIDIA
    ICD; one export completes on each.
-2. **2.1 `skia_build_script_gpu.sh`** — a sibling of the CPU script, never a modification of it.
-   Same pinned `SKIA_MILESTONE=m147`, separate `out/Release-GPU`, installs to `/usr/local/skia-gpu`,
-   selected with `-DSkia_ROOT=`. Record which build a binary used in `GPU-DECISIONS.md`.
-3. **2.2 `src/gpu`** — device, frame, surface pool.
+2. **2.1 `skia_build_script_gpu.sh`** — ✅ **done.** Graphite/Vulkan Skia m147 builds into
+   `out/Release-GPU` beside the untouched CPU build; `install_skia_gpu.sh` installs to
+   `/usr/local/skia-gpu`. `tests/gpu/openshot-gpu-smoke` (`-DENABLE_GPU_SMOKE=ON`, or configure
+   `tests/gpu` on its own) proves the whole path — Vulkan device → Graphite `Context` → 64x64
+   gradient → readback → PNG — on the NVIDIA A2000 and on lavapipe, byte-identical. Three
+   corrections the plan did not have, all in `GPU-DECISIONS.md`: `-DSkia_ROOT` needed a
+   `FindSkia.cmake` fix to beat pkg-config; Graphite needs a private-header memory allocator;
+   Skia m147 needs Vulkan 1.4 headers, which the installer now ships. **Not yet done:** the
+   `sudo ./install_skia_gpu.sh` into `/usr/local/skia-gpu` (verification used a scratch prefix).
+3. **2.2 `src/gpu`** — device, frame, surface pool. Next. The Vulkan bootstrap in
+   `tests/gpu/skia_gpu_smoke.cpp` is throwaway scaffolding, not the shape of `GpuDevice`, but it is
+   a working reference for instance/device/queue/extension/feature setup and the Graphite teardown
+   order (the async read result must die before the context that owns its pixels).
 4. **2.3 Glow pass on the GPU** — the actual prize. `TextGlowRenderer` allocates its silhouette,
    ray-march and bloom surfaces from the pool; the SkSL is already written.
 
@@ -110,6 +119,9 @@ Remaining: 1.1 single `WriteFrame` call; 1.2 thread budgets; 1.3 RGBA straight i
   x264 loss, not a matrix bug.
 
 ## Log
+
+- 2026-09-14 — plan step 2.1: `skia_build_script_gpu.sh` + `install_skia_gpu.sh`, `tests/gpu`
+  smoke test, `FindSkia.cmake` honours `Skia_ROOT`. Golden green before and after.
 
 - 2026-09-10 — analysis, plan, golden suite; first commit on `feature/gpu-rendering`.
 - 2026-09-10 — CLAUDE.md + doc/gpu-migration/STATUS.md; plan section 4 (sizing for N parallel exports).

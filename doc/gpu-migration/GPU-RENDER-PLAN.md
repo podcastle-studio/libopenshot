@@ -463,13 +463,24 @@ sibling at the root:
   to hunt for.
 
 CMake selects the build with `-DSkia_ROOT=/usr/local/skia-gpu` (CMP0074 makes `find_path`/
-`find_library` honour it); no `find_package` change is needed. Record which prefix a given build
-used in `doc/gpu-migration/GPU-DECISIONS.md`, and keep both scripts listed in `CLAUDE.md`.
+`find_library` honour it). ~~no `find_package` change is needed~~ — **wrong, corrected 2026-09-14:**
+`FindSkia.cmake` prefers pkg-config, which knows nothing about `Skia_ROOT`, so the CPU `skia.pc` in
+`/usr/local` won the include directory while `find_library` returned the GPU archive. It now ignores
+pkg-config when a root is given. Record which prefix a given build used in
+`doc/gpu-migration/GPU-DECISIONS.md`, and keep both scripts listed in `CLAUDE.md`.
 
-*Verify:* both scripts produce a `libskia.a`; a 30-line test links against the GPU one, creates a
-Vulkan device and a Graphite `Context`, draws a gradient into a 64×64 `SkSurface`, reads it back and
-saves a PNG — on the dev laptop and, with `VK_ICD_FILENAMES` pointing at lavapipe, on a machine with
-no GPU; a build configured with the CPU prefix still passes `tools/golden.sh check`.
+Two more things the installer must ship, found while doing this (details in `GPU-DECISIONS.md`):
+Skia's own Vulkan **1.4** headers, because m147's `VulkanPreferredFeatures.h` will not compile
+against Ubuntu 24.04's 1.3.275 `libvulkan-dev` — step 2.0's image must use these too — and
+`GpuTypesPriv.h` + `VulkanMemoryAllocatorPriv.h`, because Graphite makes the caller supply a
+`VulkanMemoryAllocator` and Skia's VMA-backed one has no public factory.
+
+*Verify:* ✅ both scripts produce a `libskia.a`; `tests/gpu/skia_gpu_smoke.cpp` links against the GPU
+one, creates a Vulkan device and a Graphite `Context`, draws a gradient into a 64×64 `SkSurface`,
+reads it back and saves a PNG — on the dev laptop and, with `VK_DRIVER_FILES` (the modern spelling of
+`VK_ICD_FILENAMES`) pointing at lavapipe, on the software path; a build configured with the CPU
+prefix still passes `tools/golden.sh check`. It came out at ~350 lines rather than 30 — the Vulkan
+instance/device/extension/feature bootstrap is most of it, and step 2.2 absorbs that into `GpuDevice`.
 *Flag:* the prefix itself — reconfiguring with the CPU `Skia_ROOT` reverts the whole phase.
 *Risk:* GN argument drift between the two scripts silently changing text rendering; keep the shared
 args identical and diff the two files in review.

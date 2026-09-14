@@ -10,35 +10,60 @@ if(PKG_CONFIG_FOUND)
     pkg_check_modules(PC_SKIA QUIET skia)
 endif()
 
+# -DSkia_ROOT (or SKIA_ROOT, or either in the environment) selects which Skia
+# prefix to use; CMP0074 makes find_path/find_library search it first. pkg-config
+# knows nothing about that root, so a skia.pc left in /usr/local by the CPU build
+# would hand back the CPU headers while find_library below returns the GPU static
+# library — a silent mismatch between headers compiled without SK_GRAPHITE and a
+# library built with it. When a root is given, pkg-config does not get a say.
+if(Skia_ROOT OR SKIA_ROOT OR DEFINED ENV{Skia_ROOT} OR DEFINED ENV{SKIA_ROOT})
+    set(_skia_root_given TRUE)
+else()
+    set(_skia_root_given FALSE)
+endif()
+
 # Find include directory
 # First try to use pkg-config result if available
-if(PC_SKIA_FOUND AND PC_SKIA_INCLUDE_DIRS)
+if(PC_SKIA_FOUND AND PC_SKIA_INCLUDE_DIRS AND NOT _skia_root_given)
     set(SKIA_INCLUDE_DIR ${PC_SKIA_INCLUDE_DIRS})
     message(STATUS "Using Skia include from pkg-config: ${SKIA_INCLUDE_DIR}")
 else()
     # Fallback to manual search
     # Skia headers use paths like "include/core/SkCanvas.h"
     # So we need to find the parent directory of "include"
-    find_path(SKIA_INCLUDE_DIR
-            NAMES include/core/SkCanvas.h
-            PATHS
-            /usr/local/include/skia
-            /usr/include/skia
-            /opt/skia
-            PATH_SUFFIXES skia
-    )
+    if(_skia_root_given)
+        # Only the selected root; NO_DEFAULT_PATH would also drop the root itself,
+        # so instead we simply give no system PATHS to fall back to.
+        find_path(SKIA_INCLUDE_DIR
+                NAMES include/core/SkCanvas.h
+                PATH_SUFFIXES skia include/skia
+        )
+    else()
+        find_path(SKIA_INCLUDE_DIR
+                NAMES include/core/SkCanvas.h
+                PATHS
+                /usr/local/include/skia
+                /usr/include/skia
+                /opt/skia
+                PATH_SUFFIXES skia
+        )
+    endif()
 endif()
 
 # Find library
-find_library(SKIA_LIBRARY
-        NAMES skia
-        PATHS
-        ${PC_SKIA_LIBRARY_DIRS}
-        /usr/local/lib
-        /usr/lib
-        /usr/lib/x86_64-linux-gnu
-        /opt/skia/lib
-)
+if(_skia_root_given)
+    find_library(SKIA_LIBRARY NAMES skia)
+else()
+    find_library(SKIA_LIBRARY
+            NAMES skia
+            PATHS
+            ${PC_SKIA_LIBRARY_DIRS}
+            /usr/local/lib
+            /usr/lib
+            /usr/lib/x86_64-linux-gnu
+            /opt/skia/lib
+    )
+endif()
 
 # Find required dependencies
 find_package(Freetype REQUIRED)

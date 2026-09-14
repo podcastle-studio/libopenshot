@@ -84,7 +84,7 @@ Skia is built out of tree by a script at the repository root and installed as a 
 | script | backend | output | installs to |
 |---|---|---|---|
 | `skia_build_script.sh` | CPU raster only (all GPU backends off) | `~/skia-stable/out/Release-CPU/libskia.a` | `/usr/local` via the `install_skia.sh` it emits |
-| `skia_build_script_gpu.sh` *(added in plan step 2.1)* | Graphite + Vulkan | `~/skia-stable/out/Release-GPU/libskia.a` | `/usr/local/skia-gpu` via `install_skia_gpu.sh` |
+| `skia_build_script_gpu.sh` | Graphite + Vulkan | `~/skia-stable/out/Release-GPU/libskia.a` | `/usr/local/skia-gpu` via `install_skia_gpu.sh` |
 
 Rules: **never edit `skia_build_script.sh` to add GPU support** — the CPU build must stay
 reproducible as the no-GPU fallback. The two scripts share everything except the output directory,
@@ -92,6 +92,40 @@ the GPU GN args and the install prefix; keep the rest byte-identical so text ren
 drift. Both pin `SKIA_MILESTONE=m147` to match the front end's CanvasKit. Select a build at
 configure time with `-DSkia_ROOT=/usr/local/skia-gpu` (or leave it unset for the CPU one) and record
 which one a build used in `doc/gpu-migration/GPU-DECISIONS.md`.
+
+The GPU script differs from the CPU one in four ways only, and nothing else may diverge: output
+directory, the GPU GN args, the install prefix, and that it **reuses** `~/skia-stable/skia` instead
+of wiping it — both builds share one checkout (`out/Release-CPU` and `out/Release-GPU`), so a wipe
+would destroy the CPU fallback. `SKIA_FORCE_CLONE=1` opts back into the wipe;
+`SKIA_ENABLE_GANESH=true` adds the Ganesh Vulkan backend beside Graphite.
+
+`install_skia_gpu.sh` installs three things beyond the CPU installer's library + `include/`, all of
+them load-bearing:
+
+- `modules/skcms` — `SkRuntimeEffect` (the text glow) includes `modules/skcms/skcms.h`, which in
+  turn includes `src/skcms_public.h` relative to itself, so the whole module directory has to land
+  under the same include root. Without it `FindSkia.cmake` hunts for a Skia source tree.
+- `src/gpu/GpuTypesPriv.h` and `src/gpu/vk/vulkanmemoryallocator/VulkanMemoryAllocatorPriv.h` —
+  Graphite makes the caller supply a `VulkanMemoryAllocator` and Skia's VMA-backed one is reachable
+  only through `skgpu::VulkanMemoryAllocators::Make`, declared in a private header. Both headers are
+  self-contained and are installed at their source-tree paths so their relative includes resolve.
+- `include/skia-vulkan/` — Skia m147's `include/gpu/vk/VulkanPreferredFeatures.h` uses Vulkan **1.4**
+  types; Ubuntu 24.04's `libvulkan-dev` is 1.3.275, so the system headers do not compile against it.
+  Consumers must put this directory **ahead of** `/usr/include` (see `tests/gpu/CMakeLists.txt`,
+  which links the loader by path rather than through `Vulkan::Vulkan` for exactly this reason).
+
+`cmake/Modules/FindSkia.cmake` prefers pkg-config, which knows nothing about `Skia_ROOT`; when a
+root is given it is now ignored, or `-DSkia_ROOT` would pick the GPU library and the CPU headers.
+
+Check a GPU prefix with the smoke test (Vulkan device → Graphite `Context` → 64x64 gradient →
+readback → PNG, and it checks the channel order):
+
+```bash
+cmake -S tests/gpu -B cmake-build-gpu-smoke -DSkia_ROOT=/usr/local/skia-gpu
+cmake --build cmake-build-gpu-smoke && cmake-build-gpu-smoke/openshot-gpu-smoke out.png
+VK_DRIVER_FILES=/usr/share/vulkan/icd.d/lvp_icd.json cmake-build-gpu-smoke/openshot-gpu-smoke sw.png  # no-GPU path
+```
+Inside the main tree the same target is `-DENABLE_GPU_SMOKE=ON` (off by default).
 
 ## Facts that are easy to get wrong
 

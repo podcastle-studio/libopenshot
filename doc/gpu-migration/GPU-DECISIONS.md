@@ -65,6 +65,49 @@ numbers are stable identifiers, not sequence, so existing references stay valid.
 *Revisit if:* the GPU node pool turns out to be unavailable, in which case R1 is the only work that
 can proceed.
 
+**2026-09-14 · GPU Skia: Graphite over Vulkan, Ganesh off, prefix `/usr/local/skia-gpu`.**
+Plan step 2.1 is done. `skia_build_script_gpu.sh` builds chrome/m147 into
+`~/skia-stable/skia/out/Release-GPU` (31 MB, 3,146 Graphite symbols; the CPU `out/Release-CPU` is
+untouched at 26 MB) with `skia_enable_graphite = true`, `skia_use_vulkan = true`,
+`skia_enable_ganesh = false`; `skia_use_vma` follows `skia_use_vulkan` by default so it is not named.
+Every other GN arg is byte-identical to the CPU script — the shared 54-line block diffs clean, which
+is the check to repeat whenever either script changes. `SKIA_ENABLE_GANESH=true` builds Ganesh
+alongside, which is how the still-open "Graphite only, or Ganesh as a fallback" question gets
+answered without editing the script.
+
+Verified on this laptop against a scratch prefix (the `/usr/local/skia-gpu` install itself needs
+`sudo cd ~/skia-stable/skia && ./install_skia_gpu.sh` and has not been run yet):
+`tests/gpu/openshot-gpu-smoke` brings up a Vulkan 1.3 device, a Graphite
+`Context`, draws a 64x64 red→blue gradient into a `kRGBA_8888` `SkSurface`, reads it back and writes
+a PNG — on the NVIDIA RTX A2000 and, with `VK_DRIVER_FILES=.../lvp_icd.json`, on lavapipe. Both
+produce byte-identical PNGs, and the left/right pixels (`fff90006` / `ff0600f9`) confirm the channel
+order that step 2.3 depends on. The CPU-prefix build still passes `tools/golden.sh check`
+(95 scenarios, 292 frames, 0 failures).
+
+Three things the plan did not anticipate, all now handled:
+
+1. **`-DSkia_ROOT` did not actually select a build.** `FindSkia.cmake` prefers pkg-config, and the
+   CPU `skia.pc` in `/usr/local` is on the default path, so a GPU-root configure took the GPU
+   *library* and the CPU *headers* — a silent mismatch between headers compiled without
+   `SK_GRAPHITE` and a library built with it. Fixed: when a root is given, pkg-config is ignored and
+   the system fallback paths are dropped. The plan's "no `find_package` change is needed" was wrong.
+2. **Graphite requires a caller-supplied `VulkanMemoryAllocator`**, and Skia's VMA-backed one is
+   declared only in `src/gpu/vk/vulkanmemoryallocator/VulkanMemoryAllocatorPriv.h` ("we cannot really
+   expose this to clients in a meaningful way"). The symbol is in `libskia.a`. The installer ships
+   that header and `src/gpu/GpuTypesPriv.h` at their source-tree paths rather than having every
+   caller hand-redeclare a private symbol. This is a private-API dependency to re-check at every
+   milestone bump; the alternative is writing our own allocator.
+3. **Skia m147 needs Vulkan 1.4 headers** (`VkPhysicalDeviceVulkan14Features`,
+   `VkPhysicalDeviceHostImageCopyFeatures`, `VkPhysicalDeviceDynamicRenderingLocalReadFeatures` in
+   `VulkanPreferredFeatures.h`); Ubuntu 24.04's `libvulkan-dev` is 1.3.275. The installer ships the
+   headers Skia was built against (1.4.345) as `<prefix>/include/skia-vulkan`, C headers only —
+   1.5 MB of the 21 MB, skipping the C++ bindings. Consumers must put it **ahead of** `/usr/include`
+   and link the loader by path, not through `Vulkan::Vulkan`, whose interface drags `/usr/include` in.
+   Step 2.0's Docker image needs the same, so do not rely on the distro's `libvulkan-dev` headers.
+
+*Revisit if:* the milestone moves off m147, or Skia exposes a public memory-allocator factory.
+
+
 ## Open — decide before plan phase 4
 
 - **Timeline canvas precision.** `kRGBA_8888` (matches today) or `kRGBA_F16` (better blending and
