@@ -160,10 +160,18 @@ can produce that collision, it is worth fixing there rather than relying on sort
 
 ## Still owed
 
-1. **Re-run the performance comparison on a quiet machine.** Measurements taken at the end of this
-   session are not trustworthy: the CPU was at 400 MHz and `single_video` 1080p render varied
-   74–87 fps across three consecutive runs. A full `openshot-bench` run against
-   `tests/bench/results/baseline-cpu.json` is required before this merge is called done.
+1. **Re-run the full benchmark on a quiet machine.** The merge itself is **performance-neutral**:
+   an interleaved A/B against a pre-merge build of the same tree, run back to back under identical
+   conditions, gives `single_video` 1080p render 69.5–72.5 fps before vs 70.6–72.4 after, and
+   `podcast_pip` 12.6–13.1 before vs 12.7–13.4 after. What is *not* available is an absolute number:
+   this machine was thermally throttled (CPU at 400 MHz) and **both** builds measured ~40 % below
+   `baseline-cpu.json`, so a full `openshot-bench` run plus `compare` is still required before the
+   R1 gate. Do not read the throttled absolutes as a regression — the A/B is the valid comparison.
+
+   *Method worth reusing:* `git worktree add` the pre-merge commit, build `openshot-bench` there
+   (needs `-DSKIA_SOURCE_DIR=$HOME/skia-stable/skia` or the skcms header is not found), point it at
+   the main tree's media with `--media` / `--bench-media`, and alternate the two binaries. Comparing
+   a fresh measurement against a recorded baseline is worthless on a thermally unstable machine.
 2. **Prove libopenshot-audio 0.6.0 at runtime**, or install 1.0.0 and restore upstream's
    requirement. It compiles and links today; audio was not exercised beyond the golden suite's
    silent-audio smoke test.

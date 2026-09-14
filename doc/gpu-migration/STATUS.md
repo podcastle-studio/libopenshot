@@ -55,10 +55,12 @@ new algorithm — hence the new **R2a** stop (Skia Vulkan build + glow surfaces 
 
 ## Blocking before the merge branch lands
 
-1. **Performance is not validated.** The A/B was attempted on a thermally throttled machine (CPU at
-   400 MHz, `single_video` 1080p render varying 74–87 fps across three consecutive runs). Re-run
-   `openshot-bench` on a quiet machine and `compare` against `baseline-cpu.json` before merging
-   `merge/upstream-develop` into `develop`. Gate: no scenario more than 5 % slower.
+1. **Full benchmark still owed, but the merge is performance-neutral.** An interleaved A/B against
+   a pre-merge build (both run back to back, same conditions) shows no difference:
+   `single_video` 1080p render 69.5–72.5 fps before vs 70.6–72.4 after; `podcast_pip` 12.6–13.1 vs
+   12.7–13.4. Absolute numbers are unusable — the machine was throttled to 400 MHz and *both*
+   builds landed ~40 % under `baseline-cpu.json`. Re-run the full `openshot-bench` + `compare` on a
+   quiet machine before merging into `develop`. Gate: no scenario more than 5 % slower.
 2. **`compositing.layer_order` was re-baselined.** Clip sort order is now insertion-stable rather
    than address-tie-broken (see `doc/gpu-migration/GPU-DECISIONS.md`). A clip sharing a layer *and*
    position with another now draws on top if it was added later; previously it could be hidden, and
