@@ -511,16 +511,28 @@ the golden text scenarios are the guard.
 > `nvidia.com/gpu: 1` and `NVIDIA_DRIVER_CAPABILITIES=compute,utility,video,graphics`. Keep
 > `OPENSHOT_GPU=off` on CPU nodes so the same image still runs there.
 
-**2.4 Whole text engine on GPU surfaces.** Every remaining `SkSurfaces::Raster` in
-`TextClipRenderer`, `TextAnimationRenderer` and `TextClipReader::renderToQImage` comes from the pool;
-the reader returns a `GpuFrame` with one readback at the boundary instead of `image->copy()`.
-*Verify:* `--scenario text_static_4` no worse than baseline; `--scenario text_animated_glow_3` ≥
-**8 fps**; golden text scenarios green.
+**2.4 Whole text engine on GPU surfaces.** ✅ **done 2026-09-14** (commit `fae61407`), except the
+fps gate. Every remaining `SkSurfaces::Raster` in `TextClipRenderer`, `TextAnimationRenderer` and
+`TextClipReader::renderToQImage` comes from the pool *when the destination canvas is GPU-backed*,
+via `GpuOffscreen::Match`; the reader reads back once at the boundary and skips `image->copy()` for
+per-frame renders.
+*Verify:* `--scenario text_static_4` no worse than baseline — met (135.5 → 133.1 fps over 600
+frames; the 150-frame bench shows a one-off Graphite pipeline compile); golden text scenarios green
+— met, 292/292 in all four configurations with no re-baseline; `--scenario text_animated_glow_3` ≥
+**8 fps** — **not met, 4.5 → 6.4**, blocked by an unrelated frame-sizing defect
+(`computeAnimatedExtent` bounds a perspective matrix with `SkMatrix::mapRect`, giving one clip a
+164 MB buffer). Fixing that is worklist item **A** in `STATUS.md` and takes the same build to
+34.7 fps.
 
-**2.5 Delete the CPU-blur workaround.** The σ > 120 downscale branch in `TextClipRenderer` exists
-only because Skia's CPU mask blur clamps at 128 px; the GPU has no such clamp.
-*Verify:* a 4K text shadow matches the 1080p shadow scaled up (SSIM ≥ 0.97); `text_static_4` at
-2160p ≥ **15 fps** (11.8).
+**2.5 ~~Delete~~ Skip the CPU-blur workaround on GPU surfaces.** ~~The σ > 120 downscale branch in
+`TextClipRenderer` exists only because Skia's CPU mask blur clamps at 128 px; the GPU has no such
+clamp.~~ **Corrected 2026-09-14:** deleting it would break the path that actually ships. The clamp
+is in Skia's *CPU* mask blur, so the branch is load-bearing whenever the GPU is off — which is
+every production render today. Keep it, and take it only when the offscreen is raster
+(`GpuOffscreen::onGpu()`); on a GPU surface draw the true sigma directly. See the standing
+constraint in `STATUS.md` and `GPU-DECISIONS.md`.
+*Verify:* a 4K text shadow on the GPU matches the 1080p shadow scaled up (SSIM ≥ 0.97);
+`text_static_4` at 2160p ≥ **15 fps** (11.8); CPU-path goldens bit-identical.
 
 **2.6 Long-lived `SkiaRenderer` and cross-frame caches.** One renderer per reader instead of one per
 frame, so the font and paint caches survive; cache the glow silhouette and the 3D block bake as GPU

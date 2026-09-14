@@ -130,6 +130,13 @@ Inside the main tree the same target is `-DENABLE_GPU_SMOKE=ON` (off by default)
 
 ### GPU rendering (`src/gpu`)
 
+**The CPU path ships; the GPU path is a configurable addition.** Production runs CPU-only today
+and a no-GPU machine is a supported configuration, so no change may make the CPU path slower, worse
+looking, or dependent on a GPU. Never delete CPU code because the GPU makes it unnecessary — gate
+it on `GpuOffscreen::onGpu()` / `GpuDevice::available()` and keep the CPU branch. Every change is
+accepted on the four-way golden sweep below (CPU Skia; GPU Skia with the GPU off; GPU Skia on
+Vulkan; GPU Skia on lavapipe), all four at 292/292.
+
 Off unless `OPENSHOT_GPU` says otherwise — `off` (default), `vulkan`, or `lavapipe` (Mesa's software
 rasteriser, for machines with no GPU and for checking a result is not vendor-specific). Everything
 goes through `GpuDevice::Instance().available()`, and `false` is a normal answer: fall back to

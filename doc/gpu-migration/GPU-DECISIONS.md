@@ -5,6 +5,23 @@ what would have to change for it to be revisited. Referenced from `doc/gpu-migra
 
 ## Taken
 
+### The CPU path ships; the GPU path is a configurable addition (2026-09-14, project owner)
+
+Not a trade-off to re-open. The runtime image has no GPU, so the CPU path is what production runs
+and what any no-GPU machine falls back to; it stays fully working at full quality. The GPU path is
+opt-in — `OPENSHOT_GPU=off|vulkan|lavapipe`, plus which Skia the build was configured against —
+and `GpuDevice::available() == false` is a normal answer.
+
+The consequence that bites: **CPU code is never deleted because the GPU does not need it.** It is
+gated instead, with the CPU branch kept. Plan step 2.5 as written ("delete the CPU-blur
+workaround") would have removed the σ > 120 downscale that exists precisely because Skia's *CPU*
+mask blur clamps at 128 px, breaking high-resolution shadows on the path that actually ships; it is
+rewritten to skip that branch only when the offscreen is GPU-backed. Read the rest of the plan the
+same way.
+
+Acceptance for every change is the four-way golden sweep — CPU Skia, GPU Skia with the GPU off,
+GPU Skia on Vulkan, GPU Skia on lavapipe — all four at 292/292.
+
 **2026-09-10 · Branch off the fork, not upstream.** `feature/gpu-rendering` starts from the fork's
 `develop`. Upstream OpenShot 1.0.0 is 336 commits ahead and has a fixed hardware-decode path, but
 lacks the text engine, subtitles, blend modes and transitions the service depends on. Merging

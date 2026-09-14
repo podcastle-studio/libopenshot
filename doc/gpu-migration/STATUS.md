@@ -4,8 +4,30 @@
 > green (`tools/golden.sh check`) before and after every change, performance is tracked with
 > `openshot-bench` against `tests/bench/results/baseline-cpu.json`, and the work plan with its
 > numeric gates is `doc/gpu-migration/GPU-RENDER-PLAN.md` section 3.
+> **Read the standing constraint below before planning any step.**
 
-Last updated: 2026-09-14 · branch `feature/gpu-rendering` (**R2a complete** — steps 2.1, 2.2, 2.3 done; 2.0 still owed. **R2b started**: 2.4 done bar its gate)
+## Standing constraint — the CPU path ships, the GPU path is an addition
+
+Stated by the project owner, 2026-09-14. This overrides anything in
+`GPU-RENDER-PLAN.md` that reads otherwise, and every remaining step is judged against it:
+
+1. **The CPU path stays fully working, at full quality, forever.** It is the path production runs
+   today (the runtime image has no GPU) and the path a no-GPU machine falls back to. A step is not
+   done if it makes the CPU path slower, worse-looking, or dependent on a GPU being present.
+2. **The GPU path is a configurable addition**, off by default, selected by `OPENSHOT_GPU`
+   (`off` | `vulkan` | `lavapipe`) and by which Skia the build was configured against
+   (`-DSkia_ROOT=/usr/local/skia-gpu`). `GpuDevice::available() == false` is a normal answer, not
+   an error.
+3. **Never delete CPU code because the GPU does not need it.** Gate it instead: keep the CPU branch
+   and skip it when a GPU surface is in use. This directly rewrites plan step 2.5 — see the
+   worklist below.
+4. **Both configurations are validated on every change.** The four-way golden sweep (CPU Skia;
+   GPU Skia with the GPU off; GPU Skia on Vulkan; GPU Skia on lavapipe) is the acceptance test,
+   and all four must be 292/292. Commands are in `CLAUDE.md` under "GPU rendering (`src/gpu`)".
+
+Last updated: 2026-09-14 · branch `feature/gpu-rendering`, working tree clean at `fae61407`.
+**R2a complete** (2.1, 2.2, 2.3); **2.4 done bar its gate**; **2.0 still owed**.
+Next: the Phase 2 worklist below, item **A** first.
 
 ## Where we are
 
@@ -41,7 +63,6 @@ support, opt-in Qt6, thread-budget settings that overlap step 1.2, and ~15 crash
 
 ## Open decisions (record in `doc/gpu-migration/GPU-DECISIONS.md` when taken)
 
-- Base branch: stay on the fork (recommended) or merge upstream 1.0.0 first (plan step 0.1).
 - Timeline canvas precision for the GPU compositor: RGBA8 or RGBA16F (RGBA16F recommended).
 - Reference for LUT rounding: native `ColorMap.cpp` or the WASM `LutApply.cpp` path.
 
@@ -73,11 +94,11 @@ new algorithm — hence the new **R2a** stop (Skia Vulkan build + glow surfaces 
    part is only that audio behaviour is thinly covered by the suite (one smoke test), which the
    merge does not change.
 
-## Next step
+## Phase 2 so far
 
-**Phase 2 (R2a) — Skia on the GPU, glow pass first.** The plan was reordered on 2026-09-14 so
-Phase 2 runs before Phase 1; see `doc/gpu-migration/GPU-RENDER-PLAN.md` section 3.1 for why. Phase
-and step numbers are stable identifiers, not sequence.
+The plan was reordered on 2026-09-14 so Phase 2 runs before Phase 1; see
+`doc/gpu-migration/GPU-RENDER-PLAN.md` section 3.1 for why. Phase and step numbers are stable
+identifiers, not sequence. **What is still to do is the worklist further down, not this list.**
 
 1. **2.0 GPU-capable image** — ⏳ **the only thing left in R2a, and now the blocker for shipping
    it.** (Was step 1.7, moved because Skia Vulkan cannot ship without it.)
@@ -139,18 +160,60 @@ and step numbers are stable identifiers, not sequence.
 > what it needs is a correct bound on the perspective mapping, which is its own change with its own
 > re-baseline risk, not part of 2.4.
 
-**Decide next**, in this order:
+## Phase 2 worklist — what a resuming session picks up
 
-- **The animated-extent bound** (see the 2.4 gate above). It is the single largest win measured so
-  far on the worst scenario — 5.5x, and 3.4x less memory — it is a pre-existing correctness-adjacent
-  defect rather than GPU work, and it costs the raster path just as much as the GPU one. It needs a
-  real fix (bound the perspective mapping, e.g. clip to the near plane before `mapRect`) plus a look
-  at every animation golden, since under-sizing clips the animation and over-sizing is what we have
-  now. Not yet a numbered plan step.
-- **2.5 delete the CPU-blur workaround**, which 2.4 deliberately left in place (`TextClipRenderer`
-  still carries the σ > 120 downscale branch, now merely running on a GPU offscreen).
-- **2.6 long-lived `SkiaRenderer`** and **2.7 subtitles**, then re-measure gate R2b.
-- **2.0 GPU-capable image**, still owed, and still the thing that stops any of this shipping.
+Do these in order. Each one ends with the four-way golden sweep green at 292/292 and, where it
+claims a speed-up, a back-to-back `openshot-bench` measurement on one machine. Nothing here may
+regress the CPU path (see the standing constraint at the top).
+
+**A. Bound the animated frame extent.** *Not a numbered plan step; do it first.* The largest
+measured win available and a **pure CPU-path win** — it costs the raster path exactly as much as
+the GPU one. `computeAnimatedExtent` (`src/text/TextAnimationRenderer.cpp`) bounds each sampled
+animation matrix with `SkMatrix::mapRect`, which blows up as a perspective corner approaches the
+vanishing point; `TextClipReader` then sizes one `text_animated_glow_3` clip's buffer at
+2536 × 16969 = 164 MB for 920 × 101 of content, and allocates, clears and reads it back every
+frame. The same `mapRect` pattern is in `TextClipReader`'s own tilt branch and should be fixed with
+it. *Approach:* bound the mapping properly — clip the box against the near plane before mapping, or
+map the four corners and reject/clamp any with a non-positive `w` — rather than clamping the
+result, which is what the throwaway probe did. *Verify:* every `text.*` and `subtitles.*` golden
+reviewed by eye (under-sizing clips the animation, which the suite will show as missing pixels at
+the frame edge); `text_animated_glow_3` ≥ 8 fps, which also clears **gate 2.4**; RSS down from
+2.29 GB. Probe measured 6.3 → 34.7 fps and 2.29 → 0.68 GB.
+
+**B. 2.5 — skip the CPU-blur workaround on GPU surfaces.** *Rewritten by the standing constraint:
+the plan says "delete", which would break the CPU path.* The σ > 120 downscale branch in
+`TextClipRenderer::renderShadowLayer` exists because Skia's CPU mask blur clamps sigma at 128 px;
+the GPU has no such clamp. **Keep the branch** and take it only when the offscreen is raster
+(`GpuOffscreen::onGpu()` already answers this), so the GPU draws the true sigma directly and the
+CPU keeps its downscale reconstruction. *Verify:* a 4K text shadow on GPU matches the 1080p shadow
+scaled up (SSIM ≥ 0.97); `text_static_4` at 2160p ≥ 15 fps (11.8); CPU-path goldens **bit-identical**,
+GPU-path text goldens reviewed if they move.
+
+**C. 2.6 — long-lived `SkiaRenderer` and cross-frame caches.** One renderer per reader instead of
+one per frame, so the font and paint caches survive; cache the glow silhouette and the 3D block
+bake, keyed by the plan hash, the animation-independent style **and** `GpuDevice::Generation()`
+(see `CLAUDE.md` — a GPU object cached across a device teardown crashes in the driver). Helps both
+paths. *Verify:* `text_animated_glow_3` ≥ 12 fps; text goldens unchanged.
+
+**D. 2.7 — subtitles on GPU surfaces.** `SubtitleManager::renderAtFrame` draws into a
+`GpuOffscreen`; cache the per-word `buildCharRenderInfo` work per segment (a CPU-path win too).
+*Verify:* `subtitles_words` ≥ 85 fps (56 CPU baseline; already 108.8 with the GPU on after 2.4, so
+the real target here is the CPU number and the caching); `tools/golden.sh check --filter subtitles`
+green.
+
+> **Then re-measure gate R2b:** `text_animated_glow_3` ≥ 12 fps, `subtitles_words` ≥ 85 fps,
+> `text_static_4` not slower, `everything` ≥ 4 fps, golden green in all four configurations.
+
+**E. 2.0 — GPU-capable image.** Still owed, and still the thing that stops any of this shipping.
+Lives in `../video-rendering-service` (branch `main`), not in this repo: CUDA/Vulkan base image,
+`graphics` in `NVIDIA_DRIVER_CAPABILITIES`, `libvulkan1` + `vulkan-tools`, drop Google Chrome
+(`Dockerfile` lines 86–89, ~130 MB), `ENCODER=libx264|h264_nvenc` with CPU fallback, pin the digest.
+It must also ship Skia's Vulkan 1.4 headers (see `CLAUDE.md`). *Verify:* the container starts on a
+CPU node **and** a GPU node; `ffmpeg -encoders` lists `h264_nvenc`; `vulkaninfo --summary` shows the
+NVIDIA ICD; one export completes on each. Per the standing constraint the CPU node is not a
+degraded mode — `OPENSHOT_GPU` stays `off` there and the same image must render identically.
+*Needs the owner's go-ahead:* it changes the production service repo and needs a real GPU node to
+verify.
 
 Still open from Phase 0, not blocking Phase 2: **0.5** the six-payload production corpus and
 **0.6** CI running `tools/golden.sh check` per PR.
