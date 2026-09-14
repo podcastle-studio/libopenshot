@@ -108,6 +108,48 @@ Three things the plan did not anticipate, all now handled:
 *Revisit if:* the milestone moves off m147, or Skia exposes a public memory-allocator factory.
 
 
+**2026-09-14 · `src/gpu` is one device, one context, recorders and pools owned by the device.**
+Plan step 2.2. `GpuDevice` is a singleton holding the Vulkan instance/physical device/device/queue
+and the single Graphite `Context`; `GpuSurfacePool` is thread-local and recycles render targets;
+`GpuFrame` borrows one for its lifetime and adds `upload()`/`readback()`. Off unless `OPENSHOT_GPU`
+is `vulkan` or `lavapipe` — verified, not assumed: the checks assert that an unset variable leaves
+the device unavailable on a machine with a working GPU. The adapter index comes from
+`Settings::HW_EN_DEVICE_SET`, the same knob `FFmpegWriter` uses for the encode adapter, so a
+two-GPU machine sends render and encode to one card by default.
+
+**`GpuDevice` is pimpl'd, and that is not a style choice.** `src/CMakeLists.txt` installs every
+`src/**/*.h`, so a consumer compiles against these headers with no idea which Skia the library was
+built with. If `OPENSHOT_HAVE_SKIA_GPU` changed the class layout, a service built against the
+installed headers would disagree with the library about object size. The pimpl and the
+forward-declared `skgpu::graphite::Context`/`Recorder` keep one layout for both builds; with the CPU
+Skia the same class compiles to a stub whose `available()` is always false.
+
+**Ownership, learned the hard way (two crashes, both caught by the checks):**
+*Nothing that Graphite hands out may outlive the `Context`.* Two things wanted to:
+
+1. Pooled surfaces. `DestroyInstance()` now empties every registered pool *before* resetting the
+   context — pools are thread-local, so they register themselves in a global list for exactly this.
+2. `Recorder`s. The first version kept one in a `thread_local unique_ptr`, which survives the device
+   and is destroyed later against a freed context — a segfault in
+   `VulkanResourceProvider::~VulkanResourceProvider` under the NVIDIA driver. The device now owns
+   the recorders in a map keyed by thread id and clears them first in `teardown()`; the
+   `thread_local` is only a lookup cache, keyed on `GpuDevice::Generation()` so it cannot go stale.
+
+`Generation()` is bumped on every teardown and is the general mechanism: anything caching a GPU
+object across calls records it and drops the cache when it moves.
+
+*Verified* (`tests/gpu/openshot-gpu-checks`, on the RTX A2000 and on lavapipe): 200 device
+create/destroy cycles with VRAM flat at 11 MiB; 1000 random 64x64 RGBA upload→readback round trips
+bit-identical; the pool returns the same allocation for a repeat size and a new one for a different
+size; and the pool survives a device restart. Both `tools/golden.sh check` runs — CPU Skia and GPU
+Skia — are green at 292/292, so swapping the Skia build does not move a single pixel of raster
+output, which is what the byte-identical GN args were for.
+
+*Revisit if:* rendering ever needs more than one Graphite context, or device teardown has to work
+while other threads are rendering (today it does not, and both `DestroyInstance()` and
+`DiscardAllPools()` say so).
+
+
 ## Open — decide before plan phase 4
 
 - **Timeline canvas precision.** `kRGBA_8888` (matches today) or `kRGBA_F16` (better blending and

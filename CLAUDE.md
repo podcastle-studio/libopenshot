@@ -33,6 +33,7 @@ Other project commands: `/check` (golden suite + visual diff), `/bench` (perform
 | path | what |
 |---|---|
 | `src/` | the library. Upstream OpenShot plus this fork's additions |
+| `src/gpu/` | **fork**: Vulkan device + Skia Graphite context, surface pool, GPU frame (off unless `OPENSHOT_GPU` is set) |
 | `src/text/` | **fork**: Skia text engine (layout, animation, glow, 3D tilt, curved text) |
 | `src/subtitle/` | **fork**: Skia subtitle renderer driven by JSON |
 | `src/effects/` | effect classes; the ones the service uses are listed in plan section 2.4 |
@@ -126,6 +127,32 @@ cmake --build cmake-build-gpu-smoke && cmake-build-gpu-smoke/openshot-gpu-smoke 
 VK_DRIVER_FILES=/usr/share/vulkan/icd.d/lvp_icd.json cmake-build-gpu-smoke/openshot-gpu-smoke sw.png  # no-GPU path
 ```
 Inside the main tree the same target is `-DENABLE_GPU_SMOKE=ON` (off by default).
+
+### GPU rendering (`src/gpu`)
+
+Off unless `OPENSHOT_GPU` says otherwise — `off` (default), `vulkan`, or `lavapipe` (Mesa's software
+rasteriser, for machines with no GPU and for checking a result is not vendor-specific). Everything
+goes through `GpuDevice::Instance().available()`, and `false` is a normal answer: fall back to
+raster, never treat it as an error.
+
+```bash
+cmake -S . -B cmake-build-gpu -DCMAKE_BUILD_TYPE=Release -DSkia_ROOT=/usr/local/skia-gpu
+cmake --build cmake-build-gpu --target openshot openshot-gpu-checks
+OPENSHOT_GPU=vulkan cmake-build-gpu/tests/gpu/openshot-gpu-checks     # and =lavapipe
+BUILD_DIR=$PWD/cmake-build-gpu tools/golden.sh check                  # must stay 292/292
+```
+
+Rules that are easy to get wrong and crash in the NVIDIA driver rather than anywhere useful:
+
+- **Nothing Graphite hands out may outlive the `Context`.** `GpuDevice::DestroyInstance()` empties
+  every pool and destroys every `Recorder` before the context, in that order. Do not put a
+  `Recorder`, `SkSurface` or `SkImage` in a `thread_local` or a static — the device owns them.
+- Cache a GPU object across calls only alongside `GpuDevice::Generation()`, and drop the cache when
+  it changes.
+- `GpuSurfacePool` is **per thread**, because a Graphite surface belongs to the recorder that made
+  it. Never move a surface between threads.
+- `GpuFrame` is `kRGBA_8888`; raster N32 is BGRA on x86. Anything moving bytes between the two swaps
+  R and B.
 
 ## Facts that are easy to get wrong
 

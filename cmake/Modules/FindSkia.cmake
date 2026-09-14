@@ -91,6 +91,28 @@ find_package_handle_standard_args(Skia
 if(SKIA_FOUND)
     set(SKIA_INCLUDE_DIRS ${SKIA_INCLUDE_DIR})
 
+    # The fork spells Skia includes both ways: "skia/include/core/SkCanvas.h"
+    # (src/subtitle, src/text) and "include/core/SkCanvas.h" (src/gpu, tests/gpu).
+    # The first only resolves from the prefix's include/ directory, which happens
+    # to be implicit for /usr/local but is not for /usr/local/skia-gpu. Add it so
+    # both spellings work whichever prefix is selected.
+    get_filename_component(SKIA_PREFIX_INCLUDE_DIR "${SKIA_INCLUDE_DIR}" DIRECTORY)
+    list(APPEND SKIA_INCLUDE_DIRS ${SKIA_PREFIX_INCLUDE_DIR})
+
+    # A prefix installed by install_skia_gpu.sh carries the Vulkan headers Skia was
+    # built against (1.4.x) plus the Graphite/Vulkan backend. Ubuntu 24.04's system
+    # headers are 1.3.275 and will not compile Skia's VulkanPreferredFeatures.h, so
+    # this directory has to come FIRST, ahead of /usr/include. Its presence is also
+    # how we know this is the GPU build: SKIA_GPU_FOUND drives OPENSHOT_HAVE_SKIA_GPU.
+    if(EXISTS "${SKIA_PREFIX_INCLUDE_DIR}/skia-vulkan/vulkan/vulkan_core.h")
+        set(SKIA_GPU_FOUND TRUE)
+        set(SKIA_VULKAN_INCLUDE_DIR "${SKIA_PREFIX_INCLUDE_DIR}/skia-vulkan")
+        list(INSERT SKIA_INCLUDE_DIRS 0 ${SKIA_VULKAN_INCLUDE_DIR})
+        message(STATUS "Skia has a GPU backend (Graphite/Vulkan): ${SKIA_INCLUDE_DIR}")
+    else()
+        set(SKIA_GPU_FOUND FALSE)
+    endif()
+
     # Skia runtime effects (SkRuntimeEffect, used by the text glow shader) transitively
     # include "modules/skcms/skcms.h". That header lives in the Skia source tree's modules/
     # directory, which is not always shipped alongside the installed core headers. If the

@@ -264,7 +264,11 @@ if [[ -f out/Release-GPU/libskia.a ]]; then
 
 set -e
 INSTALL_PREFIX="${INSTALL_PREFIX:-/usr/local/skia-gpu}"
-SKIA_DIR="$(pwd)"
+# Where the Skia tree is, derived from this script's own location rather than
+# $(pwd): sudo keeps the caller's working directory, so a `sudo
+# ~/skia-stable/skia/install_skia_gpu.sh` from anywhere else would otherwise
+# create the prefix directories and then fail on the first copy.
+SKIA_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 if [[ $EUID -ne 0 ]]; then
     echo "Please run with sudo:  sudo ./install_skia_gpu.sh"
@@ -277,7 +281,13 @@ if [[ "$INSTALL_PREFIX" == "/usr/local" ]]; then
     exit 1
 fi
 
-echo "Installing Skia (Graphite/Vulkan) to $INSTALL_PREFIX …"
+if [[ ! -f "$SKIA_DIR/out/Release-GPU/libskia.a" ]]; then
+    echo "No build at $SKIA_DIR/out/Release-GPU/libskia.a."
+    echo "Run skia_build_script_gpu.sh first."
+    exit 1
+fi
+
+echo "Installing Skia (Graphite/Vulkan) from $SKIA_DIR to $INSTALL_PREFIX …"
 
 install -d "$INSTALL_PREFIX/lib" \
            "$INSTALL_PREFIX/include" \

@@ -1,7 +1,13 @@
-# Graphite/Vulkan smoke test (openshot-gpu-smoke) — acceptance check for plan
-# step 2.1. Links Skia directly, NOT libopenshot: in a normal build libopenshot
-# is compiled against the CPU Skia in /usr/local and mixing the two static
-# archives in one binary would be a mess.
+# GPU tests.
+#
+# openshot-gpu-smoke — acceptance check for plan step 2.1. Links Skia directly,
+# NOT libopenshot: in a normal build libopenshot is compiled against the CPU Skia
+# in /usr/local and mixing the two static archives in one binary would be a mess.
+# It therefore builds standalone, without the rest of the tree.
+#
+# openshot-gpu-checks — acceptance checks for step 2.2 (src/gpu). This one DOES
+# link libopenshot, so it is only built inside the main tree, and only when that
+# tree was configured against a GPU Skia.
 #
 # Build it against the GPU Skia only:
 #   cmake -S tests/gpu -B cmake-build-gpu-smoke -DSkia_ROOT=/usr/local/skia-gpu
@@ -40,3 +46,12 @@ target_compile_features(openshot-gpu-smoke PRIVATE cxx_std_20)
 target_include_directories(openshot-gpu-smoke BEFORE PRIVATE
   ${SKIA_VULKAN_INCLUDE_DIR} ${SKIA_INCLUDE_DIRS})
 target_link_libraries(openshot-gpu-smoke PRIVATE ${SKIA_LIBRARIES} ${Vulkan_LIBRARY})
+
+# --- step 2.2 checks, only inside the main tree against a GPU Skia -----------
+if(DEFINED PROJECT_NAME AND TARGET openshot AND SKIA_GPU_FOUND)
+  add_executable(openshot-gpu-checks gpu_checks.cpp)
+  target_compile_features(openshot-gpu-checks PRIVATE cxx_std_20)
+  target_include_directories(openshot-gpu-checks BEFORE PRIVATE
+    ${SKIA_VULKAN_INCLUDE_DIR} ${SKIA_INCLUDE_DIRS} ${PROJECT_SOURCE_DIR}/src)
+  target_link_libraries(openshot-gpu-checks PRIVATE openshot)
+endif()

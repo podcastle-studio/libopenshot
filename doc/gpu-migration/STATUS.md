@@ -5,7 +5,7 @@
 > `openshot-bench` against `tests/bench/results/baseline-cpu.json`, and the work plan with its
 > numeric gates is `doc/gpu-migration/GPU-RENDER-PLAN.md` section 3.
 
-Last updated: 2026-09-14 · branch `feature/gpu-rendering` (plan step 2.1 done)
+Last updated: 2026-09-14 · branch `feature/gpu-rendering` (plan steps 2.1 and 2.2 done)
 
 ## Where we are
 
@@ -93,12 +93,20 @@ and step numbers are stable identifiers, not sequence.
    `FindSkia.cmake` fix to beat pkg-config; Graphite needs a private-header memory allocator;
    Skia m147 needs Vulkan 1.4 headers, which the installer now ships. **Not yet done:** the
    `sudo ./install_skia_gpu.sh` into `/usr/local/skia-gpu` (verification used a scratch prefix).
-3. **2.2 `src/gpu`** — device, frame, surface pool. Next. The Vulkan bootstrap in
-   `tests/gpu/skia_gpu_smoke.cpp` is throwaway scaffolding, not the shape of `GpuDevice`, but it is
-   a working reference for instance/device/queue/extension/feature setup and the Graphite teardown
-   order (the async read result must die before the context that owns its pixels).
-4. **2.3 Glow pass on the GPU** — the actual prize. `TextGlowRenderer` allocates its silhouette,
-   ray-march and bloom surfaces from the pool; the SkSL is already written.
+3. **2.2 `src/gpu`** — ✅ **done.** `GpuDevice` (singleton: Vulkan device + one Graphite
+   `Context`, recorder per thread, `available()`, `Generation()`), `GpuSurfacePool` (thread-local,
+   recycles render targets) and `GpuFrame` (pooled surface + `upload()`/`readback()`). Off unless
+   `OPENSHOT_GPU=vulkan|lavapipe`. `tests/gpu/openshot-gpu-checks` passes all five checks on the
+   A2000 and on lavapipe: default-off, 200 device cycles with flat VRAM, 1000 bit-identical RGBA
+   round trips, pool reuse, pool survives a device restart. Golden green on **both** the CPU-Skia
+   and GPU-Skia builds (292/292 each), so the Skia swap moves no pixels.
+4. **2.3 Glow pass on the GPU** — the actual prize, and **the next step**. `TextGlowRenderer`
+   allocates its silhouette, ray-march and bloom surfaces from `GpuSurfacePool` via `GpuFrame` when
+   `GpuDevice::Instance().available()`, runs the existing SkSL unchanged, and reads the result back
+   into the CPU text image. Nothing else in the text engine changes. Watch the channel order:
+   `GpuFrame` is `kRGBA_8888` while raster N32 is BGRA on x86, so the R/B swap in
+   `SkiaRenderer::parseColorString` must be removed on the GPU path — a red glyph staying red is the
+   check. Build with `-DSkia_ROOT=/usr/local/skia-gpu`; `cmake-build-gpu` is already configured.
 
 > **Gate R2a:** `text_animated_glow_3` ≥ 4 fps (1.4 today) and `everything` ≥ 3 fps (1.8), golden
 > green. Text scenarios may be re-baselined once, after reviewing every triptych.
@@ -120,6 +128,9 @@ Remaining: 1.1 single `WriteFrame` call; 1.2 thread budgets; 1.3 RGBA straight i
 
 ## Log
 
+- 2026-09-14 — plan step 2.2: `src/gpu` (GpuDevice, GpuSurfacePool, GpuFrame) +
+  `tests/gpu/openshot-gpu-checks`. Two ownership crashes found and fixed by the checks; see
+  `GPU-DECISIONS.md`. Golden green on both Skia builds.
 - 2026-09-14 — plan step 2.1: `skia_build_script_gpu.sh` + `install_skia_gpu.sh`, `tests/gpu`
   smoke test, `FindSkia.cmake` honours `Skia_ROOT`. Golden green before and after.
 

@@ -46,6 +46,9 @@ add_feature_info("IWYU (include-what-you-use)" ENABLE_IWYU "Scan all source file
 
 # Main library sources
 set(OPENSHOT_SOURCES
+  gpu/GpuDevice.cpp
+  gpu/GpuFrame.cpp
+  gpu/GpuSurfacePool.cpp
   subtitle/Helpers.cpp
   subtitle/SkiaRenderer.cpp
   subtitle/SubtitleManager.cpp
@@ -672,6 +675,24 @@ endif()
 
 target_include_directories(openshot PUBLIC ${SKIA_INCLUDE_DIRS})
 target_link_libraries(openshot PUBLIC ${SKIA_LIBRARIES})
+
+# src/gpu compiles either way. With a Graphite-capable Skia (installed by
+# install_skia_gpu.sh, selected with -DSkia_ROOT=/usr/local/skia-gpu) it is the
+# real device; with the CPU Skia it is a stub whose GpuDevice::available() is
+# always false. GpuDevice is pimpl'd so its layout does not depend on this define
+# — src/*.h are installed, and a consumer compiling against them has no idea
+# which Skia the library was built with.
+if(SKIA_GPU_FOUND)
+  target_compile_definitions(openshot PRIVATE OPENSHOT_HAVE_SKIA_GPU=1)
+  # Skia's Vulkan backend resolves entry points through vkGetInstanceProcAddr, so
+  # the loader is a real link dependency of src/gpu.
+  find_package(Vulkan REQUIRED)
+  target_link_libraries(openshot PUBLIC ${Vulkan_LIBRARY})
+  message(STATUS "libopenshot: GPU support ON (Graphite/Vulkan)")
+else()
+  message(STATUS "libopenshot: GPU support OFF (CPU Skia); GpuDevice::available() is always false")
+endif()
+add_feature_info("Skia GPU backend" SKIA_GPU_FOUND "src/gpu: Vulkan device + Graphite context")
 
 ###############  LINK LIBRARY  #################
 # Link remaining dependency libraries

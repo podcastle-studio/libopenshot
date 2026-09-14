@@ -4,6 +4,8 @@
 
 /cmake-build-debug
 /cmake-build-release
+/cmake-build-gpu
+/cmake-build-gpu-smoke
 /build*
 *.DS_Store
 .pydevproject
