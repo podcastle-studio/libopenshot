@@ -364,15 +364,32 @@ are 1080p render-mode fps unless stated; the baseline column is from section 0.4
 | Build | Ships | Key gate (1080p) | baseline → target |
 |---|---|---|---|
 | **R0** ✅ | golden suite, `openshot-bench`, baseline | suite green, baseline recorded | done |
-| **R1** | CPU quick wins, working nvenc, thread budgets | `single_video` nvenc export | 75 → **≥ 105 fps** |
-| **R2a** | Skia Vulkan build; the **glow pass only** on the GPU | `text_animated_glow_3` | 1.4 → **≥ 4 fps** |
+| **R2a** | GPU-capable image, Skia Vulkan build; the **glow pass only** on the GPU | `text_animated_glow_3` | 1.4 → **≥ 4 fps** |
 | **R2b** | all text + subtitle rendering on GPU surfaces | `subtitles_words` | 56 → **≥ 85 fps** |
+| **R1** | CPU quick wins, working nvenc, thread budgets | `single_video` nvenc export | 75 → **≥ 105 fps** |
 | **R3** | Skia GPU compositor; Qt off the render path | `grid_3x3` | 23 → **≥ 60 fps** |
 | **R4** | NVDEC/NVENC frames stay on the GPU; effects as shaders | `heavy_effects`; CPU per export | 11.5 → **≥ 60 fps**; **< 2 cores** |
 | **R5** | Qt, ImageMagick, babl, render-path OpenCV removed | no pixel change; image size | −300 MB |
 | **R6** | frames in flight, density tuning | `everything` 1080p; GPU busy | 1.8 → **≥ 30 fps**; **≥ 70 %** |
 
 Effort is engineer-weeks for one senior C++ engineer who knows the fork.
+
+**Order changed 2026-09-14: Phase 2 runs before Phase 1.** The table above is in execution order.
+Phase and step numbers are stable identifiers, not sequence — `2.1` stays `2.1` wherever it runs, so
+that references in `doc/gpu-migration/STATUS.md`, `GPU-DECISIONS.md` and the commit history keep
+pointing at the same work.
+
+Why: the measured bottleneck is one shader, not the encoder. `text_animated_glow_3` spends ~72 % of
+its time in `paintGlowFromSilhouette` and `everything` 65 %, while R1 by the plan's own admission
+"does essentially nothing" for those three scenarios. R2a is therefore the highest-value change
+available, and nothing in R2a depends on R1. The one real coupling was the GPU-capable image
+(formerly step 1.7), which has moved into Phase 2 as **2.0** because Skia Vulkan cannot ship without
+it.
+
+R1 keeps its value and its gate, just later: nvenc rate control and the reader/writer copy removal
+are orthogonal to the Skia work and still wanted before Phase 3. The upstream merge of 2026-09-14
+already delivered part of 1.5 (the hardware-decode fix) and overlaps 1.2 (thread budgets), so
+Phase 1 is smaller than when it was written.
 
 **What R1 will and will not do.** The baseline says the encoder is 0–30 % of wall time depending on
 the scenario, so R1 helps light scenarios (`single_video`, `source_4k`) and does essentially nothing
@@ -409,7 +426,106 @@ the GPU move, and leaves width to the process manager.
 - **0.6 Still open — CI.** Run `tools/golden.sh check` on every PR on the 8-core runner; publish the
   report as an artifact. `openshot-bench --quick` on merges to `develop`, appended to a trend file.
 
-### Phase 1 — CPU quick wins (R1) · 1 week
+### Phase 2 — Skia on the GPU, smallest useful slice first · **runs first** · 3 weeks
+
+Split into two releasable stops. R2a exists because 72 % of the worst scenario is one shader; it is
+worth shipping on its own before touching the rest of the text engine.
+
+**2.0 Infrastructure: GPU-capable image.** *(Listed as step 1.7 while Phase 1 ran first; it is a
+prerequisite for everything below — Skia Vulkan needs `libvulkan1` and the `graphics` driver
+capability, and there is nothing to validate 2.1 against without a GPU node.)* Switch the service Dockerfile to
+`cpp-base-dockerfiles/Dockerfile_cuda12.8.1-cudnn9.7.1-ffmpeg6.1-nvidia24.04`, add `graphics` to
+`NVIDIA_DRIVER_CAPABILITIES`, install `libvulkan1` + `vulkan-tools`, drop Google Chrome (unused,
+~130 MB). Add `ENCODER=libx264|h264_nvenc` with automatic fallback when no GPU is present.
+*Verify:* the container starts on a CPU node and on a GPU node; `ffmpeg -encoders` lists
+`h264_nvenc`; `vulkaninfo --summary` reports the NVIDIA ICD on the GPU node; one export completes on
+each. *Risk:* base-image drift — pin the digest.
+
+**2.1 Skia with a GPU backend — a second build script, beside the existing one.**
+The CPU Skia build is `skia_build_script.sh` at the repository root: it clones Skia at
+`$SKIA_MILESTONE` (m147) into `$HOME/skia-stable`, builds `out/Release-CPU/libskia.a` with every GPU
+backend disabled, and emits `install_skia.sh`, which installs the static library plus headers into
+`/usr/local` (`INSTALL_PREFIX` overridable). `cmake/Modules/FindSkia.cmake` then finds it at
+`/usr/local/include/skia` and `/usr/local/lib`.
+
+**Do not modify that script.** The CPU build stays exactly as it is so the raster path (and the
+no-GPU fallback of step 5.4) remains reproducible and we can flip back at any point. Instead add a
+sibling at the root:
+
+- `skia_build_script_gpu.sh` — same structure, same pinned `SKIA_MILESTONE=m147` (keep it in lockstep
+  with the front end's CanvasKit), same checkout reused, but a separate output directory
+  `out/Release-GPU` and GN args `skia_enable_graphite = true`, `skia_use_vulkan = true`,
+  `skia_enable_ganesh = false` (flip to `true` only if a Graphite feature gap forces it; see the
+  4.0 decision), everything else unchanged from the CPU args so text rendering stays identical.
+- `install_skia_gpu.sh` — emitted by that script, installing to a **separate prefix**,
+  `INSTALL_PREFIX` defaulting to `/usr/local/skia-gpu`, so both Skias coexist on one machine.
+  It must also install the `skcms` headers (`modules/skcms`), which `FindSkia.cmake` currently has
+  to hunt for.
+
+CMake selects the build with `-DSkia_ROOT=/usr/local/skia-gpu` (CMP0074 makes `find_path`/
+`find_library` honour it); no `find_package` change is needed. Record which prefix a given build
+used in `doc/gpu-migration/GPU-DECISIONS.md`, and keep both scripts listed in `CLAUDE.md`.
+
+*Verify:* both scripts produce a `libskia.a`; a 30-line test links against the GPU one, creates a
+Vulkan device and a Graphite `Context`, draws a gradient into a 64×64 `SkSurface`, reads it back and
+saves a PNG — on the dev laptop and, with `VK_ICD_FILENAMES` pointing at lavapipe, on a machine with
+no GPU; a build configured with the CPU prefix still passes `tools/golden.sh check`.
+*Flag:* the prefix itself — reconfiguring with the CPU `Skia_ROOT` reverts the whole phase.
+*Risk:* GN argument drift between the two scripts silently changing text rendering; keep the shared
+args identical and diff the two files in review.
+
+**2.2 `src/gpu`: device, frame, surface pool.** `GpuDevice` (singleton: instance, physical device
+chosen by `Settings::HW_EN_DEVICE_SET`, device, one queue, Graphite `Context`, `thread_local
+Recorder`, `available()`), `GpuFrame` (texture-backed `SkSurface`/`SkImage` + `readback()` +
+`upload()`), `GpuSurfacePool` (keyed by size and colour type; never allocate per frame).
+Environment switch `OPENSHOT_GPU=off|vulkan|lavapipe`, default `off`.
+*Verify:* create/destroy the device 100 times with flat VRAM (NVML) and no leaks; upload→readback of
+1000 random RGBA images is bit-identical; the pool returns the same allocation on the second
+request. *Flag:* `OPENSHOT_GPU=off` is the default until R2a's gate is met.
+
+**2.3 Glow pass on the GPU.** `TextGlowRenderer` allocates its silhouette, ray-march and bloom
+surfaces from the pool as `SkSurfaces::RenderTarget` when the device is available, runs the existing
+SkSL unchanged, and the caller reads the result back into the CPU text image. Nothing else in the
+text engine changes yet. Choose `kRGBA_8888` for GPU surfaces and remove the R/B swap in
+`SkiaRenderer::parseColorString` on that path (raster N32 is BGRA on x86; a GPU RGBA surface is not).
+*Verify:* `--scenario text_animated_glow_3 --res 1080p --modes render` ≥ **4 fps** (1.4);
+`--scenario everything` ≥ **3 fps** (1.8); `tools/golden.sh check --filter glow` and `--filter text`
+within the Loose tolerance (SSIM ≥ 0.95) — a red glyph must still be red, which is the channel-swap
+check. *Flag:* `OPENSHOT_GPU=off` falls back to raster. *Risk:* the swap fix is easy to half-apply;
+the golden text scenarios are the guard.
+
+> **Release gate R2a.** `text_animated_glow_3` ≥ 4 fps and `everything` ≥ 3 fps at 1080p, golden
+> green (text scenarios may be re-baselined once, after visual review of every triptych). This is
+> the first build that needs a GPU node, so the Helm change lands here: a small GPU node pool with
+> `nvidia.com/gpu: 1` and `NVIDIA_DRIVER_CAPABILITIES=compute,utility,video,graphics`. Keep
+> `OPENSHOT_GPU=off` on CPU nodes so the same image still runs there.
+
+**2.4 Whole text engine on GPU surfaces.** Every remaining `SkSurfaces::Raster` in
+`TextClipRenderer`, `TextAnimationRenderer` and `TextClipReader::renderToQImage` comes from the pool;
+the reader returns a `GpuFrame` with one readback at the boundary instead of `image->copy()`.
+*Verify:* `--scenario text_static_4` no worse than baseline; `--scenario text_animated_glow_3` ≥
+**8 fps**; golden text scenarios green.
+
+**2.5 Delete the CPU-blur workaround.** The σ > 120 downscale branch in `TextClipRenderer` exists
+only because Skia's CPU mask blur clamps at 128 px; the GPU has no such clamp.
+*Verify:* a 4K text shadow matches the 1080p shadow scaled up (SSIM ≥ 0.97); `text_static_4` at
+2160p ≥ **15 fps** (11.8).
+
+**2.6 Long-lived `SkiaRenderer` and cross-frame caches.** One renderer per reader instead of one per
+frame, so the font and paint caches survive; cache the glow silhouette and the 3D block bake as GPU
+textures keyed by the plan hash and the animation-independent style.
+*Verify:* `text_animated_glow_3` ≥ **12 fps**; golden text scenarios unchanged.
+
+**2.7 Subtitles.** `SubtitleManager::renderAtFrame` draws into a GPU surface; cache the per-word
+`buildCharRenderInfo` work per segment.
+*Verify:* `--scenario subtitles_words --res 1080p --modes render` ≥ **85 fps** (56);
+`tools/golden.sh check --filter subtitles` green.
+
+> **Release gate R2b.** `text_animated_glow_3` ≥ 12 fps, `subtitles_words` ≥ 85 fps,
+> `text_static_4` not slower, `everything` ≥ 4 fps, golden green. Runs on the GPU node pool R2a
+> introduced; no further infrastructure change.
+
+### Phase 1 — CPU quick wins (R1) · **runs after Phase 2** · 1 week
 
 Independent steps, any order; all are pure CPU and none needs a GPU node.
 
@@ -468,104 +584,9 @@ scale; run the suite under ASan once.
 *Risk:* a stale cache shows up as a frozen frame inside an effect chain — the `effects.*` and
 `transitions.*` golden scenarios cover it.
 
-**1.7 Infrastructure: GPU-capable image (no GPU requested yet).** Switch the service Dockerfile to
-`cpp-base-dockerfiles/Dockerfile_cuda12.8.1-cudnn9.7.1-ffmpeg6.1-nvidia24.04`, add `graphics` to
-`NVIDIA_DRIVER_CAPABILITIES`, install `libvulkan1` + `vulkan-tools`, drop Google Chrome (unused,
-~130 MB). Add `ENCODER=libx264|h264_nvenc` with automatic fallback when no GPU is present.
-*Verify:* the container starts on a CPU node and on a GPU node; `ffmpeg -encoders` lists
-`h264_nvenc`; `vulkaninfo --summary` reports the NVIDIA ICD on the GPU node; one export completes on
-each. *Risk:* base-image drift — pin the digest.
-
 > **Release gate R1.** Full `openshot-bench --label r1` run; `compare baseline-cpu.json r1.json`
 > shows `single_video` nvenc ≥ 105 fps, `source_4k` render ≥ 70 fps, no scenario slower than
 > baseline by more than 5 %, golden suite green. Ship behind `ENCODER=` and run in shadow for a week.
-
-### Phase 2 — Skia on the GPU, smallest useful slice first · 3 weeks
-
-Split into two releasable stops. R2a exists because 72 % of the worst scenario is one shader; it is
-worth shipping on its own before touching the rest of the text engine.
-
-**2.1 Skia with a GPU backend — a second build script, beside the existing one.**
-The CPU Skia build is `skia_build_script.sh` at the repository root: it clones Skia at
-`$SKIA_MILESTONE` (m147) into `$HOME/skia-stable`, builds `out/Release-CPU/libskia.a` with every GPU
-backend disabled, and emits `install_skia.sh`, which installs the static library plus headers into
-`/usr/local` (`INSTALL_PREFIX` overridable). `cmake/Modules/FindSkia.cmake` then finds it at
-`/usr/local/include/skia` and `/usr/local/lib`.
-
-**Do not modify that script.** The CPU build stays exactly as it is so the raster path (and the
-no-GPU fallback of step 5.4) remains reproducible and we can flip back at any point. Instead add a
-sibling at the root:
-
-- `skia_build_script_gpu.sh` — same structure, same pinned `SKIA_MILESTONE=m147` (keep it in lockstep
-  with the front end's CanvasKit), same checkout reused, but a separate output directory
-  `out/Release-GPU` and GN args `skia_enable_graphite = true`, `skia_use_vulkan = true`,
-  `skia_enable_ganesh = false` (flip to `true` only if a Graphite feature gap forces it; see the
-  4.0 decision), everything else unchanged from the CPU args so text rendering stays identical.
-- `install_skia_gpu.sh` — emitted by that script, installing to a **separate prefix**,
-  `INSTALL_PREFIX` defaulting to `/usr/local/skia-gpu`, so both Skias coexist on one machine.
-  It must also install the `skcms` headers (`modules/skcms`), which `FindSkia.cmake` currently has
-  to hunt for.
-
-CMake selects the build with `-DSkia_ROOT=/usr/local/skia-gpu` (CMP0074 makes `find_path`/
-`find_library` honour it); no `find_package` change is needed. Record which prefix a given build
-used in `doc/gpu-migration/GPU-DECISIONS.md`, and keep both scripts listed in `CLAUDE.md`.
-
-*Verify:* both scripts produce a `libskia.a`; a 30-line test links against the GPU one, creates a
-Vulkan device and a Graphite `Context`, draws a gradient into a 64×64 `SkSurface`, reads it back and
-saves a PNG — on the dev laptop and, with `VK_ICD_FILENAMES` pointing at lavapipe, on a machine with
-no GPU; a build configured with the CPU prefix still passes `tools/golden.sh check`.
-*Flag:* the prefix itself — reconfiguring with the CPU `Skia_ROOT` reverts the whole phase.
-*Risk:* GN argument drift between the two scripts silently changing text rendering; keep the shared
-args identical and diff the two files in review.
-
-**2.2 `src/gpu`: device, frame, surface pool.** `GpuDevice` (singleton: instance, physical device
-chosen by `Settings::HW_EN_DEVICE_SET`, device, one queue, Graphite `Context`, `thread_local
-Recorder`, `available()`), `GpuFrame` (texture-backed `SkSurface`/`SkImage` + `readback()` +
-`upload()`), `GpuSurfacePool` (keyed by size and colour type; never allocate per frame).
-Environment switch `OPENSHOT_GPU=off|vulkan|lavapipe`, default `off`.
-*Verify:* create/destroy the device 100 times with flat VRAM (NVML) and no leaks; upload→readback of
-1000 random RGBA images is bit-identical; the pool returns the same allocation on the second
-request. *Flag:* `OPENSHOT_GPU=off` is the default until R2a's gate is met.
-
-**2.3 Glow pass on the GPU.** `TextGlowRenderer` allocates its silhouette, ray-march and bloom
-surfaces from the pool as `SkSurfaces::RenderTarget` when the device is available, runs the existing
-SkSL unchanged, and the caller reads the result back into the CPU text image. Nothing else in the
-text engine changes yet. Choose `kRGBA_8888` for GPU surfaces and remove the R/B swap in
-`SkiaRenderer::parseColorString` on that path (raster N32 is BGRA on x86; a GPU RGBA surface is not).
-*Verify:* `--scenario text_animated_glow_3 --res 1080p --modes render` ≥ **4 fps** (1.4);
-`--scenario everything` ≥ **3 fps** (1.8); `tools/golden.sh check --filter glow` and `--filter text`
-within the Loose tolerance (SSIM ≥ 0.95) — a red glyph must still be red, which is the channel-swap
-check. *Flag:* `OPENSHOT_GPU=off` falls back to raster. *Risk:* the swap fix is easy to half-apply;
-the golden text scenarios are the guard.
-
-> **Release gate R2a.** `text_animated_glow_3` ≥ 4 fps and `everything` ≥ 3 fps at 1080p, golden
-> green (text scenarios may be re-baselined once, after visual review of every triptych). This is
-> the first build that needs a GPU node; keep `OPENSHOT_GPU=off` on CPU nodes.
-
-**2.4 Whole text engine on GPU surfaces.** Every remaining `SkSurfaces::Raster` in
-`TextClipRenderer`, `TextAnimationRenderer` and `TextClipReader::renderToQImage` comes from the pool;
-the reader returns a `GpuFrame` with one readback at the boundary instead of `image->copy()`.
-*Verify:* `--scenario text_static_4` no worse than baseline; `--scenario text_animated_glow_3` ≥
-**8 fps**; golden text scenarios green.
-
-**2.5 Delete the CPU-blur workaround.** The σ > 120 downscale branch in `TextClipRenderer` exists
-only because Skia's CPU mask blur clamps at 128 px; the GPU has no such clamp.
-*Verify:* a 4K text shadow matches the 1080p shadow scaled up (SSIM ≥ 0.97); `text_static_4` at
-2160p ≥ **15 fps** (11.8).
-
-**2.6 Long-lived `SkiaRenderer` and cross-frame caches.** One renderer per reader instead of one per
-frame, so the font and paint caches survive; cache the glow silhouette and the 3D block bake as GPU
-textures keyed by the plan hash and the animation-independent style.
-*Verify:* `text_animated_glow_3` ≥ **12 fps**; golden text scenarios unchanged.
-
-**2.7 Subtitles.** `SubtitleManager::renderAtFrame` draws into a GPU surface; cache the per-word
-`buildCharRenderInfo` work per segment.
-*Verify:* `--scenario subtitles_words --res 1080p --modes render` ≥ **85 fps** (56);
-`tools/golden.sh check --filter subtitles` green.
-
-> **Release gate R2b.** `text_animated_glow_3` ≥ 12 fps, `subtitles_words` ≥ 85 fps,
-> `text_static_4` not slower, `everything` ≥ 4 fps, golden green. First Helm change: a small GPU
-> node pool with `nvidia.com/gpu: 1` and `NVIDIA_DRIVER_CAPABILITIES=compute,utility,video,graphics`.
 
 ### Phase 3 — GPU compositor and Qt off the render path (R3) · 4 weeks
 

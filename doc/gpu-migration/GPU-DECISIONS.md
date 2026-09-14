@@ -55,6 +55,15 @@ draws on top if it was added later; `compositing.layer_order` was re-baselined f
 *Revisit if:* the service needs explicit z-ordering within a layer, which should then be an explicit
 field rather than a sort accident.
 
+**2026-09-14 · Phase 2 runs before Phase 1.** The GPU/Skia work ships first; CPU quick wins follow.
+The measured bottleneck is one shader — `text_animated_glow_3` spends ~72 % of its time in
+`paintGlowFromSilhouette`, `everything` 65 % — while the plan already conceded that R1 "does
+essentially nothing" for those scenarios. Nothing in R2a depends on R1. The only real coupling was
+the GPU-capable image, formerly step 1.7, which moved into Phase 2 as step **2.0**. Phase and step
+numbers are stable identifiers, not sequence, so existing references stay valid.
+*Revisit if:* the GPU node pool turns out to be unavailable, in which case R1 is the only work that
+can proceed.
+
 ## Open — decide before plan phase 4
 
 - **Timeline canvas precision.** `kRGBA_8888` (matches today) or `kRGBA_F16` (better blending and

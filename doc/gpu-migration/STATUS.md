@@ -74,23 +74,32 @@ new algorithm — hence the new **R2a** stop (Skia Vulkan build + glow surfaces 
 
 ## Next step
 
-**Plan steps 0.5 and 0.6, then Phase 1 (R1, CPU quick wins).**
+**Phase 2 (R2a) — Skia on the GPU, glow pass first.** The plan was reordered on 2026-09-14 so
+Phase 2 runs before Phase 1; see `doc/gpu-migration/GPU-RENDER-PLAN.md` section 3.1 for why. Phase
+and step numbers are stable identifiers, not sequence.
 
-> Step numbers below are the *Phase 0* steps in plan section 3, not the background subsections
-> 0.1–0.4 of plan section 0. The two share numbers; only the ones in section 3 are work items.
+1. **2.0 GPU-capable image** (was step 1.7, moved because Skia Vulkan cannot ship without it):
+   CUDA/Vulkan base image, `graphics` in `NVIDIA_DRIVER_CAPABILITIES`, `libvulkan1` +
+   `vulkan-tools`, `ENCODER=libx264|h264_nvenc` with CPU fallback.
+   *Verify:* container starts on both a CPU and a GPU node; `vulkaninfo --summary` shows the NVIDIA
+   ICD; one export completes on each.
+2. **2.1 `skia_build_script_gpu.sh`** — a sibling of the CPU script, never a modification of it.
+   Same pinned `SKIA_MILESTONE=m147`, separate `out/Release-GPU`, installs to `/usr/local/skia-gpu`,
+   selected with `-DSkia_ROOT=`. Record which build a binary used in `GPU-DECISIONS.md`.
+3. **2.2 `src/gpu`** — device, frame, surface pool.
+4. **2.3 Glow pass on the GPU** — the actual prize. `TextGlowRenderer` allocates its silhouette,
+   ray-march and bloom surfaces from the pool; the SkSL is already written.
 
-1. Step 0.5 — collect 6 production payloads + media into a corpus and add a service-level
-   end-to-end check (the golden suite covers the library; the corpus covers the service's
-   JSON → timeline code). Step 0.6 — run `tools/golden.sh check` in CI on every PR.
-2. Phase 1 steps in order (see the plan for per-step gates), each validated with
-   `tools/golden.sh check` and `openshot-bench --quick`, with a full run + `compare` against
-   `baseline-cpu.json` at the R1 gate:
-   1.1 service: one `WriteFrame` call instead of 8-frame chunks;
-   1.2 service: thread budgets from the cgroup quota / process count;
-   1.3 writer: RGBA straight into nvenc, no swscale/memcpy, BT.709 tags;
-   1.4 writer: sane nvenc rate-control options;
-   1.5 reader: drop memset + `av_image_copy`, threaded swscale, fix the hardware-decode crash;
-   1.6 `Frame::GetImageCV` memoisation.
+> **Gate R2a:** `text_animated_glow_3` ≥ 4 fps (1.4 today) and `everything` ≥ 3 fps (1.8), golden
+> green. Text scenarios may be re-baselined once, after reviewing every triptych.
+
+Still open from Phase 0, not blocking Phase 2: **0.5** the six-payload production corpus and
+**0.6** CI running `tools/golden.sh check` per PR.
+
+**Phase 1 (R1, CPU quick wins) now runs after Phase 2** and is smaller than when written — the
+upstream merge already delivered 1.5's hardware-decode fix and overlaps 1.2's thread budgets.
+Remaining: 1.1 single `WriteFrame` call; 1.2 thread budgets; 1.3 RGBA straight into nvenc;
+1.4 nvenc rate control; 1.5 reader copy removal + threaded swscale; 1.6 `GetImageCV` memoisation.
 
 ## Known oddities worth a look
 
