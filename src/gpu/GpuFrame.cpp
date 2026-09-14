@@ -1,14 +1,4 @@
-/**
- * @file
- * @brief Source file for the GpuFrame class
- * @author Jonathan Thomas <jonathan@openshot.org>
- *
- * @ref License
- */
-
-// Copyright (c) 2008-2024 OpenShot Studios, LLC
-//
-// SPDX-License-Identifier: LGPL-3.0-or-later
+// One texture-backed drawing surface with CPU transfers both ways. See GpuFrame.h.
 
 #include "GpuFrame.h"
 

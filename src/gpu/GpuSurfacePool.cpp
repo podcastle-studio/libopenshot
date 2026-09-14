@@ -1,14 +1,4 @@
-/**
- * @file
- * @brief Source file for the GpuSurfacePool class
- * @author Jonathan Thomas <jonathan@openshot.org>
- *
- * @ref License
- */
-
-// Copyright (c) 2008-2024 OpenShot Studios, LLC
-//
-// SPDX-License-Identifier: LGPL-3.0-or-later
+// Reuses GPU render targets instead of allocating one per frame. See GpuSurfacePool.h.
 
 #include "GpuSurfacePool.h"
 

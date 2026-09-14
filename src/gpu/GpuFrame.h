@@ -1,17 +1,7 @@
-/**
- * @file
- * @brief Header file for the GpuFrame class
- * @author Jonathan Thomas <jonathan@openshot.org>
- *
- * @ref License
- */
+#pragma once
 
-// Copyright (c) 2008-2024 OpenShot Studios, LLC
-//
-// SPDX-License-Identifier: LGPL-3.0-or-later
-
-#ifndef OPENSHOT_GPU_FRAME_H
-#define OPENSHOT_GPU_FRAME_H
+// One texture-backed drawing surface, borrowed from GpuSurfacePool for its
+// lifetime, with CPU transfers both ways.
 
 #include <memory>
 
@@ -83,4 +73,3 @@ namespace openshot
 	};
 }
 
-#endif

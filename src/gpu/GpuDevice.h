@@ -1,17 +1,9 @@
-/**
- * @file
- * @brief Header file for the GpuDevice class
- * @author Jonathan Thomas <jonathan@openshot.org>
- *
- * @ref License
- */
+#pragma once
 
-// Copyright (c) 2008-2024 OpenShot Studios, LLC
-//
-// SPDX-License-Identifier: LGPL-3.0-or-later
-
-#ifndef OPENSHOT_GPU_DEVICE_H
-#define OPENSHOT_GPU_DEVICE_H
+// The process-wide Vulkan device and Skia Graphite context. Everything GPU in
+// this fork goes through GpuDevice::Instance().available(), which is false
+// unless OPENSHOT_GPU asks for a backend — a machine with no GPU is a supported
+// configuration, not an error.
 
 #include <memory>
 #include <string>
@@ -107,4 +99,3 @@ namespace openshot
 	};
 }
 
-#endif

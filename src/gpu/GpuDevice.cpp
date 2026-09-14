@@ -1,14 +1,8 @@
-/**
- * @file
- * @brief Source file for the GpuDevice class
- * @author Jonathan Thomas <jonathan@openshot.org>
- *
- * @ref License
- */
-
-// Copyright (c) 2008-2024 OpenShot Studios, LLC
+// The process-wide Vulkan device and Skia Graphite context. See GpuDevice.h.
 //
-// SPDX-License-Identifier: LGPL-3.0-or-later
+// The Vulkan bootstrap here (instance, physical device, queue, extensions and
+// the feature chain Skia asks for through VulkanPreferredFeatures) is the same
+// sequence proved out in tests/gpu/skia_gpu_smoke.cpp for plan step 2.1.
 
 #include "GpuDevice.h"
 
