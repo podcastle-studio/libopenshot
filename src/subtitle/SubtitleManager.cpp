@@ -313,10 +313,8 @@ void SubtitleManager::renderAtFrame(std::shared_ptr<QImage> frameImage, int64_t 
     // Skip rendering if no segments are loaded
     if (segments.empty() || !frameImage || frameImage->isNull()) return;
 
-    // Convert frame to time
-    float timeMs = frameToMs(frameNumber, fps);
-
-    // Create SkBitmap that wraps the QImage data
+    // Wrap the QImage's own pixels, so drawing lands in the caller's buffer. See the
+    // header for why this stays raster rather than borrowing a GPU surface.
     SkBitmap bitmap;
     SkImageInfo skiaInfo = SkImageInfo::MakeN32Premul(frameImage->width(), frameImage->height());
 
@@ -324,13 +322,20 @@ void SubtitleManager::renderAtFrame(std::shared_ptr<QImage> frameImage, int64_t 
         return;
     }
 
-    // Create canvas from bitmap
     SkCanvas canvas(bitmap);
-    float canvasWidth = frameImage->width();
-    float canvasHeight = frameImage->height();
+    renderAtFrame(&canvas, static_cast<float>(frameImage->width()),
+                  static_cast<float>(frameImage->height()), frameNumber);
+}
+
+void SubtitleManager::renderAtFrame(SkCanvas* canvas, float canvasWidth, float canvasHeight,
+                                    int64_t frameNumber) const {
+    if (segments.empty() || !canvas || canvasWidth <= 0.f || canvasHeight <= 0.f) return;
+
+    // Convert frame to time
+    float timeMs = frameToMs(frameNumber, fps);
 
     // Create renderer
-    SkiaRenderer skiaRenderer(&canvas);
+    SkiaRenderer skiaRenderer(canvas);
     SubtitleRenderer subtitleRenderer(&skiaRenderer, fps);
 
     // Find and render active segments. The active window is HALF-OPEN [startTimeMs, endTimeMs):

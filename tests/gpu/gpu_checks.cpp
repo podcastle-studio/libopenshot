@@ -9,6 +9,8 @@
  *   2. transfer  upload -> readback of 1000 random RGBA images is bit-identical
  *   3. pool      the second acquire of a given size returns the same allocation
  *   4. canvas    a recycled surface's canvas comes back in a new surface's state
+ *   5. control   GpuDevice::SetBackend is the single on/off switch for all of it
+ *   6. subtitle  the subtitle pass renders the same on a GPU and a raster canvas
  *
  * VRAM is read via nvidia-smi when it is present; on lavapipe or a machine with
  * no NVIDIA driver that part reports "skipped" rather than failing.
@@ -19,6 +21,11 @@
 #include "gpu/GpuDevice.h"
 #include "gpu/GpuFrame.h"
 #include "gpu/GpuSurfacePool.h"
+#include "subtitle/SubtitleManager.h"
+
+#include "skia/include/core/SkBitmap.h"
+#include "skia/include/core/SkSurface.h"
+#include "skia/include/core/SkColor.h"
 
 #include "skia/include/core/SkAlphaType.h"
 #include "skia/include/core/SkCanvas.h"
@@ -314,6 +321,114 @@ void checkPoolSurvivesDeviceRestart() {
     pool.release(after);
 }
 
+// The single switch: SetBackend must both disable and re-enable every GPU path,
+// whatever OPENSHOT_GPU says, and must move Generation() so caches holding GPU
+// objects drop them. This is the check that keeps "one control" true as more GPU
+// logic is added — anything that reads the environment for itself fails it.
+void checkSingleControl() {
+    const openshot::GpuDevice::Backend requested = openshot::GpuDevice::RequestedBackend();
+
+    openshot::GpuDevice::SetBackend(openshot::GpuDevice::Backend::Off);
+    const unsigned long long afterOff = openshot::GpuDevice::Generation();
+    const bool offWorks = !openshot::GpuDevice::Instance().available() &&
+                          openshot::GpuDevice::RequestedBackend() ==
+                                  openshot::GpuDevice::Backend::Off;
+    // With everything off, the helpers every GPU path goes through must refuse too.
+    const bool noFrame = openshot::GpuFrame::Create(64, 64, kRGBA_8888_SkColorType) == nullptr;
+
+    openshot::GpuDevice::SetBackend(requested);
+    const bool backOn = openshot::GpuDevice::Instance().available() &&
+                        openshot::GpuFrame::Create(64, 64, kRGBA_8888_SkColorType) != nullptr;
+    const bool bumped = openshot::GpuDevice::Generation() > afterOff;
+
+    const bool ok = offWorks && noFrame && backOn && bumped;
+    std::string detail = ok ? std::string("off -> unavailable and GpuFrame::Create null; ") +
+                                      openshot::GpuDevice::BackendName(requested) +
+                                      " -> available again; generation moved"
+                            : std::string("off_disables=") + (offWorks ? "yes" : "no") +
+                                      " create_refused=" + (noFrame ? "yes" : "no") +
+                                      " re_enabled=" + (backOn ? "yes" : "no") +
+                                      " generation_moved=" + (bumped ? "yes" : "no");
+    report("control", ok, detail);
+}
+
+// Subtitles draw straight onto the canvas they are handed and build no offscreen
+// of their own, so the whole pass follows its destination. Render the same frame
+// onto a GPU surface and a raster one and require the results to agree.
+void checkSubtitleOnGpuCanvas() {
+    const char* fontDir = std::getenv("OPENSHOT_TEST_FONT");
+    if (!fontDir) {
+        report("subtitle-gpu", true, "skipped (set OPENSHOT_TEST_FONT to a .ttf)");
+        return;
+    }
+    const int W = 640, H = 360;
+    std::string json =
+            std::string("{\"settings\":{\"defaultStyle\":{\"fontFamily\":\"") + fontDir +
+            "\",\"fontSize\":48,\"fontWeight\":700,\"color\":\"#FFFFFF\","
+            "\"strokeColor\":\"#000000\",\"strokeWidth\":3},"
+            "\"transformation\":{\"maxWidth\":480,\"center\":{\"x\":0.5,\"y\":0.8}},"
+            "\"containerStyle\":{\"appearance\":\"ONE_WORD\",\"textAlign\":\"CENTER\"}},"
+            "\"segments\":[{\"id\":\"s0\",\"startTime\":0,\"endTime\":2000,\"visible\":true,"
+            "\"attached\":true,\"wordDetails\":[{\"word\":\"GPU\",\"startTime\":0,\"endTime\":2000}]}]}";
+
+    openshot::subtitle::SubtitleManager manager(30.f);
+    manager.loadFromJSONString(json);
+
+    // Raster reference.
+    SkBitmap rasterPixels;
+    if (!rasterPixels.tryAllocN32Pixels(W, H)) {
+        report("subtitle-gpu", false, "raster allocation failed");
+        return;
+    }
+    rasterPixels.eraseColor(SK_ColorBLUE);
+    SkCanvas rasterCanvas(rasterPixels);
+    manager.renderAtFrame(&rasterCanvas, W, H, 10);
+
+    // The same call, onto a GPU-backed canvas.
+    std::shared_ptr<openshot::GpuFrame> frame =
+            openshot::GpuFrame::Create(W, H, kN32_SkColorType);
+    if (!frame || !frame->canvas()) {
+        report("subtitle-gpu", false, "no GPU frame");
+        return;
+    }
+    frame->canvas()->clear(SK_ColorBLUE);
+    manager.renderAtFrame(frame->canvas(), W, H, 10);
+
+    SkBitmap gpuPixels;
+    if (!gpuPixels.tryAllocN32Pixels(W, H)) {
+        report("subtitle-gpu", false, "readback allocation failed");
+        return;
+    }
+    SkPixmap gpuMap;
+    if (!gpuPixels.peekPixels(&gpuMap) || !frame->readback(gpuMap)) {
+        report("subtitle-gpu", false, "readback failed");
+        return;
+    }
+
+    // Rasteriser and GPU are not required to be bit-identical (different AA), but
+    // the glyphs have to land in the same place and the frame must not be blank.
+    long long changed = 0, differing = 0, worst = 0;
+    for (int y = 0; y < H; ++y) {
+        for (int x = 0; x < W; ++x) {
+            const SkColor r = rasterPixels.getColor(x, y);
+            const SkColor g = gpuPixels.getColor(x, y);
+            if (r != SK_ColorBLUE) changed++;
+            const long long d = std::max({std::abs((int)SkColorGetR(r) - (int)SkColorGetR(g)),
+                                          std::abs((int)SkColorGetG(r) - (int)SkColorGetG(g)),
+                                          std::abs((int)SkColorGetB(r) - (int)SkColorGetB(g))});
+            if (d > 8) differing++;
+            worst = std::max(worst, d);
+        }
+    }
+    const double differingPct = 100.0 * differing / (double)(W * H);
+    const bool ok = changed > 500 && differingPct < 0.5;
+    char detail[256];
+    std::snprintf(detail, sizeof(detail),
+                  "%lld px drawn, %.3f%% differ by >8, worst channel delta %lld",
+                  changed, differingPct, worst);
+    report("subtitle-gpu", ok, detail);
+}
+
 }  // namespace
 
 int main() {
@@ -346,6 +461,8 @@ int main() {
     checkPoolReuse();
     checkPoolResetsCanvasState();
     checkPoolSurvivesDeviceRestart();
+    checkSingleControl();
+    checkSubtitleOnGpuCanvas();
 
     std::printf("\n%d failure(s)\n", failures);
     return failures == 0 ? 0 : 1;

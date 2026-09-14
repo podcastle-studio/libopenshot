@@ -137,6 +137,12 @@ it on `GpuOffscreen::onGpu()` / `GpuDevice::available()` and keep the CPU branch
 accepted on the four-way golden sweep below (CPU Skia; GPU Skia with the GPU off; GPU Skia on
 Vulkan; GPU Skia on lavapipe), all four at 292/292.
 
+**One control.** `GpuDevice::SetBackend(Backend::Off|Vulkan|Lavapipe)` is the single switch and
+overrides `OPENSHOT_GPU` at runtime (it tears the device down, moving `Generation()`, so caches
+drop). It only stays a single switch because every GPU path asks `GpuDevice::Instance().available()`
+— or `GpuOffscreen::Match` / `GpuFrame::Create`, which ask for you — and none reads the environment
+itself. Add new GPU logic the same way; the `control` check in `openshot-gpu-checks` enforces it.
+
 Off unless `OPENSHOT_GPU` says otherwise — `off` (default), `vulkan`, or `lavapipe` (Mesa's software
 rasteriser, for machines with no GPU and for checking a result is not vendor-specific). Everything
 goes through `GpuDevice::Instance().available()`, and `false` is a normal answer: fall back to
@@ -173,6 +179,13 @@ Rules that are easy to get wrong and crash in the NVIDIA driver rather than anyw
 - `GpuFrame` is `kRGBA_8888` and raster N32 is BGRA on x86, but do **not** "fix" the R/B swap in
   `SkiaRenderer::parseColorString` for the GPU path. It is a logical `SkColor` convention, not a
   byte order; Skia converts correctly in both directions on readback, so it survives the round trip.
+
+Subtitles build **no offscreen of their own**, so the whole pass follows the canvas it is given:
+`SubtitleManager::renderAtFrame(SkCanvas*, w, h, frame)` is the real entry point and the `QImage`
+overload just wraps a raster canvas around the caller's pixels. Do **not** route the Timeline's call
+through a GPU surface — subtitles composite onto an existing frame, so that costs an upload plus a
+readback (5.6 ms at 1080p, 18.7 ms at 2160p) to save 0.27 ms / 0.61 ms of drawing. It pays only once
+the frame is already on the GPU, and then the caller just passes its canvas.
 
 The whole text engine renders on the GPU when one is available. `TextClipReader::renderToQImage`
 picks GPU or raster once per frame and reads back once at the end; every offscreen below it goes

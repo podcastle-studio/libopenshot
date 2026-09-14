@@ -44,14 +44,70 @@ namespace
 	GpuDevice::Backend backendFromEnvironment()
 	{
 		const char* requested = std::getenv("OPENSHOT_GPU");
-		if (!requested || std::strcmp(requested, "off") == 0 || requested[0] == '\0')
+		if (!requested)
 			return GpuDevice::Backend::Off;
-		if (std::strcmp(requested, "vulkan") == 0)
-			return GpuDevice::Backend::Vulkan;
-		if (std::strcmp(requested, "lavapipe") == 0)
-			return GpuDevice::Backend::Lavapipe;
-		return GpuDevice::Backend::Off;
+		return GpuDevice::BackendFromName(requested);
 	}
+
+	// The SetBackend() override, when one has been set. Kept apart from the
+	// device itself so it survives DestroyInstance() — tearing the device down
+	// must not silently revert the caller's choice to whatever the environment
+	// happens to say.
+	std::mutex& backendOverrideMutex()
+	{
+		static std::mutex m;
+		return m;
+	}
+	bool g_backend_override_set = false;
+	GpuDevice::Backend g_backend_override = GpuDevice::Backend::Off;
+}
+
+GpuDevice::Backend GpuDevice::BackendFromName(const std::string& name)
+{
+	if (name == "vulkan")
+		return Backend::Vulkan;
+	if (name == "lavapipe")
+		return Backend::Lavapipe;
+	return Backend::Off;   // "off", empty, and anything unrecognised
+}
+
+const char* GpuDevice::BackendName(Backend backend)
+{
+	switch (backend) {
+	case Backend::Vulkan:
+		return "vulkan";
+	case Backend::Lavapipe:
+		return "lavapipe";
+	case Backend::Off:
+		break;
+	}
+	return "off";
+}
+
+GpuDevice::Backend GpuDevice::RequestedBackend()
+{
+	{
+		std::lock_guard<std::mutex> lock(backendOverrideMutex());
+		if (g_backend_override_set)
+			return g_backend_override;
+	}
+	return backendFromEnvironment();
+}
+
+void GpuDevice::SetBackend(Backend backend)
+{
+	{
+		std::lock_guard<std::mutex> lock(backendOverrideMutex());
+		if (g_backend_override_set && g_backend_override == backend)
+			return;                     // already the standing choice
+		g_backend_override_set = true;
+		g_backend_override = backend;
+	}
+	// A device that is already up was built for the old choice, so drop it. This
+	// moves Generation(), which is what tells every cache holding a GPU object to
+	// throw it away; the next available() rebuilds for the new backend (or, for
+	// Off, refuses without touching Vulkan at all).
+	DestroyInstance();
 }
 
 #ifdef OPENSHOT_HAVE_SKIA_GPU
@@ -109,9 +165,9 @@ public:
 			return usable;
 		initialised = true;
 
-		backend = backendFromEnvironment();
+		backend = GpuDevice::RequestedBackend();
 		if (backend == GpuDevice::Backend::Off) {
-			error = "OPENSHOT_GPU is off";
+			error = "GPU is off (OPENSHOT_GPU / GpuDevice::SetBackend)";
 			return false;
 		}
 		// Ask the loader for the software rasteriser only. Setting this here rather
@@ -337,7 +393,7 @@ public:
 	{
 		if (!initialised) {
 			initialised = true;
-			backend = backendFromEnvironment();
+			backend = GpuDevice::RequestedBackend();
 			error = "libopenshot was built against a Skia with no GPU backend "
 					"(configure with -DSkia_ROOT=/usr/local/skia-gpu)";
 		}

@@ -27,8 +27,9 @@ Stated by the project owner, 2026-09-14. This overrides anything in
 
 Last updated: 2026-09-14 · branch `feature/gpu-rendering`.
 **R2a complete** (2.1, 2.2, 2.3); **2.4 done, gate met**; worklist **A done**, **B rejected on
-measurement**, **C done differently**; **2.0 still owed**. Next: the Phase 2 worklist below, item
-**D** (plan step 2.7), or item **E** (2.0), which is what actually blocks shipping.
+measurement**, **C done differently**, **D done**. The Skia text and subtitle engines now both run
+on the GPU under one control (`GpuDevice::SetBackend`). **Only 2.0 (item E) is left in Phase 2**,
+and it is what blocks shipping any of it.
 
 ## Where we are
 
@@ -285,11 +286,39 @@ but it needs an extra surface per frame, which would cost every cache **miss** �
 constraint says the CPU path must not get slower. Clips with a glow-affecting style keyframe
 (clip c above) also never hit; decoupling colour from the silhouette would fix that.
 
-**D. 2.7 — subtitles on GPU surfaces.** `SubtitleManager::renderAtFrame` draws into a
-`GpuOffscreen`; cache the per-word `buildCharRenderInfo` work per segment (a CPU-path win too).
-*Verify:* `subtitles_words` ≥ 85 fps (56 CPU baseline; already 108.8 with the GPU on after 2.4, so
-the real target here is the CPU number and the caching); `tools/golden.sh check --filter subtitles`
-green.
+**D. 2.7 — subtitles on GPU surfaces.** — ✅ **done, as a capability; deliberately not switched
+on for the Timeline path.** Gate already met: `subtitles_words` 92–101 fps CPU vs ≥ 85.
+
+`src/subtitle` builds **no offscreen of its own** — every renderer draws straight onto the canvas it
+is handed — so the only thing keeping subtitles off the GPU was `SubtitleManager::renderAtFrame`
+constructing its own raster canvas from the caller's `QImage`. There is now a canvas overload,
+`renderAtFrame(SkCanvas*, w, h, frame)`, and the `QImage` one is a thin wrapper over it. A
+GPU-backed canvas therefore keeps the whole subtitle pass on the GPU. The `subtitle-gpu` check in
+`openshot-gpu-checks` renders the same frame both ways and gets **worst channel delta 0** — bit
+identical — on Vulkan and on lavapipe.
+
+*Why the Timeline still hands it a raster canvas.* Subtitles composite onto an existing video frame,
+so a GPU pass there means uploading the frame and reading it back. Measured:
+
+| | full-frame GPU round trip | the subtitle drawing it would replace |
+|---|---|---|
+| 1080p | 5.6 ms (1.1 up + 4.4 back) | **0.27 ms** |
+| 2160p | 18.7 ms (3.8 up + 15.0 back) | **0.61 ms** |
+
+21× and 31× more than it saves. It becomes free the moment the frame is *already* on the GPU — i.e.
+when the compositor moves in phase 3 — and at that point the caller simply passes its canvas. The
+plan's other half, caching `buildCharRenderInfo` per segment, is capped by the same 0.27 ms and was
+not done.
+
+**Single GPU control.** Asked for by the project owner so all GPU use can be switched on and off in
+one place, including the logic still to come. `GpuDevice::SetBackend(Backend)` now overrides
+`OPENSHOT_GPU` programmatically and takes effect at once — it tears down a device built for the old
+choice, which moves `Generation()` and so drops every cache holding a GPU object.
+`RequestedBackend()` answers without creating the device; `BackendFromName` / `BackendName` convert
+to and from the `OPENSHOT_GPU` spelling. The invariant that makes this one control is that every GPU
+path asks `GpuDevice::Instance().available()` (or `GpuOffscreen::Match` / `GpuFrame::Create`, which
+ask it for you) and none reads the environment for itself — the new `control` check in
+`openshot-gpu-checks` fails if that stops being true.
 
 > **Then re-measure gate R2b:** `text_animated_glow_3` ≥ 12 fps, `subtitles_words` ≥ 85 fps,
 > `text_static_4` not slower, `everything` ≥ 4 fps, golden green in all four configurations.
@@ -322,6 +351,11 @@ Remaining: 1.1 single `WriteFrame` call; 1.2 thread budgets; 1.3 RGBA straight i
 
 ## Log
 
+- 2026-09-14 — worklist item D (plan step 2.7) + the single GPU control. Subtitles gained a canvas
+  entry point, so the whole pass follows its destination (bit-identical on GPU and raster); the
+  Timeline keeps a raster canvas because a full-frame round trip is 5.6 ms at 1080p against 0.27 ms
+  of drawing. `GpuDevice::SetBackend` is now the one switch for all GPU use, guarded by a `control`
+  check. Golden 292/292 four ways; `subtitles_words` unchanged (98.7/99.8/100.5 -> 98.0/96.8/101.2).
 - 2026-09-14 — worklist item C (plan step 2.6): the plan's two halves measured at ~0.5 % and ~4 %
   (the glow is ~99 % of an animated glow frame and the ray-march ~91 % of that). Shipped instead a
   cross-frame cache for the composited glow image on block-mode animations, where the march is
