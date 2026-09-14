@@ -16,13 +16,15 @@
 #if USE_BABL
 #include <babl/babl.h>
 #endif
+#include <array>
+#include <cstdint>
 #include <vector>
 #include <cmath>
 
 using namespace openshot;
 
 /// Blank constructor, useful when using Json to load the effect properties
-ChromaKey::ChromaKey() : fuzz(5.0), halo(0), method(CHROMAKEY_BASIC) {
+ChromaKey::ChromaKey() : fuzz(20.0), halo(10.0), method(CHROMAKEY_BASIC_SOFT) {
 	// Init default color
 	color = Color();
 
@@ -114,7 +116,8 @@ std::shared_ptr<openshot::Frame> ChromaKey::GetFrame(std::shared_ptr<openshot::F
 	int pixelcount = width * height;
 
 #if USE_BABL
-	if (method > CHROMAKEY_BASIC && method <= CHROMAKEY_LAST_METHOD)
+	if (method != CHROMAKEY_BASIC && method != CHROMAKEY_BASIC_SOFT
+		&& method <= CHROMAKEY_LAST_METHOD)
 	{
 		static bool need_init = true;
 
@@ -282,33 +285,56 @@ std::shared_ptr<openshot::Frame> ChromaKey::GetFrame(std::shared_ptr<openshot::F
 				}
 				break;
 
-			case CHROMAKEY_YCBCR:
-				for (int y = 0; y < height; ++y)
-				{
-					unsigned char *pixel = image->scanLine(y);
-
-					for (int x = 0; x < width; ++x, pixel += 4, pc += 3)
+				case CHROMAKEY_YCBCR:
 					{
-						int db = (int) pc[1] - mask.u[1];
-						int dr = (int) pc[2] - mask.u[2];
-						float tmp = sqrt(db * db + dr * dr);
+						// sqrt(db^2 + dr^2), with db/dr in [-255, 255]
+						static const std::array<float, 130051> sqrt_lut = [] {
+							std::array<float, 130051> lut{};
+							for (int i = 0; i <= 130050; ++i)
+								lut[i] = std::sqrt(static_cast<float>(i));
+							return lut;
+						}();
 
-						if (tmp <= threshold)
-						{
-							pixel[0] = pixel[1] = pixel[2] = pixel[3] = 0;
-						}
-						else if (tmp <= threshold + halothreshold)
-						{
-							float alphamult = (tmp - threshold) / halothreshold;
+						const int threshold_sq = threshold * threshold;
+						const int halo_upper = threshold + halothreshold;
+						const int halo_upper_sq = halo_upper * halo_upper;
+						const float inv_halo = (halothreshold > 0) ? (1.0f / halothreshold) : 0.0f;
+						const unsigned char key_cb = mask.u[1];
+						const unsigned char key_cr = mask.u[2];
+						unsigned char *img_bits = image->bits();
+						const int img_bpl = image->bytesPerLine();
 
-							pixel[0] *= alphamult;
-							pixel[1] *= alphamult;
-							pixel[2] *= alphamult;
-							pixel[3] *= alphamult;
+						#pragma omp parallel for schedule(static)
+						for (int y = 0; y < height; ++y)
+						{
+							unsigned char *pixel = img_bits + (y * img_bpl);
+							const unsigned char *pc_row = pixelbuf.data() + (y * rowwidth);
+
+							for (int x = 0; x < width; ++x, pixel += 4)
+							{
+								const unsigned char *pc_px = pc_row + (x * 3);
+								int db = static_cast<int>(pc_px[1]) - key_cb;
+								int dr = static_cast<int>(pc_px[2]) - key_cr;
+								int dist_sq = db * db + dr * dr;
+
+								if (dist_sq <= threshold_sq)
+								{
+									pixel[0] = pixel[1] = pixel[2] = pixel[3] = 0;
+								}
+								else if (halothreshold > 0 && dist_sq <= halo_upper_sq)
+								{
+									float tmp = sqrt_lut[dist_sq];
+									float alphamult = (tmp - threshold) * inv_halo;
+
+									pixel[0] *= alphamult;
+									pixel[1] *= alphamult;
+									pixel[2] *= alphamult;
+									pixel[3] *= alphamult;
+								}
+							}
 						}
 					}
-				}
-				break;
+					break;
 
 			case CHROMAKEY_CIE_LCH_L:
 				for (int y = 0; y < height; ++y)
@@ -485,29 +511,121 @@ std::shared_ptr<openshot::Frame> ChromaKey::GetFrame(std::shared_ptr<openshot::F
 	}
 #endif
 
-	// Loop through pixels
-	for (int y = 0; y < height; ++y)
-	{
-		unsigned char * pixel = image->scanLine(y);
+		// Metric upper bound for Color::GetDistance internal term is below 589825.
+		static const std::array<uint16_t, 589826> dist_lut = [] {
+			std::array<uint16_t, 589826> lut{};
+			for (int i = 0; i <= 589825; ++i)
+				lut[i] = static_cast<uint16_t>(std::sqrt(static_cast<float>(i)));
+			return lut;
+		}();
+		static const std::array<float, 256> inv_alpha = [] {
+			std::array<float, 256> lut{};
+			lut[0] = 0.0f;
+			for (int i = 1; i < 256; ++i)
+				lut[i] = 255.0f / static_cast<float>(i);
+			return lut;
+		}();
 
-		for (int x = 0; x < width; ++x, pixel += 4)
-		{
-			float A = pixel[3];
-			unsigned char R = (pixel[0] / A) * 255.0;
-			unsigned char G = (pixel[1] / A) * 255.0;
-			unsigned char B = (pixel[2] / A) * 255.0;
+		if (method == CHROMAKEY_BASIC) {
+			// Legacy BASIC behavior (hard threshold, no halo), optimized with OpenMP.
+			unsigned char *img_bits = image->bits();
+			const int img_bpl = image->bytesPerLine();
 
-			// Get distance between mask color and pixel color
-			long distance = Color::GetDistance((long)R, (long)G, (long)B, mask_R, mask_G, mask_B);
+			#pragma omp parallel for schedule(static)
+			for (int y = 0; y < height; ++y)
+			{
+				unsigned char * pixel = img_bits + (y * img_bpl);
+				for (int x = 0; x < width; ++x, pixel += 4)
+				{
+					const int A = pixel[3];
+					if (A <= 0)
+						continue;
 
-			if (distance <= threshold) {
-				// MATCHED - Make pixel transparent
-				// Due to premultiplied alpha, we must also zero out
-				// the individual color channels (or else artifacts are left behind)
-				pixel[0] = pixel[1] = pixel[2] = pixel[3] = 0;
+					// Preserve legacy 8-bit conversion behavior by casting to unsigned char.
+					unsigned char R = 0;
+					unsigned char G = 0;
+					unsigned char B = 0;
+					if (A == 255) {
+						R = pixel[0];
+						G = pixel[1];
+						B = pixel[2];
+					} else {
+						const float inv_a = inv_alpha[A];
+						R = static_cast<unsigned char>(pixel[0] * inv_a);
+						G = static_cast<unsigned char>(pixel[1] * inv_a);
+						B = static_cast<unsigned char>(pixel[2] * inv_a);
+					}
+
+					const int rmean = (static_cast<int>(R) + static_cast<int>(mask_R)) / 2;
+					const int r = static_cast<int>(R) - static_cast<int>(mask_R);
+					const int g = static_cast<int>(G) - static_cast<int>(mask_G);
+					const int b = static_cast<int>(B) - static_cast<int>(mask_B);
+					const int dist_sq = (((512 + rmean) * r * r) >> 8) + 4 * g * g + (((767 - rmean) * b * b) >> 8);
+					const int distance = dist_lut[dist_sq];
+
+					if (distance <= threshold)
+						pixel[0] = pixel[1] = pixel[2] = pixel[3] = 0;
+				}
+			}
+		} else {
+			// BASIC_SOFT: same metric, optional halo feathering, optimized + OpenMP.
+			static const std::array<float, 589826> dist_f_lut = [] {
+				std::array<float, 589826> lut{};
+				for (int i = 0; i <= 589825; ++i)
+					lut[i] = std::sqrt(static_cast<float>(i));
+				return lut;
+			}();
+			const int halo_upper = threshold + halothreshold;
+			const int halo_upper_sq = halo_upper * halo_upper;
+			const float inv_halo = (halothreshold > 0) ? (1.0f / halothreshold) : 0.0f;
+			unsigned char *img_bits = image->bits();
+			const int img_bpl = image->bytesPerLine();
+
+			#pragma omp parallel for schedule(static)
+			for (int y = 0; y < height; ++y)
+			{
+				unsigned char * pixel = img_bits + (y * img_bpl);
+				for (int x = 0; x < width; ++x, pixel += 4)
+				{
+					const int A = pixel[3];
+					if (A <= 0)
+						continue;
+
+					int R = 0;
+					int G = 0;
+					int B = 0;
+					if (A == 255) {
+						R = pixel[0];
+						G = pixel[1];
+						B = pixel[2];
+					} else {
+						const float inv_a = inv_alpha[A];
+						R = std::clamp(static_cast<int>(pixel[0] * inv_a), 0, 255);
+						G = std::clamp(static_cast<int>(pixel[1] * inv_a), 0, 255);
+						B = std::clamp(static_cast<int>(pixel[2] * inv_a), 0, 255);
+					}
+
+					const int rmean = (R + static_cast<int>(mask_R)) / 2;
+					const int r = R - static_cast<int>(mask_R);
+					const int g = G - static_cast<int>(mask_G);
+					const int b = B - static_cast<int>(mask_B);
+					const int dist_sq = (((512 + rmean) * r * r) >> 8) + 4 * g * g + (((767 - rmean) * b * b) >> 8);
+
+					const int distance = dist_lut[dist_sq];
+					if (distance <= threshold) {
+						pixel[0] = pixel[1] = pixel[2] = pixel[3] = 0;
+					}
+					else if (halothreshold > 0 && dist_sq <= halo_upper_sq) {
+						const float distance_f = dist_f_lut[dist_sq];
+						const float alphamult = (distance_f - threshold) * inv_halo;
+						pixel[0] = static_cast<unsigned char>(pixel[0] * alphamult);
+						pixel[1] = static_cast<unsigned char>(pixel[1] * alphamult);
+						pixel[2] = static_cast<unsigned char>(pixel[2] * alphamult);
+						pixel[3] = static_cast<unsigned char>(pixel[3] * alphamult);
+					}
+				}
 			}
 		}
-	}
 
 	// return the modified frame
 	return frame;
@@ -584,6 +702,7 @@ std::string ChromaKey::PropertiesJSON(int64_t requested_frame) const {
 	root["halo"] = add_property_json("Halo", halo.GetValue(requested_frame), "float", "", &halo, 0, 125, false, requested_frame);
 	root["keymethod"] = add_property_json("Key Method", method, "int", "", NULL, 0, CHROMAKEY_LAST_METHOD, false, requested_frame);
 	root["keymethod"]["choices"].append(add_property_choice_json("Basic keying", 0, method));
+	root["keymethod"]["choices"].append(add_property_choice_json("Basic keying (soft)", CHROMAKEY_BASIC_SOFT, method));
 	root["keymethod"]["choices"].append(add_property_choice_json("HSV/HSL hue", 1, method));
 	root["keymethod"]["choices"].append(add_property_choice_json("HSV saturation", 2, method));
 	root["keymethod"]["choices"].append(add_property_choice_json("HSL saturation", 3, method));

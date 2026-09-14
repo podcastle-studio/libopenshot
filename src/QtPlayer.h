@@ -14,12 +14,15 @@
 #ifndef OPENSHOT_QT_PLAYER_H
 #define OPENSHOT_QT_PLAYER_H
 
+#include <cstdint>
 #include <iostream>
 #include <vector>
 
 #include "PlayerBase.h"
 #include "Qt/PlayerPrivate.h"
 #include "RendererBase.h"
+
+class QWidget;
 
 namespace openshot
 {
@@ -75,6 +78,9 @@ namespace openshot
   /// Seek to a specific frame in the player
 	void Seek(int64_t new_frame);
 
+  /// Seek to a specific frame, optionally triggering preroll cache rebuild.
+	void Seek(int64_t new_frame, bool start_preroll);
+
 	/// Set the source URL/path of this player (which will create an internal Reader)
 	void SetSource(const std::string &source);
 
@@ -82,12 +88,15 @@ namespace openshot
 	void SetTimelineSource(const std::string &json);
 
 	/// Set the QWidget which will be used as the display (note: QLabel works well). This does not take a
-	/// normal pointer, but rather a LONG pointer id (and it re-casts the QWidget pointer inside libopenshot).
+	/// normal pointer, but rather a pointer-sized unsigned integer (and it re-casts the QWidget pointer inside libopenshot).
 	/// This is required due to SIP and SWIG incompatibility in the Python bindings.
-	void SetQWidget(int64_t qwidget_address);
+	void SetQWidget(uintptr_t qwidget_address);
 
-	/// Get the Renderer pointer address (for Python to cast back into a QObject)
-	int64_t GetRendererQObject();
+	/// Set the QWidget which will be used as the display (for SWIG/Python bindings)
+	void SetQWidget(QWidget *widget);
+
+	/// Get the Renderer pointer address (for Python to cast back into a VideoRenderer)
+	uintptr_t GetRendererQObject();
 
 	/// Get the Playback speed
 	float Speed();

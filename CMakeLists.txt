@@ -24,8 +24,8 @@ For more information, please visit <http://www.openshot.org/>.
 set(CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake/Modules")
 
 ################ PROJECT VERSION ####################
-set(PROJECT_VERSION_FULL "0.4.0")
-set(PROJECT_SO_VERSION 27)
+set(PROJECT_VERSION_FULL "1.0.0")
+set(PROJECT_SO_VERSION 31)
 
 # Remove the dash and anything following, to get the #.#.# version for project()
 STRING(REGEX REPLACE "\-.*$" "" VERSION_NUM "${PROJECT_VERSION_FULL}")
@@ -73,7 +73,10 @@ option(USE_SYSTEM_JSONCPP "Use system installed JsonCpp, if found" ON)
 option(DISABLE_BUNDLED_JSONCPP "Don't fall back to bundled JsonCpp" OFF)
 option(ENABLE_MAGICK "Use ImageMagick, if available" ON)
 option(ENABLE_OPENCV_EFFECTS "Build with advanced OpenCV effects: Tracker, Stabilizer, ObjectDetection, Outline (requires Protobuf 3)" OFF)
+# Headless renderer: screen capture is a desktop feature and pulls in PipeWire / xdg-desktop-portal.
+option(ENABLE_WAYLAND_CAPTURE "Build Wayland screen capture support with xdg-desktop-portal and PipeWire (Linux only)" OFF)
 option(USE_HW_ACCEL "Enable hardware-accelerated encoding-decoding with FFmpeg 3.4+" ON)
+option(ENABLE_VULKAN_BENCHMARK "Build the experimental Vulkan benchmark example" OFF)
 
 # Legacy commandline override
 if (DISABLE_TESTS)

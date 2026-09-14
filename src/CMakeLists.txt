@@ -63,10 +63,13 @@ set(OPENSHOT_SOURCES
   text/TextAnimationRenderer.cpp
   AudioBufferSource.cpp
   BlendModes.cpp
+  AudioRecorder.cpp
+  AnimatedCurve.cpp
   AudioDevices.cpp
   AudioReaderSource.cpp
   AudioResampler.cpp
   AudioWaveformer.cpp
+  CameraCaptureReader.cpp
   CacheBase.cpp
   CacheDisk.cpp
   CacheMemory.cpp
@@ -80,6 +83,7 @@ set(OPENSHOT_SOURCES
   DummyReader.cpp
   ReaderBase.cpp
   RendererBase.cpp
+  ScreenCaptureReader.cpp
   WriterBase.cpp
   EffectBase.cpp
   EffectInfo.cpp
@@ -87,7 +91,9 @@ set(OPENSHOT_SOURCES
   FFmpegWriter.cpp
   Fraction.cpp
   Frame.cpp
+  FrameScope.cpp
   FrameMapper.cpp
+  MemoryTrim.cpp
   Json.cpp
   KeyFrame.cpp
   OpenShotVersion.cpp
@@ -105,16 +111,32 @@ set(OPENSHOT_SOURCES
   ZmqLogger.cpp
   )
 
+set(OPENSHOT_WAYLAND_CAPTURE FALSE)
+if(ENABLE_WAYLAND_CAPTURE AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  find_package(PkgConfig)
+  if(PkgConfig_FOUND)
+    pkg_check_modules(PC_PIPEWIRE QUIET IMPORTED_TARGET libpipewire-0.3)
+    pkg_check_modules(PC_LIBSPA QUIET IMPORTED_TARGET libspa-0.2)
+    pkg_check_modules(PC_GIO QUIET IMPORTED_TARGET gio-2.0)
+    pkg_check_modules(PC_GIO_UNIX QUIET IMPORTED_TARGET gio-unix-2.0)
+    if(PC_PIPEWIRE_FOUND AND PC_LIBSPA_FOUND AND PC_GIO_FOUND AND PC_GIO_UNIX_FOUND)
+      set(OPENSHOT_WAYLAND_CAPTURE TRUE)
+    endif()
+  endif()
+endif()
+
 # OpenCV related classes
 set(OPENSHOT_CV_SOURCES
   CVTracker.cpp
   CVStabilization.cpp
   ClipProcessingJobs.cpp
   CVObjectDetection.cpp
+  CVObjectMask.cpp
   TrackedObjectBBox.cpp
   effects/Stabilizer.cpp
   effects/Tracker.cpp
   effects/ObjectDetection.cpp
+  effects/ObjectMask.cpp
   effects/Outline.cpp
   ./sort_filter/sort.cpp
   ./sort_filter/Hungarian.cpp
@@ -136,24 +158,35 @@ set(EFFECTS_SOURCES
   effects/Wipe.cpp
   effects/Exposure.cpp
   effects/SplitShift.cpp
+  effects/AudioVisualization.cpp
   effects/Bars.cpp
+  effects/BeatSync.cpp
   effects/Blur.cpp
   effects/Brightness.cpp
   effects/Caption.cpp
   effects/ChromaKey.cpp
+  effects/ColorGrade.cpp
   effects/ColorMap.cpp
   effects/ColorShift.cpp
   effects/Crop.cpp
+  effects/CropHelpers.cpp
   effects/Deinterlace.cpp
+  effects/Displace.cpp
+  effects/FilmGrain.cpp
+  effects/Glow.cpp
   effects/Hue.cpp
   effects/LensFlare.cpp
+  effects/AnalogTape.cpp
   effects/Mask.cpp
   effects/Negate.cpp
   effects/Pixelate.cpp
   effects/Saturation.cpp
   effects/Sharpen.cpp
+  effects/Shadow.cpp
   effects/Shift.cpp
   effects/SphericalProjection.cpp
+  effects/Timer.cpp
+  effects/DenoiseImage.cpp
   effects/Wave.cpp
   audio_effects/STFT.cpp
   audio_effects/Noise.cpp
@@ -208,11 +241,37 @@ target_include_directories(openshot
     $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}>
     $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/libopenshot>)
 
+if(OPENSHOT_WAYLAND_CAPTURE)
+  target_compile_definitions(openshot PRIVATE HAVE_WAYLAND_CAPTURE_PLUGIN=1)
+  target_link_libraries(openshot PRIVATE ${CMAKE_DL_LIBS})
+
+  # PipeWire is optional at runtime. Keeping it in a module prevents the
+  # dynamic loader from rejecting libopenshot on X11 or older Linux systems
+  # that do not provide the PipeWire 0.3 client ABI.
+  add_library(openshot-wayland-capture MODULE WaylandScreenCaptureReader.cpp)
+  target_include_directories(openshot-wayland-capture PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_BINARY_DIR})
+  target_link_libraries(openshot-wayland-capture PRIVATE
+    openshot
+    PkgConfig::PC_PIPEWIRE
+    PkgConfig::PC_LIBSPA
+    PkgConfig::PC_GIO
+    PkgConfig::PC_GIO_UNIX)
+  set_target_properties(openshot-wayland-capture PROPERTIES
+    BUILD_RPATH "$ORIGIN"
+    INSTALL_RPATH "$ORIGIN")
+endif()
+add_feature_info("Wayland screen capture" OPENSHOT_WAYLAND_CAPTURE "Use the optional xdg-desktop-portal and PipeWire capture module")
+
 ################# LIBOPENSHOT-AUDIO ###################
 # Find JUCE-based openshot Audio libraries
 if(NOT TARGET OpenShot::Audio)
   # Only load if necessary (not for integrated builds)
-  find_package(OpenShotAudio 0.4.0 REQUIRED)
+  # Upstream requires 1.0.0; this fork builds and links against the 0.6.0 packaged on our
+  # images, so the bump looks conservative rather than a real API dependency. Raise this back
+  # to 1.0.0 once 1.0.0 is installed everywhere -- see doc/gpu-migration/UPSTREAM-MERGE.md.
+  find_package(OpenShotAudio 0.6.0 REQUIRED)
 endif()
 target_link_libraries(openshot PUBLIC OpenShot::Audio)
 
@@ -342,6 +401,9 @@ endif()
 ### Qt Toolkit
 ###
 
+set(USE_QT6 "AUTO" CACHE STRING "Select Qt major version (AUTO, ON=Qt6, OFF=Qt5)")
+set_property(CACHE USE_QT6 PROPERTY STRINGS AUTO ON OFF)
+
 set(_qt_components Core Gui Widgets)
 
 # We also need QtSvg unless we have Resvg insetead.
@@ -349,26 +411,67 @@ if(NOT HAVE_RESVG)
   list(APPEND _qt_components Svg)
 endif()
 
-find_package(Qt5 COMPONENTS ${_qt_components} REQUIRED)
+# Qt6 packages require newer CMake; gate support so older systems still build Qt5.
+set(_qt6_allowed TRUE)
+if(CMAKE_VERSION VERSION_LESS "3.16")
+  set(_qt6_allowed FALSE)
+  if(USE_QT6 STREQUAL "ON")
+    message(FATAL_ERROR "USE_QT6=ON requires CMake 3.16 or newer")
+  endif()
+endif()
+if(USE_QT6 STREQUAL "OFF")
+  set(_qt6_allowed FALSE)
+endif()
+
+set(_qt_selection "")
+if(USE_QT6 STREQUAL "ON")
+  if(NOT _qt6_allowed)
+    message(FATAL_ERROR "Qt6 support disabled by CMake version; set USE_QT6=OFF or upgrade CMake")
+  endif()
+  set(_qt_selection "Qt6")
+elseif(USE_QT6 STREQUAL "OFF")
+  set(_qt_selection "Qt5")
+else()
+  if(_qt6_allowed)
+    find_package(Qt6 COMPONENTS Core QUIET)
+    if(Qt6_FOUND)
+      set(_qt_selection "Qt6")
+    endif()
+  endif()
+  if(NOT _qt_selection)
+    set(_qt_selection "Qt5")
+  endif()
+endif()
+
+if(_qt_selection STREQUAL "Qt6")
+  set(QT_VERSION_MAJOR 6)
+else()
+  set(QT_VERSION_MAJOR 5)
+endif()
+
+find_package(Qt${QT_VERSION_MAJOR} COMPONENTS ${_qt_components} REQUIRED)
 
 foreach(_qt_comp IN LISTS _qt_components)
-  if(TARGET Qt5::${_qt_comp})
-    target_link_libraries(openshot PUBLIC Qt5::${_qt_comp})
+  if(TARGET Qt${QT_VERSION_MAJOR}::${_qt_comp})
+    target_link_libraries(openshot PUBLIC Qt${QT_VERSION_MAJOR}::${_qt_comp})
   endif()
 endforeach()
 
+string(REPLACE ";" ", " _qt_comp_list "${_qt_components}")
+message(STATUS "Found Qt${QT_VERSION_MAJOR} ${Qt${QT_VERSION_MAJOR}Core_VERSION_STRING} (components: ${_qt_comp_list})")
+
 # Keep track of Qt version, to embed in our version header
-set(QT_VERSION_STR ${Qt5Core_VERSION_STRING} CACHE STRING "Qt version linked with" FORCE)
+set(QT_VERSION_STR ${Qt${QT_VERSION_MAJOR}Core_VERSION_STRING} CACHE STRING "Qt version linked with" FORCE)
 mark_as_advanced(QT_VERSION_STR)
 
 ################### FFMPEG #####################
 # Find FFmpeg libraries (used for video encoding / decoding)
 find_package(FFmpeg REQUIRED
-  COMPONENTS avcodec avformat avutil swscale
-  OPTIONAL_COMPONENTS swresample avresample
+  COMPONENTS avcodec avdevice avformat avutil swscale
+  OPTIONAL_COMPONENTS swresample
 )
 
-set(all_comps avcodec avformat avutil swscale)
+set(all_comps avcodec avdevice avformat avutil swscale)
 set(version_comps avcodec avformat avutil)
 
 # Pick a resampler.  Prefer swresample if possible
@@ -376,6 +479,7 @@ if(TARGET FFmpeg::swresample)
   set(resample_lib swresample)
   set(USE_SW TRUE)
 else()
+  find_package(FFmpeg REQUIRED COMPONENTS avresample)
   set(resample_lib avresample)
   set(USE_SW FALSE)
 endif()
@@ -575,8 +679,8 @@ if(DEFINED PROFILER)
 endif()
 
 if(WIN32)
-  # Required for exception handling on Windows
-  target_link_libraries(openshot PUBLIC "imagehlp" "dbghelp" )
+  # Required for exception handling and DirectShow device enumeration on Windows
+  target_link_libraries(openshot PUBLIC "imagehlp" "dbghelp" "ole32" "oleaut32" "strmiids" "uuid" )
 endif()
 
 ###
@@ -590,6 +694,12 @@ install(TARGETS openshot
   LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
   RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
   INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/libopenshot)
+
+if(OPENSHOT_WAYLAND_CAPTURE)
+  install(TARGETS openshot-wayland-capture
+    COMPONENT runtime
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR})
+endif()
 
 install(DIRECTORY .
   COMPONENT devel

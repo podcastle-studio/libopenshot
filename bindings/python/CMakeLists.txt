@@ -12,12 +12,16 @@
 find_package(SWIG 3.0 REQUIRED)
 include(${SWIG_USE_FILE})
 
-### Enable some legacy SWIG behaviors, in newer CMAKEs
+### Use modern SWIG target behavior when available
 if (POLICY CMP0078)
-  cmake_policy(SET CMP0078 OLD)
+  cmake_policy(SET CMP0078 NEW)
 endif()
 if (POLICY CMP0086)
-  cmake_policy(SET CMP0086 OLD)
+  cmake_policy(SET CMP0086 NEW)
+endif()
+
+if (POLICY CMP0148)
+  cmake_policy(SET CMP0148 OLD)
 endif()
 
 find_package(PythonInterp 3)
@@ -85,18 +89,20 @@ if (CMAKE_VERSION VERSION_GREATER 3.20)
 endif()
 
 ### Add the SWIG interface file (which defines all the SWIG methods)
-if (CMAKE_VERSION VERSION_LESS 3.8.0)
-  swig_add_module(pyopenshot python openshot.i)
+swig_add_library(pyopenshot LANGUAGE python SOURCES openshot.i)
+
+if (POLICY CMP0078)
+  set(_pyopenshot_target pyopenshot)
 else()
-  swig_add_library(pyopenshot LANGUAGE python SOURCES openshot.i)
+  set(_pyopenshot_target ${SWIG_MODULE_pyopenshot_REAL_NAME})
 endif()
 
 ### Set output name of target
-set_target_properties(${SWIG_MODULE_pyopenshot_REAL_NAME} PROPERTIES
+set_target_properties(${_pyopenshot_target} PROPERTIES
   PREFIX "_" OUTPUT_NAME "openshot")
 
 ### Link the new python wrapper library with libopenshot
-target_link_libraries(${SWIG_MODULE_pyopenshot_REAL_NAME} PUBLIC
+target_link_libraries(${_pyopenshot_target} PUBLIC
   ${PYTHON_LIBRARIES} openshot)
 
 ######### INSTALL PATH ########
@@ -116,12 +122,8 @@ if (NOT DEFINED PYTHON_MODULE_PATH)
 
     if (NOT EXISTS "${CMAKE_INSTALL_PREFIX}/${PYTHON_MODULE_PATH}")
       ### Calculate the python module path (prefer sysconfig, fallback to distutils for compatibility)
-      execute_process(COMMAND ${PYTHON_EXECUTABLE} -c "\
-try:
-  import sysconfig; print(sysconfig.get_path('platlib'))
-except ImportError:
-  from distutils.sysconfig import get_python_lib; \
-  print(get_python_lib(plat_specific=True, prefix=''))"
+      execute_process(
+              COMMAND ${PYTHON_EXECUTABLE} -c "import sysconfig; p=sysconfig.get_path('platlib', scheme='posix_prefix'); p=p[5:] if p.startswith('/usr/') else p.lstrip('/'); print(p)"
               OUTPUT_VARIABLE PYTHON_MODULE_PATH
               OUTPUT_STRIP_TRAILING_WHITESPACE)
     endif()
@@ -132,7 +134,7 @@ message(STATUS "PYTHON_MODULE_PATH: ${CMAKE_INSTALL_PREFIX}/${PYTHON_MODULE_PATH
 
 ############### INSTALL HEADERS & LIBRARY ################
 ### Install Python bindings
-install(TARGETS ${SWIG_MODULE_pyopenshot_REAL_NAME}
+install(TARGETS ${_pyopenshot_target}
   DESTINATION ${PYTHON_MODULE_PATH} )
 install(FILES ${CMAKE_CURRENT_BINARY_DIR}/openshot.py
   DESTINATION ${PYTHON_MODULE_PATH} )

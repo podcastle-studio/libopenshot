@@ -14,6 +14,12 @@
 /* Suppress warnings about ignored operator= */
 %warnfilter(362);
 
+/* JUCE thread internals are implementation details, not binding API */
+%ignore juce::Thread;
+namespace juce {
+    class Thread {};
+}
+
 /* Don't generate multiple wrappers for functions with default args */
 %feature("compactdefaultargs", "1");
 
@@ -27,6 +33,9 @@
 %include "std_vector.i"
 %include "std_map.i"
 %include <stdint.i>
+%apply uint64_t { uintptr_t };
+
+class QWidget;
 
 /* Unhandled STL Exception Handling */
 %include <std_except.i>
@@ -34,12 +43,16 @@
 /* Include shared pointer code */
 %include <std_shared_ptr.i>
 
+%typemap(in) QWidget *;
+
 /* Mark these classes as shared_ptr classes */
 #ifdef USE_IMAGEMAGICK
     %shared_ptr(Magick::Image)
 #endif
 %shared_ptr(juce::AudioBuffer<float>)
 %shared_ptr(openshot::Frame)
+
+%newobject openshot::Clip::CreateReader;
 
 /* Rename operators to avoid wrapping name collisions */
 %rename(__eq__) operator==;
@@ -62,7 +75,9 @@
 #include "ReaderBase.h"
 #include "WriterBase.h"
 #include "AudioDevices.h"
+#include "AudioRecorder.h"
 #include "AudioWaveformer.h"
+#include "CameraCaptureReader.h"
 #include "CacheBase.h"
 #include "CacheDisk.h"
 #include "CacheMemory.h"
@@ -83,10 +98,12 @@
 #include "FFmpegWriter.h"
 #include "Fraction.h"
 #include "Frame.h"
+#include "FrameScope.h"
 #include "FrameMapper.h"
 #include "PlayerBase.h"
 #include "Point.h"
 #include "Profiles.h"
+#include "ScreenCaptureReader.h"
 #include "QtHtmlReader.h"
 #include "QtImageReader.h"
 #include "QtPlayer.h"
@@ -98,6 +115,100 @@
 #include "Timeline.h"
 #include "Qt/VideoCacheThread.h"
 #include "ZmqLogger.h"
+#include <QtWidgets/QWidget>
+
+static void *openshot_swig_pylong_as_ptr(PyObject *obj) {
+    if (!obj) {
+        return nullptr;
+    }
+
+    unsigned long long ull = PyLong_AsUnsignedLongLong(obj);
+    if (!PyErr_Occurred()) {
+        return reinterpret_cast<void*>(static_cast<uintptr_t>(ull));
+    }
+    PyErr_Clear();
+
+    long long ll = PyLong_AsLongLong(obj);
+    if (!PyErr_Occurred()) {
+        return reinterpret_cast<void*>(static_cast<intptr_t>(ll));
+    }
+    PyErr_Clear();
+
+    return nullptr;
+}
+
+static void *openshot_swig_get_qwidget_ptr(PyObject *obj) {
+    if (!obj || obj == Py_None) {
+        return nullptr;
+    }
+
+    if (PyLong_Check(obj)) {
+        void *ptr = openshot_swig_pylong_as_ptr(obj);
+        return ptr;
+    }
+
+    const char *sip_modules[] = {"sip", "PyQt6.sip", "PyQt5.sip"};
+    for (size_t i = 0; i < (sizeof(sip_modules) / sizeof(sip_modules[0])); ++i) {
+        PyObject *mod = PyImport_ImportModule(sip_modules[i]);
+        if (!mod) {
+            PyErr_Clear();
+            continue;
+        }
+        PyObject *unwrap = PyObject_GetAttrString(mod, "unwrapinstance");
+        if (unwrap && PyCallable_Check(unwrap)) {
+            PyObject *addr = PyObject_CallFunctionObjArgs(unwrap, obj, NULL);
+            if (addr) {
+                void *ptr = openshot_swig_pylong_as_ptr(addr);
+                Py_DECREF(addr);
+                if (ptr) {
+                    Py_DECREF(unwrap);
+                    Py_DECREF(mod);
+                    return ptr;
+                }
+            }
+        }
+        Py_XDECREF(unwrap);
+        Py_DECREF(mod);
+    }
+
+    const char *shiboken_modules[] = {"shiboken6", "shiboken2"};
+    for (size_t i = 0; i < (sizeof(shiboken_modules) / sizeof(shiboken_modules[0])); ++i) {
+        PyObject *mod = PyImport_ImportModule(shiboken_modules[i]);
+        if (!mod) {
+            PyErr_Clear();
+            continue;
+        }
+        PyObject *get_ptr = PyObject_GetAttrString(mod, "getCppPointer");
+        if (get_ptr && PyCallable_Check(get_ptr)) {
+            PyObject *ptrs = PyObject_CallFunctionObjArgs(get_ptr, obj, NULL);
+            if (ptrs) {
+                PyObject *addr = ptrs;
+                if (PyTuple_Check(ptrs) && PyTuple_Size(ptrs) > 0) {
+                    addr = PyTuple_GetItem(ptrs, 0);
+                }
+                void *ptr = openshot_swig_pylong_as_ptr(addr);
+                Py_DECREF(ptrs);
+                if (ptr) {
+                    Py_DECREF(get_ptr);
+                    Py_DECREF(mod);
+                    return ptr;
+                }
+            }
+        }
+        Py_XDECREF(get_ptr);
+        Py_DECREF(mod);
+    }
+
+    return nullptr;
+}
+
+static int openshot_swig_is_qwidget(PyObject *obj) {
+    void *ptr = openshot_swig_get_qwidget_ptr(obj);
+    if (ptr) {
+        return 1;
+    }
+    return obj == Py_None ? 1 : 0;
+}
 
 %}
 
@@ -136,6 +247,22 @@
     catch (std::exception &e) {
         SWIG_exception_fail(SWIG_RuntimeError, e.what());
     }
+}
+
+%typemap(in) QWidget * {
+    void *ptr = openshot_swig_get_qwidget_ptr($input);
+    if (!ptr && $input != Py_None) {
+        SWIG_exception_fail(SWIG_TypeError, "Expected QWidget or Qt binding widget");
+    }
+    $1 = reinterpret_cast<QWidget*>(ptr);
+}
+
+%typemap(typecheck, precedence=SWIG_TYPECHECK_POINTER) QWidget * {
+    $1 = openshot_swig_is_qwidget($input);
+}
+
+%typemap(out) uintptr_t openshot::QtPlayer::GetRendererQObject {
+    $result = PyLong_FromLongLong((long long)(intptr_t)$1);
 }
 
 
@@ -284,11 +411,81 @@
     }
 }
 
+%extend openshot::Frame {
+    PyObject* GetPixelsBytes() {
+        PyGILState_STATE gstate = PyGILState_Ensure();
+        PyObject* result = NULL;
+
+        std::shared_ptr<QImage> img = $self->GetImage();
+        if (!img) {
+            Py_INCREF(Py_None);
+            result = Py_None;
+            PyGILState_Release(gstate);
+            return result;
+        }
+
+        const Py_ssize_t size =
+            static_cast<Py_ssize_t>(img->bytesPerLine()) *
+            static_cast<Py_ssize_t>(img->height());
+
+        const unsigned char* p = img->constBits();
+        if (!p || size <= 0) {
+            Py_INCREF(Py_None);
+            result = Py_None;
+            PyGILState_Release(gstate);
+            return result;
+        }
+
+        result = PyBytes_FromStringAndSize(reinterpret_cast<const char*>(p), size);
+        PyGILState_Release(gstate);
+        return result;
+    }
+
+    PyObject* GetPixelsRowBytes(int row) {
+        PyGILState_STATE gstate = PyGILState_Ensure();
+        PyObject* result = NULL;
+
+        std::shared_ptr<QImage> img = $self->GetImage();
+        if (!img) {
+            Py_INCREF(Py_None);
+            result = Py_None;
+            PyGILState_Release(gstate);
+            return result;
+        }
+
+        if (row < 0 || row >= img->height()) {
+            PyErr_SetString(PyExc_IndexError, "row out of range");
+            PyGILState_Release(gstate);
+            return NULL;
+        }
+
+        const unsigned char* p = img->constScanLine(row);
+        if (!p) {
+            Py_INCREF(Py_None);
+            result = Py_None;
+            PyGILState_Release(gstate);
+            return result;
+        }
+
+        const Py_ssize_t row_bytes = static_cast<Py_ssize_t>(img->bytesPerLine());
+        result = PyBytes_FromStringAndSize(reinterpret_cast<const char*>(p), row_bytes);
+        PyGILState_Release(gstate);
+        return result;
+    }
+
+    int GetBytesPerLine() {
+        std::shared_ptr<QImage> img = $self->GetImage();
+        return img ? img->bytesPerLine() : 0;
+    }
+}
+
 %include "OpenShotVersion.h"
 %include "ReaderBase.h"
 %include "WriterBase.h"
 %include "AudioDevices.h"
+%include "AudioRecorder.h"
 %include "AudioWaveformer.h"
+%include "CameraCaptureReader.h"
 %include "CacheBase.h"
 %include "CacheDisk.h"
 %include "CacheMemory.h"
@@ -309,15 +506,18 @@
 %include "FFmpegWriter.h"
 %include "Fraction.h"
 %include "Frame.h"
+%include "FrameScope.h"
 %include "FrameMapper.h"
 %include "PlayerBase.h"
 %include "Point.h"
 %include "Profiles.h"
+%include "ScreenCaptureReader.h"
 %include "QtHtmlReader.h"
 %include "QtImageReader.h"
 %include "QtPlayer.h"
 %include "QtTextReader.h"
 %include "KeyFrame.h"
+%include "AnimatedCurve.h"
 %include "RendererBase.h"
 %include "Settings.h"
 %include "TimelineBase.h"
@@ -347,6 +547,7 @@
 %include "effects/ColorShift.h"
 %include "effects/Crop.h"
 %include "effects/Deinterlace.h"
+%include "effects/FilmGrain.h"
 %include "effects/Hue.h"
 %include "effects/LensFlare.h"
 %include "effects/Mask.h"
@@ -356,6 +557,8 @@
 %include "effects/Sharpen.h"
 %include "effects/Shift.h"
 %include "effects/SphericalProjection.cpp"
+%include "effects/Timer.h"
+%include "effects/DenoiseImage.h"
 %include "effects/Wave.h"
 #ifdef USE_OPENCV_EFFECTS
     %include "effects/Stabilizer.h"

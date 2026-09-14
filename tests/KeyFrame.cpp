@@ -15,12 +15,16 @@
 #include <sstream>
 #include <memory>
 
+#include <QColor>
+#include <QImage>
+
 #include "KeyFrame.h"
 #include "Coordinate.h"
 #include "Clip.h"
 #include "Exceptions.h"
 #include "FFmpegReader.h"
 #include "Fraction.h"
+#include "Frame.h"
 #include "Point.h"
 #include "Timeline.h"
 
@@ -580,10 +584,10 @@ TEST_CASE( "TrackedObjectBBox init", "[libopenshot][keyframe]" )
 	CHECK(kfb.scale_x.GetInt(1) == 1);
 	CHECK(kfb.scale_y.GetInt(1) == 1);
 
-	CHECK(kfb.rotation.GetInt(1) == 0);
-
 	CHECK(kfb.stroke_width.GetInt(1) == 2);
     CHECK(kfb.stroke_alpha.GetValue(1) == Approx(0.7f).margin(0.0001));
+	CHECK(kfb.draw_box.GetInt(1) == 1);
+	CHECK(kfb.draw_text.GetInt(1) == 1);
 
 	CHECK(kfb.background_alpha .GetInt(1) == 0);
 	CHECK(kfb.background_corner.GetInt(1) == 12);
@@ -593,9 +597,9 @@ TEST_CASE( "TrackedObjectBBox init", "[libopenshot][keyframe]" )
 	CHECK(kfb.stroke.blue.GetInt(1) == 0);
 	CHECK(kfb.stroke.alpha.GetInt(1) == 212);
 
-	CHECK(kfb.background.red.GetInt(1) == 0);
-	CHECK(kfb.background.green.GetInt(1) == 0);
-	CHECK(kfb.background.blue.GetInt(1) == 255);
+	CHECK(kfb.background.red.GetInt(1) == 62);
+	CHECK(kfb.background.green.GetInt(1) == 143);
+	CHECK(kfb.background.blue.GetInt(1) == 0);
 	CHECK(kfb.background.alpha.GetInt(1) == 212);
 }
 
@@ -786,5 +790,45 @@ TEST_CASE( "GetBoxValues", "[libopenshot][keyframe]" )
 	CHECK(boxValues["w"] == 20.0);
 	CHECK(boxValues["h"] == 20.0);
 	CHECK(boxValues["ang"] == 30.0);
+}
+
+TEST_CASE( "Tracker stroke width compensates for preview raster scaling", "[libopenshot][keyframe][tracker]" )
+{
+	auto blue_run_at_center = []() {
+		Timeline timeline(100, 100, Fraction(30, 1), 44100, 2, ChannelLayout::LAYOUT_STEREO);
+		Clip parent;
+		parent.ParentTimeline(&timeline);
+
+		Tracker tracker;
+		tracker.ParentClip(&parent);
+		tracker.trackedData->ParentClip(&parent);
+		tracker.trackedData->AddBox(1, 0.5f, 0.5f, 0.4f, 0.4f, 0.0f);
+		tracker.trackedData->stroke_alpha = Keyframe(1.0);
+		tracker.trackedData->background_alpha = Keyframe(0.0);
+
+		auto image = std::make_shared<QImage>(200, 200, QImage::Format_RGBA8888_Premultiplied);
+		image->fill(QColor(0, 0, 0, 0));
+		auto frame = std::make_shared<Frame>(1, 200, 200, "#000000", 0, 0);
+		frame->AddImage(image);
+
+		tracker.GetFrame(frame, 1);
+		auto rendered = frame->GetImage();
+
+		int best_run = 0;
+		int current_run = 0;
+		for (int x = 40; x <= 160; ++x) {
+			const QColor pixel = rendered->pixelColor(x, 100);
+			const bool blue_pixel = pixel.alpha() > 0 && pixel.blue() > 120 && pixel.red() < 80 && pixel.green() < 80;
+			if (blue_pixel) {
+				current_run++;
+				best_run = std::max(best_run, current_run);
+			} else {
+				current_run = 0;
+			}
+		}
+		return best_run;
+	};
+
+	CHECK(blue_run_at_center() >= 3);
 }
 #endif

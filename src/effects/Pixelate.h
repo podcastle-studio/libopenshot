@@ -24,6 +24,10 @@
 
 namespace openshot
 {
+	enum PixelateMaskMode {
+		PIXELATE_MASK_LIMIT_TO_AREA = 0,
+		PIXELATE_MASK_VARY_STRENGTH = 1
+	};
 
 	/**
 	 * @brief This class pixelates an image, and can be animated with openshot::Keyframe curves over time.
@@ -37,6 +41,10 @@ namespace openshot
 		/// Init effect settings
 		void init_effect_details();
 
+	protected:
+		bool UseCustomMaskBlend(int64_t frame_number) const override;
+		void ApplyCustomMaskBlend(std::shared_ptr<QImage> original_image, std::shared_ptr<QImage> effected_image,
+							  std::shared_ptr<QImage> mask_image, int64_t frame_number) const override;
 
 	public:
 		Keyframe pixelization;	///< Amount of pixelization
@@ -44,6 +52,7 @@ namespace openshot
 		Keyframe top;			///< Size of top margin
 		Keyframe right;			///< Size of right margin
 		Keyframe bottom;		///< Size of bottom margin
+		int mask_mode;			///< Mask behavior mode for this effect.
 
 		/// Default constructor, useful when using Json to load the effect properties
 		Pixelate();

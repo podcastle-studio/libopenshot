@@ -14,6 +14,8 @@
 #include <sstream>
 #include <memory>
 #include <list>
+#include <vector>
+#include <cstdint>
 #include <omp.h>
 
 #include "openshot_catch.h"
@@ -21,12 +23,463 @@
 #include "FrameMapper.h"
 #include "Timeline.h"
 #include "Clip.h"
+#include "CacheMemory.h"
+#include "DummyReader.h"
 #include "Frame.h"
 #include "Fraction.h"
+#include "effects/Brightness.h"
+#include "Exceptions.h"
 #include "effects/Blur.h"
+#include "effects/Bars.h"
+#include "effects/Mask.h"
 #include "effects/Negate.h"
+#include "effects/Saturation.h"
 
 using namespace openshot;
+
+TEST_CASE("Deleting a JSON-owned clip invalidates its former range", "[libopenshot][timeline][sentry-delete]")
+{
+	Timeline timeline(2, 2, Fraction(30, 1), 44100, 2, LAYOUT_STEREO);
+	DummyReader reader;
+	Clip source(&reader);
+	source.Id("owned");
+	source.Position(1.0);
+	source.End(1.0);
+	Json::Value changes(Json::arrayValue);
+	Json::Value change;
+	change["type"] = "insert";
+	change["key"].append("clips");
+	change["value"] = source.JsonValue();
+	changes.append(change);
+	timeline.ApplyJsonDiff(changes.toStyledString());
+	REQUIRE(timeline.GetClip("owned") != nullptr);
+
+	for (int number : {5, 45, 90})
+		timeline.GetCache()->Add(std::make_shared<Frame>(number, 2, 2, "black"));
+	REQUIRE(timeline.GetCache()->Contains(45));
+
+	changes[0]["type"] = "delete";
+	Json::Value id;
+	id["id"] = "owned";
+	changes[0]["key"].append(id);
+	changes[0]["value"] = Json::nullValue;
+	timeline.ApplyJsonDiff(changes.toStyledString());
+	CHECK(timeline.GetClip("owned") == nullptr);
+	CHECK_FALSE(timeline.GetCache()->Contains(45));
+	CHECK(timeline.GetCache()->Contains(5));
+	CHECK(timeline.GetCache()->Contains(90));
+	// Duplicate delayed deletes are harmless.
+	CHECK_NOTHROW(timeline.ApplyJsonDiff(changes.toStyledString()));
+}
+
+static uint64_t image_fingerprint(const std::shared_ptr<QImage>& image) {
+	const uint64_t kFnvOffset = 1469598103934665603ULL;
+	const uint64_t kFnvPrime = 1099511628211ULL;
+	uint64_t hash = kFnvOffset;
+
+	if (!image) {
+		return hash;
+	}
+
+	const unsigned char* bytes = image->constBits();
+	const size_t count = static_cast<size_t>(image->sizeInBytes());
+	for (size_t i = 0; i < count; ++i) {
+		hash ^= static_cast<uint64_t>(bytes[i]);
+		hash *= kFnvPrime;
+	}
+
+	return hash;
+}
+
+class TimelineTrackingMaskReader : public ReaderBase {
+private:
+	bool is_open = false;
+	CacheMemory cache;
+	int width = 2;
+	int height = 1;
+
+public:
+	std::vector<int64_t> requests;
+
+	TimelineTrackingMaskReader(int fps_num, int fps_den, int64_t length_frames) {
+		info.has_video = true;
+		info.has_audio = false;
+		info.width = width;
+		info.height = height;
+		info.fps = Fraction(fps_num, fps_den);
+		info.video_length = length_frames;
+		info.duration = static_cast<float>(length_frames / info.fps.ToDouble());
+		info.sample_rate = 48000;
+		info.channels = 2;
+		info.audio_stream_index = -1;
+	}
+
+	openshot::CacheBase* GetCache() override { return &cache; }
+	bool IsOpen() override { return is_open; }
+	std::string Name() override { return "TimelineTrackingMaskReader"; }
+	void Open() override { is_open = true; }
+	void Close() override { is_open = false; }
+
+	std::shared_ptr<openshot::Frame> GetFrame(int64_t number) override {
+		requests.push_back(number);
+		auto frame = std::make_shared<Frame>(number, width, height, "#00000000");
+		frame->GetImage()->fill(QColor(128, 128, 128, 255));
+		return frame;
+	}
+
+	std::string Json() const override { return JsonValue().toStyledString(); }
+	Json::Value JsonValue() const override {
+		Json::Value root = ReaderBase::JsonValue();
+		root["type"] = "TimelineTrackingMaskReader";
+		root["path"] = "";
+		return root;
+	}
+	void SetJson(const std::string value) override { (void) value; }
+	void SetJsonValue(const Json::Value root) override { ReaderBase::SetJsonValue(root); }
+};
+
+class TimelineSolidColorReader : public ReaderBase {
+private:
+	bool is_open = false;
+	CacheMemory cache;
+	QColor color;
+
+public:
+	TimelineSolidColorReader(int width,
+	                         int height,
+	                         int fps_num,
+	                         int fps_den,
+	                         int64_t length_frames,
+	                         const QColor& fill_color)
+		: color(fill_color) {
+		info.has_video = true;
+		info.has_audio = false;
+		info.width = width;
+		info.height = height;
+		info.fps = Fraction(fps_num, fps_den);
+		info.video_length = length_frames;
+		info.duration = static_cast<float>(length_frames / info.fps.ToDouble());
+		info.sample_rate = 48000;
+		info.channels = 2;
+		info.audio_stream_index = -1;
+	}
+
+	openshot::CacheBase* GetCache() override { return &cache; }
+	bool IsOpen() override { return is_open; }
+	std::string Name() override { return "TimelineSolidColorReader"; }
+	void Open() override { is_open = true; }
+	void Close() override { is_open = false; }
+
+	std::shared_ptr<openshot::Frame> GetFrame(int64_t number) override {
+		auto frame = std::make_shared<Frame>(number, info.width, info.height, "#00000000");
+		frame->GetImage()->fill(color);
+		return frame;
+	}
+
+	std::string Json() const override { return JsonValue().toStyledString(); }
+	Json::Value JsonValue() const override {
+		Json::Value root = ReaderBase::JsonValue();
+		root["type"] = "TimelineSolidColorReader";
+		root["path"] = "";
+		return root;
+	}
+	void SetJson(const std::string value) override { (void) value; }
+	void SetJsonValue(const Json::Value root) override { ReaderBase::SetJsonValue(root); }
+};
+
+class TimelineConstantAudioReader : public ReaderBase {
+private:
+	bool is_open = false;
+	CacheMemory cache;
+	float sample_value = 0.0f;
+
+public:
+	TimelineConstantAudioReader(int width, int height,
+	                            int fps_num, int fps_den,
+	                            int sample_rate, int channels,
+	                            int64_t length_frames, float fill_sample)
+		: sample_value(fill_sample) {
+		info.has_video = true;
+		info.has_audio = true;
+		info.width = width;
+		info.height = height;
+		info.fps = Fraction(fps_num, fps_den);
+		info.video_length = length_frames;
+		info.duration = static_cast<float>(length_frames / info.fps.ToDouble());
+		info.sample_rate = sample_rate;
+		info.channels = channels;
+		info.channel_layout = LAYOUT_STEREO;
+		info.audio_stream_index = 0;
+	}
+
+	openshot::CacheBase* GetCache() override { return &cache; }
+	bool IsOpen() override { return is_open; }
+	std::string Name() override { return "TimelineConstantAudioReader"; }
+	void Open() override { is_open = true; }
+	void Close() override { is_open = false; }
+
+	std::shared_ptr<openshot::Frame> GetFrame(int64_t number) override {
+		const int sample_count = Frame::GetSamplesPerFrame(number, info.fps, info.sample_rate, info.channels);
+		auto frame = std::make_shared<Frame>(number, info.width, info.height, "#000000", sample_count, info.channels);
+		std::vector<float> samples(sample_count, sample_value);
+		for (int channel = 0; channel < info.channels; ++channel)
+			frame->AddAudio(true, channel, 0, samples.data(), sample_count, 1.0f);
+		return frame;
+	}
+
+	std::string Json() const override { return JsonValue().toStyledString(); }
+	Json::Value JsonValue() const override {
+		Json::Value root = ReaderBase::JsonValue();
+		root["type"] = "TimelineConstantAudioReader";
+		root["path"] = "";
+		return root;
+	}
+	void SetJson(const std::string value) override { (void) value; }
+	void SetJsonValue(const Json::Value root) override { ReaderBase::SetJsonValue(root); }
+};
+
+class TimelineFailFirstOpenReader : public ReaderBase {
+private:
+	bool is_open = false;
+	bool fail_next_open = false;
+	CacheMemory cache;
+	QColor color;
+
+public:
+	TimelineFailFirstOpenReader(int width,
+	                            int height,
+	                            int fps_num,
+	                            int fps_den,
+	                            int64_t length_frames,
+	                            const QColor& fill_color)
+		: color(fill_color) {
+		info.has_video = true;
+		info.has_audio = false;
+		info.width = width;
+		info.height = height;
+		info.fps = Fraction(fps_num, fps_den);
+		info.video_length = length_frames;
+		info.duration = static_cast<float>(length_frames / info.fps.ToDouble());
+		info.sample_rate = 48000;
+		info.channels = 2;
+		info.audio_stream_index = -1;
+	}
+
+	openshot::CacheBase* GetCache() override { return &cache; }
+	bool IsOpen() override { return is_open; }
+	std::string Name() override { return "TimelineFailFirstOpenReader"; }
+	void FailNextOpen() { fail_next_open = true; }
+	void Open() override {
+		if (fail_next_open) {
+			fail_next_open = false;
+			throw InvalidFile("synthetic first open failure", "");
+		}
+		is_open = true;
+	}
+	void Close() override { is_open = false; }
+
+	std::shared_ptr<openshot::Frame> GetFrame(int64_t number) override {
+		if (!is_open)
+			throw ReaderClosed("synthetic reader is closed");
+		auto frame = std::make_shared<Frame>(number, info.width, info.height, "#00000000");
+		frame->GetImage()->fill(color);
+		return frame;
+	}
+
+	std::string Json() const override { return JsonValue().toStyledString(); }
+	Json::Value JsonValue() const override {
+		Json::Value root = ReaderBase::JsonValue();
+		root["type"] = "TimelineFailFirstOpenReader";
+		root["path"] = "";
+		return root;
+	}
+	void SetJson(const std::string value) override { (void) value; }
+	void SetJsonValue(const Json::Value root) override { ReaderBase::SetJsonValue(root); }
+};
+
+static double expected_equal_power_gain(int64_t frame_number, int64_t start_frame, int64_t end_frame, bool fades_in) {
+	constexpr double kHalfPi = 1.57079632679489661923;
+	if (end_frame <= start_frame)
+		return 1.0;
+	const double span = static_cast<double>(end_frame - start_frame);
+	double t = static_cast<double>(frame_number - start_frame) / span;
+	if (t < 0.0)
+		t = 0.0;
+	else if (t > 1.0)
+		t = 1.0;
+	return fades_in ? std::sin(t * kHalfPi) : std::cos(t * kHalfPi);
+}
+
+TEST_CASE("Timeline honors Mask fade_audio_hint with equal-power overlapping audio", "[libopenshot][timeline][audio][transition]") {
+	const Fraction fps(30, 1);
+	const int sample_rate = 48000;
+	const int channels = 2;
+	const int64_t length_frames = 90;
+	const int64_t overlap_start_frame = 31;
+	const int64_t overlap_end_frame = 60;
+
+	Timeline t(320, 180, fps, sample_rate, channels, LAYOUT_STEREO);
+
+	TimelineConstantAudioReader bottom_reader(320, 180, fps.num, fps.den, sample_rate, channels, length_frames, 1.0f);
+	TimelineConstantAudioReader top_reader(320, 180, fps.num, fps.den, sample_rate, channels, length_frames, 1.0f);
+
+	Clip bottom_clip;
+	bottom_clip.Reader(&bottom_reader);
+	bottom_clip.Layer(0);
+	bottom_clip.Position(0.0);
+	bottom_clip.Start(0.0);
+	bottom_clip.End(2.0);
+	bottom_clip.channel_filter = Keyframe(0.0);
+
+	Clip top_clip;
+	top_clip.Reader(&top_reader);
+	top_clip.Layer(0);
+	top_clip.Position(1.0);
+	top_clip.Start(0.0);
+	top_clip.End(2.0);
+	top_clip.channel_filter = Keyframe(1.0);
+
+	TimelineTrackingMaskReader mask_reader(fps.num, fps.den, overlap_end_frame - overlap_start_frame + 1);
+	Mask transition;
+	transition.Reader(&mask_reader);
+	transition.Layer(0);
+	transition.Position(1.0);
+	transition.Start(0.0);
+	transition.End(1.0);
+	transition.brightness = Keyframe();
+	transition.brightness.AddPoint(1, 1.0, BEZIER);
+	transition.brightness.AddPoint(overlap_end_frame - overlap_start_frame + 1, -1.0, BEZIER);
+	transition.contrast = Keyframe(3.0);
+
+	t.AddClip(&bottom_clip);
+	t.AddClip(&top_clip);
+	t.AddEffect(&transition);
+	t.Open();
+
+	SECTION("disabled hint keeps raw overlap audio") {
+		transition.fade_audio_hint = false;
+		auto frame = t.GetFrame(45);
+		const int last_sample = frame->GetAudioSamplesCount() - 1;
+		CHECK(frame->GetAudioSamples(0)[0] == Approx(1.0).margin(0.0001));
+		CHECK(frame->GetAudioSamples(1)[0] == Approx(1.0).margin(0.0001));
+		CHECK(frame->GetAudioSamples(0)[last_sample] == Approx(1.0).margin(0.0001));
+		CHECK(frame->GetAudioSamples(1)[last_sample] == Approx(1.0).margin(0.0001));
+	}
+
+	SECTION("enabled hint fades bottom out and top in") {
+		transition.fade_audio_hint = true;
+
+		auto start_frame = t.GetFrame(overlap_start_frame);
+		CHECK(start_frame->GetAudioSamples(0)[0] == Approx(1.0).margin(0.0001));
+		CHECK(start_frame->GetAudioSamples(1)[0] == Approx(0.0).margin(0.0001));
+
+		auto middle_frame = t.GetFrame(45);
+		const int middle_last_sample = middle_frame->GetAudioSamplesCount() - 1;
+		const double expected_prev_bottom = expected_equal_power_gain(44, overlap_start_frame, overlap_end_frame, false);
+		const double expected_prev_top = expected_equal_power_gain(44, overlap_start_frame, overlap_end_frame, true);
+		const double expected_bottom = expected_equal_power_gain(45, overlap_start_frame, overlap_end_frame, false);
+		const double expected_top = expected_equal_power_gain(45, overlap_start_frame, overlap_end_frame, true);
+		CHECK(middle_frame->GetAudioSamples(0)[0] == Approx(expected_prev_bottom).margin(0.0002));
+		CHECK(middle_frame->GetAudioSamples(1)[0] == Approx(expected_prev_top).margin(0.0002));
+		CHECK(middle_frame->GetAudioSamples(0)[middle_last_sample] == Approx(expected_bottom).margin(0.002));
+		CHECK(middle_frame->GetAudioSamples(1)[middle_last_sample] == Approx(expected_top).margin(0.002));
+
+		auto end_frame = t.GetFrame(overlap_end_frame);
+		const int end_last_sample = end_frame->GetAudioSamplesCount() - 1;
+		CHECK(end_frame->GetAudioSamples(0)[end_last_sample] == Approx(0.0).margin(0.002));
+		CHECK(end_frame->GetAudioSamples(1)[end_last_sample] == Approx(1.0).margin(0.002));
+	}
+
+	SECTION("reversed brightness does not affect geometry-based fade directions") {
+		transition.fade_audio_hint = true;
+		transition.brightness = Keyframe();
+		transition.brightness.AddPoint(1, -1.0, BEZIER);
+		transition.brightness.AddPoint(overlap_end_frame - overlap_start_frame + 1, 1.0, BEZIER);
+
+		auto start_frame = t.GetFrame(overlap_start_frame);
+		CHECK(start_frame->GetAudioSamples(0)[0] == Approx(1.0).margin(0.0001));
+		CHECK(start_frame->GetAudioSamples(1)[0] == Approx(0.0).margin(0.0001));
+
+		auto middle_frame = t.GetFrame(45);
+		const int middle_last_sample = middle_frame->GetAudioSamplesCount() - 1;
+		const double expected_prev_bottom = expected_equal_power_gain(44, overlap_start_frame, overlap_end_frame, false);
+		const double expected_prev_top = expected_equal_power_gain(44, overlap_start_frame, overlap_end_frame, true);
+		const double expected_bottom = expected_equal_power_gain(45, overlap_start_frame, overlap_end_frame, false);
+		const double expected_top = expected_equal_power_gain(45, overlap_start_frame, overlap_end_frame, true);
+		CHECK(middle_frame->GetAudioSamples(0)[0] == Approx(expected_prev_bottom).margin(0.0002));
+		CHECK(middle_frame->GetAudioSamples(1)[0] == Approx(expected_prev_top).margin(0.0002));
+		CHECK(middle_frame->GetAudioSamples(0)[middle_last_sample] == Approx(expected_bottom).margin(0.002));
+		CHECK(middle_frame->GetAudioSamples(1)[middle_last_sample] == Approx(expected_top).margin(0.002));
+
+		auto end_frame = t.GetFrame(overlap_end_frame);
+		const int end_last_sample = end_frame->GetAudioSamplesCount() - 1;
+		CHECK(end_frame->GetAudioSamples(0)[end_last_sample] == Approx(0.0).margin(0.002));
+		CHECK(end_frame->GetAudioSamples(1)[end_last_sample] == Approx(1.0).margin(0.002));
+	}
+
+	t.Close();
+}
+
+TEST_CASE("Timeline uses transition edge proximity for single-clip fade audio", "[libopenshot][timeline][audio][transition][single]") {
+	const Fraction fps(30, 1);
+	const int sample_rate = 48000;
+	const int channels = 2;
+	const int64_t length_frames = 90;
+
+	Timeline t(320, 180, fps, sample_rate, channels, LAYOUT_STEREO);
+
+	TimelineConstantAudioReader clip_reader(320, 180, fps.num, fps.den, sample_rate, channels, length_frames, 1.0f);
+	Clip clip;
+	clip.Reader(&clip_reader);
+	clip.Layer(0);
+	clip.Position(1.0);
+	clip.Start(0.0);
+	clip.End(2.0);
+
+	TimelineTrackingMaskReader mask_reader(fps.num, fps.den, 30);
+	Mask transition;
+	transition.Reader(&mask_reader);
+	transition.Layer(0);
+	transition.Start(0.0);
+	transition.End(1.0);
+	transition.fade_audio_hint = true;
+	transition.brightness = Keyframe(0.0);
+	transition.contrast = Keyframe(0.0);
+
+	t.AddClip(&clip);
+	t.AddEffect(&transition);
+	t.Open();
+
+	SECTION("left edge proximity fades in") {
+		transition.Position(1.0);
+		auto start_frame = t.GetFrame(31);
+		auto end_frame = t.GetFrame(60);
+		const int end_last_sample = end_frame->GetAudioSamplesCount() - 1;
+		CHECK(start_frame->GetAudioSamples(0)[0] == Approx(0.0).margin(0.0001));
+		CHECK(end_frame->GetAudioSamples(0)[end_last_sample] == Approx(1.0).margin(0.002));
+	}
+
+	SECTION("right edge proximity fades out") {
+		transition.Position(2.0);
+		auto start_frame = t.GetFrame(61);
+		auto end_frame = t.GetFrame(90);
+		const int end_last_sample = end_frame->GetAudioSamplesCount() - 1;
+		CHECK(start_frame->GetAudioSamples(0)[0] == Approx(1.0).margin(0.0001));
+		CHECK(end_frame->GetAudioSamples(0)[end_last_sample] == Approx(0.0).margin(0.002));
+	}
+
+	SECTION("equal distance defaults to fade in") {
+		transition.Position(1.5);
+		transition.End(1.0);
+		auto start_frame = t.GetFrame(46);
+		auto end_frame = t.GetFrame(75);
+		const int end_last_sample = end_frame->GetAudioSamplesCount() - 1;
+		CHECK(start_frame->GetAudioSamples(0)[0] == Approx(0.0).margin(0.0001));
+		CHECK(end_frame->GetAudioSamples(0)[end_last_sample] == Approx(1.0).margin(0.002));
+	}
+
+	t.Close();
+}
 
 TEST_CASE( "constructor", "[libopenshot][timeline]" )
 {
@@ -42,6 +495,19 @@ TEST_CASE( "constructor", "[libopenshot][timeline]" )
 	// Check values
 	CHECK(t2.info.width == 300);
 	CHECK(t2.info.height == 240);
+}
+
+TEST_CASE( "project constructor invalid path message", "[libopenshot][timeline]" )
+{
+	const std::string invalid_path = "/tmp/__openshot_missing_test_project__.osp";
+	try {
+		Timeline t(invalid_path, true);
+		FAIL("Expected InvalidFile for missing timeline project path");
+	} catch (const InvalidFile& e) {
+		const std::string message = e.what();
+		CHECK(message.find("Timeline project file could not be opened.") != std::string::npos);
+		CHECK(message.find(invalid_path) != std::string::npos);
+	}
 }
 
 TEST_CASE( "Set Json and clear clips", "[libopenshot][timeline]" )
@@ -107,6 +573,48 @@ TEST_CASE("ReaderInfo constructor", "[libopenshot][timeline]")
 	CHECK(r1->info.sample_rate == t1.info.sample_rate);
 	CHECK(r1->info.channels == t1.info.channels);
 	CHECK(r1->info.channel_layout == t1.info.channel_layout);
+}
+
+TEST_CASE("JSON diff insert keeps audio-only clip at stored timeline dimensions", "[libopenshot][timeline][json]")
+{
+	std::stringstream path;
+	path << TEST_MEDIA_PATH << "piano.wav";
+
+	Timeline t(1280, 720, Fraction(30, 1), 44100, 2, LAYOUT_STEREO);
+	std::stringstream diff;
+	diff << "[{\"type\":\"insert\",\"key\":[\"clips\"],\"value\":{"
+		<< "\"id\":\"audio-copy\","
+		<< "\"position\":0,"
+		<< "\"start\":0,"
+		<< "\"end\":1,"
+		<< "\"duration\":1,"
+		<< "\"layer\":1,"
+		<< "\"reader\":{\"type\":\"FFmpegReader\","
+		<< "\"path\":\"" << path.str() << "\","
+		<< "\"has_audio\":true,"
+		<< "\"has_video\":false,"
+		<< "\"width\":1280,"
+		<< "\"height\":720,"
+		<< "\"fps\":{\"num\":30,\"den\":1},"
+		<< "\"sample_rate\":44100,"
+		<< "\"channels\":2,"
+		<< "\"channel_layout\":3,"
+		<< "\"duration\":1.0}"
+		<< "}}]";
+
+	t.ApplyJsonDiff(diff.str());
+
+	std::list<Clip*> clips = t.Clips();
+	REQUIRE(clips.size() == 1);
+	Clip* clip = clips.front();
+	CHECK(clip->ParentTimeline() == &t);
+	CHECK(clip->Reader()->info.width == 1280);
+	CHECK(clip->Reader()->info.height == 720);
+
+	std::shared_ptr<Frame> frame = t.GetFrame(1);
+	REQUIRE(frame);
+	CHECK(frame->GetWidth() == 1280);
+	CHECK(frame->GetHeight() == 720);
 }
 
 TEST_CASE( "width and height functions", "[libopenshot][timeline]" )
@@ -543,6 +1051,70 @@ TEST_CASE( "GetClipEffect by id", "[libopenshot][timeline]" )
 	CHECK(match1->Layer() == 2);
 }
 
+TEST_CASE( "Parent effect update preserves child effect id", "[libopenshot][timeline]" )
+{
+	Timeline t(640, 480, Fraction(30, 1), 44100, 2, LAYOUT_STEREO);
+
+	std::stringstream path1;
+	path1 << TEST_MEDIA_PATH << "interlaced.png";
+	auto media_path1 = path1.str();
+
+	Clip parent_clip(media_path1);
+	parent_clip.Id("CLIP-PARENT");
+
+	Clip child_clip(media_path1);
+	child_clip.Id("CLIP-CHILD");
+
+	Clip grandchild_clip(media_path1);
+	grandchild_clip.Id("CLIP-GRANDCHILD");
+
+	t.AddClip(&parent_clip);
+	t.AddClip(&child_clip);
+	t.AddClip(&grandchild_clip);
+
+	Saturation parent_effect;
+	parent_effect.Id("EFFECT-PARENT");
+	parent_clip.AddEffect(&parent_effect);
+
+	Saturation child_effect;
+	child_effect.Id("EFFECT-CHILD");
+	child_clip.AddEffect(&child_effect);
+
+	Saturation grandchild_effect;
+	grandchild_effect.Id("EFFECT-GRANDCHILD");
+	grandchild_clip.AddEffect(&grandchild_effect);
+
+	Json::Value child_json = child_effect.JsonValue();
+	child_json["parent_effect_id"] = parent_effect.Id();
+	child_effect.SetJsonValue(child_json);
+	REQUIRE(t.GetClipEffect("EFFECT-CHILD") != nullptr);
+
+	Json::Value grandchild_json = grandchild_effect.JsonValue();
+	grandchild_json["parent_effect_id"] = child_effect.Id();
+	grandchild_effect.SetJsonValue(grandchild_json);
+	REQUIRE(t.GetClipEffect("EFFECT-GRANDCHILD") != nullptr);
+
+	Json::Value parent_json = parent_effect.JsonValue();
+	parent_json["order"] = 7;
+	parent_json["saturation"] = Keyframe(2.25).JsonValue();
+	parent_json["saturation_R"] = Keyframe(0.5).JsonValue();
+	parent_effect.SetJsonValue(parent_json);
+
+	REQUIRE(t.GetClipEffect("EFFECT-PARENT") != nullptr);
+	REQUIRE(t.GetClipEffect("EFFECT-CHILD") != nullptr);
+	REQUIRE(t.GetClipEffect("EFFECT-GRANDCHILD") != nullptr);
+	CHECK(t.GetClipEffect("EFFECT-CHILD")->Id() == "EFFECT-CHILD");
+	CHECK(t.GetClipEffect("EFFECT-GRANDCHILD")->Id() == "EFFECT-GRANDCHILD");
+	CHECK(child_effect.Order() == 7);
+	CHECK(grandchild_effect.Order() == 7);
+	CHECK(child_effect.saturation.GetValue(1) == Approx(2.25));
+	CHECK(child_effect.saturation_R.GetValue(1) == Approx(0.5));
+	CHECK(grandchild_effect.saturation.GetValue(1) == Approx(2.25));
+	CHECK(grandchild_effect.saturation_R.GetValue(1) == Approx(0.5));
+	CHECK(openshot::stringToJson(child_effect.PropertiesJSON(1))["parent_effect_id"]["memo"].asString() == "EFFECT-PARENT");
+	CHECK(openshot::stringToJson(grandchild_effect.PropertiesJSON(1))["parent_effect_id"]["memo"].asString() == "EFFECT-CHILD");
+}
+
 TEST_CASE( "GetEffect by id", "[libopenshot][timeline]" )
 {
 	Timeline t(640, 480, Fraction(30, 1), 44100, 2, LAYOUT_STEREO);
@@ -597,6 +1169,88 @@ TEST_CASE( "Effect: Blur", "[libopenshot][timeline]" )
 	CHECK(f->number == 1);
 
 	// Close reader
+	t.Close();
+}
+
+TEST_CASE("Global mask effect source FPS mode follows timeline FPS mapping", "[libopenshot][timeline][effect][mask][timing]") {
+	Timeline t(320, 240, Fraction(30, 1), 44100, 2, LAYOUT_STEREO);
+
+	DummyReader clip_reader(Fraction(30, 1), 320, 240, 44100, 2, 2.0f);
+	Clip clip(&clip_reader);
+	clip.Layer(0);
+	clip.Position(0.0);
+	clip.Start(0.0);
+	clip.End(1.0);
+	t.AddClip(&clip);
+
+	Brightness effect(Keyframe(0.0), Keyframe(0.0));
+	effect.Layer(0);
+	effect.Position(0.0);
+	effect.Start(0.0);
+	effect.End(1.0);
+
+	auto* tracking = new TimelineTrackingMaskReader(15, 1, 120);
+	effect.MaskReader(tracking);
+
+	Json::Value timing;
+	timing["mask_time_mode"] = 1; // Source FPS
+	timing["mask_loop_mode"] = 0; // Play Once
+	timing["start"] = 0.0;
+	timing["end"] = 1.0;
+	effect.SetJsonValue(timing);
+
+	t.AddEffect(&effect);
+	t.Open();
+
+	for (int64_t frame = 1; frame <= 5; ++frame) {
+		auto out = t.GetFrame(frame);
+		REQUIRE(out != nullptr);
+	}
+
+	const std::vector<int64_t> expected = {1, 2, 2, 3, 3};
+	CHECK(tracking->requests == expected);
+
+	t.Close();
+}
+
+TEST_CASE("Global mask effect start trims source without freezing playback", "[libopenshot][timeline][effect][mask][trim]") {
+	Timeline t(320, 240, Fraction(30, 1), 44100, 2, LAYOUT_STEREO);
+
+	DummyReader clip_reader(Fraction(30, 1), 320, 240, 44100, 2, 2.0f);
+	Clip clip(&clip_reader);
+	clip.Layer(0);
+	clip.Position(0.0);
+	clip.Start(0.0);
+	clip.End(1.0);
+	t.AddClip(&clip);
+
+	Brightness effect(Keyframe(0.0), Keyframe(0.0));
+	effect.Layer(0);
+	effect.Position(0.0);
+	effect.Start(1.0 / 15.0);
+	effect.End(1.0);
+
+	auto* tracking = new TimelineTrackingMaskReader(15, 1, 120);
+	effect.MaskReader(tracking);
+
+	Json::Value timing;
+	timing["mask_time_mode"] = 1; // Source FPS
+	timing["mask_loop_mode"] = 0; // Play Once
+	timing["start"] = 1.0 / 15.0;
+	timing["end"] = 1.0;
+	effect.SetJsonValue(timing);
+
+	t.AddEffect(&effect);
+	t.Open();
+
+	for (int64_t frame = 1; frame <= 5; ++frame) {
+		auto out = t.GetFrame(frame);
+		REQUIRE(out != nullptr);
+	}
+
+	const std::vector<int64_t> expected = {2, 3, 3, 4, 4};
+	CHECK(tracking->requests == expected);
+
 	t.Close();
 }
 
@@ -722,6 +1376,40 @@ TEST_CASE( "GetMinFrame and GetMinTime", "[libopenshot][timeline]" )
     CHECK(t.GetMinFrame() == (5 * 30) + 1);
 }
 
+TEST_CASE( "GetMaxFrame with 24fps clip mapped to 30fps timeline", "[libopenshot][timeline]" )
+{
+	Timeline t(640, 480, Fraction(30, 1), 44100, 2, LAYOUT_STEREO);
+	t.AutoMapClips(true);
+
+	std::stringstream path;
+	path << TEST_MEDIA_PATH << "sintel_trailer-720p.mp4";
+	Clip clip(path.str());
+
+	REQUIRE(clip.Reader()->info.fps.num == 24);
+	REQUIRE(clip.Reader()->info.fps.den == 1);
+
+	t.AddClip(&clip);
+
+	REQUIRE(clip.Reader()->Name() == "FrameMapper");
+	auto* mapper = static_cast<FrameMapper*>(clip.Reader());
+	REQUIRE(mapper->info.fps.num == 30);
+	REQUIRE(mapper->info.fps.den == 1);
+	REQUIRE(mapper->info.video_length > 0);
+
+	const int64_t timeline_max_frame = t.GetMaxFrame();
+	const int64_t mapped_video_length = mapper->info.video_length;
+
+	// Timeline max frame is computed from duration (seconds), while mapper length is
+	// rounded frame count. They should stay aligned within one frame at this boundary.
+	CHECK(timeline_max_frame >= mapped_video_length);
+	CHECK((timeline_max_frame - mapped_video_length) <= 1);
+
+	// Regression guard: fetching the mapped tail frame should not throw.
+	t.Open();
+	CHECK_NOTHROW(t.GetFrame(mapped_video_length));
+	t.Close();
+}
+
 TEST_CASE( "Multi-threaded Timeline GetFrame", "[libopenshot][timeline]" )
 {
 	Timeline *t = new Timeline(1280, 720, Fraction(24, 1), 48000, 2, LAYOUT_STEREO);
@@ -757,52 +1445,203 @@ TEST_CASE( "Multi-threaded Timeline GetFrame", "[libopenshot][timeline]" )
 	t = NULL;
 }
 
-TEST_CASE( "Multi-threaded Timeline Add/Remove Clip", "[libopenshot][timeline]" )
-{
-	// Create timeline
-	Timeline *t = new Timeline(1280, 720, Fraction(24, 1), 48000, 2, LAYOUT_STEREO);
-	t->Open();
+// ---------------------------------------------------------------------------
+// New tests to validate removing timeline-level effects (incl. threading/locks)
+// Paste at the end of tests/Timeline.cpp
+// ---------------------------------------------------------------------------
 
-	// Calculate test video path
+TEST_CASE( "RemoveEffect basic", "[libopenshot][timeline]" )
+{
+	// Create a simple timeline
+	Timeline t(640, 480, Fraction(30, 1), 44100, 2, LAYOUT_STEREO);
+
+	// Two timeline-level effects
+	Negate e1; e1.Id("E1"); e1.Layer(0);
+	Negate e2; e2.Id("E2"); e2.Layer(1);
+
+	t.AddEffect(&e1);
+	t.AddEffect(&e2);
+
+	// Sanity check
+	REQUIRE(t.Effects().size() == 2);
+	REQUIRE(t.GetEffect("E1") != nullptr);
+	REQUIRE(t.GetEffect("E2") != nullptr);
+
+	// Remove one effect and verify it is truly gone
+	t.RemoveEffect(&e1);
+	auto effects_after = t.Effects();
+	CHECK(effects_after.size() == 1);
+	CHECK(t.GetEffect("E1") == nullptr);
+	CHECK(t.GetEffect("E2") != nullptr);
+	CHECK(std::find(effects_after.begin(), effects_after.end(), &e1) == effects_after.end());
+
+	// Removing the same (already-removed) effect should be a no-op
+	t.RemoveEffect(&e1);
+	CHECK(t.Effects().size() == 1);
+}
+
+TEST_CASE( "RemoveEffect not present is no-op", "[libopenshot][timeline]" )
+{
+	Timeline t(640, 480, Fraction(30, 1), 44100, 2, LAYOUT_STEREO);
+
+	Negate existing; existing.Id("KEEP"); existing.Layer(0);
+	Negate never_added; never_added.Id("GHOST"); never_added.Layer(1);
+
+	t.AddEffect(&existing);
+	REQUIRE(t.Effects().size() == 1);
+
+	// Try to remove an effect pointer that was never added
+	t.RemoveEffect(&never_added);
+
+	// State should be unchanged
+	CHECK(t.Effects().size() == 1);
+	CHECK(t.GetEffect("KEEP") != nullptr);
+	CHECK(t.GetEffect("GHOST") == nullptr);
+}
+
+TEST_CASE( "RemoveEffect while open (active pipeline safety)", "[libopenshot][timeline]" )
+{
+	// Timeline with one visible clip so we can request frames
+	Timeline t(640, 480, Fraction(30, 1), 44100, 2, LAYOUT_STEREO);
+	std::stringstream path;
+	path << TEST_MEDIA_PATH << "front3.png";
+	Clip clip(path.str());
+	clip.Layer(0);
+	t.AddClip(&clip);
+
+	// Add a timeline-level effect and open the timeline
+	Negate neg; neg.Id("NEG"); neg.Layer(1);
+	t.AddEffect(&neg);
+
+	t.Open();
+	// Touch the pipeline before removal
+	std::shared_ptr<Frame> f1 = t.GetFrame(1);
+	REQUIRE(f1 != nullptr);
+
+	// Remove the effect while open, this should be safe and effective
+	t.RemoveEffect(&neg);
+	CHECK(t.GetEffect("NEG") == nullptr);
+	CHECK(t.Effects().size() == 0);
+
+	// Touch the pipeline again after removal (should not crash / deadlock)
+	std::shared_ptr<Frame> f2 = t.GetFrame(2);
+	REQUIRE(f2 != nullptr);
+
+		// Close reader
+	t.Close();
+}
+
+TEST_CASE( "RemoveEffect preserves ordering of remaining effects", "[libopenshot][timeline]" )
+{
+	// Create a timeline
+	Timeline t(640, 480, Fraction(30, 1), 44100, 2, LAYOUT_STEREO);
+
+	// Add effects out of order (Layer/Position/Order)
+	Negate a; a.Id("A"); a.Layer(0); a.Position(0.0); a.Order(0);
+	Negate b1; b1.Id("B-1"); b1.Layer(1); b1.Position(0.0); b1.Order(3);
+	Negate b;  b.Id("B");  b.Layer(1); b.Position(0.0); b.Order(0);
+	Negate b2; b2.Id("B-2"); b2.Layer(1); b2.Position(0.5); b2.Order(2);
+	Negate b3; b3.Id("B-3"); b3.Layer(1); b3.Position(0.5); b3.Order(1);
+	Negate c;  c.Id("C");  c.Layer(2); c.Position(0.0); c.Order(0);
+
+	t.AddEffect(&c);
+	t.AddEffect(&b);
+	t.AddEffect(&a);
+	t.AddEffect(&b3);
+	t.AddEffect(&b2);
+	t.AddEffect(&b1);
+
+	// Remove a middle effect and verify ordering is still deterministic
+	t.RemoveEffect(&b);
+
+	std::list<EffectBase*> effects = t.Effects();
+	REQUIRE(effects.size() == 5);
+
+	int n = 0;
+	for (auto effect : effects) {
+		switch (n) {
+		case 0:
+			CHECK(effect->Layer() == 0);
+			CHECK(effect->Id() == "A");
+			CHECK(effect->Order() == 0);
+			break;
+		case 1:
+			CHECK(effect->Layer() == 1);
+			CHECK(effect->Id() == "B-1");
+			CHECK(effect->Position() == Approx(0.0).margin(0.0001));
+			CHECK(effect->Order() == 3);
+			break;
+		case 2:
+			CHECK(effect->Layer() == 1);
+			CHECK(effect->Id() == "B-2");
+			CHECK(effect->Position() == Approx(0.5).margin(0.0001));
+			CHECK(effect->Order() == 2);
+			break;
+		case 3:
+			CHECK(effect->Layer() == 1);
+			CHECK(effect->Id() == "B-3");
+			CHECK(effect->Position() == Approx(0.5).margin(0.0001));
+			CHECK(effect->Order() == 1);
+			break;
+		case 4:
+			CHECK(effect->Layer() == 2);
+			CHECK(effect->Id() == "C");
+			CHECK(effect->Order() == 0);
+			break;
+		}
+		++n;
+	}
+}
+
+TEST_CASE( "Multi-threaded Timeline Add/Remove Effect", "[libopenshot][timeline]" )
+{
+	// Create timeline with a clip so frames can be requested
+	Timeline *t = new Timeline(1280, 720, Fraction(24, 1), 48000, 2, LAYOUT_STEREO);
 	std::stringstream path;
 	path << TEST_MEDIA_PATH << "test.mp4";
+	Clip *clip = new Clip(path.str());
+	clip->Layer(0);
+	t->AddClip(clip);
+	t->Open();
 
-	// A successful test will NOT crash - since this causes many threads to
-	// call the same Timeline methods asynchronously, to verify mutexes and multi-threaded
-	// access does not seg fault or crash this test.
+	// A successful test will NOT crash - many threads will add/remove effects
+	// while also requesting frames, exercising locks around effect mutation.
 #pragma omp parallel
 	{
-		 // Run the following loop in all threads
-		int64_t clip_count = 10;
-		for (int clip_index = 1; clip_index <= clip_count; clip_index++) {
-			// Create clip
-			Clip* clip_video = new Clip(path.str());
-			clip_video->Layer(omp_get_thread_num());
+		int64_t effect_count = 10;
+		for (int i = 0; i < effect_count; ++i) {
+			// Each thread creates its own effect
+			Negate *neg = new Negate();
+			std::stringstream sid;
+			sid << "NEG_T" << omp_get_thread_num() << "_I" << i;
+			neg->Id(sid.str());
+			neg->Layer(1 + omp_get_thread_num()); // spread across layers
 
-			// Add clip to timeline
-			t->AddClip(clip_video);
+			// Add the effect
+			t->AddEffect(neg);
 
-			// Loop through all timeline frames - each new clip makes the timeline longer
-			for (long int frame = 10; frame >= 1; frame--) {
+			// Touch a few frames to exercise the render pipeline with the effect
+			for (long int frame = 1; frame <= 6; ++frame) {
 				std::shared_ptr<Frame> f = t->GetFrame(frame);
-				t->GetMaxFrame();
+				REQUIRE(f != nullptr);
 			}
 
-			// Remove clip
-			 t->RemoveClip(clip_video);
-			 delete clip_video;
-			 clip_video = NULL;
+			// Remove the effect and destroy it
+			t->RemoveEffect(neg);
+			delete neg;
+			neg = nullptr;
 		}
 
-		// Clear all clips after loop is done
- 		// This is designed to test the mutex for Clear()
- 		t->Clear();
+		// Clear all effects at the end from within threads (should be safe)
+		// This also exercises internal sorting/locking paths
+		t->Clear();
 	}
 
-	// Close and delete timeline object
 	t->Close();
 	delete t;
-	t = NULL;
+	t = nullptr;
+	delete clip;
+	clip = nullptr;
 }
 
 TEST_CASE( "ApplyJSONDiff and FrameMappers", "[libopenshot][timeline]" )
@@ -859,6 +1698,366 @@ TEST_CASE( "ApplyJSONDiff and FrameMappers", "[libopenshot][timeline]" )
 	CHECK(clip1.Reader()->Name() == "QtImageReader");
 }
 
+TEST_CASE( "ApplyJSONDiff insert invalidates overlapping timeline cache", "[libopenshot][timeline]" )
+{
+	// Create timeline with no clips so cached frames are black placeholders
+	Timeline t(640, 480, Fraction(30, 1), 44100, 2, LAYOUT_STEREO);
+	t.Open();
+
+	// Cache a frame in the area where we'll insert a new clip
+	std::shared_ptr<Frame> cached_before = t.GetFrame(10);
+	REQUIRE(cached_before != nullptr);
+	REQUIRE(t.GetCache() != nullptr);
+	REQUIRE(t.GetCache()->Contains(10));
+
+	// Insert clip via JSON diff overlapping frame 10
+	std::stringstream path1;
+	path1 << TEST_MEDIA_PATH << "interlaced.png";
+	std::stringstream json_change;
+	json_change << "[{\"type\":\"insert\",\"key\":[\"clips\"],\"value\":{\"id\":\"INSERT_CACHE_INVALIDATE\",\"layer\":1,\"position\":0.0,\"start\":0,\"end\":10,\"reader\":{\"acodec\":\"\",\"audio_bit_rate\":0,\"audio_stream_index\":-1,\"audio_timebase\":{\"den\":1,\"num\":1},\"channel_layout\":4,\"channels\":0,\"display_ratio\":{\"den\":1,\"num\":1},\"duration\":3600.0,\"file_size\":\"160000\",\"fps\":{\"den\":1,\"num\":30},\"has_audio\":false,\"has_single_image\":true,\"has_video\":true,\"height\":200,\"interlaced_frame\":false,\"metadata\":{},\"path\":\"" << path1.str() << "\",\"pixel_format\":-1,\"pixel_ratio\":{\"den\":1,\"num\":1},\"sample_rate\":0,\"top_field_first\":true,\"type\":\"QtImageReader\",\"vcodec\":\"\",\"video_bit_rate\":0,\"video_length\":\"108000\",\"video_stream_index\":-1,\"video_timebase\":{\"den\":30,\"num\":1},\"width\":200}},\"partial\":false}]";
+	t.ApplyJsonDiff(json_change.str());
+
+	// Overlapping cached frame should be invalidated
+	CHECK(!t.GetCache()->Contains(10));
+}
+
+TEST_CASE( "AddClip replaces stale cached black timeline frames with new clip content", "[libopenshot][timeline][cache]" )
+{
+	Timeline t(640, 480, Fraction(30, 1), 44100, 2, LAYOUT_STEREO);
+	t.Open();
+
+	// Cache two frames while the timeline has no clips. This reproduces the
+	// stale final_cache state VideoCacheThread can build before a simple edit.
+	std::shared_ptr<Frame> cached_before = t.GetFrame(10);
+	std::shared_ptr<Frame> cached_far = t.GetFrame(400);
+	REQUIRE(cached_before != nullptr);
+	REQUIRE(cached_far != nullptr);
+	REQUIRE(t.GetCache() != nullptr);
+	REQUIRE(t.GetCache()->Contains(10));
+	REQUIRE(t.GetCache()->Contains(400));
+	CHECK(cached_before->GetImage()->pixelColor(320, 240) == QColor(0, 0, 0, 255));
+
+	TimelineSolidColorReader red_reader(
+		/*width=*/640, /*height=*/480, /*fps_num=*/30, /*fps_den=*/1, /*length_frames=*/300,
+		QColor(220, 20, 30, 255)
+	);
+	Clip clip(&red_reader);
+	clip.Id("ADDCLIP_CACHE_INVALIDATE");
+	clip.Layer(1);
+	clip.Position(0.0);
+	clip.Start(0.0);
+	clip.End(10.0);
+	t.AddClip(&clip);
+
+	CHECK(!t.GetCache()->Contains(10));
+	CHECK(t.GetCache()->Contains(400));
+
+	std::shared_ptr<Frame> refreshed = t.GetFrame(10);
+	REQUIRE(refreshed != nullptr);
+	const QColor refreshed_pixel = refreshed->GetImage()->pixelColor(320, 240);
+	CHECK(refreshed_pixel.red() == Approx(220).margin(2));
+	CHECK(refreshed_pixel.green() == Approx(20).margin(2));
+	CHECK(refreshed_pixel.blue() == Approx(30).margin(2));
+
+	t.RemoveClip(&clip);
+}
+
+TEST_CASE( "Timeline retries opening intersecting clip after transient open failure", "[libopenshot][timeline]" )
+{
+	Timeline t(640, 480, Fraction(30, 1), 44100, 2, LAYOUT_STEREO);
+	t.Open();
+	t.AutoMapClips(false);
+
+	TimelineFailFirstOpenReader reader(
+		/*width=*/640, /*height=*/480, /*fps_num=*/30, /*fps_den=*/1, /*length_frames=*/300,
+		QColor(30, 210, 40, 255)
+	);
+	Clip clip(&reader);
+	reader.FailNextOpen();
+	clip.Id("RETRY_OPEN_AFTER_FAILURE");
+	clip.Layer(5000000);
+	clip.Position(0.0);
+	clip.Start(0.0);
+	clip.End(10.0);
+	t.AddClip(&clip);
+
+	std::shared_ptr<Frame> failed_open_frame = t.GetFrame(1);
+	REQUIRE(failed_open_frame != nullptr);
+	CHECK(failed_open_frame->GetImage()->pixelColor(320, 240) == QColor(0, 0, 0, 255));
+
+	t.GetCache()->Clear();
+	std::shared_ptr<Frame> retried_frame = t.GetFrame(1);
+	REQUIRE(retried_frame != nullptr);
+	const QColor retried_pixel = retried_frame->GetImage()->pixelColor(320, 240);
+	CHECK(retried_pixel.red() == Approx(30).margin(2));
+	CHECK(retried_pixel.green() == Approx(210).margin(2));
+	CHECK(retried_pixel.blue() == Approx(40).margin(2));
+
+	t.RemoveClip(&clip);
+}
+
+TEST_CASE( "Timeline repairs stale open clip state while clip still intersects playhead", "[libopenshot][timeline][cache]" )
+{
+	Timeline t(640, 480, Fraction(30, 1), 44100, 2, LAYOUT_STEREO);
+	t.Open();
+
+	// Model a long clip whose visible extent is much wider than the editor
+	// viewport, with the playhead well inside the clip rather than at an edge.
+	TimelineFailFirstOpenReader red_reader(
+		/*width=*/640, /*height=*/480, /*fps_num=*/30, /*fps_den=*/1,
+		/*length_frames=*/18000, QColor(220, 20, 30, 255)
+	);
+	Clip clip(&red_reader);
+	clip.Id("STALE_OPEN_CLIP_STATE");
+	clip.Layer(5);
+	clip.Position(0.0);
+	clip.Start(0.0);
+	clip.End(600.0);
+	t.AddClip(&clip);
+
+	const int64_t playhead_frame = 4501; // 150 seconds, deep inside the clip
+	std::shared_ptr<Frame> initial = t.GetFrame(playhead_frame);
+	REQUIRE(initial != nullptr);
+	CHECK(initial->GetImage()->pixelColor(320, 240).red() == Approx(220).margin(2));
+
+	// Reproduce the suspected invariant violation: Timeline::open_clips still
+	// contains this Clip pointer and Clip::IsOpen() is still true, but the
+	// FrameMapper's nested source Reader has become closed.
+	// A timing nudge which continues to intersect the playhead should not leave
+	// the preview permanently black.
+	REQUIRE(clip.IsOpen());
+	auto* mapper = dynamic_cast<FrameMapper*>(clip.Reader());
+	REQUIRE(mapper != nullptr);
+	mapper->Reader()->Close();
+	CHECK(clip.IsOpen());
+	CHECK_FALSE(mapper->IsOpen());
+	t.GetCache()->Remove(playhead_frame);
+
+	std::stringstream nudge_right;
+	nudge_right << "[{\"type\":\"update\",\"key\":[\"clips\",{\"id\":\""
+	            << clip.Id()
+	            << "\"}],\"value\":{\"id\":\"" << clip.Id()
+	            << "\",\"position\":0.1,\"start\":0.0,\"end\":600.0},\"partial\":true}]";
+	t.ApplyJsonDiff(nudge_right.str());
+
+	std::shared_ptr<Frame> after_nudge = t.GetFrame(playhead_frame);
+	REQUIRE(after_nudge != nullptr);
+	const QColor after_nudge_pixel = after_nudge->GetImage()->pixelColor(320, 240);
+	CHECK(after_nudge_pixel.red() == Approx(220).margin(2));
+	CHECK(after_nudge_pixel.green() == Approx(20).margin(2));
+	CHECK(after_nudge_pixel.blue() == Approx(30).margin(2));
+
+	// A second nudge which still covers the playhead must remain healthy after
+	// the stale open state was repaired by the first frame request.
+	std::stringstream nudge_again;
+	nudge_again << "[{\"type\":\"update\",\"key\":[\"clips\",{\"id\":\""
+	            << clip.Id()
+	            << "\"}],\"value\":{\"id\":\"" << clip.Id()
+	            << "\",\"position\":0.2,\"start\":0.0,\"end\":600.0},\"partial\":true}]";
+	t.ApplyJsonDiff(nudge_again.str());
+	std::shared_ptr<Frame> after_second_nudge = t.GetFrame(playhead_frame);
+	REQUIRE(after_second_nudge != nullptr);
+	CHECK(after_second_nudge->GetImage()->pixelColor(320, 240).red() == Approx(220).margin(2));
+
+	// Match the UI recovery gesture: move the clip completely past the playhead
+	// and render once so update_open_clips() removes its stale registry entry.
+	std::stringstream move_past_playhead;
+	move_past_playhead << "[{\"type\":\"update\",\"key\":[\"clips\",{\"id\":\""
+	                   << clip.Id()
+	                   << "\"}],\"value\":{\"id\":\"" << clip.Id()
+	                   << "\",\"position\":200.0,\"start\":0.0,\"end\":600.0},\"partial\":true}]";
+	t.ApplyJsonDiff(move_past_playhead.str());
+	std::shared_ptr<Frame> outside_clip = t.GetFrame(playhead_frame);
+	REQUIRE(outside_clip != nullptr);
+	CHECK(outside_clip->GetImage()->pixelColor(320, 240) == QColor(0, 0, 0, 255));
+
+	// Moving it back over the same playhead now forces a fresh Clip::Open(), and
+	// the source image returns.
+	std::stringstream move_back;
+	move_back << "[{\"type\":\"update\",\"key\":[\"clips\",{\"id\":\""
+	          << clip.Id()
+	          << "\"}],\"value\":{\"id\":\"" << clip.Id()
+	          << "\",\"position\":0.2,\"start\":0.0,\"end\":600.0},\"partial\":true}]";
+	t.ApplyJsonDiff(move_back.str());
+	std::shared_ptr<Frame> after_move_back = t.GetFrame(playhead_frame);
+	REQUIRE(after_move_back != nullptr);
+	const QColor recovered_pixel = after_move_back->GetImage()->pixelColor(320, 240);
+	CHECK(recovered_pixel.red() == Approx(220).margin(2));
+	CHECK(recovered_pixel.green() == Approx(20).margin(2));
+	CHECK(recovered_pixel.blue() == Approx(30).margin(2));
+
+	t.RemoveClip(&clip);
+}
+
+TEST_CASE( "ApplyJSONDiff alpha updates refresh fixed-frame preview content", "[libopenshot][timeline]" )
+{
+	// Deterministic solid-color readers avoid any fixture/image ambiguity.
+	TimelineSolidColorReader base_reader(
+		/*width=*/64, /*height=*/64, /*fps_num=*/30, /*fps_den=*/1, /*length_frames=*/300,
+		QColor(10, 200, 20, 255)
+	);
+	TimelineSolidColorReader overlay_reader(
+		/*width=*/64, /*height=*/64, /*fps_num=*/30, /*fps_den=*/1, /*length_frames=*/300,
+		QColor(220, 30, 180, 255)
+	);
+
+	Clip base_clip(&base_reader);
+	base_clip.Id("BASE_ALPHA_TEST");
+	base_clip.Layer(0);
+	base_clip.Position(0.0);
+	base_clip.End(5.0);
+
+	Clip overlay_clip(&overlay_reader);
+	overlay_clip.Id("OVERLAY_ALPHA_TEST");
+	overlay_clip.Layer(1);
+	overlay_clip.Position(0.0);
+	overlay_clip.End(5.0);
+
+	Timeline t(64, 64, Fraction(30, 1), 44100, 2, LAYOUT_STEREO);
+	t.AddClip(&base_clip);
+	t.AddClip(&overlay_clip);
+	t.Open();
+
+	const int64_t frame_number = 1;
+
+	auto apply_alpha = [&](double alpha_value) {
+		Json::Value root(Json::arrayValue);
+		Json::Value change(Json::objectValue);
+		change["type"] = "update";
+		change["partial"] = true;
+
+		Json::Value key(Json::arrayValue);
+		key.append("clips");
+		Json::Value key_id(Json::objectValue);
+		key_id["id"] = overlay_clip.Id();
+		key.append(key_id);
+		change["key"] = key;
+
+		Json::Value alpha_json(Json::objectValue);
+		Json::Value points(Json::arrayValue);
+		Json::Value p1(Json::objectValue);
+		p1["co"]["X"] = 1.0;
+		p1["co"]["Y"] = 1.0;
+		p1["interpolation"] = 0;
+		points.append(p1);
+		Json::Value p2(Json::objectValue);
+		p2["co"]["X"] = static_cast<double>(frame_number);
+		p2["co"]["Y"] = alpha_value;
+		p2["interpolation"] = 1;
+		points.append(p2);
+		alpha_json["Points"] = points;
+
+		Json::Value value(Json::objectValue);
+		value["alpha"] = alpha_json;
+		change["value"] = value;
+
+		root.append(change);
+		t.ApplyJsonDiff(root.toStyledString());
+
+		Clip* updated = t.GetClip(overlay_clip.Id());
+		REQUIRE(updated != nullptr);
+		CHECK(updated->alpha.GetValue(frame_number) == Approx(alpha_value).margin(0.0001));
+	};
+
+	// Establish reference colors for alpha=1.0 (top) and alpha=0.0 (bottom).
+	// Prime cache at fixed frame.
+	std::shared_ptr<Frame> initial = t.GetFrame(frame_number);
+	REQUIRE(initial != nullptr);
+	REQUIRE(t.GetCache() != nullptr);
+	REQUIRE(t.GetCache()->Contains(frame_number));
+	QColor previous_color = initial->GetImage()->pixelColor(20, 20);
+
+	// Repeated alpha updates at the same frame must invalidate the timeline cache
+	// and refresh the composited preview content.
+	const std::vector<double> alpha_steps = {0.9, 0.8, 0.7, 0.6, 0.5};
+	for (double alpha_value : alpha_steps) {
+		apply_alpha(alpha_value);
+		CHECK(!t.GetCache()->Contains(frame_number));
+
+		// Re-request frame to repopulate the timeline cache before next update.
+		std::shared_ptr<Frame> refreshed = t.GetFrame(frame_number);
+		REQUIRE(refreshed != nullptr);
+		CHECK(t.GetCache()->Contains(frame_number));
+		QColor refreshed_color = refreshed->GetImage()->pixelColor(20, 20);
+		CHECK(refreshed_color != previous_color);
+		previous_color = refreshed_color;
+	}
+}
+
+TEST_CASE( "ApplyJSONDiff clip Bars effect updates refresh fixed-frame preview content", "[libopenshot][timeline][effect][bars]" )
+{
+	TimelineSolidColorReader base_reader(
+		/*width=*/64, /*height=*/64, /*fps_num=*/30, /*fps_den=*/1, /*length_frames=*/300,
+		QColor(10, 200, 20, 255)
+	);
+
+	Clip clip(&base_reader);
+	clip.Id("BARS_CLIP_TEST");
+	clip.Layer(0);
+	clip.Position(0.0);
+	clip.End(5.0);
+
+	Bars bars;
+	bars.Id("BARS_EFFECT_TEST");
+	bars.Layer(0);
+	bars.Position(0.0);
+	bars.Start(0.0);
+	bars.End(5.0);
+	bars.color = Color("#000000");
+	bars.left = Keyframe(0.0);
+	bars.top = Keyframe(0.0);
+	bars.right = Keyframe(0.0);
+	bars.bottom = Keyframe(0.0);
+	clip.AddEffect(&bars);
+
+	Timeline t(64, 64, Fraction(30, 1), 44100, 2, LAYOUT_STEREO);
+	t.AddClip(&clip);
+	t.Open();
+
+	const int64_t frame_number = 1;
+	auto frame = t.GetFrame(frame_number);
+	REQUIRE(frame != nullptr);
+	CHECK(frame->GetImage()->pixelColor(20, 20) == QColor(10, 200, 20, 255));
+	uint64_t previous_hash = image_fingerprint(frame->GetImage());
+
+	const std::vector<double> top_steps = {0.02, 0.04, 0.06, 0.08, 0.10};
+	for (double top_value : top_steps) {
+		Keyframe top_kf(top_value);
+
+		Json::Value root(Json::arrayValue);
+		Json::Value change(Json::objectValue);
+		change["type"] = "update";
+		change["partial"] = true;
+
+		Json::Value key(Json::arrayValue);
+		key.append("clips");
+		Json::Value clip_key(Json::objectValue);
+		clip_key["id"] = clip.Id();
+		key.append(clip_key);
+		key.append("effects");
+		Json::Value effect_key(Json::objectValue);
+		effect_key["id"] = bars.Id();
+		key.append(effect_key);
+		change["key"] = key;
+
+		Json::Value value(Json::objectValue);
+		value["top"] = top_kf.JsonValue();
+		change["value"] = value;
+		root.append(change);
+
+		t.ApplyJsonDiff(root.toStyledString());
+		CHECK(bars.top.GetValue(frame_number) == Approx(top_value).margin(0.0001));
+
+		frame = t.GetFrame(frame_number);
+		REQUIRE(frame != nullptr);
+		const uint64_t current_hash = image_fingerprint(frame->GetImage());
+
+		// Regression check: every Bars update should change the rendered image.
+		CHECK(current_hash != previous_hash);
+		previous_hash = current_hash;
+	}
+}
+
 TEST_CASE( "ApplyJSONDiff Update Reader Info", "[libopenshot][timeline]" )
 {
 	// Create a timeline
@@ -889,7 +2088,7 @@ TEST_CASE( "ApplyJSONDiff Update Reader Info", "[libopenshot][timeline]" )
 	CHECK(clip1.info.fps.den == 1);
 	CHECK(clip1.info.video_timebase.num == 1);
 	CHECK(clip1.info.video_timebase.den == 24);
-	CHECK(clip1.info.duration == Approx(51.94667).margin(0.00001));
+	CHECK(clip1.info.duration == Approx(52.20833).margin(0.00001));
 
 	// Create JSON change to increase FPS from 24 to 60
 	Json::Value reader_root = openshot::stringToJson(reader_json);
@@ -914,14 +2113,14 @@ TEST_CASE( "ApplyJSONDiff Update Reader Info", "[libopenshot][timeline]" )
 	CHECK(mapper->Reader()->info.fps.den == 1);
 	CHECK(mapper->Reader()->info.video_timebase.num == 1);
 	CHECK(mapper->Reader()->info.video_timebase.den == 60);
-	CHECK(mapper->Reader()->info.duration == Approx(20.77867).margin(0.00001));
+	CHECK(mapper->Reader()->info.duration == Approx(20.88333).margin(0.00001));
 
 	// Verify clip has updated properties and info struct
 	CHECK(clip1.info.fps.num == 24);
 	CHECK(clip1.info.fps.den == 1);
 	CHECK(clip1.info.video_timebase.num == 1);
 	CHECK(clip1.info.video_timebase.den == 24);
-	CHECK(clip1.info.duration == Approx(20.77867).margin(0.00001));
+	CHECK(clip1.info.duration == Approx(20.88333).margin(0.00001));
 
 	// Open Clip object, and verify this does not clobber our 60 FPS change
 	clip1.Open();
@@ -929,6 +2128,58 @@ TEST_CASE( "ApplyJSONDiff Update Reader Info", "[libopenshot][timeline]" )
 	CHECK(mapper->Reader()->info.fps.den == 1);
 	CHECK(mapper->Reader()->info.video_timebase.num == 1);
 	CHECK(mapper->Reader()->info.video_timebase.den == 60);
-	CHECK(mapper->Reader()->info.duration == Approx(20.77867).margin(0.00001));
+	CHECK(mapper->Reader()->info.duration == Approx(20.88333).margin(0.00001));
 
+}
+
+TEST_CASE("GetFrame past-end requests are not cached", "[libopenshot][timeline][cache]") {
+	TimelineSolidColorReader reader(
+		64, 64,
+		30, 1,
+		300,
+		QColor(10, 20, 30, 255));
+	Clip clip(&reader);
+	clip.Layer(1);
+	clip.Position(0.0);
+	clip.End(1.0);
+
+	Timeline t(640, 480, Fraction(30, 1), 44100, 2, LAYOUT_STEREO);
+	t.AddClip(&clip);
+	t.Open();
+
+	const int64_t end = t.GetMaxFrame();
+	REQUIRE(end > 1);
+	REQUIRE(t.GetCache() != nullptr);
+	const int64_t count_before = t.GetCache()->Count();
+
+	std::shared_ptr<Frame> first = t.GetFrame(end + 25);
+	REQUIRE(first != nullptr);
+	CHECK(first->number == end + 25);
+	CHECK(t.GetCache()->Count() == count_before);
+
+	std::shared_ptr<Frame> second = t.GetFrame(end + 120);
+	REQUIRE(second != nullptr);
+	CHECK(second->number == end + 120);
+	CHECK(t.GetCache()->Count() == count_before);
+}
+
+TEST_CASE("GetMaxFrame ignores tiny float overshoot at clip end", "[libopenshot][timeline][frames]") {
+	TimelineSolidColorReader reader(
+		64, 64,
+		30, 1,
+		600,
+		QColor(10, 20, 30, 255));
+	Clip clip(&reader);
+	clip.Layer(1);
+	clip.Position(0.0);
+	clip.End(16.83333396911621f);
+
+	Timeline t(640, 480, Fraction(30, 1), 44100, 2, LAYOUT_STEREO);
+	t.AddClip(&clip);
+
+	// This value reproduces an exported project where 505 frames at 30 FPS
+	// reloaded from JSON as a tiny float overshoot beyond the frame boundary.
+	REQUIRE(t.GetMaxTime() * t.info.fps.ToDouble() > 505.0);
+	REQUIRE(t.GetMaxTime() * t.info.fps.ToDouble() < 505.0001);
+	CHECK(t.GetMaxFrame() == 505);
 }

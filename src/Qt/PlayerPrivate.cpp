@@ -74,9 +74,13 @@ namespace openshot
             // Pausing Code (which re-syncs audio/video times)
             // - If speed is zero or speed changes
             // - If pre-roll is not ready (This should allow scrubbing of the timeline without waiting on pre-roll)
-            if ((speed == 0 && video_position == last_video_position) ||
-                (speed != 0 && last_speed != speed) ||
-                (speed != 0 && !is_dirty && !videoCache->isReady()))
+            bool wait_paused_hold = (speed == 0 && video_position == last_video_position);
+            bool wait_speed_change = (speed != 0 && last_speed != speed);
+            bool cache_ready = videoCache->isReady();
+            bool wait_preroll = (speed != 0 && !is_dirty && !cache_ready);
+            bool should_wait = (wait_paused_hold || wait_speed_change || wait_preroll);
+
+            if (should_wait)
             {
                 // Sleep for a fraction of frame duration
                 std::this_thread::sleep_for(frame_duration / 4);
@@ -97,7 +101,16 @@ namespace openshot
 
             // Set the video frame on the video thread and render frame
             videoPlayback->frame = frame;
+            videoPlayback->rendered.reset();
             videoPlayback->render.signal();
+            // Keep decode/position advancement aligned with actual preview updates.
+            // This avoids occasional "silent advance then jump" behavior when
+            // preroll transitions and rendering are briefly out-of-sync.
+            const int render_wait_ms = std::max(
+                1,
+                static_cast<int>(frame_duration.count() / 1000.0 * 2.0)
+            );
+            videoPlayback->rendered.wait(render_wait_ms);
 
             // Keep track of the last displayed frame
             last_video_position = video_position;
@@ -116,6 +129,12 @@ namespace openshot
                     // Protect against invalid or too-long sleep times
                     std::this_thread::sleep_for(max_sleep);
                 }
+            } else {
+                // If we're behind schedule (e.g. preroll/render stall), do not
+                // burst through delayed frames. Resync timing baseline so
+                // playback continues smoothly at normal cadence.
+                start_time = std::chrono::time_point_cast<micro_sec>(current_time);
+                playback_frames = 0;
             }
         }
     }
@@ -150,8 +169,8 @@ namespace openshot
             // Increment playback frames (always in the positive direction)
             playback_frames += std::abs(speed);
 
-            // Update cache on which frame was retrieved
-            videoCache->Seek(video_position);
+            // Update playhead hint for cache window tracking without triggering seek behavior.
+            videoCache->NotifyPlaybackPosition(video_position);
 
             // return frame from reader
             return reader->GetFrame(video_position);
@@ -170,6 +189,10 @@ namespace openshot
     {
         video_position = new_position;
         last_video_position = 0;
+        // Drop local frame reference so same-frame refreshes cannot reuse stale
+        // content after timeline/clip property updates.
+        frame.reset();
+        // Always force immediate refresh after seek/update, even while playing.
         is_dirty = true;
     }
 

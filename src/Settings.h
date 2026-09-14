@@ -46,6 +46,15 @@ namespace openshot {
 		/// Private variable to keep track of singleton instance
 		static Settings * m_pInstance;
 
+		/// Last OMP thread count applied to the OpenMP runtime
+		int applied_omp_threads = 0;
+
+		/// Machine default OpenMP thread count detected at startup
+		int default_omp_threads = 2;
+
+		/// Machine default FFmpeg thread count detected at startup
+		int default_ff_threads = 2;
+
 	public:
 		/**
 		 * @brief Use video codec for faster video decoding (if supported)
@@ -64,14 +73,17 @@ namespace openshot {
 		/// Scale mode used in FFmpeg decoding and encoding (used as an optimization for faster previews)
 		bool HIGH_QUALITY_SCALING = true;
 
-		/// Number of threads of OpenMP
-		int OMP_THREADS = 16;
+		/// Number of OpenMP threads
+		int OMP_THREADS = 2;
 
-		/// Number of threads that ffmpeg uses
-		int FF_THREADS = 16;
+			/// Number of threads that ffmpeg uses
+			int FF_THREADS = 16;
 
-		/// Maximum rows that hardware decode can handle
-		int DE_LIMIT_HEIGHT_MAX = 1100;
+			/// Minimum number of frames for frame-count-based caches
+			int CACHE_MIN_FRAMES = 24;
+
+			/// Maximum rows that hardware decode can handle
+			int DE_LIMIT_HEIGHT_MAX = 1100;
 
 		/// Maximum columns that hardware decode can handle
 		int DE_LIMIT_WIDTH_MAX = 1950;
@@ -86,10 +98,10 @@ namespace openshot {
 		float VIDEO_CACHE_PERCENT_AHEAD = 0.7;
 
 		/// Minimum number of frames to cache before playback begins
-		int VIDEO_CACHE_MIN_PREROLL_FRAMES = 24;
+		int VIDEO_CACHE_MIN_PREROLL_FRAMES = 30;
 
 		/// Max number of frames (ahead of playhead) to cache during playback
-		int VIDEO_CACHE_MAX_PREROLL_FRAMES = 48;
+		int VIDEO_CACHE_MAX_PREROLL_FRAMES = 60;
 
 		/// Max number of frames (when paused) to cache for playback
 		int VIDEO_CACHE_MAX_FRAMES = 30 * 10;
@@ -118,6 +130,21 @@ namespace openshot {
 
  		/// Whether to dump ZeroMQ debug messages to stderr
 		bool DEBUG_TO_STDERR = false;
+
+		/// Return the effective OpenMP worker budget used by libopenshot heuristics
+		int EffectiveOMPThreads() const;
+
+		/// Return the maximum allowed thread override based on this machine
+		int MaxAllowedThreads() const;
+
+		/// Return the machine default OpenMP thread count detected at startup
+		int DefaultOMPThreads() const { return default_omp_threads; }
+
+		/// Return the machine default FFmpeg thread count detected at startup
+		int DefaultFFThreads() const { return default_ff_threads; }
+
+		/// Apply any explicit OpenMP thread override to the runtime
+		void ApplyOpenMPSettings();
 
 		/// Create or get an instance of this logger singleton (invoke the class with this method)
 		static Settings * Instance();

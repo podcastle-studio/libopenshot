@@ -16,13 +16,21 @@ endif()
 # Test media path, used by unit tests for input data
 file(TO_NATIVE_PATH "${PROJECT_SOURCE_DIR}/examples/" TEST_MEDIA_PATH)
 
+# Benchmark executable
+add_executable(openshot-benchmark Benchmark.cpp BenchmarkOptions.cpp)
+target_compile_definitions(openshot-benchmark PRIVATE -DTEST_MEDIA_PATH="${TEST_MEDIA_PATH}")
+target_link_libraries(openshot-benchmark openshot)
+
 ###
 ###  TEST SOURCE FILES
 ###
 set(OPENSHOT_TESTS
   AudioDeviceManager
+  AudioRecorder
+  AnimatedCurve
   AudioWaveformer
   BlendModes
+  CameraCaptureReader
   CacheDisk
   CacheMemory
   Caption
@@ -34,28 +42,50 @@ set(OPENSHOT_TESTS
   FFmpegWriter
   Fraction
   Frame
+  FrameScope
   FrameMapper
   KeyFrame
   Point
   Profiles
+  QtPlayer
   QtImageReader
   ReaderBase
   Settings
+  ScreenCaptureReader
   SphericalMetadata
   Timeline
   VideoCacheThread
   # Effects
+  AudioVisualization
+  Bars
+  BeatSync
+  Blur
+  ColorGrade
   ColorMap
   ChromaKey
   Crop
+  Displace
+  FilmGrain
+  Glow
   LensFlare
+  AnalogTape
+  BenchmarkArgs
+  EffectMask
+  Mask
+  Pixelate
+  Saturation
   Sharpen
+  Shadow
   SphericalEffect
+  Timer
+  DenoiseImage
+  WaveEffect
 )
 
 # ImageMagick related test files
 if($CACHE{HAVE_IMAGEMAGICK})
   list(APPEND OPENSHOT_TESTS
+    ImageReader
     ImageWriter
   )
 endif()
@@ -66,6 +96,7 @@ if($CACHE{HAVE_OPENCV})
     CVTracker
     CVStabilizer
     CVOutline
+    ObjectMask
     # CVObjectDetection
   )
 endif()
@@ -104,20 +135,42 @@ else()
 endif()
 
 foreach(tname ${OPENSHOT_TESTS})
-  add_executable(openshot-${tname}-test
+  set(test_sources
     ${tname}.cpp
+  )
+  if(tname STREQUAL "BenchmarkArgs")
+    list(APPEND test_sources BenchmarkOptions.cpp)
+  endif()
+  add_executable(openshot-${tname}-test
+    ${test_sources}
   )
   target_link_libraries(openshot-${tname}-test
     openshot_catch2
     openshot
   )
 
+  set(test_properties
+    LABELS ${tname}
+  )
+  if(tname STREQUAL "FFmpegReader")
+    # Catch2 v2 has no native SKIP assertion. Report unavailable VAAPI
+    # prerequisites as skipped in CTest rather than as a passing decode test.
+    list(APPEND test_properties
+      SKIP_REGULAR_EXPRESSION "Skipping VAAPI test:"
+    )
+  endif()
+  if(tname STREQUAL "Caption" OR tname STREQUAL "Timer")
+    list(APPEND test_properties
+      ENVIRONMENT "QT_QPA_PLATFORM=minimal"
+    )
+  endif()
+
   # Automatically configure CTest targets from Catch2 test cases
   catch_discover_tests(
     openshot-${tname}-test
     TEST_PREFIX ${tname}:
     PROPERTIES
-      LABELS ${tname}
+      ${test_properties}
   )
   list(APPEND CATCH2_TEST_TARGETS openshot-${tname}-test)
   list(APPEND CATCH2_TEST_NAMES ${tname})

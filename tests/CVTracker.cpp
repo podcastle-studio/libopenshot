@@ -13,6 +13,7 @@
 
 #include <sstream>
 #include <memory>
+#include <cmath>
 
 #include "openshot_catch.h"
 
@@ -20,6 +21,7 @@
 #include "CVTracker.h"  // for FrameData, CVTracker
 #include "ProcessingController.h"
 #include "Exceptions.h"
+#include "sort_filter/sort.hpp"
 
 using namespace openshot;
 
@@ -105,6 +107,240 @@ TEST_CASE( "Track_Video", "[libopenshot][opencv][tracker]" )
     CHECK(y == Approx(132).margin(1));
     CHECK(width == Approx(180).margin(1));
     CHECK(height == Approx(166).margin(2));
+}
+
+TEST_CASE( "Track_BoundingBoxClipping", "[libopenshot][opencv][tracker]" )
+{
+    // Create a video clip
+    std::stringstream path;
+    path << TEST_MEDIA_PATH << "test.avi";
+
+    // Open clip
+    openshot::Clip c1(path.str());
+    c1.Open();
+
+    std::string json_data = R"proto(
+    {
+        "tracker-type": "KCF",
+        "region": {
+            "normalized_x": -0.2,
+            "normalized_y": -0.2,
+        "normalized_width": 1.5,
+        "normalized_height": 1.5,
+        "first-frame": 1
+        }
+    } )proto";
+
+    ProcessingController tracker_pc;
+    CVTracker tracker(json_data, tracker_pc);
+    tracker_pc.SetError(false, "");
+
+    // Grab first frame and run tracker directly
+    std::shared_ptr<openshot::Frame> f = c1.GetFrame(1);
+    cv::Mat image = f->GetImageCV();
+
+    tracker.initTracker(image, 1);
+    tracker.trackFrame(image, 2);
+
+    INFO(tracker_pc.GetErrorMessage());
+    CHECK(tracker_pc.GetError() == false);
+}
+
+TEST_CASE( "Track_FrameSizeChangeDoesNotCrash", "[libopenshot][opencv][tracker]" )
+{
+    std::string json_data = R"proto(
+    {
+        "tracker-type": "KCF",
+        "region": {
+            "normalized_x": 0.2,
+            "normalized_y": 0.2,
+            "normalized_width": 0.3,
+            "normalized_height": 0.3,
+            "first-frame": 1
+        }
+    } )proto";
+
+    ProcessingController tracker_pc;
+    CVTracker tracker(json_data, tracker_pc);
+
+    cv::Mat frame1(360, 640, CV_8UC3, cv::Scalar(0, 0, 0));
+    cv::rectangle(frame1, cv::Rect(128, 72, 160, 108), cv::Scalar(255, 255, 255), cv::FILLED);
+
+    cv::Mat frame2 = frame1.clone();
+
+    cv::Mat frame3(180, 320, CV_8UC3, cv::Scalar(0, 0, 0));
+    cv::rectangle(frame3, cv::Rect(64, 36, 80, 54), cv::Scalar(255, 255, 255), cv::FILLED);
+
+    REQUIRE_NOTHROW(tracker.initTracker(frame1, 1));
+    REQUIRE_NOTHROW(tracker.trackFrame(frame2, 2));
+    REQUIRE_NOTHROW(tracker.trackFrame(frame3, 3));
+
+    FrameData fd = tracker.GetTrackedData(3);
+    CHECK(fd.frame_id == 3);
+    CHECK(fd.x1 >= 0.0f);
+    CHECK(fd.y1 >= 0.0f);
+    CHECK(fd.x2 <= 1.0f);
+    CHECK(fd.y2 <= 1.0f);
+}
+
+TEST_CASE( "KalmanTracker smooths class scores", "[libopenshot][opencv][tracker]" )
+{
+    KalmanTracker tracker(
+        cv::Rect_<float>(0.0f, 0.0f, 10.0f, 10.0f),
+        0.9f, 1, 42,
+        { ClassScore(1, 0.9f), ClassScore(2, 0.1f) }
+    );
+
+    CHECK(tracker.classId == 1);
+    CHECK(tracker.confidence == Approx(0.9f));
+
+    tracker.update_class_scores({ ClassScore(1, 0.1f), ClassScore(2, 0.9f) }, 2, 0.9f);
+    CHECK(tracker.classId == 1);
+
+    tracker.update_class_scores({ ClassScore(1, 0.1f), ClassScore(2, 0.9f) }, 2, 0.9f);
+    CHECK(tracker.classId == 1);
+
+    tracker.update_class_scores({ ClassScore(1, 0.1f), ClassScore(2, 0.9f) }, 2, 0.9f);
+    tracker.update_class_scores({ ClassScore(1, 0.1f), ClassScore(2, 0.9f) }, 2, 0.9f);
+    CHECK(tracker.classId == 2);
+}
+
+TEST_CASE( "SortTracker does not reacquire a missed track onto a nearby object", "[libopenshot][opencv][tracker]" )
+{
+    SortTracker sort(50, 1, 7, 0.1, 0.5, 0.0);
+    const double diagonal = std::sqrt(1920.0 * 1920.0 + 1080.0 * 1080.0);
+
+    sort.update(
+        { cv::Rect(100, 100, 60, 60) },
+        1,
+        diagonal,
+        { 0.95f },
+        { 2 },
+        { { ClassScore(2, 0.95f) } }
+    );
+    sort.update(
+        { cv::Rect(100, 100, 60, 60) },
+        2,
+        diagonal,
+        { 0.95f },
+        { 2 },
+        { { ClassScore(2, 0.95f) } }
+    );
+    REQUIRE(sort.frameTrackingResult.size() == 1);
+    const int first_id = sort.frameTrackingResult[0].id;
+
+    sort.update({}, 3, diagonal, {}, {}, {});
+    REQUIRE(sort.frameTrackingResult.size() == 1);
+    CHECK(sort.frameTrackingResult[0].id == first_id);
+
+    sort.update(
+        { cv::Rect(100, 145, 60, 60) },
+        4,
+        diagonal,
+        { 0.95f },
+        { 2 },
+        { { ClassScore(2, 0.95f) } }
+    );
+
+    bool original_track_coasted = false;
+    for (const auto& result : sort.frameTrackingResult) {
+        if (result.id == first_id) {
+            original_track_coasted = true;
+            CHECK(result.box.y < 130.0f);
+        }
+    }
+    CHECK(original_track_coasted);
+    CHECK(sort.trackers.size() >= 2);
+}
+
+TEST_CASE( "SortTracker rejects adjacent-object handoff for active track", "[libopenshot][opencv][tracker]" )
+{
+    SortTracker sort(50, 1, 3, 0.1, 0.5, 0.0);
+    const double diagonal = std::sqrt(960.0 * 960.0 + 540.0 * 540.0);
+
+    sort.update(
+        { cv::Rect(299, 181, 112, 97) },
+        1,
+        diagonal,
+        { 0.80f },
+        { 2 },
+        { { ClassScore(2, 0.80f) } }
+    );
+    sort.update(
+        { cv::Rect(299, 181, 112, 97) },
+        2,
+        diagonal,
+        { 0.80f },
+        { 2 },
+        { { ClassScore(2, 0.80f) } }
+    );
+    REQUIRE(sort.frameTrackingResult.size() == 1);
+    const int first_id = sort.frameTrackingResult[0].id;
+
+    sort.update(
+        { cv::Rect(248, 156, 103, 71) },
+        3,
+        diagonal,
+        { 0.77f },
+        { 2 },
+        { { ClassScore(2, 0.77f) } }
+    );
+
+    bool original_track_did_not_jump = false;
+    for (const auto& result : sort.frameTrackingResult) {
+        if (result.id == first_id) {
+            original_track_did_not_jump = true;
+            CHECK(result.box.x > 285.0f);
+            CHECK(result.box.y > 170.0f);
+        }
+    }
+    CHECK(original_track_did_not_jump);
+    CHECK(sort.trackers.size() >= 2);
+}
+
+TEST_CASE( "SortTracker rejects tiny nested detection for vehicle track", "[libopenshot][opencv][tracker]" )
+{
+    SortTracker sort(50, 1, 3, 0.1, 0.5, 0.0);
+    const double diagonal = std::sqrt(960.0 * 960.0 + 540.0 * 540.0);
+
+    sort.update(
+        { cv::Rect(520, 178, 123, 91) },
+        1,
+        diagonal,
+        { 0.77f },
+        { 2 },
+        { { ClassScore(2, 0.77f) } }
+    );
+    sort.update(
+        { cv::Rect(520, 178, 123, 91) },
+        2,
+        diagonal,
+        { 0.77f },
+        { 2 },
+        { { ClassScore(2, 0.77f) } }
+    );
+    REQUIRE(sort.frameTrackingResult.size() == 1);
+    const int car_id = sort.frameTrackingResult[0].id;
+
+    sort.update(
+        { cv::Rect(592, 198, 30, 13) },
+        3,
+        diagonal,
+        { 0.36f },
+        { 0 },
+        { { ClassScore(0, 0.36f), ClassScore(2, 0.15f) } }
+    );
+
+    bool car_track_did_not_shrink = false;
+    for (const auto& result : sort.frameTrackingResult) {
+        if (result.id == car_id) {
+            car_track_did_not_shrink = true;
+            CHECK(result.box.width > 90.0f);
+            CHECK(result.box.height > 70.0f);
+        }
+    }
+    CHECK(car_track_did_not_shrink);
+    CHECK(sort.trackers.size() >= 2);
 }
 
 

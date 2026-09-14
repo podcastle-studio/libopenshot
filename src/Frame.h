@@ -25,6 +25,7 @@
 #include <mutex>
 
 #include "ChannelLayouts.h"
+#include "Enums.h"
 #include "Fraction.h"
 
 #include <QColor>
@@ -102,7 +103,7 @@ namespace openshot
 		int sample_rate;
 		std::string color;
 		int64_t max_audio_sample; ///< The max audio sample count added to this frame
-		bool audio_reversed; ///< Keep track of audio reversal (i.e. time keyframe)
+		bool audio_is_increasing; ///< Keep track of audio direction (i.e. related to time keyframe)
 
 #ifdef USE_OPENCV
 		cv::Mat imagecv; ///< OpenCV image. It will always be in BGRA format
@@ -114,6 +115,7 @@ namespace openshot
 	public:
 		std::shared_ptr<juce::AudioBuffer<float>> audio;
 		int64_t number;	 ///< This is the frame number (starting at 1)
+		double capture_timestamp; ///< Optional source capture timestamp in seconds for live capture frames
 		bool has_audio_data; ///< This frame has been loaded with audio data
 		bool has_image_data; ///< This frame has been loaded with pixel data
 
@@ -244,9 +246,8 @@ namespace openshot
 		/// Set the original sample rate of this frame's audio data
 		void SampleRate(int orig_sample_rate) { sample_rate = orig_sample_rate; };
 
-		/// Reverse the audio buffer of this frame (will only reverse a single time, regardless of how many times
-		/// you invoke this method)
-		void ReverseAudio();
+		/// Set the direction of the audio buffer of this frame
+		void SetAudioDirection(bool is_increasing);
 
 		/// Save the frame image to the specified path.  The image format can be BMP, JPG, JPEG, PNG, PPM, XBM, XPM
 		void Save(std::string path, float scale, std::string format="PNG", int quality=100);
@@ -258,9 +259,12 @@ namespace openshot
 		void SetPixelRatio(int num, int den);
 
 		/// Thumbnail the frame image with tons of options to the specified path.  The image format is determined from the extension (i.e. image.PNG, image.JPEG).
-		/// This method allows for masks, overlays, background color, and much more accurate resizing (including padding and centering)
+		/// This method allows for masks, overlays, background color, and much more accurate resizing (including padding and centering).
+		/// A trailing optional scale mode can force FIT / CROP / STRETCH behavior while preserving
+		/// legacy behavior for existing callers.
 		void Thumbnail(std::string path, int new_width, int new_height, std::string mask_path, std::string overlay_path,
-				std::string background_color, bool ignore_aspect, std::string format="png", int quality=100, float rotate=0.0);
+				std::string background_color, bool ignore_aspect, std::string format="png", int quality=100,
+				float rotate=0.0, ScaleType scale_mode=SCALE_FIT);
 
 		/// Play audio samples for this frame
 		void Play();

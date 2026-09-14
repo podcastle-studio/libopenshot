@@ -48,6 +48,23 @@ TEST_CASE( "derived class", "[libopenshot][readerbase]" )
 
 	// Validate the new class
 	CHECK(t1.Name() == "TestReader");
+	CHECK_FALSE(t1.HasMaxDecodeSize());
+	CHECK(t1.MaxDecodeWidth() == 0);
+	CHECK(t1.MaxDecodeHeight() == 0);
+
+	t1.SetMaxDecodeSize(320, 180);
+	CHECK(t1.HasMaxDecodeSize());
+	CHECK(t1.MaxDecodeWidth() == 320);
+	CHECK(t1.MaxDecodeHeight() == 180);
+
+	t1.SetMaxDecodeSize(0, 0);
+	CHECK_FALSE(t1.HasMaxDecodeSize());
+	CHECK(t1.ApplyOrientationMetadata());
+
+	t1.ApplyOrientationMetadata(false);
+	CHECK_FALSE(t1.ApplyOrientationMetadata());
+	t1.ApplyOrientationMetadata(true);
+	CHECK(t1.ApplyOrientationMetadata());
 
 	t1.Close();
 	t1.Open();

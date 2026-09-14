@@ -62,15 +62,21 @@ namespace openshot {
     {
     public:
         std::string file_path;
+        std::string full_message;
         FileExceptionBase(std::string message, std::string file_path="")
-            : ExceptionBase(message), file_path(file_path) { }
-        virtual std::string py_message() const override {
-            // return complete message for Python exception handling
-            std::string out_msg(m_message +
+            : ExceptionBase(message),
+              file_path(file_path),
+              full_message(message +
                 (file_path != ""
                  ? " for file " + file_path
-                 : ""));
-            return out_msg;
+                 : "")) { }
+        virtual const char* what() const noexcept override {
+            // Include file path in native C++ exception output (stderr / terminate).
+            return full_message.c_str();
+        }
+        virtual std::string py_message() const override {
+            // Keep Python exception output consistent with what().
+            return full_message;
         }
     };
 

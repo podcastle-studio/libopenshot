@@ -79,6 +79,9 @@ namespace openshot
 		/// Mutex for multiple threads
 		std::recursive_mutex getFrameMutex;
 		openshot::ClipBase* clip; ///< Pointer to the parent clip instance (if any)
+		int max_decode_width; ///< Optional maximum decoded frame width (0 disables the limit)
+		int max_decode_height; ///< Optional maximum decoded frame height (0 disables the limit)
+		bool apply_orientation_metadata; ///< Apply source orientation metadata while reading frames
 
 	public:
 
@@ -93,6 +96,24 @@ namespace openshot
 
 		/// Set parent clip object of this reader
 		void ParentClip(openshot::ClipBase* new_clip);
+
+		/// Set an optional maximum decoded frame size. Use 0,0 to disable the limit.
+		void SetMaxDecodeSize(int width, int height);
+
+		/// Return the current maximum decoded frame width (0 when unlimited).
+		int MaxDecodeWidth() const;
+
+		/// Return the current maximum decoded frame height (0 when unlimited).
+		int MaxDecodeHeight() const;
+
+		/// Return true when a maximum decoded frame size is active.
+		bool HasMaxDecodeSize() const;
+
+		/// Set whether readers should apply source orientation metadata to returned frames.
+		void ApplyOrientationMetadata(bool value);
+
+		/// Return whether readers apply source orientation metadata to returned frames.
+		bool ApplyOrientationMetadata() const;
 
 		/// Close the reader (and any resources it was consuming)
 		virtual void Close() = 0;
@@ -113,6 +134,10 @@ namespace openshot
 
 		/// Determine if reader is open or closed
 		virtual bool IsOpen() = 0;
+
+		/// Return true if hardware decode successfully produced at least one frame.
+		/// Readers without hardware decode support should return false.
+		virtual bool HardwareDecodeSuccessful() const { return false; }
 
 		/// Return the type name of the class
 		virtual std::string Name() = 0;

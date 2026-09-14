@@ -22,6 +22,13 @@
 #include "Timeline.h"
 #include "ZmqLogger.h"
 #include "effects/image-processing-lib/src/Effects/effects.h"
+#include "effects/AudioVisualization.h"
+
+#include <algorithm>
+#include <cmath>
+#include <sstream>
+#include <QPainter>
+#include <QPainterPath>
 
 #ifdef USE_IMAGEMAGICK
 	#include "MagickUtilities.h"
@@ -61,6 +68,31 @@ namespace {
 		                 cv::Size(kernel_for_sigma(sigma_x), kernel_for_sigma(sigma_y)),
 		                 sigma_x, sigma_y);
 	}
+	struct CompositeChoice { const char* name; CompositeType value; };
+	const CompositeChoice composite_choices[] = {
+		{"Normal",      COMPOSITE_SOURCE_OVER},
+
+		// Darken group
+		{"Darken",      COMPOSITE_DARKEN},
+		{"Multiply",    COMPOSITE_MULTIPLY},
+		{"Color Burn",  COMPOSITE_COLOR_BURN},
+
+		// Lighten group
+		{"Lighten",     COMPOSITE_LIGHTEN},
+		{"Screen",      COMPOSITE_SCREEN},
+		{"Color Dodge", COMPOSITE_COLOR_DODGE},
+		{"Add",         COMPOSITE_PLUS},
+
+		// Contrast group
+		{"Overlay",     COMPOSITE_OVERLAY},
+		{"Soft Light",  COMPOSITE_SOFT_LIGHT},
+		{"Hard Light",  COMPOSITE_HARD_LIGHT},
+
+		// Compare
+		{"Difference",  COMPOSITE_DIFFERENCE},
+		{"Exclusion",   COMPOSITE_EXCLUSION},
+	};
+	const int composite_choices_count = sizeof(composite_choices)/sizeof(CompositeChoice);
 }
 
 // Init default settings for a clip
@@ -76,10 +108,13 @@ void Clip::init_settings()
 	anchor = ANCHOR_CANVAS;
 	display = FRAME_DISPLAY_NONE;
 	mixing = VOLUME_MIX_NONE;
+	composite = COMPOSITE_SOURCE_OVER;
 	waveform = false;
 	shadow = false;
 	flip_horizontal = false;
 	flip_vertical = false;
+	waveform_mode = AUDIO_VISUALIZATION_FILLED_WAVEFORM;
+	reader_orientation_mode = ReaderOrientationMode::Reader;
 	previous_properties = "";
 	parentObjectId = "";
 
@@ -93,6 +128,8 @@ void Clip::init_settings()
 
 	// Init alpha
 	alpha = Keyframe(1.0);
+	margin = Keyframe(0.0);
+	corner_radius = Keyframe(0.0);
 
 	// Init time & volume
 	time = Keyframe(1.0);
@@ -158,36 +195,56 @@ void Clip::init_reader_settings() {
 }
 
 void Clip::init_reader_rotation() {
-	// Don't init rotation if clip already has keyframes.
-	if (rotation.GetCount() > 0)
+	// Only apply metadata rotation if clip rotation has not been explicitly set.
+	if (rotation.GetCount() > 0 || !reader)
 		return;
 
-	// Get rotation from metadata (if any)
-	float rotate_angle = 0.0f;
-	if (reader && reader->info.metadata.count("rotate") > 0) {
-		try {
-			rotate_angle = strtof(reader->info.metadata["rotate"].c_str(), nullptr);
-		} catch (const std::exception& e) {
-			// Leave rotate_angle at default 0.0f
-		}
+	if (reader->ApplyOrientationMetadata()) {
+		rotation = Keyframe(0.0f);
+		return;
 	}
+
+	const auto rotate_meta = reader->info.metadata.find("rotate");
+	if (rotate_meta == reader->info.metadata.end()) {
+		// Ensure rotation keyframes always start with a default 0° point.
+		rotation = Keyframe(0.0f);
+		return;
+	}
+
+	float rotate_angle = 0.0f;
+	try {
+		rotate_angle = strtof(rotate_meta->second.c_str(), nullptr);
+	} catch (const std::exception& e) {
+		return; // ignore invalid metadata
+	}
+
 	rotation = Keyframe(rotate_angle);
 
-	// Compute uniform scale factors for rotated video.
-	// Assume reader->info.width and reader->info.height are the clip's natural dimensions.
+	// Do not overwrite user-authored scale curves.
+	auto has_default_scale = [](const Keyframe& kf) {
+		return kf.GetCount() == 1 && fabs(kf.GetPoint(0).co.Y - 1.0) < 0.00001;
+	};
+	if (!has_default_scale(scale_x) || !has_default_scale(scale_y))
+		return;
+
+	// No need to adjust scaling when the metadata rotation is effectively zero.
+	if (fabs(rotate_angle) < 0.0001f)
+		return;
+
 	float w = static_cast<float>(reader->info.width);
 	float h = static_cast<float>(reader->info.height);
-	float rad = rotate_angle * M_PI / 180.0f;
+	if (w <= 0.0f || h <= 0.0f)
+		return;
 
-	// Calculate the dimensions of the bounding box for the rotated clip.
+	float rad = rotate_angle * static_cast<float>(M_PI) / 180.0f;
+
 	float new_width  = fabs(w * cos(rad)) + fabs(h * sin(rad));
 	float new_height = fabs(w * sin(rad)) + fabs(h * cos(rad));
+	if (new_width <= 0.0f || new_height <= 0.0f)
+		return;
 
-	// To have the rotated clip appear the same size as the unrotated clip,
-	// compute a uniform scale factor S that brings the bounding box back to (w, h).
 	float uniform_scale = std::min(w / new_width, h / new_height);
 
-	// Set scale keyframes uniformly.
 	scale_x = Keyframe(uniform_scale);
 	scale_y = Keyframe(uniform_scale);
 }
@@ -225,50 +282,7 @@ Clip::Clip(std::string path) : resampler(NULL), reader(NULL), allocated_reader(N
 {
 	// Init all default settings
 	init_settings();
-
-	// Get file extension (and convert to lower case)
-	std::string ext = get_file_extension(path);
-	std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-
-	// Determine if common video formats (or image sequences)
-	if (ext=="avi" || ext=="mov" || ext=="mkv" ||  ext=="mpg" || ext=="mpeg" || ext=="mp3" || ext=="mp4" || ext=="mts" ||
-		ext=="ogg" || ext=="wav" || ext=="wmv" || ext=="webm" || ext=="vob" || ext=="gif" || path.find("%") != std::string::npos)
-	{
-		try
-		{
-			// Open common video format
-			reader = new openshot::FFmpegReader(path);
-
-		} catch(...) { }
-	}
-	if (ext=="osp")
-	{
-		try
-		{
-			// Open common video format
-			reader = new openshot::Timeline(path, true);
-
-		} catch(...) { }
-	}
-
-
-	// If no video found, try each reader
-	if (!reader)
-	{
-		try
-		{
-			// Try an image reader
-			reader = new openshot::QtImageReader(path);
-
-		} catch(...) {
-			try
-			{
-				// Try a video reader
-				reader = new openshot::FFmpegReader(path);
-
-			} catch(...) { }
-		}
-	}
+	reader = CreateReader(path);
 
 	// Update duration and set parent
 	if (reader) {
@@ -278,6 +292,43 @@ Clip::Clip(std::string path) : resampler(NULL), reader(NULL), allocated_reader(N
 		// Init reader info struct
 		init_reader_settings();
 	}
+}
+
+ReaderBase* Clip::CreateReader(std::string path, bool inspect_reader)
+{
+	// Get file extension (and convert to lower case)
+	std::string ext = get_file_extension(path);
+	std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+
+	// Determine if common video formats (or image sequences)
+	if (ext=="avi" || ext=="flac" || ext=="mov" || ext=="mkv" ||  ext=="mpg" || ext=="mpeg" || ext=="mp3" || ext=="mp4" || ext=="mts" ||
+		ext=="ogg" || ext=="wav" || ext=="wmv" || ext=="webm" || ext=="vob" || ext=="gif" || path.find("%") != std::string::npos)
+	{
+		try
+		{
+			return new openshot::FFmpegReader(path, inspect_reader);
+		} catch(...) { }
+	}
+	if (ext=="osp")
+	{
+		try
+		{
+			return new openshot::Timeline(path, true);
+		} catch(...) { }
+	}
+
+	// If no video found, try each reader
+	try
+	{
+		return new openshot::QtImageReader(path, inspect_reader);
+	} catch(...) {
+		try
+		{
+			return new openshot::FFmpegReader(path, inspect_reader);
+		} catch(...) { }
+	}
+
+	return NULL;
 }
 
 // Destructor
@@ -366,6 +417,7 @@ void Clip::Reader(ReaderBase* new_reader)
 
 	// set parent
 	if (reader) {
+		reader->ApplyOrientationMetadata(reader_orientation_mode == ReaderOrientationMode::Reader);
 		reader->ParentClip(this);
 
 		// Init reader info struct
@@ -540,11 +592,11 @@ std::shared_ptr<Frame> Clip::GetFrame(std::shared_ptr<openshot::Frame> backgroun
             // Get time mapped frame object (used to increase speed, change direction, etc...)
             apply_timemapping(frame, options);
 
-            // Apply waveform image (if any)
-            apply_waveform(frame, timeline_size);
+		// Apply waveform image (if any)
+		apply_waveform(frame, timeline_size);
 
-            // Apply effects BEFORE applying keyframes (if any local or global effects are used)
-            apply_effects(frame, timeline_frame_number, options, true);
+		// Apply effects BEFORE applying keyframes (if any local or global effects are used)
+		apply_effects(frame, timeline_frame_number, options, true);
 
 			if (!overlayClips.empty()) {
 				for (const auto& overlayClipData : overlayClips) {
@@ -597,8 +649,8 @@ std::shared_ptr<Frame> Clip::GetFrame(std::shared_ptr<openshot::Frame> backgroun
             // Apply keyframe / transforms to current clip image
             apply_keyframes(frame, timeline_size);
 
-            // Apply effects AFTER applying keyframes (if any local or global effects are used)
-            apply_effects(frame, timeline_frame_number, options, false);
+		// Apply effects AFTER applying keyframes (if any local or global effects are used)
+		apply_effects(frame, timeline_frame_number, options, false);
 
             // Add final frame to cache (before flattening into background_frame)
             final_cache.Add(frame);
@@ -669,8 +721,13 @@ std::shared_ptr<openshot::TrackedObjectBase> Clip::GetParentTrackedObject() {
 // Get file extension
 std::string Clip::get_file_extension(std::string path)
 {
-	// return last part of path
-	return path.substr(path.find_last_of(".") + 1);
+	// Return last part of path safely (handle filenames without a dot)
+	const auto dot_pos = path.find_last_of('.');
+	if (dot_pos == std::string::npos || dot_pos + 1 >= path.size()) {
+		return std::string();
+	}
+
+	return path.substr(dot_pos + 1);
 }
 
 // Adjust the audio and image of a time mapped frame
@@ -694,7 +751,8 @@ void Clip::apply_timemapping(std::shared_ptr<Frame> frame, openshot::TimelineInf
 
 		// Get delta (difference from this frame to the next time mapped frame: Y value)
 		double delta = time.GetDelta(clip_frame_number + 1);
-		bool is_increasing = time.IsIncreasing(clip_frame_number + 1);
+		const bool prev_is_increasing = time.IsIncreasing(clip_frame_number);
+		const bool is_increasing = time.IsIncreasing(clip_frame_number + 1);
 
 		// Determine length of source audio (in samples)
 		// A delta of 1.0 == normal expected samples
@@ -714,7 +772,7 @@ void Clip::apply_timemapping(std::shared_ptr<Frame> frame, openshot::TimelineInf
 
 		// Determine starting audio location
 		AudioLocation location;
-		if (previous_location.frame == 0 || abs(new_frame_number - previous_location.frame) > 2) {
+		if (previous_location.frame == 0 || abs(new_frame_number - previous_location.frame) > 2 || prev_is_increasing != is_increasing) {
 			// No previous location OR gap detected
 			location.frame = new_frame_number;
 			location.sample_start = 0;
@@ -723,6 +781,7 @@ void Clip::apply_timemapping(std::shared_ptr<Frame> frame, openshot::TimelineInf
 			// We don't want to interpolate between unrelated audio data
 			if (resampler) {
 				delete resampler;
+				resampler = nullptr;
 			}
 			// Init resampler with # channels from Reader (should match the timeline)
 			resampler = new AudioResampler(Reader()->info.channels);
@@ -755,6 +814,12 @@ void Clip::apply_timemapping(std::shared_ptr<Frame> frame, openshot::TimelineInf
 		while (remaining_samples > 0) {
 			std::shared_ptr<Frame> source_frame = GetOrCreateFrame(location.frame, false);
 			int frame_sample_count = source_frame->GetAudioSamplesCount() - location.sample_start;
+
+            // Inform FrameMapper of the direction for THIS mapper frame
+            if (auto *fm = dynamic_cast<FrameMapper*>(reader)) {
+                fm->SetDirectionHint(is_increasing);
+            }
+            source_frame->SetAudioDirection(is_increasing);
 
 			if (frame_sample_count == 0) {
 				// No samples found in source frame (fill with silence)
@@ -842,10 +907,17 @@ std::shared_ptr<Frame> Clip::GetOrCreateFrame(int64_t number, bool enable_time)
 	try {
 		// Init to requested frame
 		int64_t clip_frame_number = adjust_frame_number_minimum(number);
+		bool is_increasing = true;
 
 		// Adjust for time-mapping (if any)
 		if (enable_time && time.GetLength() > 1) {
-			clip_frame_number = adjust_frame_number_minimum(time.GetLong(clip_frame_number));
+			is_increasing = time.IsIncreasing(clip_frame_number + 1);
+			const int64_t time_frame_number = adjust_frame_number_minimum(time.GetLong(clip_frame_number));
+			if (auto *fm = dynamic_cast<FrameMapper*>(reader)) {
+				// Inform FrameMapper which direction this mapper frame is being requested
+				fm->SetDirectionHint(is_increasing);
+			}
+			clip_frame_number = time_frame_number;
 		}
 
 		// Debug output
@@ -855,10 +927,12 @@ std::shared_ptr<Frame> Clip::GetOrCreateFrame(int64_t number, bool enable_time)
 
 		// Attempt to get a frame (but this could fail if a reader has just been closed)
 		auto reader_frame = reader->GetFrame(clip_frame_number);
-		reader_frame->number = number; // Override frame # (due to time-mapping might change it)
-
-		// Return real frame
 		if (reader_frame) {
+			// Override frame # (due to time-mapping might change it)
+			reader_frame->number = number;
+			reader_frame->SetAudioDirection(is_increasing);
+
+			// Return real frame
 			// Create a new copy of reader frame
 			// This allows a clip to modify the pixels and audio of this frame without
 			// changing the underlying reader's frame data
@@ -921,12 +995,14 @@ std::string Clip::PropertiesJSON(int64_t requested_frame) const {
 	root["scale"] = add_property_json("Scale", scale, "int", "", NULL, 0, 3, false, requested_frame);
 	root["display"] = add_property_json("Frame Number", display, "int", "", NULL, 0, 3, false, requested_frame);
 	root["mixing"] = add_property_json("Volume Mixing", mixing, "int", "", NULL, 0, 2, false, requested_frame);
+	root["composite"] = add_property_json("Composite", composite, "int", "", NULL, 0, composite_choices_count - 1, false, requested_frame);
 	root["waveform"] = add_property_json("Waveform", waveform, "int", "", NULL, 0, 1, false, requested_frame);
 	root["shadow"] = add_property_json("Shadow", shadow, "int", "", NULL, 0, 1, false, requested_frame);
 	root["blur_enabled"] = add_property_json("Blur", blur, "int", "", NULL, 0, 1, false, requested_frame);
 	root["flip_horizontal"] = add_property_json("Flip Horizontal", flip_horizontal, "int", "", NULL, 0, 1, false, requested_frame);
 	root["flip_vertical"] = add_property_json("Flip Vertical", flip_vertical, "int", "", NULL, 0, 1, false, requested_frame);
 	root["blend_mode"] = add_property_json("Blend Mode", blend_mode, "int", "", NULL, 0, BLEND_MODE_COUNT - 1, false, requested_frame);
+	root["waveform_mode"] = add_property_json("Waveform Mode", waveform_mode, "int", "", NULL, 0, AUDIO_VISUALIZATION_RADIAL_BARS, false, requested_frame);
 	root["parentObjectId"] = add_property_json("Parent", 0.0, "string", parentObjectId, NULL, -1, -1, false, requested_frame);
 
 	// Add gravity choices (dropdown style)
@@ -961,6 +1037,10 @@ std::string Clip::PropertiesJSON(int64_t requested_frame) const {
 	root["mixing"]["choices"].append(add_property_choice_json("Average", VOLUME_MIX_AVERAGE, mixing));
 	root["mixing"]["choices"].append(add_property_choice_json("Reduce", VOLUME_MIX_REDUCE, mixing));
 
+	// Add composite choices (dropdown style)
+	for (int i = 0; i < composite_choices_count; ++i)
+		root["composite"]["choices"].append(add_property_choice_json(composite_choices[i].name, composite_choices[i].value, composite));
+
 	// Add waveform choices (dropdown style)
 	root["waveform"]["choices"].append(add_property_choice_json("Yes", true, waveform));
 	root["waveform"]["choices"].append(add_property_choice_json("No", false, waveform));
@@ -978,6 +1058,16 @@ std::string Clip::PropertiesJSON(int64_t requested_frame) const {
 	root["flip_horizontal"]["choices"].append(add_property_choice_json("No", false, flip_horizontal));
 	root["flip_vertical"]["choices"].append(add_property_choice_json("Yes", true, flip_vertical));
 	root["flip_vertical"]["choices"].append(add_property_choice_json("No", false, flip_vertical));
+	// Add waveform mode choices (dropdown style)
+	root["waveform_mode"]["choices"].append(add_property_choice_json("Waveform", AUDIO_VISUALIZATION_WAVEFORM, waveform_mode));
+	root["waveform_mode"]["choices"].append(add_property_choice_json("Filled Waveform", AUDIO_VISUALIZATION_FILLED_WAVEFORM, waveform_mode));
+	root["waveform_mode"]["choices"].append(add_property_choice_json("Bars", AUDIO_VISUALIZATION_BARS, waveform_mode));
+	root["waveform_mode"]["choices"].append(add_property_choice_json("Radial", AUDIO_VISUALIZATION_RADIAL, waveform_mode));
+	root["waveform_mode"]["choices"].append(add_property_choice_json("Radial Bars", AUDIO_VISUALIZATION_RADIAL_BARS, waveform_mode));
+	root["waveform_mode"]["choices"].append(add_property_choice_json("Spectrum", AUDIO_VISUALIZATION_SPECTRUM, waveform_mode));
+	root["waveform_mode"]["choices"].append(add_property_choice_json("Phase Scope", AUDIO_VISUALIZATION_PHASE_SCOPE, waveform_mode));
+	root["waveform_mode"]["choices"].append(add_property_choice_json("Particles", AUDIO_VISUALIZATION_PARTICLES, waveform_mode));
+	root["waveform_mode"]["choices"].append(add_property_choice_json("VU Meter", AUDIO_VISUALIZATION_VU_METER, waveform_mode));
 
 	// Add the parentClipObject's properties
 	if (parentClipObject)
@@ -1019,6 +1109,8 @@ std::string Clip::PropertiesJSON(int64_t requested_frame) const {
 
 	// Keyframes
 	root["alpha"] = add_property_json("Alpha", alpha.GetValue(requested_frame), "float", "", &alpha, 0.0, 1.0, false, requested_frame);
+	root["corner_radius"] = add_property_json("Corner Radius", corner_radius.GetValue(requested_frame), "float", "", &corner_radius, 0.0, 0.5, false, requested_frame);
+	root["margin"] = add_property_json("Margin", margin.GetValue(requested_frame), "float", "", &margin, 0.0, 0.5, false, requested_frame);
 	root["origin_x"] = add_property_json("Origin X", origin_x.GetValue(requested_frame), "float", "", &origin_x, 0.0, 1.0, false, requested_frame);
 	root["origin_y"] = add_property_json("Origin Y", origin_y.GetValue(requested_frame), "float", "", &origin_y, 0.0, 1.0, false, requested_frame);
 	root["volume"] = add_property_json("Volume", volume.GetValue(requested_frame), "float", "", &volume, 0.0, 1.0, false, requested_frame);
@@ -1072,6 +1164,7 @@ Json::Value Clip::JsonValue() const {
 	root["anchor"] = anchor;
 	root["display"] = display;
 	root["mixing"] = mixing;
+	root["composite"] = composite;
 	root["waveform"] = waveform;
 	root["flip_horizontal"] = flip_horizontal;
 	root["flip_vertical"] = flip_vertical;
@@ -1099,11 +1192,23 @@ Json::Value Clip::JsonValue() const {
 	clip_blur["amount"] = blur_amount.JsonValue();
 	root["blur"] = clip_blur;
 
+	root["waveform_mode"] = waveform_mode;
+	switch (reader_orientation_mode) {
+		case ReaderOrientationMode::LegacyClipTransform:
+			root["reader_orientation_mode"] = "legacy_clip_transform";
+			break;
+		case ReaderOrientationMode::Reader:
+		default:
+			root["reader_orientation_mode"] = "reader";
+			break;
+	}
 	root["scale_x"] = scale_x.JsonValue();
 	root["scale_y"] = scale_y.JsonValue();
 	root["location_x"] = location_x.JsonValue();
 	root["location_y"] = location_y.JsonValue();
 	root["alpha"] = alpha.JsonValue();
+	root["corner_radius"] = corner_radius.JsonValue();
+	root["margin"] = margin.JsonValue();
 	root["rotation"] = rotation.JsonValue();
 	root["time"] = time.JsonValue();
 	root["volume"] = volume.JsonValue();
@@ -1162,9 +1267,27 @@ void Clip::SetJson(const std::string value) {
 
 // Load Json::Value into this object
 void Clip::SetJsonValue(const Json::Value root) {
+	auto ensure_default_keyframe = [](Keyframe& kf, double default_value) {
+		if (kf.GetCount() == 0) {
+			kf = Keyframe(default_value);
+		}
+	};
 
 	// Set parent data
 	ClipBase::SetJsonValue(root);
+
+	// Older project files predate reader-applied orientation metadata and stored
+	// phone/camera rotation as ordinary clip rotation/scale keyframes.
+	if (root["reader_orientation_mode"].isNull()) {
+		reader_orientation_mode = ReaderOrientationMode::LegacyClipTransform;
+	} else {
+		const std::string mode = root["reader_orientation_mode"].asString();
+		if (mode == "legacy_clip_transform") {
+			reader_orientation_mode = ReaderOrientationMode::LegacyClipTransform;
+		} else {
+			reader_orientation_mode = ReaderOrientationMode::Reader;
+		}
+	}
 
 	// Set data from Json (if key is found)
 	if (!root["parentObjectId"].isNull()){
@@ -1186,6 +1309,8 @@ void Clip::SetJsonValue(const Json::Value root) {
 		display = (FrameDisplayType) root["display"].asInt();
 	if (!root["mixing"].isNull())
 		mixing = (VolumeMixType) root["mixing"].asInt();
+	if (!root["composite"].isNull())
+		composite = (CompositeType) root["composite"].asInt();
 	if (!root["waveform"].isNull())
 		waveform = root["waveform"].asBool();
 	if (!root["flip_horizontal"].isNull())
@@ -1249,6 +1374,8 @@ void Clip::SetJsonValue(const Json::Value root) {
 		blur = root["blur_enabled"].asBool();
 	if (!root["blur_amount"].isNull())
 		blur_amount.SetJsonValue(root["blur_amount"]);
+	if (!root["waveform_mode"].isNull())
+		waveform_mode = root["waveform_mode"].asInt();
 	if (!root["scale_x"].isNull())
 		scale_x.SetJsonValue(root["scale_x"]);
 	if (!root["scale_y"].isNull())
@@ -1259,6 +1386,10 @@ void Clip::SetJsonValue(const Json::Value root) {
 		location_y.SetJsonValue(root["location_y"]);
 	if (!root["alpha"].isNull())
 		alpha.SetJsonValue(root["alpha"]);
+	if (!root["corner_radius"].isNull())
+		corner_radius.SetJsonValue(root["corner_radius"]);
+	if (!root["margin"].isNull())
+		margin.SetJsonValue(root["margin"]);
 	if (!root["rotation"].isNull())
 		rotation.SetJsonValue(root["rotation"]);
 	if (!root["time"].isNull())
@@ -1299,6 +1430,18 @@ void Clip::SetJsonValue(const Json::Value root) {
 		perspective_c4_x.SetJsonValue(root["perspective_c4_x"]);
 	if (!root["perspective_c4_y"].isNull())
 		perspective_c4_y.SetJsonValue(root["perspective_c4_y"]);
+
+	// Core clip transforms should never remain empty after load. Empty JSON
+	// point arrays can be produced by editing flows that remove every keyframe.
+	ensure_default_keyframe(scale_x, 1.0);
+	ensure_default_keyframe(scale_y, 1.0);
+	ensure_default_keyframe(location_x, 0.0);
+	ensure_default_keyframe(location_y, 0.0);
+	ensure_default_keyframe(origin_x, 0.5);
+	ensure_default_keyframe(origin_y, 0.5);
+	ensure_default_keyframe(rotation, 0.0);
+	ensure_default_keyframe(corner_radius, 0.0);
+	ensure_default_keyframe(margin, 0.0);
 	if (!root["effects"].isNull()) {
 
 		// Clear existing effects
@@ -1392,6 +1535,7 @@ void Clip::SetJsonValue(const Json::Value root) {
 
 			// mark as managed reader and set parent
 			if (reader) {
+				reader->ApplyOrientationMetadata(reader_orientation_mode == ReaderOrientationMode::Reader);
 				reader->ParentClip(this);
 				allocated_reader = reader;
 			}
@@ -1472,7 +1616,9 @@ void Clip::RemoveEffect(EffectBase* effect)
 
 
 // Apply background image to the current clip image (i.e. flatten this image onto previous layer)
-void Clip::apply_background(std::shared_ptr<openshot::Frame> frame, std::shared_ptr<openshot::Frame> background_frame) {
+void Clip::apply_background(std::shared_ptr<openshot::Frame> frame,
+                            std::shared_ptr<openshot::Frame> background_frame,
+                            bool update_frame_image) {
 	// Retrieve the background image
     const std::shared_ptr<QImage> background_canvas = background_frame->GetImage();
 
@@ -1489,8 +1635,11 @@ void Clip::apply_background(std::shared_ptr<openshot::Frame> frame, std::shared_
         BlendImages(*background_canvas, *frame->GetImage(), blend_mode);
     }
 
-    // Add the modified image back to the frame
-    frame->AddImage(background_canvas);
+
+	// A standalone clip wants its own image updated; timeline composition paints straight
+	// onto the timeline-owned background frame and leaves the cached clip frame alone.
+	if (update_frame_image)
+		frame->AddImage(background_canvas);
 }
 
 // Apply effects to the source frame (if any)
@@ -1500,9 +1649,9 @@ void Clip::apply_effects(std::shared_ptr<Frame> frame, int64_t timeline_frame_nu
 	{
 		// Apply the effect to this frame
 		if (effect->info.apply_before_clip && before_keyframes) {
-			effect->GetFrame(frame, frame->number);
+			effect->ProcessFrame(frame, frame->number);
 		} else if (!effect->info.apply_before_clip && !before_keyframes) {
-			effect->GetFrame(frame, frame->number);
+			effect->ProcessFrame(frame, frame->number);
 		}
 	}
 
@@ -1707,9 +1856,6 @@ void Clip::apply_waveform(std::shared_ptr<Frame> frame, QSize timeline_size) {
 		return;
 	}
 
-	// Get image from clip
-	std::shared_ptr<QImage> source_image = frame->GetImage();
-
 	// Debug output
 	ZmqLogger::Instance()->AppendDebugMethod("Clip::apply_waveform (Generate Waveform Image)",
 			"frame->number", frame->number,
@@ -1723,9 +1869,34 @@ void Clip::apply_waveform(std::shared_ptr<Frame> frame, QSize timeline_size) {
 	int blue = wave_color.blue.GetInt(frame->number);
 	int alpha = wave_color.alpha.GetInt(frame->number);
 
-	// Generate Waveform Dynamically (the size of the timeline)
-	source_image = frame->GetWaveform(timeline_size.width(), timeline_size.height(), red, green, blue, alpha);
-	frame->AddImage(source_image);
+	// Render the waveform through the audio visualization effect so clip shortcuts
+	// and explicit effects share the same rendering path.
+	auto visual_frame = std::make_shared<Frame>(*frame.get());
+	visual_frame->AddImage(std::make_shared<QImage>(
+		timeline_size.width(), timeline_size.height(), QImage::Format_RGBA8888_Premultiplied));
+	visual_frame->GetImage()->fill(Qt::transparent);
+
+	AudioVisualization visualization;
+	visualization.visualization_type = waveform_mode;
+	visualization.style = AUDIO_VISUALIZATION_STYLE_MINIMAL;
+	visualization.color = Color(
+		static_cast<unsigned char>(red),
+		static_cast<unsigned char>(green),
+		static_cast<unsigned char>(blue),
+		static_cast<unsigned char>(alpha));
+	visualization.intensity = Keyframe(1.0);
+	visualization.smoothing = Keyframe(0.25);
+	visualization.detail = Keyframe(0.75);
+	visualization.glow = Keyframe(0.0);
+	visualization.color_spread = Keyframe(0.0);
+	visualization.color_mode = AUDIO_VISUALIZATION_COLOR_SEED;
+	visualization.channel_layout = AUDIO_VISUALIZATION_CHANNEL_AUTO;
+	visualization.frequency_low = Keyframe(0.0);
+	visualization.frequency_high = Keyframe(1.0);
+	visualization.background = AUDIO_VISUALIZATION_BACKGROUND_TRANSPARENT;
+	visualization.GetFrame(visual_frame, frame->number);
+
+	frame->AddImage(visual_frame->GetImage());
 }
 
 // Scale a source size to a target size (given a specific scale-type)

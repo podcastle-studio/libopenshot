@@ -32,6 +32,10 @@
 
 namespace openshot
 {
+	enum SaturationMaskMode {
+		SATURATION_MASK_POST_BLEND = 0,
+		SATURATION_MASK_DRIVE_AMOUNT = 1
+	};
 
 	/**
 	 * @brief This class adjusts the saturation of color on a frame's image.
@@ -45,11 +49,17 @@ namespace openshot
 		/// Init effect settings
 		void init_effect_details();
 
+	protected:
+		bool UseCustomMaskBlend(int64_t frame_number) const override;
+		void ApplyCustomMaskBlend(std::shared_ptr<QImage> original_image, std::shared_ptr<QImage> effected_image,
+							  std::shared_ptr<QImage> mask_image, int64_t frame_number) const override;
+
 	public:
 		Keyframe saturation;	///< Overall color saturation: 0.0 = greyscale, 1.0 = normal, 2.0 = double saturation
 		Keyframe saturation_R;	///< Red color saturation
 		Keyframe saturation_G;	///< Green color saturation
 		Keyframe saturation_B;	///< Blue color saturation
+		int mask_mode;	///< How to apply common masks to saturation (post-blend or drive-amount).
 
 		/// Blank constructor, useful when using Json to load the effect properties
 		Saturation();

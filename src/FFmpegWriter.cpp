@@ -21,6 +21,7 @@
 #include <ctime>
 #include <mutex>
 #include <queue>
+#include <sstream>
 #include <thread>
 #include <unistd.h>
 
@@ -117,7 +118,7 @@ FFmpegWriter::FFmpegWriter(const std::string& path) :
 		initial_audio_input_frame_size(0), img_convert_ctx(NULL),
 		video_codec_ctx(NULL), audio_codec_ctx(NULL), is_writing(false), video_timestamp(0), audio_timestamp(0),
 		original_sample_rate(0), original_channels(0), avr(NULL), avr_planar(NULL), is_open(false), prepare_streams(false),
-		write_header(false), write_trailer(false), audio_encoder_buffer_size(0), audio_encoder_buffer(NULL) {
+		write_header(false), write_trailer(false), allow_b_frames(false), audio_encoder_buffer_size(0), audio_encoder_buffer(NULL) {
 
 	// Disable audio & video (so they can be independently enabled)
 	info.has_audio = false;
@@ -165,17 +166,18 @@ void FFmpegWriter::auto_detect_format() {
 	// Determine what format to use when encoding this output filename
 	oc->oformat = av_guess_format(NULL, path.c_str(), NULL);
 	if (oc->oformat == nullptr) {
-		throw InvalidFormat(
-			"Could not deduce output format from file extension.", path);
+		throw InvalidFormat("Could not deduce output format from file extension.", path);
 	}
 
-	// Update video codec name
-	if (oc->oformat->video_codec != AV_CODEC_ID_NONE && info.has_video)
-		info.vcodec = avcodec_find_encoder(oc->oformat->video_codec)->name;
-
-	// Update audio codec name
-	if (oc->oformat->audio_codec != AV_CODEC_ID_NONE && info.has_audio)
-		info.acodec = avcodec_find_encoder(oc->oformat->audio_codec)->name;
+	// Update video & audio codec name
+	if (oc->oformat->video_codec != AV_CODEC_ID_NONE && info.has_video) {
+		const AVCodec *vcodec = avcodec_find_encoder(oc->oformat->video_codec);
+		info.vcodec = vcodec ? vcodec->name : std::string();
+	}
+	if (oc->oformat->audio_codec != AV_CODEC_ID_NONE && info.has_audio) {
+		const AVCodec *acodec = avcodec_find_encoder(oc->oformat->audio_codec);
+		info.acodec = acodec ? acodec->name : std::string();
+	}
 }
 
 // initialize streams
@@ -405,7 +407,7 @@ void FFmpegWriter::SetOption(StreamType stream, std::string name, std::string va
 	// Was option found?
 	if (option || (name == "g" || name == "qmin" || name == "qmax" || name == "max_b_frames" || name == "mb_decision" ||
 				   name == "level" || name == "profile" || name == "slices" || name == "rc_min_rate" || name == "rc_max_rate" ||
-				   name == "rc_buffer_size" || name == "crf" || name == "cqp" || name == "qp")) {
+				   name == "rc_buffer_size" || name == "crf" || name == "cqp" || name == "qp" || name == "allow_b_frames")) {
 		// Check for specific named options
 		if (name == "g")
 			// Set gop_size
@@ -422,6 +424,11 @@ void FFmpegWriter::SetOption(StreamType stream, std::string name, std::string va
 		else if (name == "max_b_frames")
 			// Maximum number of B-frames between non-B-frames
 			convert >> c->max_b_frames;
+
+		else if (name == "allow_b_frames")
+			// Preserve configured B-frames for codecs that support them.
+			// Values: 1/true/yes/on to enable, everything else disables.
+			allow_b_frames = (value == "1" || value == "true" || value == "yes" || value == "on");
 
 		else if (name == "mb_decision")
 			// Macroblock decision mode
@@ -730,6 +737,38 @@ void FFmpegWriter::WriteFrame(std::shared_ptr<openshot::Frame> frame) {
 	last_frame = frame;
 }
 
+void FFmpegWriter::WriteFrameAt(std::shared_ptr<openshot::Frame> frame, int64_t frame_number) {
+	// Check for open reader (or throw exception)
+	if (!is_open)
+		throw WriterClosed("The FFmpegWriter is closed.  Call Open() before calling this method.", path);
+
+	if (frame_number < 1) {
+		frame_number = 1;
+	}
+
+	ZmqLogger::Instance()->AppendDebugMethod(
+		"FFmpegWriter::WriteFrameAt",
+		"frame->number", frame->number,
+		"output_frame_number", frame_number,
+		"is_writing", is_writing);
+
+	const int64_t previous_video_timestamp = video_timestamp;
+	if (info.has_video && video_st && video_codec_ctx) {
+		video_timestamp = av_rescale_q(
+			frame_number - 1,
+			av_make_q(info.fps.den, info.fps.num),
+			video_codec_ctx->time_base);
+	}
+
+	write_frame(frame);
+
+	if (!(info.has_video && video_st && video_codec_ctx)) {
+		video_timestamp = previous_video_timestamp;
+	}
+
+	last_frame = frame;
+}
+
 // Write all frames in the queue to the video file.
 void FFmpegWriter::write_frame(std::shared_ptr<Frame> frame) {
 	// Flip writing flag
@@ -852,6 +891,13 @@ void FFmpegWriter::WriteTrailer() {
 	// Flush encoders (who sometimes hold on to frames)
 	flush_encoders();
 
+	if (info.has_audio && audio_st && audio_codec_ctx && audio_timestamp > 0) {
+		audio_st->duration = av_rescale_q(
+			audio_timestamp,
+			audio_codec_ctx->time_base,
+			audio_st->time_base);
+	}
+
 	/* write the trailer, if any. The trailer must be written
 	 * before you close the CodecContexts open when you wrote the
 	 * header; otherwise write_trailer may try to use memory that
@@ -909,6 +955,9 @@ void FFmpegWriter::flush_encoders() {
 					avcodec_flush_buffers(video_codec_ctx);
 					break;
 				}
+				if (pkt->duration <= 0) {
+					pkt->duration = av_rescale_q(1, av_make_q(info.fps.den, info.fps.num), video_codec_ctx->time_base);
+				}
 				av_packet_rescale_ts(pkt, video_codec_ctx->time_base, video_st->time_base);
 				pkt->stream_index = video_st->index;
 				error_code = av_interleaved_write_frame(oc, pkt);
@@ -931,6 +980,9 @@ void FFmpegWriter::flush_encoders() {
 			}
 
 			// set the timestamp
+			if (pkt->duration <= 0) {
+				pkt->duration = av_rescale_q(1, av_make_q(info.fps.den, info.fps.num), video_codec_ctx->time_base);
+			}
 			av_packet_rescale_ts(pkt, video_codec_ctx->time_base, video_st->time_base);
 			pkt->stream_index = video_st->index;
 
@@ -962,10 +1014,61 @@ void FFmpegWriter::flush_encoders() {
 			int error_code = 0;
 			int got_packet = 0;
 #if IS_FFMPEG_3_2
+			if (!audio_codec_ctx->codec || !(audio_codec_ctx->codec->capabilities & AV_CODEC_CAP_DELAY)) {
+				av_packet_free(&pkt);
+				break;
+			}
 			error_code = avcodec_send_frame(audio_codec_ctx, NULL);
+			if (error_code < 0 && error_code != AVERROR_EOF) {
+				ZmqLogger::Instance()->AppendDebugMethod(
+					"FFmpegWriter::flush_encoders ERROR ["
+						+ av_err2string(error_code) + "]",
+					"error_code", error_code);
+			}
+			while (true) {
+				error_code = avcodec_receive_packet(audio_codec_ctx, pkt);
+				if (error_code == AVERROR(EAGAIN) || error_code == AVERROR_EOF) {
+					got_packet = 0;
+					break;
+				}
+				if (error_code < 0) {
+					ZmqLogger::Instance()->AppendDebugMethod(
+						"FFmpegWriter::flush_encoders ERROR ["
+							+ av_err2string(error_code) + "]",
+						"error_code", error_code);
+					got_packet = 0;
+					break;
+				}
+
+				got_packet = 1;
+				if (pkt->pts == AV_NOPTS_VALUE) {
+					pkt->pts = audio_timestamp;
+				}
+				if (pkt->dts == AV_NOPTS_VALUE) {
+					pkt->dts = pkt->pts;
+				}
+				if (pkt->duration <= 0) {
+					pkt->duration = audio_codec_ctx->frame_size > 0 ? audio_codec_ctx->frame_size : audio_input_frame_size;
+				}
+				const int64_t packet_duration = pkt->duration;
+				av_packet_rescale_ts(pkt, audio_codec_ctx->time_base, audio_st->time_base);
+				pkt->stream_index = audio_st->index;
+				pkt->flags |= AV_PKT_FLAG_KEY;
+
+				error_code = av_interleaved_write_frame(oc, pkt);
+				if (error_code < 0) {
+					ZmqLogger::Instance()->AppendDebugMethod(
+						"FFmpegWriter::flush_encoders ERROR ["
+							+ av_err2string(error_code) + "]",
+						"error_code", error_code);
+				}
+				audio_timestamp += packet_duration;
+				AV_FREE_PACKET(pkt);
+			}
+			av_packet_free(&pkt);
+			break;
 #else
 			error_code = avcodec_encode_audio2(audio_codec_ctx, pkt, NULL, &got_packet);
-#endif
 			if (error_code < 0) {
 				ZmqLogger::Instance()->AppendDebugMethod(
 					"FFmpegWriter::flush_encoders ERROR ["
@@ -979,6 +1082,9 @@ void FFmpegWriter::flush_encoders() {
 			// Since the PTS can change during encoding, set the value again.  This seems like a huge hack,
 			// but it fixes lots of PTS related issues when I do this.
 			pkt->pts = pkt->dts = audio_timestamp;
+			if (pkt->duration <= 0) {
+				pkt->duration = audio_codec_ctx->frame_size > 0 ? audio_codec_ctx->frame_size : audio_input_frame_size;
+			}
 
 			// Scale the PTS to the audio stream timebase (which is sometimes different than the codec's timebase)
 			av_packet_rescale_ts(pkt, audio_codec_ctx->time_base, audio_st->time_base);
@@ -1001,6 +1107,7 @@ void FFmpegWriter::flush_encoders() {
 
 			// deallocate memory for packet
 			AV_FREE_PACKET(pkt);
+#endif
 		}
 	}
 
@@ -1153,6 +1260,9 @@ AVStream *FFmpegWriter::add_audio_stream() {
 	} else
 		// Set sample rate
 		c->sample_rate = info.sample_rate;
+
+	c->time_base = AVRational{1, c->sample_rate};
+	st->time_base = c->time_base;
 
 	uint64_t channel_layout = info.channel_layout;
 #if HAVE_CH_LAYOUT
@@ -1372,6 +1482,7 @@ AVStream *FFmpegWriter::add_video_stream() {
 	c->framerate = av_inv_q(c->time_base);
 #endif
 	st->avg_frame_rate = av_inv_q(c->time_base);
+	st->r_frame_rate = av_inv_q(c->time_base);
 	st->time_base.num = info.video_timebase.num;
 	st->time_base.den = info.video_timebase.den;
 
@@ -1571,8 +1682,12 @@ void FFmpegWriter::open_video(AVFormatContext *oc, AVStream *st) {
 	if (!codec)
 		throw InvalidCodec("Could not find codec", path);
 
-	/* Force max_b_frames to 0 in some cases (i.e. for mjpeg image sequences */
-	if (video_codec_ctx->max_b_frames && video_codec_ctx->codec_id != AV_CODEC_ID_MPEG4 && video_codec_ctx->codec_id != AV_CODEC_ID_MPEG1VIDEO && video_codec_ctx->codec_id != AV_CODEC_ID_MPEG2VIDEO)
+	/* Legacy behavior: force max_b_frames to 0 for many codecs.
+	 * This can be disabled via SetOption(VIDEO_STREAM, "allow_b_frames", "1"). */
+	if (!allow_b_frames && video_codec_ctx->max_b_frames &&
+		video_codec_ctx->codec_id != AV_CODEC_ID_MPEG4 &&
+		video_codec_ctx->codec_id != AV_CODEC_ID_MPEG1VIDEO &&
+		video_codec_ctx->codec_id != AV_CODEC_ID_MPEG2VIDEO)
 		video_codec_ctx->max_b_frames = 0;
 
 	// Init options
@@ -1604,7 +1719,7 @@ void FFmpegWriter::open_video(AVFormatContext *oc, AVStream *st) {
 		switch (video_codec_ctx->codec_id) {
 			case AV_CODEC_ID_H264:
 				video_codec_ctx->max_b_frames = 0;  // At least this GPU doesn't support b-frames
-				video_codec_ctx->profile = FF_PROFILE_H264_BASELINE | FF_PROFILE_H264_CONSTRAINED;
+				video_codec_ctx->profile = AV_PROFILE_H264_CONSTRAINED_BASELINE;
 				av_opt_set(video_codec_ctx->priv_data, "preset", "slow", 0);
 				av_opt_set(video_codec_ctx->priv_data, "tune", "zerolatency", 0);
 				av_opt_set(video_codec_ctx->priv_data, "vprofile", "baseline", AV_OPT_SEARCH_CHILDREN);
@@ -1650,6 +1765,8 @@ void FFmpegWriter::open_video(AVFormatContext *oc, AVStream *st) {
 	if (avcodec_open2(video_codec_ctx, codec, &opts) < 0)
 		throw InvalidCodec("Could not open video codec", path);
 	AV_COPY_PARAMS_FROM_CONTEXT(st, video_codec_ctx);
+	st->avg_frame_rate = av_make_q(info.fps.num, info.fps.den);
+	st->r_frame_rate = av_make_q(info.fps.num, info.fps.den);
 
 	// Free options
 	av_dict_free(&opts);
@@ -1819,10 +1936,14 @@ void FFmpegWriter::write_audio_packets(bool is_final, std::shared_ptr<openshot::
 		if (!avr) {
 			avr = SWR_ALLOC();
 #if HAVE_CH_LAYOUT
-			AVChannelLayout in_chlayout;
-			AVChannelLayout out_chlayout;
-			av_channel_layout_from_mask(&in_chlayout, channel_layout_in_frame);
-			av_channel_layout_from_mask(&out_chlayout, info.channel_layout);
+			AVChannelLayout in_chlayout = ffmpeg_default_channel_layout(channels_in_frame);
+			AVChannelLayout out_chlayout = ffmpeg_default_channel_layout(info.channels);
+			if (channel_layout_in_frame > 0) {
+				av_channel_layout_from_mask(&in_chlayout, channel_layout_in_frame);
+			}
+			if (info.channel_layout > 0) {
+				av_channel_layout_from_mask(&out_chlayout, info.channel_layout);
+			}
 			av_opt_set_chlayout(avr, "in_chlayout", &in_chlayout, 0);
 			av_opt_set_chlayout(avr, "out_chlayout", &out_chlayout, 0);
 #else
@@ -1877,6 +1998,13 @@ void FFmpegWriter::write_audio_packets(bool is_final, std::shared_ptr<openshot::
 			"remaining_frame_samples", remaining_frame_samples);
 	}
 
+	if (is_final && remaining_frame_samples <= 0 && audio_input_position <= 0) {
+		if (all_queued_samples) {
+			av_freep(&all_queued_samples);
+		}
+		return;
+	}
+
 	// Loop until no more samples
 	while (remaining_frame_samples > 0 || is_final) {
 		// Get remaining samples needed for this packet
@@ -1916,6 +2044,7 @@ void FFmpegWriter::write_audio_packets(bool is_final, std::shared_ptr<openshot::
 		// Convert to planar (if needed by audio codec)
 		AVFrame *frame_final = AV_ALLOCATE_FRAME();
 		AV_RESET_FRAME(frame_final);
+		const int frame_nb_samples = audio_input_position / info.channels;
 		if (av_sample_fmt_is_planar(audio_codec_ctx->sample_fmt)) {
 			ZmqLogger::Instance()->AppendDebugMethod(
 				"FFmpegWriter::write_audio_packets (2nd resampling for Planar formats)",
@@ -1931,8 +2060,10 @@ void FFmpegWriter::write_audio_packets(bool is_final, std::shared_ptr<openshot::
 			if (!avr_planar) {
 				avr_planar = SWR_ALLOC();
 #if HAVE_CH_LAYOUT
-				AVChannelLayout layout;
-				av_channel_layout_from_mask(&layout, info.channel_layout);
+				AVChannelLayout layout = ffmpeg_default_channel_layout(info.channels);
+				if (info.channel_layout > 0) {
+					av_channel_layout_from_mask(&layout, info.channel_layout);
+				}
 				av_opt_set_chlayout(avr_planar, "in_chlayout", &layout, 0);
 				av_opt_set_chlayout(avr_planar, "out_chlayout", &layout, 0);
 #else
@@ -1971,7 +2102,7 @@ void FFmpegWriter::write_audio_packets(bool is_final, std::shared_ptr<openshot::
 				(uint8_t *) final_samples_planar, audio_encoder_buffer_size, 0);
 
 			// Create output frame (and allocate arrays)
-			frame_final->nb_samples = audio_input_frame_size;
+			frame_final->nb_samples = frame_nb_samples;
 #if HAVE_CH_LAYOUT
 			av_channel_layout_from_mask(&frame_final->ch_layout, info.channel_layout);
 #else
@@ -2024,7 +2155,14 @@ void FFmpegWriter::write_audio_packets(bool is_final, std::shared_ptr<openshot::
 				audio_input_position * av_get_bytes_per_sample(audio_codec_ctx->sample_fmt));
 
 			// Init the nb_samples property
-			frame_final->nb_samples = audio_input_frame_size;
+			frame_final->nb_samples = frame_nb_samples;
+			frame_final->format = audio_codec_ctx->sample_fmt;
+#if HAVE_CH_LAYOUT
+			av_channel_layout_copy(&frame_final->ch_layout, &audio_codec_ctx->ch_layout);
+#else
+			frame_final->channels = audio_codec_ctx->channels;
+			frame_final->channel_layout = audio_codec_ctx->channel_layout;
+#endif
 
 			// Fill the final_frame AVFrame with audio (non planar)
 #if HAVE_CH_LAYOUT
@@ -2046,9 +2184,9 @@ void FFmpegWriter::write_audio_packets(bool is_final, std::shared_ptr<openshot::
 #else
 		AVPacket* pkt;
 		av_init_packet(pkt);
-#endif
 		pkt->data = audio_encoder_buffer;
 		pkt->size = audio_encoder_buffer_size;
+#endif
 
 		// Set the packet's PTS prior to encoding
 		pkt->pts = pkt->dts = audio_timestamp;
@@ -2062,7 +2200,9 @@ void FFmpegWriter::write_audio_packets(bool is_final, std::shared_ptr<openshot::
 		int ret = 0;
 		int frame_finished = 0;
 		error_code = ret =  avcodec_send_frame(audio_codec_ctx, frame_final);
-		if (ret < 0 && ret !=  AVERROR(EINVAL) && ret != AVERROR_EOF) {
+		if (ret < 0 && ret !=  AVERROR(EINVAL) && ret != AVERROR_EOF
+				&& audio_codec_ctx->codec
+				&& (audio_codec_ctx->codec->capabilities & AV_CODEC_CAP_DELAY)) {
 			avcodec_send_frame(audio_codec_ctx, NULL);
 		}
 		else {
@@ -2072,7 +2212,6 @@ void FFmpegWriter::write_audio_packets(bool is_final, std::shared_ptr<openshot::
 			if (ret >= 0)
 				frame_finished = 1;
 			if(ret == AVERROR(EINVAL) || ret == AVERROR_EOF) {
-				avcodec_flush_buffers(audio_codec_ctx);
 				ret = 0;
 			}
 			if (ret >= 0) {
@@ -2094,6 +2233,9 @@ void FFmpegWriter::write_audio_packets(bool is_final, std::shared_ptr<openshot::
 			// Since the PTS can change during encoding, set the value again.  This seems like a huge hack,
 			// but it fixes lots of PTS related issues when I do this.
 			pkt->pts = pkt->dts = audio_timestamp;
+			if (pkt->duration <= 0) {
+				pkt->duration = frame_nb_samples;
+			}
 
 			// Scale the PTS to the audio stream timebase (which is sometimes different than the codec's timebase)
 			av_packet_rescale_ts(pkt, audio_codec_ctx->time_base, audio_st->time_base);
@@ -2331,6 +2473,7 @@ bool FFmpegWriter::write_video_packet(std::shared_ptr<Frame> frame, AVFrame *fra
 
 		// Set PTS (in frames and scaled to the codec's timebase)
 		pkt->pts = video_timestamp;
+		pkt->duration = av_rescale_q(1, av_make_q(info.fps.den, info.fps.num), video_codec_ctx->time_base);
 
 		/* write the compressed frame in the media file */
 		int error_code = av_interleaved_write_frame(oc, pkt);
@@ -2437,6 +2580,9 @@ bool FFmpegWriter::write_video_packet(std::shared_ptr<Frame> frame, AVFrame *fra
 		/* if zero size, it means the image was buffered */
 		if (error_code == 0 && got_packet_ptr) {
 			// set the timestamp
+			if (pkt->duration <= 0) {
+				pkt->duration = av_rescale_q(1, av_make_q(info.fps.den, info.fps.num), video_codec_ctx->time_base);
+			}
 			av_packet_rescale_ts(pkt, video_codec_ctx->time_base, video_st->time_base);
 			pkt->stream_index = video_st->index;
 
@@ -2508,6 +2654,7 @@ void FFmpegWriter::AddSphericalMetadata(const std::string& projection, float yaw
 	map->pitch = static_cast<int32_t>(pitch_deg * (1 << 16));
 	map->roll  = static_cast<int32_t>(roll_deg  * (1 << 16));
 
-	av_stream_add_side_data(video_st, AV_PKT_DATA_SPHERICAL, reinterpret_cast<uint8_t*>(map), sd_size);
+	ffmpeg_stream_add_side_data(video_st, AV_PKT_DATA_SPHERICAL,
+		reinterpret_cast<uint8_t*>(map), sd_size);
 #endif
 }

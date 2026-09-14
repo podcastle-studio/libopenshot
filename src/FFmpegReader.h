@@ -17,6 +17,7 @@
 #define OPENSHOT_FFMPEG_READER_H
 
 #include "ReaderBase.h"
+#include "Enums.h"
 
 // Include FFmpeg headers and macros
 #include "FFmpegUtilities.h"
@@ -116,7 +117,7 @@ namespace openshot {
 		bool is_duration_known;
 		bool check_interlace;
 		bool check_fps;
-		int max_concurrent_frames;
+		DurationStrategy duration_strategy;
 
 		CacheMemory working_cache;
 		AudioLocation previous_packet_location;
@@ -127,6 +128,7 @@ namespace openshot {
 		int64_t pts_total;
 		int64_t pts_counter;
 		std::shared_ptr<openshot::Frame> last_video_frame;
+		std::shared_ptr<openshot::Frame> last_final_video_frame;
 
 		bool is_seeking;
 		int64_t seeking_pts;
@@ -135,6 +137,8 @@ namespace openshot {
 		int seek_count;
 		int64_t seek_audio_frame_found;
 		int64_t seek_video_frame_found;
+		int64_t last_seek_max_frame;
+		int seek_stagnant_count;
 
 		int64_t last_frame;
 		int64_t largest_frame_processed;
@@ -149,12 +153,25 @@ namespace openshot {
 		int64_t NO_PTS_OFFSET;
 		PacketStatus packet_status;
 
+		// Duration bookkeeping
+		double video_stream_duration_seconds = 0.0;
+		double audio_stream_duration_seconds = 0.0;
+		double format_duration_seconds = 0.0;
+		double inferred_duration_seconds = 0.0;
+		int source_width = 0;
+		int source_height = 0;
+		double source_rotation = 0.0;
+
 		// Cached conversion contexts and frames for performance
 		SwsContext *img_convert_ctx = nullptr;        ///< Cached video scaler context
 		SWRCONTEXT *avr_ctx = nullptr;                ///< Cached audio resample context
 		AVFrame *pFrameRGB_cached = nullptr;          ///< Temporary frame used for video conversion
 
 		int hw_de_supported = 0;	// Is set by FFmpegReader
+		bool force_sw_decode = false;
+		bool hw_decode_failed = false;
+		int hw_decode_error_count = 0;
+		bool hw_decode_succeeded = false;
 #if USE_HW_ACCEL
 		AVPixelFormat hw_de_av_pix_fmt = AV_PIX_FMT_NONE;
 		AVHWDeviceType hw_de_av_device_type = AV_HWDEVICE_TYPE_NONE;
@@ -188,6 +205,9 @@ namespace openshot {
 		/// Get an AVFrame (if any)
 		bool GetAVFrame();
 
+		/// Reopen the current reader with software decode after hardware decode fails
+		bool ReopenWithoutHardwareDecode(int64_t requested_frame);
+
 		/// Get the next packet (if any)
 		int GetNextPacket();
 
@@ -196,6 +216,12 @@ namespace openshot {
 
 		/// Check if there's an album art
 		bool HasAlbumArt();
+
+		/// Decide which duration to use based on the configured strategy
+		double PickDurationSeconds() const;
+
+		/// Apply the chosen duration to info.duration and info.video_length
+		void ApplyDurationStrategy();
 
 		/// Remove partial frames due to seek
 		bool IsPartialFrame(int64_t requested_frame);
@@ -229,6 +255,12 @@ namespace openshot {
 		/// Update File Info for video streams
 		void UpdateVideoInfo();
 
+		/// Update display-oriented geometry from source dimensions and orientation metadata
+		void UpdateOrientedVideoInfo();
+
+		/// Apply source orientation metadata to a decoded frame image
+		void ApplyFrameOrientation(std::shared_ptr<openshot::Frame> frame);
+
 	public:
 		/// Final cache object used to hold final frames
 		CacheMemory final_cache;
@@ -244,6 +276,12 @@ namespace openshot {
 		/// @param path  The filesystem location to load
 		/// @param inspect_reader  if true (the default), automatically open the media file and loads frame 1.
 		FFmpegReader(const std::string& path, bool inspect_reader=true);
+		/// @brief Constructor for FFmpegReader with duration strategy.
+		///
+		/// @param path  The filesystem location to load
+		/// @param duration_strategy  Which duration source to prioritize
+		/// @param inspect_reader  if true (the default), automatically open the media file and loads frame 1.
+		FFmpegReader(const std::string& path, DurationStrategy duration_strategy, bool inspect_reader=true);
 
 		/// Destructor
 		virtual ~FFmpegReader();
@@ -262,6 +300,9 @@ namespace openshot {
 
 		/// Determine if reader is open or closed
 		bool IsOpen() override { return is_open; };
+
+		/// Return true if hardware decode was requested and successfully produced at least one frame
+		bool HardwareDecodeSuccessful() const override;
 
 		/// Return the type name of the class
 		std::string Name() override { return "FFmpegReader"; };

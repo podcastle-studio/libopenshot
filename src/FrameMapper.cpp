@@ -11,12 +11,14 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
 #include <cmath>
+#include <algorithm>
 #include <iostream>
 #include <iomanip>
 
 #include "FrameMapper.h"
 #include "Exceptions.h"
 #include "Clip.h"
+#include "MemoryTrim.h"
 #include "ZmqLogger.h"
 
 using namespace std;
@@ -48,7 +50,11 @@ FrameMapper::FrameMapper(ReaderBase *reader, Fraction target, PulldownType targe
 	field_toggle = true;
 
 	// Adjust cache size based on size of frame and audio
-	final_cache.SetMaxBytesFromInfo(Settings::Instance()->DISABLE_CACHING ? 1 : OPEN_MP_NUM_PROCESSORS, info.width, info.height, info.sample_rate, info.channels);
+	// DISABLE_CACHING is on by default in this fork: a headless export reads each frame once, so a
+	// cache only costs memory. When caching is on, use upstream's floor.
+	const int initial_cache_frames = Settings::Instance()->DISABLE_CACHING ? 1
+		: std::max(Settings::Instance()->CACHE_MIN_FRAMES, OPEN_MP_NUM_PROCESSORS);
+	final_cache.SetMaxBytesFromInfo(initial_cache_frames, info.width, info.height, info.sample_rate, info.channels);
 }
 
 // Destructor
@@ -440,6 +446,34 @@ std::shared_ptr<Frame> FrameMapper::GetFrame(int64_t requested_frame)
 	// Find parent properties (if any)
 	Clip *parent = static_cast<Clip *>(ParentClip());
 	bool is_increasing = true;
+	bool direction_flipped = false;
+
+	{
+		const std::lock_guard<std::recursive_mutex> lock(directionMutex);
+
+		// One-shot: if a hint exists, consume it for THIS call, regardless of frame number.
+		if (have_hint) {
+			is_increasing = hint_increasing;
+			have_hint = false;
+		} else if (previous_frame > 0 && std::llabs(requested_frame - previous_frame) == 1) {
+			// Infer from request order when adjacent
+			is_increasing = (requested_frame > previous_frame);
+		} else if (last_dir_initialized) {
+			// Reuse last known direction if non-adjacent and no hint
+			is_increasing = last_is_increasing;
+		} else {
+			is_increasing = true; // default on first call
+		}
+
+		// Detect flips so we can reset SR context
+		if (!last_dir_initialized) {
+			last_is_increasing = is_increasing;
+			last_dir_initialized = true;
+		} else if (last_is_increasing != is_increasing) {
+			direction_flipped = true;
+			last_is_increasing = is_increasing;
+		}
+	}
 	if (parent) {
 		float position = parent->Position();
 		float start = parent->Start();
@@ -448,10 +482,6 @@ std::shared_ptr<Frame> FrameMapper::GetFrame(int64_t requested_frame)
 			// since this heavily affects frame #s and audio mappings
 			is_dirty = true;
 		}
-
-		// Determine direction of parent clip at this frame (forward or reverse direction)
-		// This is important for reversing audio in our resampler, for smooth reversed audio.
-		is_increasing = parent->time.IsIncreasing(requested_frame);
 	}
 
 	// Check if mappings are dirty (and need to be recalculated)
@@ -531,8 +561,12 @@ std::shared_ptr<Frame> FrameMapper::GetFrame(int64_t requested_frame)
 				frame->AddImage(std::make_shared<QImage>(*even_frame->GetImage()), false);
 		}
 
-		// Determine if reader contains audio samples
-		bool reader_has_audio = frame->SampleRate() > 0 && frame->GetAudioChannelsCount() > 0;
+		// Only treat the reader as audio-capable when the wrapped reader reports
+		// audio. Individual source frames can still be empty near boundaries, but
+		// those cases should pad with silence instead of dropping this mapped frame.
+		const bool reader_has_audio = info.has_audio &&
+			mapped_frame->SampleRate() > 0 &&
+			mapped_frame->GetAudioChannelsCount() > 0;
 
 		// Resample audio on frame (if needed)
 		bool need_resampling = false;
@@ -548,13 +582,13 @@ std::shared_ptr<Frame> FrameMapper::GetFrame(int64_t requested_frame)
 
 		if (need_resampling)
 		{
-			// Check for non-adjacent frame requests - so the resampler can be reset
-			if (abs(frame->number - previous_frame) > 1) {
+			// Reset resampler when non-adjacent request OR playback direction flips
+			if (direction_flipped || (previous_frame > 0 && std::llabs(requested_frame - previous_frame) > 1)) {
 				if (avr) {
 					// Delete resampler (if exists)
 					SWR_CLOSE(avr);
 					SWR_FREE(&avr);
-					avr = NULL;
+					avr = nullptr;
 				}
 			}
 
@@ -573,10 +607,14 @@ std::shared_ptr<Frame> FrameMapper::GetFrame(int64_t requested_frame)
 			}
 		}
 
+		// Preserve the target frame duration even when a source frame has no samples.
+		if (reader_has_audio && samples_in_frame > 0)
+			frame->AddAudioSilence(samples_in_frame);
+
 		// Copy the samples
 		int samples_copied = 0;
 		int64_t starting_frame = copy_samples.frame_start;
-		while (info.has_audio && samples_copied < copy_samples.total)
+		while (reader_has_audio && samples_copied < copy_samples.total)
 		{
 			// Init number of samples to copy this iteration
 			int remaining_samples = copy_samples.total - samples_copied;
@@ -589,6 +627,28 @@ std::shared_ptr<Frame> FrameMapper::GetFrame(int64_t requested_frame)
 			}
 
 			int original_samples = original_frame->GetAudioSamplesCount();
+			if (original_samples <= 0) {
+				if (starting_frame >= copy_samples.frame_end)
+					break;
+				starting_frame++;
+				continue;
+			}
+
+			if (starting_frame == copy_samples.frame_start)
+				number_to_copy = original_samples - copy_samples.sample_start;
+			else if (starting_frame > copy_samples.frame_start && starting_frame < copy_samples.frame_end)
+				number_to_copy = original_samples;
+			else
+				number_to_copy = copy_samples.sample_end + 1;
+
+			if (number_to_copy <= 0) {
+				if (starting_frame >= copy_samples.frame_end)
+					break;
+				starting_frame++;
+				continue;
+			}
+			if (number_to_copy > remaining_samples)
+				number_to_copy = remaining_samples;
 
 			// Loop through each channel
 			for (int channel = 0; channel < channels_in_frame; channel++)
@@ -596,31 +656,16 @@ std::shared_ptr<Frame> FrameMapper::GetFrame(int64_t requested_frame)
 				if (starting_frame == copy_samples.frame_start)
 				{
 					// Starting frame (take the ending samples)
-					number_to_copy = original_samples - copy_samples.sample_start;
-					if (number_to_copy > remaining_samples)
-						number_to_copy = remaining_samples;
-
-					// Add samples to new frame
 					frame->AddAudio(true, channel, samples_copied, original_frame->GetAudioSamples(channel) + copy_samples.sample_start, number_to_copy, 1.0);
 				}
 				else if (starting_frame > copy_samples.frame_start && starting_frame < copy_samples.frame_end)
 				{
 					// Middle frame (take all samples)
-					number_to_copy = original_samples;
-					if (number_to_copy > remaining_samples)
-						number_to_copy = remaining_samples;
-
-					// Add samples to new frame
 					frame->AddAudio(true, channel, samples_copied, original_frame->GetAudioSamples(channel), number_to_copy, 1.0);
 				}
 				else
 				{
 					// Ending frame (take the beginning samples)
-					number_to_copy = copy_samples.sample_end + 1;
-					if (number_to_copy > remaining_samples)
-						number_to_copy = remaining_samples;
-
-					// Add samples to new frame
 					frame->AddAudio(false, channel, samples_copied, original_frame->GetAudioSamples(channel), number_to_copy, 1.0);
 				}
 			}
@@ -630,9 +675,8 @@ std::shared_ptr<Frame> FrameMapper::GetFrame(int64_t requested_frame)
 			starting_frame++;
 		}
 
-		// Reverse audio (if needed)
-		if (!is_increasing)
-			frame->ReverseAudio();
+		// Set audio direction
+		frame->SetAudioDirection(is_increasing);
 
 		// Resample audio on frame (if needed)
 		if (need_resampling)
@@ -774,18 +818,15 @@ void FrameMapper::SetJsonValue(const Json::Value root) {
 
 	// Set parent data
 	ReaderBase::SetJsonValue(root);
-
-	// Re-Open path, and re-init everything (if needed)
-	if (reader) {
-
-		Close();
-		Open();
-	}
 }
 
 // Change frame rate or audio mapping details
 void FrameMapper::ChangeMapping(Fraction target_fps, PulldownType target_pulldown,  int target_sample_rate, int target_channels, ChannelLayout target_channel_layout)
 {
+	// Prevent concurrent GetFrame()/Init()/Close() calls from using or freeing
+	// the resampler while this mapping update is in progress.
+	const std::lock_guard<std::recursive_mutex> lock(getFrameMutex);
+
 	ZmqLogger::Instance()->AppendDebugMethod(
 		"FrameMapper::ChangeMapping",
 		"target_fps.num", target_fps.num,
@@ -818,7 +859,9 @@ void FrameMapper::ChangeMapping(Fraction target_fps, PulldownType target_pulldow
 	final_cache.Clear();
 
 	// Adjust cache size based on size of frame and audio
-	final_cache.SetMaxBytesFromInfo(Settings::Instance()->DISABLE_CACHING ? 1 : OPEN_MP_NUM_PROCESSORS, info.width, info.height, info.sample_rate, info.channels);
+	const int reset_cache_frames = Settings::Instance()->DISABLE_CACHING ? 1
+		: std::max(Settings::Instance()->CACHE_MIN_FRAMES, OPEN_MP_NUM_PROCESSORS * 4);
+	final_cache.SetMaxBytesFromInfo(reset_cache_frames, info.width, info.height, info.sample_rate, info.channels);
 
 	// Deallocate resample buffer
 	if (avr) {
@@ -826,6 +869,13 @@ void FrameMapper::ChangeMapping(Fraction target_fps, PulldownType target_pulldow
 		SWR_FREE(&avr);
 		avr = NULL;
 	}
+
+	// Reset direction/resampler continuity after a mapping change.
+	previous_frame = 0;
+	const std::lock_guard<std::recursive_mutex> direction_lock(directionMutex);
+	have_hint = false;
+	last_dir_initialized = false;
+	last_is_increasing = true;
 }
 
 // Resample audio and map channels (if needed)
@@ -916,15 +966,45 @@ void FrameMapper::ResampleMappedAudio(std::shared_ptr<Frame> frame, int64_t orig
 	// setup resample context
 	if (!avr) {
 		avr = SWR_ALLOC();
+#if HAVE_CH_LAYOUT
+		AVChannelLayout input_layout = {};
+		AVChannelLayout output_layout = {};
+		if (channel_layout_in_frame != 0)
+			av_channel_layout_from_mask(&input_layout, channel_layout_in_frame);
+		else
+			input_layout = ffmpeg_default_channel_layout(channels_in_frame);
+		if (info.channel_layout != 0)
+			av_channel_layout_from_mask(&output_layout, info.channel_layout);
+		else
+			output_layout = ffmpeg_default_channel_layout(info.channels);
+		int in_layout_err = av_opt_set_chlayout(avr, "in_chlayout", &input_layout, 0);
+		int out_layout_err = av_opt_set_chlayout(avr, "out_chlayout", &output_layout, 0);
+#else
 		av_opt_set_int(avr, "in_channel_layout",  channel_layout_in_frame, 0);
 		av_opt_set_int(avr, "out_channel_layout", info.channel_layout,	 0);
+#endif
 		av_opt_set_int(avr, "in_sample_fmt",	  AV_SAMPLE_FMT_S16,	   0);
 		av_opt_set_int(avr, "out_sample_fmt",	 AV_SAMPLE_FMT_S16,	   0);
 		av_opt_set_int(avr, "in_sample_rate",	 sample_rate_in_frame,	0);
 		av_opt_set_int(avr, "out_sample_rate",	info.sample_rate,		0);
+#if !HAVE_CH_LAYOUT
 		av_opt_set_int(avr, "in_channels",		channels_in_frame,	   0);
 		av_opt_set_int(avr, "out_channels",	   info.channels,		   0);
-		SWR_INIT(avr);
+#endif
+		int swr_init_err = SWR_INIT(avr);
+#if HAVE_CH_LAYOUT
+		av_channel_layout_uninit(&input_layout);
+		av_channel_layout_uninit(&output_layout);
+		if (in_layout_err < 0 || out_layout_err < 0 || swr_init_err < 0) {
+			SWR_FREE(&avr);
+			throw ErrorEncodingVideo("Error while initializing audio resampler in frame mapper", frame->number);
+		}
+#else
+		if (swr_init_err < 0) {
+			SWR_FREE(&avr);
+			throw ErrorEncodingVideo("Error while initializing audio resampler in frame mapper", frame->number);
+		}
+#endif
 	}
 
 	// Convert audio samples
@@ -1038,4 +1118,12 @@ int64_t FrameMapper::AdjustFrameNumber(int64_t clip_frame_number) {
 	int64_t frame_number = clip_frame_number + clip_start_position - clip_start_frame;
 
 	return frame_number;
+}
+
+// Set direction hint for the next call to GetFrame
+void FrameMapper::SetDirectionHint(const bool increasing)
+{
+	const std::lock_guard<std::recursive_mutex> lock(directionMutex);
+	hint_increasing = increasing;
+	have_hint = true;
 }

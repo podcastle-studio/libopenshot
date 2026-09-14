@@ -35,6 +35,26 @@ service already uses. *Revisit if:* the CPU fallback path becomes a product requ
 `out/Release-GPU` and `/usr/local/skia-gpu` prefix, selected with `-DSkia_ROOT=`. Both pin milestone
 m147 to stay in lockstep with the front end's CanvasKit.
 
+**2026-09-14 · Merge upstream `develop` now, before the GPU rewrite.** Supersedes the 2026-09-10
+decision to stay on the fork. `upstream/develop` (the live branch; `upstream/master` is frozen at
+2021) was 341 commits / 220 files ahead of the merge base. Merged on `merge/upstream-develop`:
+24 conflicted paths, 82 hunks, ~2,322 lines. Three reasons the timing changed: the conflict set is
+exactly the files plan phases 3–4 rewrite, so a later merge becomes impossible; the golden suite now
+exists to validate it bit-exactly; and it delivers plan step 1.5's hardware-decode fix better than
+the plan proposed. Governing rule was **upstream wins on plumbing, the fork wins on pixels** — see
+`doc/gpu-migration/UPSTREAM-MERGE.md` for every per-file decision and what is still owed.
+*Revisit if:* never — but keep `UPSTREAM-MERGE.md`'s "still owed" list alive until it is empty.
+
+**2026-09-14 · Clip sort order is insertion-stable, not address-tie-broken.** The fork's
+`CompareClips` used `<=` and was not a strict weak ordering (undefined behaviour for
+`std::list::sort`); upstream fixed the ordering but tie-broke on pointer address, which made the
+same project render differently between runs (the golden suite failed 4 runs in 5). `CompareClips`
+now reports no ordering for equal layer and position and relies on `std::list::sort` being stable,
+so clips keep insertion order. Consequence: a clip sharing a layer *and* position with another now
+draws on top if it was added later; `compositing.layer_order` was re-baselined for this, alone.
+*Revisit if:* the service needs explicit z-ordering within a layer, which should then be an explicit
+field rather than a sort accident.
+
 ## Open — decide before plan phase 4
 
 - **Timeline canvas precision.** `kRGBA_8888` (matches today) or `kRGBA_F16` (better blending and

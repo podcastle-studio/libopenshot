@@ -13,6 +13,7 @@
 #include <thread>	// for std::this_thread::sleep_for
 #include <chrono>	// for std::chrono::milliseconds
 #include <iomanip>
+#include <limits>
 
 #include "Frame.h"
 #include "AudioBufferSource.h"
@@ -43,12 +44,12 @@ using namespace openshot;
 // Constructor - image & audio
 Frame::Frame(int64_t number, int width, int height, std::string color, int samples, int channels)
 	: audio(std::make_shared<juce::AudioBuffer<float>>(channels, samples)),
-	  number(number), width(width), height(height),
+	  number(number), capture_timestamp(std::numeric_limits<double>::quiet_NaN()), width(width), height(height),
 	  pixel_ratio(1,1), color(color),
 	  channels(channels), channel_layout(LAYOUT_STEREO),
 	  sample_rate(44100),
 	  has_audio_data(false), has_image_data(false),
-	  max_audio_sample(0)
+	  max_audio_sample(0), audio_is_increasing(true)
 {
 	// zero (fill with silence) the audio buffer
 	audio->clear();
@@ -86,6 +87,7 @@ Frame& Frame::operator= (const Frame& other)
 void Frame::DeepCopy(const Frame& other)
 {
 	number = other.number;
+	capture_timestamp = other.capture_timestamp;
 	channels = other.channels;
 	width = other.width;
 	height = other.height;
@@ -96,6 +98,7 @@ void Frame::DeepCopy(const Frame& other)
 	pixel_ratio = Fraction(other.pixel_ratio.num, other.pixel_ratio.den);
 	color = other.color;
 	max_audio_sample = other.max_audio_sample;
+	audio_is_increasing = other.audio_is_increasing;
 
 	if (other.image)
 		image = std::make_shared<QImage>(*(other.image));
@@ -454,9 +457,9 @@ void Frame::SetFrameNumber(int64_t new_number)
 // Calculate the # of samples per video frame (for a specific frame number and frame rate)
 int Frame::GetSamplesPerFrame(int64_t number, Fraction fps, int sample_rate, int channels)
 {
-	// Directly return 0 if there are no channels
+	// Directly return 0 for invalid audio/frame-rate parameters
 	// so that we do not need to deal with NaNs later
-	if (channels == 0) return 0;
+	if (channels <= 0 || sample_rate <= 0 || fps.num <= 0 || fps.den <= 0) return 0;
 
 	// Get the total # of samples for the previous frame, and the current frame (rounded)
 	double fps_rate = fps.Reciprocal().ToDouble();
@@ -540,7 +543,7 @@ void Frame::Save(std::string path, float scale, std::string format, int quality)
 
 // Thumbnail the frame image to the specified path.  The image format is determined from the extension (i.e. image.PNG, image.JPEG)
 void Frame::Thumbnail(std::string path, int new_width, int new_height, std::string mask_path, std::string overlay_path,
-		std::string background_color, bool ignore_aspect, std::string format, int quality, float rotate) {
+		std::string background_color, bool ignore_aspect, std::string format, int quality, float rotate, ScaleType scale_mode) {
 
 	// Create blank thumbnail image & fill background color
 	auto thumbnail = std::make_shared<QImage>(
@@ -568,16 +571,28 @@ void Frame::Thumbnail(std::string path, int new_width, int new_height, std::stri
 	}
 
 	// Resize frame image
-	if (ignore_aspect)
-		// Ignore aspect ratio
-		previewImage = std::make_shared<QImage>(previewImage->scaled(
-			new_width, new_height,
-			Qt::IgnoreAspectRatio, Qt::SmoothTransformation));
-	else
-		// Maintain aspect ratio
-		previewImage = std::make_shared<QImage>(previewImage->scaled(
-			new_width, new_height,
-			Qt::KeepAspectRatio, Qt::SmoothTransformation));
+	Qt::AspectRatioMode aspect_ratio_mode = Qt::KeepAspectRatio;
+	if (ignore_aspect) {
+		aspect_ratio_mode = Qt::IgnoreAspectRatio;
+	} else {
+		switch (scale_mode) {
+			case SCALE_CROP:
+				aspect_ratio_mode = Qt::KeepAspectRatioByExpanding;
+				break;
+			case SCALE_STRETCH:
+				aspect_ratio_mode = Qt::IgnoreAspectRatio;
+				break;
+			case SCALE_FIT:
+			case SCALE_NONE:
+			default:
+				aspect_ratio_mode = Qt::KeepAspectRatio;
+				break;
+		}
+	}
+
+	previewImage = std::make_shared<QImage>(previewImage->scaled(
+		new_width, new_height,
+		aspect_ratio_mode, Qt::SmoothTransformation));
 
 	// Composite frame image onto background (centered)
 	int x = (new_width - previewImage->size().width()) / 2.0; // center
@@ -801,14 +816,16 @@ void Frame::ResizeAudio(int channels, int length, int rate, ChannelLayout layout
 	max_audio_sample = length;
 }
 
-// Reverse the audio buffer of this frame (will only reverse a single time, regardless of how many times
-// you invoke this method)
-void Frame::ReverseAudio() {
-	if (audio && !audio_reversed) {
+/// Set the direction of the audio buffer of this frame
+void Frame::SetAudioDirection(bool is_increasing) {
+	if (audio && !audio_is_increasing && is_increasing) {
+		// Forward audio buffer
+		audio->reverse(0, audio->getNumSamples());
+	} else if (audio && audio_is_increasing && !is_increasing) {
 		// Reverse audio buffer
 		audio->reverse(0, audio->getNumSamples());
-		audio_reversed = true;
 	}
+	audio_is_increasing = is_increasing;
 }
 
 // Add audio samples to a specific channel
@@ -838,8 +855,8 @@ void Frame::AddAudio(bool replaceSamples, int destChannel, int destStartSample, 
 	if (new_length > max_audio_sample)
 		max_audio_sample = new_length;
 
-	// Reset audio reverse flag
-	audio_reversed = false;
+	// Reset audio direction
+	audio_is_increasing = true;
 }
 
 // Apply gain ramp (i.e. fading volume)
@@ -1060,6 +1077,6 @@ void Frame::AddAudioSilence(int numSamples)
 	// Calculate max audio sample added
 	max_audio_sample = numSamples;
 
-	// Reset audio reverse flag
-	audio_reversed = false;
+	// Reset audio direction
+	audio_is_increasing = true;
 }

@@ -42,6 +42,8 @@ void AudioReaderSource::getNextAudioBlock(const juce::AudioSourceChannelInfo& in
 		}
 
         while (remaining_samples > 0) {
+            const int previous_remaining = remaining_samples;
+            frame.reset();
             try {
                 // Get current frame object
                 if (reader) {
@@ -53,9 +55,19 @@ void AudioReaderSource::getNextAudioBlock(const juce::AudioSourceChannelInfo& in
 
             // Get audio samples
             if (reader && frame) {
+                const int frame_samples = frame->GetAudioSamplesCount();
+                const int frame_channels = frame->GetAudioChannelsCount();
+
+                // Corrupt/unsupported streams can yield frames without audio data.
+                // Avoid a tight loop that never consumes remaining_samples.
+                if (frame_samples <= 0 || frame_channels <= 0) {
+                    info.buffer->clear(remaining_position, remaining_samples);
+                    break;
+                }
+
                 if (sample_position + remaining_samples <= frame->GetAudioSamplesCount()) {
                     // Success, we have enough samples
-                    for (int channel = 0; channel < frame->GetAudioChannelsCount(); channel++) {
+                    for (int channel = 0; channel < frame_channels; channel++) {
                         if (channel < info.buffer->getNumChannels()) {
                             info.buffer->addFrom(channel, remaining_position, *frame->GetAudioSampleBuffer(),
                                                  channel, sample_position, remaining_samples);
@@ -68,7 +80,12 @@ void AudioReaderSource::getNextAudioBlock(const juce::AudioSourceChannelInfo& in
                 } else if (sample_position + remaining_samples > frame->GetAudioSamplesCount()) {
                     // Not enough samples, take what we can
                     int amount_to_copy = frame->GetAudioSamplesCount() - sample_position;
-                    for (int channel = 0; channel < frame->GetAudioChannelsCount(); channel++) {
+                    if (amount_to_copy <= 0) {
+                        info.buffer->clear(remaining_position, remaining_samples);
+                        break;
+                    }
+
+                    for (int channel = 0; channel < frame_channels; channel++) {
                         if (channel < info.buffer->getNumChannels()) {
                             info.buffer->addFrom(channel, remaining_position, *frame->GetAudioSampleBuffer(), channel,
                                                  sample_position, amount_to_copy);
@@ -84,7 +101,14 @@ void AudioReaderSource::getNextAudioBlock(const juce::AudioSourceChannelInfo& in
                     frame_position += speed;
                     sample_position = 0; // reset for new frame
                 }
+            } else {
+                info.buffer->clear(remaining_position, remaining_samples);
+                break;
+            }
 
+            if (remaining_samples == previous_remaining) {
+                info.buffer->clear(remaining_position, remaining_samples);
+                break;
             }
 		}
 	}

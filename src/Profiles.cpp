@@ -129,13 +129,13 @@ Profile::Profile(std::string path) {
 	catch (const std::exception& e)
 	{
 		// Error parsing profile file
-		throw InvalidFile("Profile could not be found or loaded (or is invalid).", path);
+		throw InvalidFile("Profile file could not be parsed (invalid format or values).", path);
 	}
 
 	// Throw error if file was not read
 	if (!read_file)
 		// Error parsing profile file
-		throw InvalidFile("Profile could not be found or loaded (or is invalid).", path);
+		throw InvalidFile("Profile file could not be found or opened.", path);
 }
 
 // Return a formatted FPS

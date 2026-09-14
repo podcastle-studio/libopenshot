@@ -117,11 +117,18 @@ namespace openshot {
 		void init_reader_rotation();
 
 	private:
+		enum class ReaderOrientationMode {
+			Reader,
+			LegacyClipTransform
+		};
+
 		bool waveform; ///< Should a waveform be used instead of the clip's image
 		bool shadow; ///< Should a drop shadow be drawn behind the clip's image
 		bool blur; ///< Should the clip's image be blurred
 		bool flip_horizontal; ///< Should the clip's image be mirrored left-to-right
 		bool flip_vertical; ///< Should the clip's image be mirrored top-to-bottom
+		int waveform_mode; ///< Audio visualization mode used when waveform is enabled
+		ReaderOrientationMode reader_orientation_mode; ///< Internal project compatibility mode
 		std::list<openshot::EffectBase*> effects; ///< List of clips on this timeline
 		bool is_open;	///< Is Reader opened
 		std::string parentObjectId; ///< Id of the bounding box that this clip is attached to
@@ -130,7 +137,7 @@ namespace openshot {
 
 		std::vector<OverlayClipData> overlayClips;
 
-		/// Final cache object used to hold final frames
+		/// Final cache object used to hold final frames (currently unused for clip frame caching)
 		CacheMemory final_cache;
 		
 		// Audio resampler (if time mapping)
@@ -147,7 +154,9 @@ namespace openshot {
 		int64_t adjust_frame_number_minimum(int64_t frame_number);
 
 		/// Apply background image to the current clip image (i.e. flatten this image onto previous layer)
-		void apply_background(std::shared_ptr<openshot::Frame> frame, std::shared_ptr<openshot::Frame> background_frame);
+		void apply_background(std::shared_ptr<openshot::Frame> frame,
+		                      std::shared_ptr<openshot::Frame> background_frame,
+		                      bool update_frame_image = true);
 
 		/// Apply effects to the source frame (if any)
 		void apply_effects(std::shared_ptr<openshot::Frame> frame, int64_t timeline_frame_number, TimelineInfoStruct* options, bool before_keyframes);
@@ -173,7 +182,7 @@ namespace openshot {
 		std::shared_ptr<QImage> get_shadow_image(std::shared_ptr<QImage> source_image, int64_t frame_number, int& offset_x, int& offset_y);
 
 		/// Get file extension
-		std::string get_file_extension(std::string path);
+		static std::string get_file_extension(std::string path);
 
 		/// Get a frame object or create a blank one
 		std::shared_ptr<openshot::Frame> GetOrCreateFrame(int64_t number, bool enable_time=true);
@@ -198,6 +207,7 @@ namespace openshot {
 		openshot::AnchorType anchor;	 ///< The anchor determines what parent a clip should snap to
 		openshot::FrameDisplayType display; ///< The format to display the frame number (if any)
 		openshot::VolumeMixType mixing;  ///< What strategy should be followed when mixing audio with other clips
+		openshot::CompositeType composite; ///< How this clip is composited onto lower layers
 
         /// Repeat the clip's first source frame for this many frames at the start of the clip
         /// (used by overlapping transitions, which pull Position back by the same amount).
@@ -220,6 +230,10 @@ namespace openshot {
 		/// @brief Constructor with filepath (reader is automatically created... by guessing file extensions)
 		/// @param path The path of a reader (video file, image file, etc...). The correct reader will be used automatically.
 		Clip(std::string path);
+
+		/// Create the most appropriate reader for a media path.
+		/// The caller owns the returned reader pointer.
+		static openshot::ReaderBase* CreateReader(std::string path, bool inspect_reader=true);
 
 		/// @brief Constructor with reader
 		/// @param new_reader The reader to be used by this clip
@@ -344,6 +358,8 @@ namespace openshot {
 		// Waveform property
 		bool Waveform() { return waveform; } ///< Get the waveform property of this clip
 		void Waveform(bool value) { waveform = value; } ///< Set the waveform property of this clip
+		int WaveformMode() { return waveform_mode; } ///< Get the waveform visualization mode
+		void WaveformMode(int value) { waveform_mode = value; } ///< Set the waveform visualization mode
 
 		// Shadow property
 		bool Shadow() { return shadow; } ///< Get the drop-shadow property of this clip
@@ -369,6 +385,8 @@ namespace openshot {
 		openshot::Keyframe location_x; ///< Curve representing the relative X position in percent based on the gravity (-1 to 1)
 		openshot::Keyframe location_y; ///< Curve representing the relative Y position in percent based on the gravity (-1 to 1)
 		openshot::Keyframe alpha; ///< Curve representing the alpha (1 to 0)
+		openshot::Keyframe margin; ///< Curve representing edge margin as a percent of the canvas' shortest side
+		openshot::Keyframe corner_radius; ///< Curve representing corner radius as a percent of the clip's shortest side
 
 		// Rotation and Shear curves (origin point (x,y) is adjustable for both rotation and shear)
 		openshot::Keyframe rotation; ///< Curve representing the rotation (0 to 360)

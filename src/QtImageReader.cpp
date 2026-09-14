@@ -16,13 +16,18 @@
 #include "CacheMemory.h"
 #include "Exceptions.h"
 #include "Timeline.h"
+#include "effects/CropHelpers.h"
 
+#include <algorithm>
 #include <thread>
 #include <QString>
 #include <QImage>
 #include <QPainter>
 #include <QIcon>
 #include <QImageReader>
+#if USE_RESVG != 1
+#include <QSvgRenderer>
+#endif
 
 using namespace openshot;
 
@@ -88,7 +93,7 @@ void QtImageReader::Open()
 
         if (!loaded) {
             // raise exception
-            throw InvalidFile("File could not be opened.", path.toStdString());
+            throw InvalidFile("QtImageReader could not open image file.", path.toStdString());
         }
 
         // Update image properties
@@ -113,12 +118,13 @@ void QtImageReader::Open()
         }
         info.pixel_ratio.num = 1;
         info.pixel_ratio.den = 1;
-        info.duration = 60 * 60 * 1;  // 1 hour duration
         info.fps.num = 30;
         info.fps.den = 1;
         info.video_timebase.num = 1;
         info.video_timebase.den = 30;
-        info.video_length = round(info.duration * info.fps.ToDouble());
+        // Default still-image duration: 1 hour, aligned to fps
+        info.video_length = 60 * 60 * info.fps.num; // 3600 seconds * 30 fps
+        info.duration = static_cast<float>(info.video_length / info.fps.ToDouble());
 
         // Calculate the DAR (display aspect ratio)
         Fraction size(info.width * info.pixel_ratio.num, info.height * info.pixel_ratio.den);
@@ -277,6 +283,30 @@ QSize QtImageReader::calculate_max_size() {
             // max_width = info.width;
             // max_height = info.height;
         }
+
+        // If a crop effect is resizing the image, request enough pixels to preserve detail
+        ApplyCropResizeScale(parent, info.width, info.height, max_width, max_height);
+    }
+
+    if (HasMaxDecodeSize()) {
+        QSize bounded_size(max_width, max_height);
+        const QSize max_decode_size(MaxDecodeWidth(), MaxDecodeHeight());
+        const QString lower_path = path.toLower();
+        const bool is_svg = lower_path.endsWith(".svg") || lower_path.endsWith(".svgz");
+
+        if (is_svg && !parent) {
+            // Vector images have no fixed source pixel limit. With no parent
+            // Timeline/Clip to provide a render size, use MaxDecodeSize as the
+            // rasterization target instead of preserving the tiny document size.
+            bounded_size.scale(max_decode_size, Qt::KeepAspectRatio);
+            max_width = bounded_size.width();
+            max_height = bounded_size.height();
+        } else if (bounded_size.width() > max_decode_size.width() ||
+            bounded_size.height() > max_decode_size.height()) {
+            bounded_size.scale(max_decode_size, Qt::KeepAspectRatio);
+            max_width = bounded_size.width();
+            max_height = bounded_size.height();
+        }
     }
 
     // Return new QSize of the current max size
@@ -335,9 +365,26 @@ QSize QtImageReader::load_svg_path(QString) {
                 QSize svg_size = image->size().scaled(
                                  current_max_size, Qt::KeepAspectRatio);
                 if (QCoreApplication::instance()) {
-                    // Requires QApplication to be running (for QPixmap support)
-                    // Re-rasterize SVG image to max size
-                    image = std::make_shared<QImage>(QIcon(path).pixmap(svg_size).toImage());
+#if USE_RESVG != 1
+                    // Re-rasterize SVG directly into a QImage at the target size,
+                    // instead of routing through QIcon/QPixmap which can apply
+                    // device-pixel-ratio behavior we do not want in timeline frames.
+                    QSvgRenderer renderer(path);
+                    if (renderer.isValid()) {
+                        image = std::make_shared<QImage>(
+                            svg_size, QImage::Format_RGBA8888_Premultiplied);
+                        image->fill(Qt::transparent);
+                        QPainter p(image.get());
+                        renderer.render(&p);
+                        p.end();
+                    } else {
+                        image = std::make_shared<QImage>(image->scaled(
+                                svg_size, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+                    }
+#else
+                    image = std::make_shared<QImage>(image->scaled(
+                            svg_size, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+#endif
                 } else {
                     // Scale image without re-rasterizing it (due to lack of QApplication)
                     image = std::make_shared<QImage>(image->scaled(
@@ -395,11 +442,4 @@ void QtImageReader::SetJsonValue(const Json::Value root) {
     // Set data from Json (if key is found)
     if (!root["path"].isNull())
         path = QString::fromStdString(root["path"].asString());
-
-    // Re-Open path, and re-init everything (if needed)
-    if (is_open)
-    {
-        Close();
-        Open();
-    }
 }

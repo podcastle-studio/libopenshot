@@ -13,6 +13,7 @@
 #include "openshot_catch.h"
 
 #include <QGuiApplication>
+#include <sstream>
 
 #include "QtImageReader.h"
 #include "Clip.h"
@@ -24,8 +25,16 @@ using namespace openshot;
 
 TEST_CASE( "Default_Constructor", "[libopenshot][qtimagereader]" )
 {
-	// Check invalid path
-	CHECK_THROWS_AS(QtImageReader(""), InvalidFile);
+	// Check invalid path and error details
+	const std::string invalid_path = "/tmp/__openshot_missing_test_file__.png";
+	try {
+		QtImageReader r(invalid_path);
+		FAIL("Expected InvalidFile for missing image path");
+	} catch (const InvalidFile& e) {
+		const std::string message = e.what();
+		CHECK(message.find("QtImageReader could not open image file.") != std::string::npos);
+		CHECK(message.find(invalid_path) != std::string::npos);
+	}
 }
 
 TEST_CASE( "GetFrame_Before_Opening", "[libopenshot][qtimagereader]" )
@@ -83,4 +92,67 @@ TEST_CASE( "Check_SVG_Loading", "[libopenshot][qtimagereader]" )
     // Close reader
     t1.Close();
     r.Close();
+}
+
+TEST_CASE( "Duration_And_Length_QtImageReader", "[libopenshot][qtimagereader]" )
+{
+	// Create a reader
+	std::stringstream path;
+	path << TEST_MEDIA_PATH << "front.png";
+	QtImageReader r(path.str());
+	r.Open();
+
+	// Duration and frame count should be aligned to fps (1 hour at 30 fps)
+	CHECK(r.info.fps.num == 30);
+	CHECK(r.info.fps.den == 1);
+	CHECK(r.info.video_length == 108000);
+	CHECK(r.info.duration == Approx(3600.0f).margin(0.001f));
+
+	r.Close();
+}
+
+TEST_CASE( "Max_Decode_Size_QtImageReader", "[libopenshot][qtimagereader]" )
+{
+	std::stringstream path;
+	path << TEST_MEDIA_PATH << "front.png";
+
+	QtImageReader r(path.str());
+	r.Open();
+
+	std::shared_ptr<Frame> full = r.GetFrame(1);
+	REQUIRE(full != nullptr);
+	CHECK(full->GetWidth() == r.info.width);
+	CHECK(full->GetHeight() == r.info.height);
+
+	r.SetMaxDecodeSize(64, 64);
+	std::shared_ptr<Frame> limited = r.GetFrame(2);
+	REQUIRE(limited != nullptr);
+	CHECK(limited->GetWidth() <= 64);
+	CHECK(limited->GetHeight() <= 64);
+	CHECK(limited->GetWidth() < full->GetWidth());
+	CHECK(limited->GetHeight() < full->GetHeight());
+
+	r.Close();
+}
+
+TEST_CASE( "Max_Decode_Size_SVG_QtImageReader", "[libopenshot][qtimagereader]" )
+{
+	std::stringstream path;
+	path << TEST_MEDIA_PATH << "1F0CF.svg";
+
+	QtImageReader r(path.str());
+	r.Open();
+
+	std::shared_ptr<Frame> original = r.GetFrame(1);
+	REQUIRE(original != nullptr);
+	CHECK(original->GetWidth() == 72);
+	CHECK(original->GetHeight() == 72);
+
+	r.SetMaxDecodeSize(256, 128);
+	std::shared_ptr<Frame> limited = r.GetFrame(2);
+	REQUIRE(limited != nullptr);
+	CHECK(limited->GetWidth() == 128);
+	CHECK(limited->GetHeight() == 128);
+
+	r.Close();
 }

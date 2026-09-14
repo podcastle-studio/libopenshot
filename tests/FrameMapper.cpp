@@ -21,6 +21,9 @@
 #include "Frame.h"
 #include "FrameMapper.h"
 #include "Timeline.h"
+#include <atomic>
+#include <sstream>
+#include <thread>
 
 using namespace openshot;
 
@@ -59,6 +62,47 @@ TEST_CASE( "Invalid_Frame_Too_Small", "[libopenshot][framemapper]" )
 	// Check invalid frame number
 	CHECK_THROWS_AS(mapping.GetMappedFrame(0), OutOfBoundsFrame);
 
+}
+
+TEST_CASE( "zero_sample_source_frame_preserves_mapped_audio_duration", "[libopenshot][framemapper][audio]" )
+{
+	CacheMemory cache;
+	const Fraction fps(24, 1);
+	const int sample_rate = 48000;
+	const int channels = 2;
+	const int samples_per_frame = Frame::GetSamplesPerFrame(1, fps, sample_rate, channels);
+
+	auto empty_frame = std::make_shared<Frame>(1, 1, 1, "#000000", 0, channels);
+	empty_frame->SampleRate(sample_rate);
+	empty_frame->ChannelsLayout(LAYOUT_STEREO);
+	cache.Add(empty_frame);
+
+	auto audio_frame = std::make_shared<Frame>(2, 1, 1, "#000000", samples_per_frame, channels);
+	audio_frame->SampleRate(sample_rate);
+	audio_frame->ChannelsLayout(LAYOUT_STEREO);
+	std::vector<float> samples(samples_per_frame, 0.5f);
+	for (int channel = 0; channel < channels; ++channel)
+		audio_frame->AddAudio(true, channel, 0, samples.data(), samples_per_frame, 1.0f);
+	cache.Add(audio_frame);
+
+	DummyReader reader(fps, 1, 1, sample_rate, channels, 2.0 / fps.ToDouble(), &cache);
+	reader.info.has_audio = true;
+	reader.Open();
+
+	FrameMapper map(&reader, fps, PULLDOWN_NONE, sample_rate, channels, LAYOUT_STEREO);
+	map.Open();
+
+	auto first = map.GetFrame(1);
+	CHECK(first->GetAudioSamplesCount() == samples_per_frame);
+	for (int i = 0; i < samples_per_frame; ++i)
+		CHECK(first->GetAudioSample(0, i, 1.0) == Approx(0.0f).margin(0.0001f));
+
+	auto second = map.GetFrame(2);
+	CHECK(second->GetAudioSamplesCount() == samples_per_frame);
+	CHECK(second->GetAudioSample(0, 0, 1.0) == Approx(0.5f).margin(0.0001f));
+
+	map.Close();
+	reader.Close();
 }
 
 TEST_CASE( "24_fps_to_30_fps_Pulldown_Classic", "[libopenshot][framemapper]" )
@@ -188,7 +232,7 @@ TEST_CASE( "resample_audio_48000_to_41000", "[libopenshot][framemapper]" )
 	CHECK(map.GetFrame(1)->GetAudioSamplesCount() == 1470);
 	CHECK(map.GetFrame(2)->GetAudioSamplesCount() == 1470);
 	CHECK(map.GetFrame(50)->GetAudioSamplesCount() == 1470);
-	CHECK(map.info.video_length == 1558);
+	CHECK(map.info.video_length == 1566);
 
 	// Change mapping data
 	map.ChangeMapping(Fraction(25,1), PULLDOWN_NONE, 22050, 1, LAYOUT_MONO);
@@ -198,10 +242,57 @@ TEST_CASE( "resample_audio_48000_to_41000", "[libopenshot][framemapper]" )
 	CHECK(map.GetFrame(1)->GetAudioSamplesCount() == Approx(882).margin(10.0));
 	CHECK(map.GetFrame(2)->GetAudioSamplesCount() == Approx(882).margin(10.0));
 	CHECK(map.GetFrame(50)->GetAudioSamplesCount() == Approx(882).margin(10.0));
-	CHECK(map.info.video_length == 1299);
+	CHECK(map.info.video_length == 1305);
 
 	// Close mapper
 	map.Close();
+}
+
+TEST_CASE( "concurrent_change_mapping_and_getframe_is_safe", "[libopenshot][framemapper][audio][threading]" )
+{
+	std::stringstream path;
+	path << TEST_MEDIA_PATH << "sintel_trailer-720p.mp4";
+	FFmpegReader reader(path.str());
+
+	FrameMapper map(&reader, Fraction(30, 1), PULLDOWN_NONE, 44100, 2, LAYOUT_STEREO);
+	map.Open();
+
+	std::atomic<bool> failed{false};
+
+	std::thread frame_thread([&]() {
+		try {
+			for (int i = 0; i < 120; ++i) {
+				const int64_t frame_number = (i % 60) + 1;
+				auto frame = map.GetFrame(frame_number);
+				REQUIRE(frame != nullptr);
+				REQUIRE(frame->GetAudioChannelsCount() >= 1);
+				REQUIRE(frame->GetAudioSamplesCount() >= 0);
+			}
+		} catch (...) {
+			failed = true;
+		}
+	});
+
+	std::thread remap_thread([&]() {
+		try {
+			for (int i = 0; i < 60; ++i) {
+				if (i % 2 == 0)
+					map.ChangeMapping(Fraction(30, 1), PULLDOWN_NONE, 44100, 2, LAYOUT_STEREO);
+				else
+					map.ChangeMapping(Fraction(24, 1), PULLDOWN_NONE, 48000, 2, LAYOUT_STEREO);
+			}
+		} catch (...) {
+			failed = true;
+		}
+	});
+
+	frame_thread.join();
+	remap_thread.join();
+
+	CHECK(failed == false);
+
+	map.Close();
+	reader.Close();
 }
 
 TEST_CASE( "resample_audio_mapper", "[libopenshot][framemapper]" ) {

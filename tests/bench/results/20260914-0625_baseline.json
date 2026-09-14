@@ -1,0 +1,46 @@
+{
+  "cases" : 
+  [
+    {
+      "agg_fps" : 14.943960149439603,
+      "avg_ms" : 66.917000000000002,
+      "build_ms" : 175.40000000000001,
+      "cpu_cores" : 6.1028389218184964,
+      "cpu_seconds" : 63.378670999999997,
+      "description" : "podcast layout: main video with colour filters + LUT, PiP with crop radius + shadow, logo, lower third",
+      "error" : "",
+      "fps" : 14.944000000000001,
+      "frames" : 150,
+      "height" : 1080,
+      "max_ms" : 267.10399999999998,
+      "max_rss_kb" : 553624,
+      "mode" : "render",
+      "ok" : true,
+      "p50_ms" : 65.034000000000006,
+      "p95_ms" : 75.927000000000007,
+      "parallel" : 1,
+      "res" : "1080p",
+      "scenario" : "podcast_pip",
+      "wall_s" : 10.0375,
+      "width" : 1920
+    }
+  ],
+  "date" : "2026-09-14T06:25:22",
+  "frames" : 150,
+  "label" : "baseline",
+  "machine" : 
+  {
+    "build_type" : "Release",
+    "cpu" : "12th Gen Intel(R) Core(TM) i7-12700H",
+    "ffmpeg" : "6.1",
+    "git" : "a1a0a14c",
+    "git_branch" : "merge/upstream-develop",
+    "gpu" : "NVIDIA RTX A2000 8GB Laptop GPU, 580.126.20, 8192 MiB",
+    "hardware_threads" : 20,
+    "kernel" : "7.0.0-31-generic",
+    "mem_total" : "32521716 kB",
+    "threads_setting" : "library defaults (FF_THREADS=16, OMP_THREADS=16)"
+  },
+  "parallel" : 1,
+  "total_seconds" : 10.385359267
+}

@@ -14,6 +14,21 @@
 /* Suppress warnings about ignored operator= */
 %warnfilter(362);
 
+/* JUCE thread internals are implementation details, not binding API */
+%ignore juce::Thread;
+namespace juce {
+    class Thread {};
+}
+
+/* Ruby bindings intentionally expose the primary OpenShot base class only */
+%warnfilter(802) openshot::Clip;
+%warnfilter(802) openshot::Timeline;
+
+/* Ruby bindings do not expose Profile comparison operators */
+%warnfilter(503) operator<;
+%warnfilter(503) operator>;
+%warnfilter(503) operator==;
+
 /* Don't generate multiple wrappers for functions with default args */
 %feature("compactdefaultargs", "1");
 
@@ -27,6 +42,10 @@
 %include "std_vector.i"
 %include "std_map.i"
 %include <stdint.i>
+%apply uint64_t { uintptr_t };
+
+// Ignore QWidget overloads (Qt types are not wrapped in Ruby bindings)
+%ignore openshot::QtPlayer::SetQWidget(QWidget *);
 
 /* Unhandled STL Exception Handling */
 %include <std_except.i>
@@ -41,6 +60,8 @@
 %shared_ptr(juce::AudioBuffer<float>)
 %shared_ptr(openshot::Frame)
 
+%newobject openshot::Clip::CreateReader;
+
 /* Instantiate the required template specializations */
 %template() std::map<std::string, int>;
 %template() std::pair<int, int>;
@@ -51,6 +72,21 @@
 %template() std::pair<std::string, std::string>;
 %template() std::vector<std::pair<std::string, std::string>>;
 %template() std::vector<std::vector<float>>;
+
+%inline %{
+typedef struct OpenShotByteBuffer {
+    const unsigned char* data;
+    int size;
+} OpenShotByteBuffer;
+%}
+
+%typemap(out) OpenShotByteBuffer {
+    if ($1.data && $1.size > 0) {
+        $result = rb_str_new(reinterpret_cast<const char*>($1.data), $1.size);
+    } else {
+        $result = Qnil;
+    }
+}
 
 %{
 /* Ruby and FFmpeg define competing RSHIFT macros,
@@ -136,6 +172,45 @@
 /* Deprecated */
 %template(AudioDeviceInfoVector) std::vector<openshot::AudioDeviceInfo>;
 
+%extend openshot::Frame {
+    OpenShotByteBuffer GetPixelsBytes() {
+        OpenShotByteBuffer out = {NULL, 0};
+        std::shared_ptr<QImage> img = $self->GetImage();
+        if (!img) return out;
+
+        const int size = img->bytesPerLine() * img->height();
+
+        const unsigned char* p = $self->GetPixels();
+        if (!p || size <= 0) return out;
+
+        out.data = p;
+        out.size = size;
+        return out;
+    }
+
+    OpenShotByteBuffer GetPixelsRowBytes(int row) {
+        OpenShotByteBuffer out = {NULL, 0};
+        std::shared_ptr<QImage> img = $self->GetImage();
+        if (!img) return out;
+
+        if (row < 0 || row >= img->height()) {
+            rb_raise(rb_eIndexError, "row out of range");
+        }
+
+        const unsigned char* p = $self->GetPixels(row);
+        if (!p) return out;
+
+        out.data = p;
+        out.size = img->bytesPerLine();
+        return out;
+    }
+
+    int GetBytesPerLine() {
+        std::shared_ptr<QImage> img = $self->GetImage();
+        return img ? img->bytesPerLine() : 0;
+    }
+}
+
 %include "OpenShotVersion.h"
 %include "ReaderBase.h"
 %include "WriterBase.h"
@@ -191,6 +266,7 @@
 %include "QtPlayer.h"
 %include "QtTextReader.h"
 %include "KeyFrame.h"
+%include "AnimatedCurve.h"
 %include "RendererBase.h"
 %include "Settings.h"
 %include "TimelineBase.h"
@@ -213,6 +289,7 @@
 %include "effects/ColorShift.h"
 %include "effects/Crop.h"
 %include "effects/Deinterlace.h"
+%include "effects/FilmGrain.h"
 %include "effects/Hue.h"
 %include "effects/LensFlare.h"
 %include "effects/Mask.h"
@@ -220,6 +297,6 @@
 %include "effects/Pixelate.h"
 %include "effects/Saturation.h"
 %include "effects/Shift.h"
+%include "effects/Timer.h"
+%include "effects/DenoiseImage.h"
 %include "effects/Wave.h"
-
-
