@@ -66,8 +66,11 @@ new algorithm — hence the new **R2a** stop (Skia Vulkan build + glow surfaces 
    position with another now draws on top if it was added later; previously it could be hidden, and
    which happened varied run to run. Confirm this is the behaviour the service wants — or fix the
    layer collision so it cannot arise.
-3. **libopenshot-audio is pinned at 0.6.0**, below upstream's 1.0.0 requirement. It compiles and
-   links; it is not proven at runtime beyond the silent-audio smoke test.
+3. **libopenshot-audio stays at 0.6.0 — settled, not a risk.** Upstream's 1.0.0 requirement came
+   from a release-tagging commit (`ffcff368`) that changes only version strings; they developed
+   against 0.6.0 throughout. `ldd -r` on the merged library shows zero unresolved symbols. The open
+   part is only that audio behaviour is thinly covered by the suite (one smoke test), which the
+   merge does not change.
 
 ## Next step
 

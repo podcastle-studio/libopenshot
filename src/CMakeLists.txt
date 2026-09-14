@@ -268,9 +268,10 @@ add_feature_info("Wayland screen capture" OPENSHOT_WAYLAND_CAPTURE "Use the opti
 # Find JUCE-based openshot Audio libraries
 if(NOT TARGET OpenShot::Audio)
   # Only load if necessary (not for integrated builds)
-  # Upstream requires 1.0.0; this fork builds and links against the 0.6.0 packaged on our
-  # images, so the bump looks conservative rather than a real API dependency. Raise this back
-  # to 1.0.0 once 1.0.0 is installed everywhere -- see doc/gpu-migration/UPSTREAM-MERGE.md.
+  # Upstream asks for 1.0.0, but their commit ffcff368 that raised it changes only version
+  # strings while tagging their own 1.0.0 release -- every upstream commit we merged was written
+  # against 0.6.0. Verified: compiles against the 0.6.0 headers and `ldd -r` on the built library
+  # reports no unresolved symbols. Keep 0.6.0 until we actually need a newer API.
   find_package(OpenShotAudio 0.6.0 REQUIRED)
 endif()
 target_link_libraries(openshot PUBLIC OpenShot::Audio)

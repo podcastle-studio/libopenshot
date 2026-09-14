@@ -133,9 +133,14 @@ Fork's `Example.cpp` — upstream's is a personal scratch file with hardcoded `/
 - **OpenCV split.** Upstream's new tracked-object code in `EffectBase.cpp` is guarded by
   `USE_OPENCV`, but this fork splits `USE_OPENCV` (core, always on) from `USE_OPENCV_EFFECTS` (the
   tracker sources, off). Guard narrowed to `USE_OPENCV_EFFECTS`; the block already had an `#else`.
-- **libopenshot-audio.** Upstream requires 1.0.0; this box has 0.6.0. Lowered to 0.6.0 and
-  everything compiles and links, so the bump looks conservative rather than a real API dependency.
-  **Not proven at runtime** — see below.
+- **libopenshot-audio.** Upstream requires 1.0.0; we have 0.6.0, and kept 0.6.0. This is **not** a
+  downgrade of a real dependency: upstream's commit `ffcff368` ("Bumping version to 1.0.0, SO 31,
+  requiring OpenShotAudio 1.0.0", 2026-07-25) changes two files and nothing but version strings, as
+  part of tagging their own 1.0.0 release. Every commit merged here was developed against 0.6.0.
+  Verified: all of upstream's new audio sources compile against the 0.6.0 headers (headers and
+  library are both 0.6.0, so a 1.0.0-only API would be a compile error, not a silent mismatch), and
+  `ldd -r` on the merged library reports zero unresolved symbols, with all 82 referenced `juce::`
+  symbols resolving against `libopenshot-audio.so.10`.
 
 ## The one deliberate pixel change
 
@@ -172,9 +177,11 @@ can produce that collision, it is worth fixing there rather than relying on sort
    (needs `-DSKIA_SOURCE_DIR=$HOME/skia-stable/skia` or the skcms header is not found), point it at
    the main tree's media with `--media` / `--bench-media`, and alternate the two binaries. Comparing
    a fresh measurement against a recorded baseline is worthless on a thermally unstable machine.
-2. **Prove libopenshot-audio 0.6.0 at runtime**, or install 1.0.0 and restore upstream's
-   requirement. It compiles and links today; audio was not exercised beyond the golden suite's
-   silent-audio smoke test.
+2. **Audio behaviour is thinly covered**, though the 0.6.0 pin itself is settled (see above:
+   linkage fully verified, upstream never needed 1.0.0). The suite exercises audio only through
+   `export.silent_audio_smoke`. That is unchanged by the merge, so it adds no new audio risk, but
+   the coverage gap is worth closing. Also confirm the service's runtime image carries ≥ 0.6.0 —
+   this merge does not raise the floor, so anything that ran before still runs.
 3. **Decide on `compositing.layer_order`** — accept the new behaviour or fix the layer collision.
 4. **Port upstream's `apply_keyframes` extras** (corner radius, painter-applied opacity) on top of
    the fork's antialiasing behaviour, if wanted.
