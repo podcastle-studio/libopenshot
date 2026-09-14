@@ -13,15 +13,20 @@ Other project commands: `/check` (golden suite + visual diff), `/bench` (perform
 
 ## Read first
 
-1. `STATUS.md` — where the work is right now and what the next step is. **Read it before doing
-   anything, and update it at the end of any session that changed code, plans or decisions.**
-2. `doc/GPU-RENDER-PLAN.md` — the multi-phase plan to move rendering fully onto the GPU and remove Qt.
-   Sections 0–2 are background (measurements, GPU primer, Qt inventory); section 3 is the step list;
-   section 4 sizes CPU/RAM/VRAM/NVENC for N parallel export processes.
+> Everything under `doc/gpu-migration/` is scaffolding for the GPU migration and is deleted when
+> that work lands. Permanent documentation stays directly in `doc/`.
+
+1. `doc/gpu-migration/STATUS.md` — where the work is right now and what the next step is. **Read it
+   before doing anything, and update it at the end of any session that changed code, plans or
+   decisions.**
+2. `doc/gpu-migration/GPU-RENDER-PLAN.md` — the multi-phase plan to move rendering fully onto the
+   GPU and remove Qt. Sections 0–2 are background (measurements, GPU primer, Qt inventory);
+   section 3 is the step list; section 4 sizes CPU/RAM/VRAM/NVENC for N parallel export processes.
 3. `tests/golden/README.md` — the regression suite that gates every change.
 4. `doc/PERFORMANCE-BASELINE.md` — benchmark history (`tests/bench`, `openshot-bench`). Re-run at the
    end of every optimisation phase, commit the JSON under `tests/bench/results/`, append the table.
-5. `doc/GPU-DECISIONS.md` — decisions already taken (do not re-litigate) and the ones still open.
+5. `doc/gpu-migration/GPU-DECISIONS.md` — decisions already taken (do not re-litigate) and the ones
+   still open.
 
 ## Repo map
 
@@ -37,14 +42,15 @@ Other project commands: `/check` (golden suite + visual diff), `/bench` (perform
 | `tests/golden/` | the regression suite and its committed reference frames |
 | `tests/bench/` | the performance benchmark and its recorded results |
 | `tools/golden.sh` | build + run + report wrapper |
-| `doc/` | the plan, the baseline, the decisions |
+| `doc/` | permanent documentation: install guides, hardware acceleration, the benchmark history |
+| `doc/gpu-migration/` | **temporary**: the plan, the decisions log, session status — deleted when the migration lands |
 | `skia_build_script.sh` | out-of-tree Skia build (see below) |
 | `../video-rendering-service` | the only consumer: JSON payload in, MP4 out |
 
 ## How to communicate
 
 - Keep replies short. Lead with the result, a few bullets at most, tables only when numbers matter.
-  Details belong in the docs (`STATUS.md`, `doc/*.md`), not in chat.
+  Details belong in the docs (`doc/gpu-migration/STATUS.md`, `doc/*.md`), not in chat.
 
 ## Non-negotiable workflow
 
@@ -85,7 +91,7 @@ reproducible as the no-GPU fallback. The two scripts share everything except the
 the GPU GN args and the install prefix; keep the rest byte-identical so text rendering does not
 drift. Both pin `SKIA_MILESTONE=m147` to match the front end's CanvasKit. Select a build at
 configure time with `-DSkia_ROOT=/usr/local/skia-gpu` (or leave it unset for the CPU one) and record
-which one a build used in `doc/GPU-DECISIONS.md`.
+which one a build used in `doc/gpu-migration/GPU-DECISIONS.md`.
 
 ## Facts that are easy to get wrong
 

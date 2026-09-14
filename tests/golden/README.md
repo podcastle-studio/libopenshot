@@ -4,7 +4,7 @@ Renders every feature that `video-rendering-service` drives through libopenshot,
 and compares the result against committed reference PNGs with visual metrics (PSNR, SSIM, max
 channel difference, % of pixels off by more than 2). Failures produce a side-by-side
 golden | actual | diff image and an HTML report. Run it before and after every change to the
-render path; the GPU rewrite (see `doc/GPU-RENDER-PLAN.md`) is gated on it.
+render path; the GPU rewrite (see `doc/gpu-migration/GPU-RENDER-PLAN.md`) is gated on it.
 
 ## Layout
 

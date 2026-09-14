@@ -3,17 +3,17 @@
 > **Resuming?** Run `/resume`. In short: branch `feature/gpu-rendering`, the golden suite must be
 > green (`tools/golden.sh check`) before and after every change, performance is tracked with
 > `openshot-bench` against `tests/bench/results/baseline-cpu.json`, and the work plan with its
-> numeric gates is `doc/GPU-RENDER-PLAN.md` section 3.
+> numeric gates is `doc/gpu-migration/GPU-RENDER-PLAN.md` section 3.
 
 Last updated: 2026-09-10 · branch `feature/gpu-rendering` (from fork `develop` 1d82adc9)
 
 ## Where we are
 
-Phase 0 of `doc/GPU-RENDER-PLAN.md` is mostly done:
+Phase 0 of `doc/gpu-migration/GPU-RENDER-PLAN.md` is mostly done:
 
 - Baseline measured (plan section 0.3): codecs are not the bottleneck; Qt raster compositing and
   single-threaded swscale are. GPU encode alone gives ~1.3x; hardware decode crashes in the fork.
-- Plan reviewed a second time and rewritten around the measured data (`doc/GPU-RENDER-PLAN.md`,
+- Plan reviewed a second time and rewritten around the measured data (`doc/gpu-migration/GPU-RENDER-PLAN.md`,
   draft 3): every step now has a numeric gate tied to the 1080p baseline, every phase a releasable
   stop, and Phase 2 is split so the single highest-value change ships on its own.
 - Golden-frame regression suite built and baselined: `tests/golden`, 95 scenarios, 292 frames,
@@ -29,7 +29,7 @@ Phase 0 of `doc/GPU-RENDER-PLAN.md` is mostly done:
   1080p exports give 1.8x aggregate throughput, not 4x.
 - All of the above is committed on `feature/gpu-rendering`.
 
-## Open decisions (record in `doc/GPU-DECISIONS.md` when taken)
+## Open decisions (record in `doc/gpu-migration/GPU-DECISIONS.md` when taken)
 
 - Base branch: stay on the fork (recommended) or merge upstream 1.0.0 first (plan step 0.1).
 - Timeline canvas precision for the GPU compositor: RGBA8 or RGBA16F (RGBA16F recommended).
@@ -46,10 +46,14 @@ new algorithm — hence the new **R2a** stop (Skia Vulkan build + glow surfaces 
 
 ## Next step
 
-**Plan step 0.2 / 0.3, then Phase 1 (R1, CPU quick wins).**
+**Plan steps 0.5 and 0.6, then Phase 1 (R1, CPU quick wins).**
 
-1. Collect 6 production payloads + media into a corpus and add a service-level end-to-end check
-   (the golden suite covers the library; the corpus covers the service's JSON → timeline code).
+> Step numbers below are the *Phase 0* steps in plan section 3, not the background subsections
+> 0.1–0.4 of plan section 0. The two share numbers; only the ones in section 3 are work items.
+
+1. Step 0.5 — collect 6 production payloads + media into a corpus and add a service-level
+   end-to-end check (the golden suite covers the library; the corpus covers the service's
+   JSON → timeline code). Step 0.6 — run `tools/golden.sh check` in CI on every PR.
 2. Phase 1 steps in order (see the plan for per-step gates), each validated with
    `tools/golden.sh check` and `openshot-bench --quick`, with a full run + `compare` against
    `baseline-cpu.json` at the R1 gate:
@@ -70,6 +74,6 @@ new algorithm — hence the new **R2a** stop (Skia Vulkan build + glow surfaces 
 ## Log
 
 - 2026-09-10 — analysis, plan, golden suite; first commit on `feature/gpu-rendering`.
-- 2026-09-10 — CLAUDE.md + STATUS.md; plan section 4 (sizing for N parallel exports).
+- 2026-09-10 — CLAUDE.md + doc/gpu-migration/STATUS.md; plan section 4 (sizing for N parallel exports).
 - 2026-09-10 — openshot-bench committed; full CPU baseline + concurrency measurements recorded in doc/PERFORMANCE-BASELINE.md.
 - 2026-09-11 — second pass over the plan (draft 3): numeric gates per step, R2a split out after profiling showed the glow shader is 72 % of the worst scenario.

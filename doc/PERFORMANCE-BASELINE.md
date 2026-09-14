@@ -1,7 +1,7 @@
 # Performance baseline and history
 
 Measurements of the render pipeline taken with `openshot-bench` (`tests/bench`), to be repeated after
-every optimisation phase of `doc/GPU-RENDER-PLAN.md` so the gain of each step is visible against the
+every optimisation phase of `doc/gpu-migration/GPU-RENDER-PLAN.md` so the gain of each step is visible against the
 same scenarios, resolutions and machine.
 
 ## How to reproduce

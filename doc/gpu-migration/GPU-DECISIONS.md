@@ -1,7 +1,7 @@
 # Decisions
 
 One line per decision that a later session should not re-litigate: what was decided, when, why, and
-what would have to change for it to be revisited. Referenced from `doc/GPU-RENDER-PLAN.md`.
+what would have to change for it to be revisited. Referenced from `doc/gpu-migration/GPU-RENDER-PLAN.md`.
 
 ## Taken
 

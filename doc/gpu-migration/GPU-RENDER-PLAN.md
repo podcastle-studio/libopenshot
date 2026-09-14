@@ -390,6 +390,9 @@ the GPU move, and leaves width to the process manager.
 
 ### Phase 0 — Baseline and safety net (R0) · **done**
 
+> The step numbers in this section are independent of the subsection numbers in section 0.
+> Section 0.1–0.4 is background to read; the 0.1–0.6 below are the work items.
+
 - **0.1 Base branch.** `feature/gpu-rendering` is branched from the fork's `develop`. The upstream
   question (section 0.1) is still open but no longer blocking; if upstream is ever merged it must
   happen *before* R3, because R3 rewrites the same files.
@@ -505,7 +508,7 @@ sibling at the root:
 
 CMake selects the build with `-DSkia_ROOT=/usr/local/skia-gpu` (CMP0074 makes `find_path`/
 `find_library` honour it); no `find_package` change is needed. Record which prefix a given build
-used in `doc/GPU-DECISIONS.md`, and keep both scripts listed in `CLAUDE.md`.
+used in `doc/gpu-migration/GPU-DECISIONS.md`, and keep both scripts listed in `CLAUDE.md`.
 
 *Verify:* both scripts produce a `libskia.a`; a 30-line test links against the GPU one, creates a
 Vulkan device and a Graphite `Context`, draws a gradient into a 64×64 `SkSurface`, reads it back and
@@ -616,7 +619,7 @@ with the standard library; `Color` without `QColor`.
 
 4.1–4.4 sequential (interop first); 4.5–4.7 parallel with them and with each other.
 
-**4.0 Record the decisions** in `doc/GPU-DECISIONS.md` before starting: canvas precision
+**4.0 Record the decisions** in `doc/gpu-migration/GPU-DECISIONS.md` before starting: canvas precision
 (`kRGBA_F16` recommended), Graphite-only or Ganesh fallback, LUT rounding reference (native
 `ColorMap.cpp` or the WASM `LutApply.cpp` the front end uses), whether nearest-neighbour sampling is
 preserved in `BORDER_REFLECTED_ROTATION` and `DISPLACEMENT_MAP`, GPU SKU (L4).
@@ -633,7 +636,7 @@ SkSL pass (matrix and range from the stream, defaulting to BT.709 at ≥ 720p) t
 pre-scale. Extend `IsHardwareDecodeSupported` to HEVC, VP9, AV1 and MPEG-4; remove `DE_LIMIT_*`;
 software decode + `upload()` remains the fallback for codecs NVDEC lacks.
 *Verify:* decode-only 4K ≥ **120 fps** and < 1 core; decoded frame vs software decode PSNR ≥ 48 dB;
-a BT.709 chart decodes to the right sRGB values — note in `GPU-DECISIONS.md` that this intentionally
+a BT.709 chart decodes to the right sRGB values — note in `doc/gpu-migration/GPU-DECISIONS.md` that this intentionally
 *differs* from the CPU goldens, which apply swscale's BT.601 default, and re-baseline the affected
 `readers.*` scenarios once.
 
@@ -783,7 +786,7 @@ the report and re-baseline only those scenarios.
   differs (GPU anti-aliasing, Gaussian vs box kernels, bilinear vs bicubic).
 - **redefine**: the old output was wrong or implementation-defined (BT.601 applied to
   BT.709 sources, R/B swap, nearest sampling artefacts). Document in
-  `doc/GPU-DECISIONS.md`, compare against the editor's CanvasKit render instead, and
+  `doc/gpu-migration/GPU-DECISIONS.md`, compare against the editor's CanvasKit render instead, and
   update the golden set with a dated note.
 
 Anything that fails its parity gate is reverted or feature-flagged; it does not stay
