@@ -246,10 +246,45 @@ route. Its cost is pure bandwidth (~6 GB/s measured), not per-call overhead.
 surface for a raster destination (it is worth a readback on its own), but when the destination is
 GPU-backed it snapshots straight into VRAM and never touches the CPU.
 
-*Not done here, and it blocks the step's gate:* `TextClipReader` sizes one clip's frame buffer at
-2536 × 16969 (164 MB), because `computeAnimatedExtent` bounds a perspective animation matrix with
-`SkMatrix::mapRect`, which blows up as a corner approaches the vanishing point. That buffer is
-allocated, filled and now read back every frame. See STATUS.md.
+*Not done here, and it blocked the step's gate:* `TextClipReader` sized one clip's frame buffer at
+2536 × 16969 (164 MB). ~~because `computeAnimatedExtent` bounds a perspective animation matrix with
+`SkMatrix::mapRect`, which blows up as a corner approaches the vanishing point~~ — **that diagnosis
+was wrong**; the clip has no perspective at all. Fixed in worklist item A: a ~100×-too-large `ty` in
+the golden recipe plus a glow margin that padded both axes from the longer one. See STATUS.md.
+
+### Step 2.5 — do NOT skip the large-sigma shadow downscale on GPU surfaces (2026-09-14)
+
+**Measured and rejected.** The plan assumed the σ > 120 downscale in
+`TextClipRenderer::renderShadowLayer` is nothing but a workaround for Skia's CPU mask-blur clamp,
+so a GPU destination should draw the true sigma directly. The premise about the clamp is right:
+`SkBlurMaskFilterImpl::computeXformedSigma` clamps at 128 px and only the raster and Ganesh
+mask-filter paths call it; Graphite never sees a mask filter (its `Device` asserts so) because
+`SkCanvas` first converts it through `asImageFilter`, which passes the sigma to
+`SkImageFilters::Blur` unclamped. Drawing directly does produce the full blur — a 4K shadow came
+back at **83.7 dB PSNR** against the CPU reconstruction, and reproduced the 1080p shadow just as
+well (RMSE 0.00698 vs 0.00700 for the downscale path).
+
+**But the downscale is an optimisation in its own right, not only a workaround.** At σ = 384 it
+blurs a surface scaled by 120/384, i.e. ~10× fewer pixels. Skipping it, one-time 4K shadow render,
+two A/B rounds on one machine:
+
+| | before | after | |
+|---|---|---|---|
+| GPU off | 111.4 / — ms | 111.5 / — ms | unchanged (CPU path untouched, bit-identical) |
+| Vulkan | 27.2 / 28.8 ms | 32.0 / 28.1 ms | no measurable difference |
+| lavapipe | 145.9 / 141.2 ms | 171.5 / 186.6 ms | **~30 % slower, both rounds** |
+
+Nothing to gain on a real GPU, and a supported configuration (lavapipe, the no-GPU fallback) gets
+materially slower. The change was written, verified four-way green, measured, and reverted.
+
+*Revisit if:* a case appears where the reconstruction is visibly wrong rather than merely
+approximate, or Skia's raster blur engine stops downscaling large sigma internally.
+
+**The step's gate belongs elsewhere.** `text_static_4` at 2160p ≥ 15 fps cannot be moved by this
+step: the shadow renders **once** per clip (static text is served from the resting-frame cache), so
+its ~120 ms is amortised to ~0.8 ms over 150 frames. Timing each of the scenario's four clips at
+2160p gives 0.98 / 0.04 / 0.10 / 0.01 ms per steady-state frame — about **1 % of the scenario's
+~90 ms frame**. The rest is decode and Qt compositing, which is R3.
 
 
 ## Open — decide before plan phase 4

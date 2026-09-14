@@ -26,8 +26,8 @@ Stated by the project owner, 2026-09-14. This overrides anything in
    and all four must be 292/292. Commands are in `CLAUDE.md` under "GPU rendering (`src/gpu`)".
 
 Last updated: 2026-09-14 · branch `feature/gpu-rendering`.
-**R2a complete** (2.1, 2.2, 2.3); **2.4 done, gate met**; worklist **A done**; **2.0 still owed**.
-Next: the Phase 2 worklist below, item **B** (plan step 2.5).
+**R2a complete** (2.1, 2.2, 2.3); **2.4 done, gate met**; worklist **A done**, **B rejected on
+measurement**; **2.0 still owed**. Next: the Phase 2 worklist below, item **C** (plan step 2.6).
 
 ## Where we are
 
@@ -212,14 +212,24 @@ nothing clipped at the frame edge.
 came from clamping an extent that was only that large because of the bad recipe; the honest figure
 for the library change is the table above.
 
-**B. 2.5 — skip the CPU-blur workaround on GPU surfaces.** *Rewritten by the standing constraint:
-the plan says "delete", which would break the CPU path.* The σ > 120 downscale branch in
-`TextClipRenderer::renderShadowLayer` exists because Skia's CPU mask blur clamps sigma at 128 px;
-the GPU has no such clamp. **Keep the branch** and take it only when the offscreen is raster
-(`GpuOffscreen::onGpu()` already answers this), so the GPU draws the true sigma directly and the
-CPU keeps its downscale reconstruction. *Verify:* a 4K text shadow on GPU matches the 1080p shadow
-scaled up (SSIM ≥ 0.97); `text_static_4` at 2160p ≥ 15 fps (11.8); CPU-path goldens **bit-identical**,
-GPU-path text goldens reviewed if they move.
+**B. 2.5 — skip the CPU-blur workaround on GPU surfaces.** — ❌ **measured and rejected,
+2026-09-14. Do not redo it.** Full reasoning in `GPU-DECISIONS.md`; the short version:
+
+The plan's premise about the clamp is correct — Graphite never sees a mask filter, so `SkCanvas`
+converts it through `asImageFilter` and the sigma reaches `SkImageFilters::Blur` unclamped; drawing
+directly on a GPU destination does give the full blur (**83.7 dB PSNR** against the CPU
+reconstruction at 4K). But the σ > 120 downscale is **an optimisation in its own right**, not only a
+clamp workaround: at σ = 384 it blurs ~10× fewer pixels. Skipping it gains nothing on Vulkan
+(27.2/28.8 → 32.0/28.1 ms over two A/B rounds) and costs **~30 % on lavapipe** (145.9/141.2 →
+171.5/186.6 ms), which is a supported no-GPU configuration. The CPU path was bit-identical, as
+required, and all four golden configurations stayed at 292/292 — the change was correct, just not
+worth making. Reverted.
+
+**Its gate belongs to R3, not here.** `text_static_4` at 2160p ≥ 15 fps cannot be moved by this
+step. Static text is served from the resting-frame cache, so the shadow renders **once** (~120 ms,
+amortised to ~0.8 ms over 150 frames), and timing the scenario's four clips at 2160p gives
+0.98 / 0.04 / 0.10 / 0.01 ms per steady-state frame — about **1 % of its ~90 ms frame**. The rest is
+decode and Qt compositing.
 
 **C. 2.6 — long-lived `SkiaRenderer` and cross-frame caches.** One renderer per reader instead of
 one per frame, so the font and paint caches survive; cache the glow silhouette and the 3D block
@@ -264,6 +274,10 @@ Remaining: 1.1 single `WriteFrame` call; 1.2 thread budgets; 1.3 RGBA straight i
 
 ## Log
 
+- 2026-09-14 — worklist item B (plan step 2.5): written, verified four-way green, measured,
+  **reverted**. The large-sigma shadow downscale is an optimisation, not just a CPU-clamp
+  workaround — skipping it on GPU surfaces gains nothing on Vulkan and costs ~30 % on lavapipe. Its
+  gate (`text_static_4` 2160p) is unreachable from this step: text is ~1 % of that scenario.
 - 2026-09-14 — worklist item A: frame-extent sizing. No perspective bug existed; the 164 MB buffer
   was a ~100×-too-large `ty` in `tests/golden/Recipes.cpp` plus a glow margin that padded both axes
   from the longer one. Per-axis glow margin (clamped, pixel-identical) + recipe fix. Glow scenario
