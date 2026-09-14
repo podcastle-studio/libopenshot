@@ -37,7 +37,8 @@ m147 to stay in lockstep with the front end's CanvasKit.
 
 **2026-09-14 · Merge upstream `develop` now, before the GPU rewrite.** Supersedes the 2026-09-10
 decision to stay on the fork. `upstream/develop` (the live branch; `upstream/master` is frozen at
-2021) was 341 commits / 220 files ahead of the merge base. Merged on `merge/upstream-develop`:
+2021) was 341 commits / 220 files ahead of the merge base. Merged on `merge/upstream-develop`,
+since folded into `feature/gpu-rendering`:
 24 conflicted paths, 82 hunks, ~2,322 lines. Three reasons the timing changed: the conflict set is
 exactly the files plan phases 3–4 rewrite, so a later merge becomes impossible; the golden suite now
 exists to validate it bit-exactly; and it delivers plan step 1.5's hardware-decode fix better than

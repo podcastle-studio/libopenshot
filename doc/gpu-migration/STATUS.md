@@ -5,7 +5,7 @@
 > `openshot-bench` against `tests/bench/results/baseline-cpu.json`, and the work plan with its
 > numeric gates is `doc/gpu-migration/GPU-RENDER-PLAN.md` section 3.
 
-Last updated: 2026-09-14 · branch `merge/upstream-develop` (from `feature/gpu-rendering`)
+Last updated: 2026-09-14 · branch `feature/gpu-rendering` (upstream merge folded in)
 
 ## Where we are
 
@@ -30,8 +30,9 @@ Phase 0 of `doc/gpu-migration/GPU-RENDER-PLAN.md` is mostly done:
 - All of the above is committed on `feature/gpu-rendering`.
 
 **2026-09-14 — upstream merged.** `upstream/develop` (341 commits / 220 files ahead of the
-2025-06-07 merge base) is merged on `merge/upstream-develop`, as a real merge commit so the next
-sync has a proper base. 24 conflicted paths, 82 hunks, ~2,322 lines. Golden suite green and stable
+2025-06-07 merge base) is merged and folded into `feature/gpu-rendering` (fast-forward; the
+`merge/upstream-develop` branch is now just a marker at the same commit and can be deleted). It is
+a real merge commit, so the next sync has a proper base. 24 conflicted paths, 82 hunks, ~2,322 lines. Golden suite green and stable
 across 3 runs, with exactly one deliberate re-baseline (`compositing.layer_order`, see below).
 Every per-file decision and the remaining checklist are in `doc/gpu-migration/UPSTREAM-MERGE.md`.
 
