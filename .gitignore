@@ -22,3 +22,7 @@ tags
 /golden-report
 /tests/bench/media/*.mp4
 /tests/bench/media/*.png
+
+# Ad-hoc openshot-bench runs auto-name themselves <timestamp>_<label>.json. Only curated
+# phase-gate results (baseline-cpu.json, parallel-*.json, r1.json, ...) belong in git.
+tests/bench/results/20*_*.json
