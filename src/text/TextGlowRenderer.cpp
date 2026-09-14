@@ -1,11 +1,14 @@
 #include "TextGlowRenderer.h"
 
+#include "../gpu/GpuDevice.h"
+#include "../gpu/GpuFrame.h"
 #include "../subtitle/SkiaRenderer.h"
 #include "TextAnimationRenderer.h"
 #include "TextClipRenderer.h"
 #include "TextDrawShared.h"
 #include "TextGlowShader.h"
 
+#include <skia/include/core/SkBitmap.h>
 #include <skia/include/core/SkCanvas.h>
 #include <skia/include/core/SkData.h>
 #include <skia/include/core/SkImageInfo.h>
@@ -282,10 +285,32 @@ void TextGlowRenderer::paintGlowFromSilhouette(
         static_cast<float>(GLOW_GAIN), static_cast<float>(GLOW_FALLOFF),
     };
 
+    // Choose the working surface BEFORE building the shader: on the GPU the shader's
+    // child has to be a texture-backed image, so this decides which image it is built
+    // from. The ray-march below is ~72 % of the worst benchmark scenario, and on the
+    // GPU it is the same SkSL over the same silhouette. With OPENSHOT_GPU off,
+    // GpuFrame::Create returns null and everything below runs exactly as it did
+    // before — the golden suite depends on that staying true.
+    std::shared_ptr<GpuFrame> gpuFrame;
+    sk_sp<SkImage> source = image;
+    if (GpuDevice::Instance().available())
+        gpuFrame = GpuFrame::Create(gsw, gsh);
+    if (gpuFrame) {
+        // Graphite will not upload the raster silhouette on our behalf: a raster image
+        // used as a shader is dropped with "Couldn't convert SkImage to a
+        // Graphite-backed representation" and the draw vanishes. If the upload fails,
+        // give up the GPU surface rather than the glow.
+        source = GpuFrame::ToTexture(image);
+        if (!source) {
+            gpuFrame.reset();
+            source = image;
+        }
+    }
+
     const SkSamplingOptions linear(SkFilterMode::kLinear);
     // Shift the silhouette shader so the image lands at (rectPad, rectPad) in the working surface.
     const SkMatrix childMat = SkMatrix::Translate(offsetPx, offsetPx);
-    sk_sp<SkShader> child = image->makeShader(SkTileMode::kDecal, SkTileMode::kDecal, linear, &childMat);
+    sk_sp<SkShader> child = source->makeShader(SkTileMode::kDecal, SkTileMode::kDecal, linear, &childMat);
     SkRuntimeEffect::ChildPtr children[1] = { SkRuntimeEffect::ChildPtr(child) };
     sk_sp<SkShader> shader = effect->makeShader(
         SkData::MakeWithCopy(uniforms, sizeof(uniforms)),
@@ -296,9 +321,18 @@ void TextGlowRenderer::paintGlowFromSilhouette(
     // Screen blending is associative, so screening this combined layer onto the canvas
     // matches drawing the ray then the bloom directly — but it lets us upscale only once.
     // (RGBA: this holds the COLOURED glow output, unlike the alpha-only silhouette.)
-    sk_sp<SkSurface> glowSurface = SkSurfaces::Raster(SkImageInfo::MakeN32Premul(gsw, gsh));
-    if (!glowSurface) return;
-    SkCanvas* gc = glowSurface->getCanvas();
+    sk_sp<SkSurface> glowSurface;
+    SkCanvas* gc = nullptr;
+    if (gpuFrame) {
+        gc = gpuFrame->canvas();
+    } else {
+        glowSurface = SkSurfaces::Raster(SkImageInfo::MakeN32Premul(gsw, gsh));
+        if (!glowSurface) return;
+        gc = glowSurface->getCanvas();
+    }
+    if (!gc) return;
+    // Pooled GPU surfaces are recycled, so this clear is load-bearing there, not
+    // just tidiness as it is for a fresh raster surface.
     gc->clear(SK_ColorTRANSPARENT);
 
     SkPaint rayPaint;                                 // base layer (onto transparent)
@@ -316,10 +350,25 @@ void TextGlowRenderer::paintGlowFromSilhouette(
         bloomPaint.setAlphaf(static_cast<float>(clamp01(glow.opacity * GLOW_BLOOM_ALPHA * opacityMul)));
         bloomPaint.setImageFilter(SkImageFilters::Blur(
             bloomSigma, bloomSigma, SkTileMode::kDecal, nullptr));
-        gc->drawImage(image.get(), offsetPx, offsetPx, SkSamplingOptions(), &bloomPaint);
+        gc->drawImage(source.get(), offsetPx, offsetPx, SkSamplingOptions(), &bloomPaint);
     }
 
-    sk_sp<SkImage> combined = glowSurface->makeImageSnapshot();
+    // Back to the CPU: the destination canvas is the raster text image. Reading into
+    // an N32 pixmap converts from the surface's kRGBA_8888, so the platform BGR swap
+    // that SkiaRenderer::parseColorString bakes into every colour stays consistent —
+    // it is a logical-colour convention, not a byte order, and survives the round trip.
+    sk_sp<SkImage> combined;
+    if (gpuFrame) {
+        SkBitmap readback;
+        if (!readback.tryAllocN32Pixels(gsw, gsh)) return;
+        SkPixmap pixels;
+        if (!readback.peekPixels(&pixels)) return;
+        if (!gpuFrame->readback(pixels)) return;
+        readback.setImmutable();
+        combined = readback.asImage();
+    } else {
+        combined = glowSurface->makeImageSnapshot();
+    }
     if (!combined) return;
 
     // Upscale the combined glow onto the canvas (screen-blended, beneath the text). Working-surface

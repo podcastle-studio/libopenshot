@@ -6,6 +6,7 @@
 #include <memory>
 #include <vector>
 
+#include "skia/include/core/SkColorSpace.h"
 #include "skia/include/core/SkColorType.h"
 #include "skia/include/core/SkRefCnt.h"
 #include "skia/include/core/SkSurface.h"
@@ -52,9 +53,16 @@ namespace openshot
 		/// requirement as DestroyInstance(): no other thread may be rendering.
 		static void DiscardAllPools();
 
-		/// A render target of this size and colour type, or null when the GPU is
-		/// unavailable or allocation failed. Call release() when finished.
-		sk_sp<SkSurface> acquire(int width, int height, SkColorType color_type);
+		/// A render target of this size, colour type and colour space, or null when
+		/// the GPU is unavailable or allocation failed. Call release() when finished.
+		///
+		/// @a color_space defaults to null, which is Skia's legacy mode: no gamma
+		/// conversion on blending or on readback. That is deliberate — the raster
+		/// surfaces this replaces are built with SkImageInfo::MakeN32Premul, which
+		/// also carries no colour space, and attaching sRGB here would silently make
+		/// every blend gamma-correct and change the output.
+		sk_sp<SkSurface> acquire(int width, int height, SkColorType color_type,
+								 sk_sp<SkColorSpace> color_space = nullptr);
 
 		/// Return a surface from acquire(). Passing null, or a surface this pool
 		/// did not hand out, is ignored.
@@ -77,6 +85,7 @@ namespace openshot
 			int width = 0;
 			int height = 0;
 			SkColorType color_type = kUnknown_SkColorType;
+			sk_sp<SkColorSpace> color_space;
 			sk_sp<SkSurface> surface;
 			bool in_use = false;
 		};

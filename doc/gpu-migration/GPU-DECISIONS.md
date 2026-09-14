@@ -150,6 +150,54 @@ while other threads are rendering (today it does not, and both `DestroyInstance(
 `DiscardAllPools()` say so).
 
 
+**2026-09-14 · The glow ray-march runs on the GPU; R2a's gates are met, with no re-baselining.**
+Plan step 2.3. `TextGlowRenderer::paintGlowFromSilhouette` takes its working surface from
+`GpuSurfacePool` through `GpuFrame` when `GpuDevice::Instance().available()`, runs the **unchanged**
+SkSL, and reads the result back into a raster N32 image for the text canvas. Nothing else in the
+text engine changed. With `OPENSHOT_GPU` off, `GpuFrame::Create` returns null and the raster path
+runs exactly as before.
+
+| 1080p, render | GPU off | GPU on | gate |
+|---|---|---|---|
+| `text_animated_glow_3` | 1.3 fps, p95 1060 ms | **4.5 fps, p95 281 ms** | ≥ 4 ✅ |
+| `everything` | 1.8 fps, p95 625 ms | **4.3 fps, p95 261 ms** | ≥ 3 ✅ |
+
+Measured back to back on one machine; treat the deltas as the result, not the absolutes (this
+laptop currently runs `single_video` at 112 fps against a 81 fps recorded baseline). No scenario
+regressed: `single_video` 111.7→115.0, `subtitles_words` 107.5→108.0, `text_static_4` 60.7→60.2,
+`grid_3x3` 23.0→21.7, `heavy_effects` 9.6→10.5.
+
+**Golden is green with the GPU on, unchanged — 292/292, no re-baseline.** The plan allowed the text
+scenarios one re-baseline within a Loose SSIM ≥ 0.95; it was not needed. `text.glow` comes back at
+PSNR 64.3 / SSIM 0.9998 / max channel delta 2, and the whole suite passes the normal comparison on
+NVIDIA and on lavapipe. Four configurations are green: CPU Skia, GPU Skia with the GPU off, GPU
+Skia on Vulkan, GPU Skia on lavapipe.
+
+**The R/B swap does not need removing on the GPU path, and removing it would be a bug.** The plan
+expected to drop the swap in `SkiaRenderer::parseColorString` because raster N32 is BGRA on x86 and
+a GPU RGBA surface is not. That reasoning does not apply: the swap produces a *logical* `SkColor`,
+and Skia's colour types are logical, not byte layouts. Rendering that colour to a `kRGBA_8888` GPU
+surface and reading it back into an N32 pixmap converts correctly in both directions, so the
+convention survives the round trip untouched. The golden text scenarios confirm it — a red glyph
+stays red.
+
+**Graphite does not implicitly upload raster images, and fails silently when you assume it does.**
+The first working version drew *no glow at all*: the silhouette is a raster `SkImage` used as the
+runtime effect's child shader, and Graphite logs `Couldn't convert SkImage to a Graphite-backed
+representation` / `draw dropped!` and carries on. Ganesh uploaded such images automatically.
+Every image crossing onto a GPU surface now goes through `GpuFrame::ToTexture`
+(`SkImages::TextureFromImage`), and a failed upload drops the GPU surface rather than the glow.
+Note the ordering this forces: the working surface must be chosen *before* the shader is built,
+because the choice decides which image the shader is built from.
+
+`GpuSurfacePool` surfaces take a colour space, defaulting to **null** — Skia's legacy mode, matching
+the `SkImageInfo::MakeN32Premul` raster surfaces they replace. An sRGB colour space here would
+silently make every blend gamma-correct and change the output.
+
+*Revisit if:* the silhouette itself moves onto the GPU (it is still rasterised on the CPU and
+uploaded once per frame), which is the obvious next gain and belongs with R2b.
+
+
 ## Open — decide before plan phase 4
 
 - **Timeline canvas precision.** `kRGBA_8888` (matches today) or `kRGBA_F16` (better blending and

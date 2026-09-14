@@ -31,14 +31,32 @@ GpuFrame::~GpuFrame()
 	GpuSurfacePool::Instance().release(frame_surface);
 }
 
-std::shared_ptr<GpuFrame> GpuFrame::Create(int width, int height, SkColorType color_type)
+std::shared_ptr<GpuFrame> GpuFrame::Create(int width, int height, SkColorType color_type,
+										   sk_sp<SkColorSpace> color_space)
 {
-	sk_sp<SkSurface> surface =
-		GpuSurfacePool::Instance().acquire(width, height, color_type);
+	sk_sp<SkSurface> surface = GpuSurfacePool::Instance().acquire(
+		width, height, color_type, std::move(color_space));
 	if (!surface)
 		return nullptr;
 	return std::shared_ptr<GpuFrame>(
 		new GpuFrame(std::move(surface), width, height, color_type));
+}
+
+sk_sp<SkImage> GpuFrame::ToTexture(const sk_sp<SkImage>& image)
+{
+#ifdef OPENSHOT_HAVE_SKIA_GPU
+	if (!image)
+		return nullptr;
+	if (image->isTextureBacked())
+		return image;
+	skgpu::graphite::Recorder* recorder = GpuDevice::Instance().recorder();
+	if (!recorder)
+		return nullptr;
+	return SkImages::TextureFromImage(recorder, image.get(), {});
+#else
+	(void)image;
+	return nullptr;
+#endif
 }
 
 SkCanvas* GpuFrame::canvas()

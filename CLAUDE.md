@@ -151,8 +151,19 @@ Rules that are easy to get wrong and crash in the NVIDIA driver rather than anyw
   it changes.
 - `GpuSurfacePool` is **per thread**, because a Graphite surface belongs to the recorder that made
   it. Never move a surface between threads.
-- `GpuFrame` is `kRGBA_8888`; raster N32 is BGRA on x86. Anything moving bytes between the two swaps
-  R and B.
+- **Graphite never uploads a raster image for you.** A raster `SkImage` used as a shader — a
+  runtime-effect child included — is dropped with `Couldn't convert SkImage to a Graphite-backed
+  representation` and the draw silently disappears; Ganesh did upload automatically. Put every image
+  crossing onto a GPU surface through `GpuFrame::ToTexture` first.
+- Pooled surfaces default to a **null** colour space, matching the `SkImageInfo::MakeN32Premul`
+  raster surfaces they replace. Attaching sRGB makes every blend gamma-correct and changes output.
+- `GpuFrame` is `kRGBA_8888` and raster N32 is BGRA on x86, but do **not** "fix" the R/B swap in
+  `SkiaRenderer::parseColorString` for the GPU path. It is a logical `SkColor` convention, not a
+  byte order; Skia converts correctly in both directions on readback, so it survives the round trip.
+
+The glow ray-march (`TextGlowRenderer::paintGlowFromSilhouette`) is the one thing on the GPU today:
+`text_animated_glow_3` 1.3 → 4.5 fps, `everything` 1.8 → 4.3 fps at 1080p. The silhouette is still
+rasterised on the CPU and uploaded once per frame.
 
 ## Facts that are easy to get wrong
 

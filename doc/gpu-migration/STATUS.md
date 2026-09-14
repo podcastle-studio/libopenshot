@@ -5,7 +5,7 @@
 > `openshot-bench` against `tests/bench/results/baseline-cpu.json`, and the work plan with its
 > numeric gates is `doc/gpu-migration/GPU-RENDER-PLAN.md` section 3.
 
-Last updated: 2026-09-14 · branch `feature/gpu-rendering` (plan steps 2.1 and 2.2 done)
+Last updated: 2026-09-14 · branch `feature/gpu-rendering` (**R2a complete** — steps 2.1, 2.2, 2.3 done; 2.0 still owed)
 
 ## Where we are
 
@@ -79,7 +79,8 @@ new algorithm — hence the new **R2a** stop (Skia Vulkan build + glow surfaces 
 Phase 2 runs before Phase 1; see `doc/gpu-migration/GPU-RENDER-PLAN.md` section 3.1 for why. Phase
 and step numbers are stable identifiers, not sequence.
 
-1. **2.0 GPU-capable image** (was step 1.7, moved because Skia Vulkan cannot ship without it):
+1. **2.0 GPU-capable image** — ⏳ **the only thing left in R2a, and now the blocker for shipping
+   it.** (Was step 1.7, moved because Skia Vulkan cannot ship without it.)
    CUDA/Vulkan base image, `graphics` in `NVIDIA_DRIVER_CAPABILITIES`, `libvulkan1` +
    `vulkan-tools`, `ENCODER=libx264|h264_nvenc` with CPU fallback.
    *Verify:* container starts on both a CPU and a GPU node; `vulkaninfo --summary` shows the NVIDIA
@@ -91,8 +92,8 @@ and step numbers are stable identifiers, not sequence.
    gradient → readback → PNG — on the NVIDIA A2000 and on lavapipe, byte-identical. Three
    corrections the plan did not have, all in `GPU-DECISIONS.md`: `-DSkia_ROOT` needed a
    `FindSkia.cmake` fix to beat pkg-config; Graphite needs a private-header memory allocator;
-   Skia m147 needs Vulkan 1.4 headers, which the installer now ships. **Not yet done:** the
-   `sudo ./install_skia_gpu.sh` into `/usr/local/skia-gpu` (verification used a scratch prefix).
+   Skia m147 needs Vulkan 1.4 headers, which the installer now ships. Installed into
+   `/usr/local/skia-gpu`; `cmake-build-gpu` is configured against it.
 3. **2.2 `src/gpu`** — ✅ **done.** `GpuDevice` (singleton: Vulkan device + one Graphite
    `Context`, recorder per thread, `available()`, `Generation()`), `GpuSurfacePool` (thread-local,
    recycles render targets) and `GpuFrame` (pooled surface + `upload()`/`readback()`). Off unless
@@ -100,16 +101,17 @@ and step numbers are stable identifiers, not sequence.
    A2000 and on lavapipe: default-off, 200 device cycles with flat VRAM, 1000 bit-identical RGBA
    round trips, pool reuse, pool survives a device restart. Golden green on **both** the CPU-Skia
    and GPU-Skia builds (292/292 each), so the Skia swap moves no pixels.
-4. **2.3 Glow pass on the GPU** — the actual prize, and **the next step**. `TextGlowRenderer`
-   allocates its silhouette, ray-march and bloom surfaces from `GpuSurfacePool` via `GpuFrame` when
-   `GpuDevice::Instance().available()`, runs the existing SkSL unchanged, and reads the result back
-   into the CPU text image. Nothing else in the text engine changes. Watch the channel order:
-   `GpuFrame` is `kRGBA_8888` while raster N32 is BGRA on x86, so the R/B swap in
-   `SkiaRenderer::parseColorString` must be removed on the GPU path — a red glyph staying red is the
-   check. Build with `-DSkia_ROOT=/usr/local/skia-gpu`; `cmake-build-gpu` is already configured.
+4. **2.3 Glow pass on the GPU** — ✅ **done.** `paintGlowFromSilhouette` takes its working surface
+   from `GpuSurfacePool` via `GpuFrame`, runs the unchanged SkSL, and reads back into the raster
+   text image. The R/B swap in `SkiaRenderer::parseColorString` was **not** removed — it is a
+   logical-colour convention that survives the round trip, and removing it would be a bug; see
+   `GPU-DECISIONS.md`. The silhouette is still rasterised on the CPU and uploaded once per frame.
 
-> **Gate R2a:** `text_animated_glow_3` ≥ 4 fps (1.4 today) and `everything` ≥ 3 fps (1.8), golden
-> green. Text scenarios may be re-baselined once, after reviewing every triptych.
+> **Gate R2a: met.** `text_animated_glow_3` 1.3 → **4.5 fps** (gate ≥ 4), `everything` 1.8 →
+> **4.3 fps** (gate ≥ 3), measured back to back on one machine. Golden green with the GPU on at
+> 292/292 **with no re-baseline at all** — the one allowed re-baseline was not needed. Four
+> configurations green: CPU Skia; GPU Skia with the GPU off; GPU Skia on Vulkan; GPU Skia on
+> lavapipe.
 
 Still open from Phase 0, not blocking Phase 2: **0.5** the six-payload production corpus and
 **0.6** CI running `tools/golden.sh check` per PR.
@@ -128,6 +130,8 @@ Remaining: 1.1 single `WriteFrame` call; 1.2 thread budgets; 1.3 RGBA straight i
 
 ## Log
 
+- 2026-09-14 — plan step 2.3: glow ray-march on the GPU. R2a's two gates met, golden green with no
+  re-baseline. Graphite needs explicit image uploads; the planned R/B swap removal was wrong.
 - 2026-09-14 — plan step 2.2: `src/gpu` (GpuDevice, GpuSurfacePool, GpuFrame) +
   `tests/gpu/openshot-gpu-checks`. Two ownership crashes found and fixed by the checks; see
   `GPU-DECISIONS.md`. Golden green on both Skia builds.

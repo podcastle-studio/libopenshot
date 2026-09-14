@@ -6,6 +6,7 @@
 #include <memory>
 
 #include "skia/include/core/SkCanvas.h"
+#include "skia/include/core/SkColorSpace.h"
 #include "skia/include/core/SkColorType.h"
 #include "skia/include/core/SkImage.h"
 #include "skia/include/core/SkPixmap.h"
@@ -34,8 +35,21 @@ namespace openshot
 	public:
 		/// A frame of this size, or null when the GPU is unavailable. Contents are
 		/// undefined: the surface may be recycled, so clear it before drawing.
+		/// @a color_space defaults to null (Skia legacy mode), matching the raster
+		/// surfaces this replaces; see GpuSurfacePool::acquire.
 		static std::shared_ptr<GpuFrame> Create(
-			int width, int height, SkColorType color_type = kRGBA_8888_SkColorType);
+			int width, int height, SkColorType color_type = kRGBA_8888_SkColorType,
+			sk_sp<SkColorSpace> color_space = nullptr);
+
+		/// Make @a image texture-backed on this thread's recorder, or null when the
+		/// GPU is unavailable or the conversion failed.
+		///
+		/// Graphite will NOT do this implicitly. A raster SkImage used as a shader
+		/// — including as a runtime-effect child — is silently dropped with
+		/// "Couldn't convert SkImage to a Graphite-backed representation" and the
+		/// draw disappears. Ganesh uploaded such images automatically; Graphite does
+		/// not, so every image crossing onto a GPU surface goes through here first.
+		static sk_sp<SkImage> ToTexture(const sk_sp<SkImage>& image);
 
 		~GpuFrame();
 

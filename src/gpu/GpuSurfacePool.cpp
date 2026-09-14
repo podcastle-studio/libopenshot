@@ -85,7 +85,8 @@ void GpuSurfacePool::discardIfStale()
 	generation = current;
 }
 
-sk_sp<SkSurface> GpuSurfacePool::acquire(int width, int height, SkColorType color_type)
+sk_sp<SkSurface> GpuSurfacePool::acquire(int width, int height, SkColorType color_type,
+										 sk_sp<SkColorSpace> color_space)
 {
 	if (width <= 0 || height <= 0 || color_type == kUnknown_SkColorType)
 		return nullptr;
@@ -94,7 +95,8 @@ sk_sp<SkSurface> GpuSurfacePool::acquire(int width, int height, SkColorType colo
 
 	for (Entry& entry : entries) {
 		if (!entry.in_use && entry.width == width && entry.height == height &&
-			entry.color_type == color_type) {
+			entry.color_type == color_type &&
+			SkColorSpace::Equals(entry.color_space.get(), color_space.get())) {
 			entry.in_use = true;
 			counters.reused++;
 			return entry.surface;
@@ -106,8 +108,8 @@ sk_sp<SkSurface> GpuSurfacePool::acquire(int width, int height, SkColorType colo
 	if (!recorder)
 		return nullptr;
 
-	const SkImageInfo info = SkImageInfo::Make(
-		width, height, color_type, kPremul_SkAlphaType, SkColorSpace::MakeSRGB());
+	const SkImageInfo info =
+		SkImageInfo::Make(width, height, color_type, kPremul_SkAlphaType, color_space);
 	sk_sp<SkSurface> surface = SkSurfaces::RenderTarget(recorder, info);
 	if (!surface)
 		return nullptr;
@@ -116,6 +118,7 @@ sk_sp<SkSurface> GpuSurfacePool::acquire(int width, int height, SkColorType colo
 	entry.width = width;
 	entry.height = height;
 	entry.color_type = color_type;
+	entry.color_space = color_space;
 	entry.surface = surface;
 	entry.in_use = true;
 	entries.push_back(entry);
