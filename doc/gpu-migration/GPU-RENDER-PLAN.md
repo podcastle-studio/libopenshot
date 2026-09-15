@@ -364,13 +364,21 @@ are 1080p render-mode fps unless stated; the baseline column is from section 0.4
 | Build | Ships | Key gate (1080p) | baseline → target |
 |---|---|---|---|
 | **R0** ✅ | golden suite, `openshot-bench`, baseline | suite green, baseline recorded | done |
-| **R2a** | GPU-capable image, Skia Vulkan build; the **glow pass only** on the GPU | `text_animated_glow_3` | 1.4 → **≥ 4 fps** |
-| **R2b** | all text + subtitle rendering on GPU surfaces | `subtitles_words` | 56 → **≥ 85 fps** |
-| **R1** | CPU quick wins, working nvenc, thread budgets | `single_video` nvenc export | 75 → **≥ 105 fps** |
-| **R3** | Skia GPU compositor; Qt off the render path | `grid_3x3` | 23 → **≥ 60 fps** |
-| **R4** | NVDEC/NVENC frames stay on the GPU; effects as shaders | `heavy_effects`; CPU per export | 11.5 → **≥ 60 fps**; **< 2 cores** |
-| **R5** | Qt, ImageMagick, babl, render-path OpenCV removed | no pixel change; image size | −300 MB |
-| **R6** | frames in flight, density tuning | `everything` 1080p; GPU busy | 1.8 → **≥ 30 fps**; **≥ 70 %** |
+| **R2a** ✅ | GPU-capable image, Skia Vulkan build; the **glow pass only** on the GPU | `text_animated_glow_3` | 1.4 → **≥ 4 fps** · **met: 52 fps** |
+| **R2b** ✅ | all text + subtitle rendering on GPU surfaces | `subtitles_words` | 56 → **≥ 85 fps** · **met: 113 fps** |
+| **R1** ⏳ | CPU quick wins, working nvenc, thread budgets | `single_video` nvenc export | 75 → **≥ 105 fps** |
+| **R3** ⏳ | Skia GPU compositor; Qt off the render path | `grid_3x3` | 23 → **≥ 60 fps** |
+| **R4** ⏳ | NVDEC/NVENC frames stay on the GPU; effects as shaders | `heavy_effects`; CPU per export | 11.5 → **≥ 60 fps**; **< 2 cores** |
+| **R5** ⏳ | Qt, ImageMagick, babl, render-path OpenCV removed | no pixel change; image size | −300 MB |
+| **R6** ⏳ | frames in flight, density tuning | `everything` 1080p; GPU busy | 1.8 → **≥ 30 fps**; **≥ 70 %** |
+
+**Status 2026-09-15.** R0, R2a and R2b are shipped on `feature/gpu-rendering`; everything
+below them is untouched. R2a/R2b measured on an RTX A2000: `text_animated_glow_3`
+4.3 → **52 fps** (12.3x), 2160p 1.3 → **11.4**, `everything` 5.4 → **8.8**,
+`subtitles_words` 113. A real 30 s six-clip text payload through the service path runs
+**2.1x** faster with `OPENSHOT_GPU=vulkan` (43.7 s → 21.0 s for 900 frames at 720p) —
+less than 12x because only one clip in it carries glow, and what is left is Qt
+compositing and the x264 encode, which are R3 and R4.
 
 Effort is engineer-weeks for one senior C++ engineer who knows the fork.
 
@@ -423,15 +431,28 @@ the GPU move, and leaves width to the process manager.
 - **0.5 Still open — production corpus.** Six real payloads with their media, rendered through the
   *service* (not just the library), to catch JSON→timeline regressions the golden suite cannot see.
   *Verify:* all six render without error; frame hashes stable across two runs.
+  **The mechanism now exists** — `tools/render-payload` in the service repo runs one payload file
+  through `ExportData::fromJson` + `renderVideo` offline and times it, and both paths proved
+  deterministic on the first payload (two rounds byte-identical each). What is missing is the corpus
+  itself and a hash check in CI.
 - **0.6 Still open — CI.** Run `tools/golden.sh check` on every PR on the 8-core runner; publish the
   report as an artifact. `openshot-bench --quick` on merges to `develop`, appended to a trend file.
 
-### Phase 2 — Skia on the GPU, smallest useful slice first · **runs first** · 3 weeks
+### Phase 2 — Skia on the GPU, smallest useful slice first · **runs first** · ✅ **complete 2026-09-15**
 
 Split into two releasable stops. R2a exists because 72 % of the worst scenario is one shader; it is
 worth shipping on its own before touching the rest of the text engine.
 
-**2.0 Infrastructure: GPU-capable image.** *(Listed as step 1.7 while Phase 1 ran first; it is a
+**2.0 Infrastructure: GPU-capable image.** ✅ **done 2026-09-15** — `../video-rendering-service`
+branch `feature/gpu-rendering`. Runtime base moved to the shared CUDA 12.8.1 / FFmpeg 6.1 image,
+`graphics` added to `NVIDIA_DRIVER_CAPABILITIES`, `libvulkan1` + `vulkan-tools` +
+`mesa-vulkan-drivers` installed, Chrome dropped, `ENCODER=libx264|h264_nvenc` probed once with
+fallback, `OPENSHOT_GPU` plumbed through, base images as `ARG`s for digest pinning. Verified with a
+public-base stand-in image: `openshot-gpu-checks` 7/7 in-container on a GPU node and on a CPU node.
+**Still owed:** build the real image (its build-stage base is in a private registry) and pin the two
+digests. Two corrections to what this step assumed are in `GPU-DECISIONS.md` — the image does *not*
+need Skia's Vulkan 1.4 headers, and NVENC needed two library fixes before it produced usable output.
+*(Listed as step 1.7 while Phase 1 ran first; it is a
 prerequisite for everything below — Skia Vulkan needs `libvulkan1` and the `graphics` driver
 capability, and there is nothing to validate 2.1 against without a GPU node.)* Switch the service Dockerfile to
 `cpp-base-dockerfiles/Dockerfile_cuda12.8.1-cudnn9.7.1-ffmpeg6.1-nvidia24.04`, add `graphics` to
@@ -613,7 +634,15 @@ green; nvenc output vs x264 output on a BT.709 chart within 2 LSB mean.
 *Flag:* `OPENSHOT_NVENC_RGBA=0`. *Risk:* colour shift if the range/matrix tags are wrong — the chart
 check catches it.
 
-**1.4 Writer: sane nvenc rate control.** Replace `preset slow` + `tune zerolatency` + baseline
+**1.4 Writer: sane nvenc rate control.** ⚠️ **half done 2026-09-15, as a side effect of 2.0.**
+Already landed: the library no longer forces `preset slow`, `tune zerolatency` or
+constrained-baseline profile on NVENC (those were VAAPI settings applied to every hardware H.264
+encoder, and were silently producing Main profile); NVENC now gets `profile=high` and keeps whatever
+the caller sets, and the service asks for `preset p5`, `tune hq`, `rc vbr`, `cq 19`. Both encoders
+now emit profile 100. **Still to do:** `b_ref_mode middle`, `spatial-aq 1`, stop `SetOption("crf")`
+hijacking the bitrate when hardware encode is on, guard the `hw_en_on`-only branches with
+`hw_en_supported`, and the VMAF verification below — none of which has been measured yet.
+Original text: replace `preset slow` + `tune zerolatency` + baseline
 profile + `max_b_frames = 0` with `preset p5`, `tune hq`, `rc vbr`, `cq 19`, `b_ref_mode middle`,
 `spatial-aq 1`. Stop `SetOption("crf")` hijacking the bitrate when hardware encode is on, and guard
 the `hw_en_on`-only branches with `hw_en_supported`.
