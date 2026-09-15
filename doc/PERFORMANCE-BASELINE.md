@@ -230,3 +230,47 @@ Reading this:
 - **nvenc uses a quarter of the CPU** of x264 at N=4 (3.8 vs 13.8 cores) for similar aggregate fps,
   so it is the better choice under contention even before the frames stay GPU-resident.
 
+
+## 2026-09-15 · end of phase 2 · CPU vs GPU text rendering, on the discrete card
+
+The first measurement of the finished phase-2 work on the **NVIDIA RTX A2000 8GB** rather than the
+Intel Iris Xe iGPU every earlier phase-2 number was taken on. Same machine, same binary, interleaved
+runs, `render` mode (no encoder). **"CPU" here is the GPU-capable build with `OPENSHOT_GPU=off`**,
+not the CPU-Skia build — so the only variable is the switch. 150 frames is the window the text
+scenarios are actually animated over, and the one the baseline above uses.
+
+Raw results: `tests/bench/results/20260915-0930_p2-*.json`.
+
+| scenario | res | frames | CPU (`off`) | GPU (`vulkan`) | speed-up |
+|---|---|---:|---:|---:|---:|
+| `text_animated_glow_3` | 1080p | 150 | 4.3 / 4.2 fps | **51.7 / 52.9 fps** | **12.3×** |
+| `text_animated_glow_3` | 2160p | 150 | 1.3 fps | **11.4 fps** | **9.1×** |
+| `everything` | 1080p | 150 | 5.4 fps | **8.8 fps** | 1.6× |
+| `subtitles_words` | 1080p | 150 | 109.2 fps | 112.9 fps | 1.03× |
+| `text_static_4` | 1080p | 150 | 64.5 / 61.8 fps | 61.1 / 60.8 fps | 0.96× |
+| `text_static_4` | 2160p | 150 | 13.1 fps | 12.5 fps | 0.96× |
+| `text_static_4` | 1080p | 600 | 148.4 / 142.5 / 146.3 fps | 139.1 / 139.4 / 138.6 fps | 0.95× |
+
+Per frame, the scenario the GPU exists for: **234.6 ms → 19.3 ms** at 1080p, **795.2 ms → 87.5 ms**
+at 2160p. RSS rises modestly with the GPU on (0.41 → 0.56 GB at 1080p, 1.04 → 1.20 GB for
+`everything`).
+
+Reading this:
+
+- **Animated glow text is the whole story**, as the profile said it would be: 12.3× at 1080p and
+  9.1× at 4K. `everything` gains 1.6× because only part of its frame is text.
+- **The A2000 is roughly twice the iGPU** on this work — 52 fps against the 26.7 recorded on
+  2026-09-14 — so the earlier phase-2 numbers understate the production case.
+- **Static text is ~5 % *slower* on the GPU**, consistently: three interleaved 600-frame pairs gave
+  145.7 fps mean off against 139.0 on Vulkan, with non-overlapping ranges. This is not noise and it
+  is not a regression to fix — static text is served from the resting-frame cache, so there is
+  almost no per-frame Skia work for the GPU to take over, and what is left is the fixed cost of
+  going through a GPU surface. It is a reason `OPENSHOT_GPU` is a per-deployment switch rather than
+  a default.
+- **Subtitles are unchanged**, by design — the Timeline still hands them a raster canvas (step 2.7).
+- **lavapipe is 3× faster than raster for glow text**, not slower: 12.96 fps against 4.39 at 1080p.
+  Skia's raster backend runs the glow SkSL through its CPU interpreter, while lavapipe JIT-compiles
+  it with LLVM across all cores. The practical consequence is that a GPU deployment that loses the
+  `graphics` driver capability — and so silently gets llvmpipe instead of the NVIDIA ICD — degrades
+  to something still well ahead of raster. It uses many cores to do it, so it is not a good choice
+  under parallel exports.

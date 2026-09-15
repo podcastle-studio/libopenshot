@@ -407,9 +407,37 @@ void FFmpegWriter::SetOption(StreamType stream, std::string name, std::string va
 	// Was option found?
 	if (option || (name == "g" || name == "qmin" || name == "qmax" || name == "max_b_frames" || name == "mb_decision" ||
 				   name == "level" || name == "profile" || name == "slices" || name == "rc_min_rate" || name == "rc_max_rate" ||
-				   name == "rc_buffer_size" || name == "crf" || name == "cqp" || name == "qp" || name == "allow_b_frames")) {
+				   name == "rc_buffer_size" || name == "crf" || name == "cqp" || name == "qp" || name == "allow_b_frames" ||
+				   name == "color_primaries" || name == "color_trc" || name == "colorspace" || name == "color_range")) {
 		// Check for specific named options
-		if (name == "g")
+
+		// Colour tagging lives on the codec context, not in priv_data, so it is the
+		// same call for every encoder. Without this the only way to tag an H.264
+		// stream was the x264-only "x264-params colorprim=...:transfer=...:colormatrix=...",
+		// which silently does nothing on h264_nvenc and every other encoder. Values are
+		// the FFmpeg names ("bt709", "smpte170m", "tv", "pc", ...); an unknown one is
+		// ignored rather than throwing, matching how a bad priv_data option behaves.
+		if (name == "color_primaries") {
+			const int v = av_color_primaries_from_name(value.c_str());
+			if (v >= 0) c->color_primaries = (AVColorPrimaries) v;
+		}
+
+		else if (name == "color_trc") {
+			const int v = av_color_transfer_from_name(value.c_str());
+			if (v >= 0) c->color_trc = (AVColorTransferCharacteristic) v;
+		}
+
+		else if (name == "colorspace") {
+			const int v = av_color_space_from_name(value.c_str());
+			if (v >= 0) c->colorspace = (AVColorSpace) v;
+		}
+
+		else if (name == "color_range") {
+			const int v = av_color_range_from_name(value.c_str());
+			if (v >= 0) c->color_range = (AVColorRange) v;
+		}
+
+		else if (name == "g")
 			// Set gop_size
 			convert >> c->gop_size;
 
@@ -1718,6 +1746,23 @@ void FFmpegWriter::open_video(AVFormatContext *oc, AVStream *st) {
 
 		switch (video_codec_ctx->codec_id) {
 			case AV_CODEC_ID_H264:
+				if (hw_en_av_device_type == AV_HWDEVICE_TYPE_CUDA) {
+					// NVENC is not VAAPI and none of the settings below suit it: it does
+					// support B-frames and High profile, its presets are p1..p7 (the
+					// legacy "slow" is far slower than anything we want by default), and
+					// "zerolatency" is not one of its tune values at all — it fails to
+					// parse and logs. Leaving those in place silently downgraded every
+					// h264_nvenc export to Main profile at preset=slow.
+					//
+					// Preset, tune and rate control are left exactly as the caller set
+					// them through SetOption (or at NVENC's own defaults when it set
+					// nothing); rate-control tuning proper is plan step 1.4. Profile is
+					// the exception: SetOption("profile") writes the integer
+					// AVCodecContext field, which NVENC ignores in favour of its private
+					// "profile" option, so there is no way to ask for High from outside.
+					av_opt_set(video_codec_ctx->priv_data, "profile", "high", 0);
+					break;
+				}
 				video_codec_ctx->max_b_frames = 0;  // At least this GPU doesn't support b-frames
 				video_codec_ctx->profile = AV_PROFILE_H264_CONSTRAINED_BASELINE;
 				av_opt_set(video_codec_ctx->priv_data, "preset", "slow", 0);

@@ -25,15 +25,19 @@ Stated by the project owner, 2026-09-14. This overrides anything in
    GPU Skia with the GPU off; GPU Skia on Vulkan; GPU Skia on lavapipe) is the acceptance test,
    and all four must be 292/292. Commands are in `CLAUDE.md` under "GPU rendering (`src/gpu`)".
 
-Last updated: 2026-09-14 · branch `feature/gpu-rendering`.
-**R2a complete** (2.1, 2.2, 2.3); **2.4 done, gate met**; worklist **A done**, **B rejected on
-measurement**, **C done differently**, **D done**. The Skia text and subtitle engines now both run
-on the GPU under one control (`GpuDevice::SetBackend`). **Only 2.0 (item E) is left in Phase 2**,
-and it is what blocks shipping any of it.
+Last updated: 2026-09-15 · branch `feature/gpu-rendering`.
+**Phase 2 is complete.** 2.0 landed 2026-09-15 (the GPU-capable image, in
+`../video-rendering-service` branch `feature/gpu-rendering`), which was the last thing in it and the
+only thing stopping R2a and R2b from shipping. **R2a complete** (2.1, 2.2, 2.3); **2.4 done, gate
+met**; worklist **A done**, **B rejected on
+measurement**, **C done differently**, **D done**, **E done**. The Skia text and subtitle engines now both run
+on the GPU under one control (`GpuDevice::SetBackend`), and the image that can run them exists.
+**Phase 1 (CPU quick wins) is what a resuming session picks up next**, along with the two Phase 0
+leftovers (0.5 corpus, 0.6 CI) — see "Next step".
 
 ## Where we are
 
-### What works today (verified 2026-09-14, all four configurations green)
+### What works today (verified 2026-09-15, all four configurations green)
 
 - **The Skia text engine renders entirely on the GPU** when one is enabled, with one readback at
   the reader boundary (`TextClipReader::renderToQImage`). Steps 2.1–2.4 plus worklist items A and C.
@@ -46,21 +50,36 @@ and it is what blocks shipping any of it.
   logic lands.
 - **The CPU path got faster too**, which matters because it is what production runs: the frame-extent
   fix (item A) and the block-mode glow cache (item C) are both pure CPU wins.
+- **The service image is GPU-capable and still runs on a CPU node** — step 2.0, in
+  `../video-rendering-service` branch `feature/gpu-rendering`. Two independent switches, both
+  defaulting to the CPU: `ENCODER=libx264|h264_nvenc` (probed once, falls back with a logged reason)
+  and `OPENSHOT_GPU=off|vulkan|lavapipe` (read by the library). See item E below.
 - `tools/golden.sh check` **292/292** on CPU Skia and on GPU Skia with the GPU off, on Vulkan and on
-  lavapipe. `openshot-gpu-checks` **7/7** on Vulkan and lavapipe.
+  lavapipe. `openshot-gpu-checks` **7/7** on Vulkan and lavapipe, on the host *and inside a
+  container* on both a GPU node and a CPU node.
 
-Measured at 1080p, `render` mode, back to back on one machine (an Intel Iris Xe iGPU — **not** the
-A2000; worth re-running on the discrete card):
+Measured at 1080p, `render` mode, 150 frames, interleaved on one machine — now on the **NVIDIA RTX
+A2000**, which every earlier phase-2 number was *not* (they were taken on an Intel Iris Xe iGPU).
+Full table and the raw JSON in `doc/PERFORMANCE-BASELINE.md`, 2026-09-15 section.
 
-| scenario | baseline | CPU path now | Vulkan now |
-|---|---|---|---|
-| `text_animated_glow_3` | 1.4 fps | **3.7–3.8** | **26.7–33.7** |
-| `everything` | 1.8 fps | **4.4–4.5** | **7.7–8.4** |
-| `subtitles_words` | 56 fps | **92–101** | **94.6** |
-| `text_static_4` | 62 fps | ~57 (150 fr) / 113 (600 fr) | 48 (150 fr) / **116.3** (600 fr) |
+| scenario | baseline | CPU path now (`off`) | Vulkan now | speed-up |
+|---|---|---|---|---|
+| `text_animated_glow_3` | 1.4 fps | **4.2–4.3** | **51.7–52.9** | **12.3×** |
+| `text_animated_glow_3` 2160p | – | 1.3 | **11.4** | **9.1×** |
+| `everything` | 1.8 fps | **5.4** | **8.8** | 1.6× |
+| `subtitles_words` | 56 fps | **109** | 113 | 1.03× |
+| `text_static_4` | 62 fps | 61.8–64.5 | 60.8–61.1 | 0.96× |
 
-`text_static_4`'s GPU deficit at 150 frames is a fixed ~0.5 s Graphite pipeline compile, not a
-per-frame cost — at 600 frames the GPU is ahead. A real export is thousands of frames.
+Two corrections to what this file said on 2026-09-14:
+
+- **The A2000 is roughly twice the iGPU** on the glow scenario — 52 fps against 26.7 — so the
+  earlier phase-2 numbers understate the production case.
+- **`text_static_4` is ~5 % slower on the GPU, and it is not the pipeline compile.** Three
+  interleaved 600-frame pairs gave 145.7 fps mean off against 139.0 on Vulkan, ranges
+  non-overlapping — so the earlier "at 600 frames the GPU is ahead" no longer holds on this card.
+  Static text comes from the resting-frame cache, so there is almost no per-frame Skia work for the
+  GPU to take over and what is left is the fixed cost of going through a GPU surface. Not a
+  regression to fix; a reason `OPENSHOT_GPU` is a per-deployment switch rather than a default.
 
 ### Phase 0 baseline (history)
 
@@ -133,12 +152,8 @@ The plan was reordered on 2026-09-14 so Phase 2 runs before Phase 1; see
 `doc/gpu-migration/GPU-RENDER-PLAN.md` section 3.1 for why. Phase and step numbers are stable
 identifiers, not sequence. **What is still to do is the worklist further down, not this list.**
 
-1. **2.0 GPU-capable image** — ⏳ **the only thing left in R2a, and now the blocker for shipping
-   it.** (Was step 1.7, moved because Skia Vulkan cannot ship without it.)
-   CUDA/Vulkan base image, `graphics` in `NVIDIA_DRIVER_CAPABILITIES`, `libvulkan1` +
-   `vulkan-tools`, `ENCODER=libx264|h264_nvenc` with CPU fallback.
-   *Verify:* container starts on both a CPU and a GPU node; `vulkaninfo --summary` shows the NVIDIA
-   ICD; one export completes on each.
+1. **2.0 GPU-capable image** — ✅ **done, 2026-09-15.** (Was step 1.7, moved because Skia Vulkan
+   cannot ship without it.) Details in item E of the worklist below and in `GPU-DECISIONS.md`.
 2. **2.1 `skia_build_script_gpu.sh`** — ✅ **done.** Graphite/Vulkan Skia m147 builds into
    `out/Release-GPU` beside the untouched CPU build; `install_skia_gpu.sh` installs to
    `/usr/local/skia-gpu`. `tests/gpu/openshot-gpu-smoke` (`-DENABLE_GPU_SMOKE=ON`, or configure
@@ -184,9 +199,12 @@ identifiers, not sequence. **What is still to do is the worklist further down, n
 > gate read 6.4 fps, blocked by a 164 MB frame buffer for 920 × 101 of content — see item A for
 > what that actually was.
 
-## Phase 2 worklist — what a resuming session picks up
+## Phase 2 worklist — all done (kept for the reasoning)
 
-Do these in order. Each one ends with the four-way golden sweep green at 292/292 and, where it
+Items A–D are below; item E (plan step 2.0) is under "Next step", because it is the one that
+finished the phase. Each ended with the four-way golden sweep green at 292/292.
+
+Originally: do these in order. Each one ends with the four-way golden sweep green at 292/292 and, where it
 claims a speed-up, a back-to-back `openshot-bench` measurement on one machine. Nothing here may
 regress the CPU path (see the standing constraint at the top).
 
@@ -361,37 +379,67 @@ ask it for you) and none reads the environment for itself — the new `control` 
 
 ## Next step
 
-**Plan step 2.0 — the GPU-capable container image** (worklist item E). It is the only thing left in
-Phase 2 and the only thing stopping R2a *and* R2b from shipping: everything above runs on a
-developer machine and nowhere else, because the runtime image has no Vulkan.
+**Phase 2 is finished.** The work that remains is Phase 1 (CPU quick wins) and the two Phase 0
+leftovers. Nothing is blocked.
 
-*Gate:* the container starts on a CPU node **and** a GPU node; `vulkaninfo --summary` shows the
-NVIDIA ICD; `ffmpeg -encoders` lists `h264_nvenc`; one export completes on each, and the CPU node
-renders **identically** (`OPENSHOT_GPU` stays `off` there — it is not a degraded mode).
+1. **The full `openshot-bench` + `compare` run that the upstream merge still owes** (see "Blocking
+   before the merge branch lands" above). It is the last thing between `feature/gpu-rendering` and
+   `develop`, and it needs a quiet machine — the A/B that stood in for it ran on a box throttled to
+   400 MHz. *Gate:* no scenario more than 5 % slower than `tests/bench/results/baseline-cpu.json`.
+2. **Phase 1 (R1, CPU quick wins)**, smaller than when written — the upstream merge already
+   delivered 1.5's hardware-decode fix and overlaps 1.2's thread budgets. Remaining: 1.1 single
+   `WriteFrame` call (a real production gain the bench cannot show); 1.2 thread budgets; 1.3 RGBA
+   straight into nvenc; **1.4 nvenc rate control — now has a concrete starting point, see item E**;
+   1.5 reader copy removal + threaded swscale; 1.6 `GetImageCV` memoisation.
+3. **Phase 0 leftovers:** **0.5** the six-payload production corpus, **0.6** CI running
+   `tools/golden.sh check` per PR.
 
-*It needs the owner's go-ahead first:* the work is in `../video-rendering-service` (branch `main`),
-a production repo, and verifying it needs a real GPU node. Nothing in this repo is blocked by it, so
-if that go-ahead is not coming, the next-best work is Phase 1 (CPU quick wins, all pure CPU and none
-needing a GPU node) or Phase 0's **0.6** — CI running `tools/golden.sh check` per PR.
+Still awaiting a decision from the owner, unchanged: whether insertion-stable clip sort order is
+what the service wants (`compositing.layer_order`, re-baselined during the merge).
 
-**E. 2.0 — GPU-capable image.** Still owed, and still the thing that stops any of this shipping.
-Lives in `../video-rendering-service` (branch `main`), not in this repo: CUDA/Vulkan base image,
-`graphics` in `NVIDIA_DRIVER_CAPABILITIES`, `libvulkan1` + `vulkan-tools`, drop Google Chrome
-(`Dockerfile` lines 86–89, ~130 MB), `ENCODER=libx264|h264_nvenc` with CPU fallback, pin the digest.
-It must also ship Skia's Vulkan 1.4 headers (see `CLAUDE.md`). *Verify:* the container starts on a
-CPU node **and** a GPU node; `ffmpeg -encoders` lists `h264_nvenc`; `vulkaninfo --summary` shows the
-NVIDIA ICD; one export completes on each. Per the standing constraint the CPU node is not a
-degraded mode — `OPENSHOT_GPU` stays `off` there and the same image must render identically.
-*Needs the owner's go-ahead:* it changes the production service repo and needs a real GPU node to
-verify.
+**E. 2.0 — GPU-capable image.** — ✅ **done, 2026-09-15**, in `../video-rendering-service` branch
+`feature/gpu-rendering` (not `main`). One image, two independent switches, both defaulting to the
+CPU; the CPU node is not a degraded mode.
 
-Still open from Phase 0, not blocking Phase 2: **0.5** the six-payload production corpus and
-**0.6** CI running `tools/golden.sh check` per PR.
+- **Runtime base → the shared CUDA 12.8.1 / FFmpeg 6.1 image**, the one `vfx-processor` and
+  `video-transcoder` already use. That is where `h264_nvenc` comes from, so Ubuntu's `ffmpeg` /
+  `libav*` packages are *removed* from the runtime stage rather than layered on top of it.
+  Google Chrome and `gdebi-core` dropped (~130 MB; nothing in `src/` ever used `CHROME_PATH`).
+  Base images are `ARG`s so CI can pin digests without editing the Dockerfile.
+- **`NVIDIA_DRIVER_CAPABILITIES=compute,utility,video,graphics`.** `graphics` is the load-bearing
+  word — without it NVENC works and Vulkan finds nothing.
+- **`ENCODER=libx264|h264_nvenc`** with a real probe (`RenderBackend`): it opens the encoder once
+  per process and falls back to libx264 with a logged reason. The probe encodes at **320×240** —
+  64×64 is below NVENC's minimum frame size and the first version read that as "no GPU" on a machine
+  that had one.
+- **`OPENSHOT_GPU=off|vulkan|lavapipe`** passed straight to the library; the service only reports
+  what `GpuDevice` resolved to. `libvulkan1` is installed on **every** node because the
+  Graphite-capable `libopenshot.so` names it in `DT_NEEDED`.
+- **`tools/gpu-preflight.sh`** prints driver / NVENC / Vulkan status at container start; purely
+  informational, never fails.
+- **The vendored `libopenshot.so` is now the GPU-Skia build** (soname `.31`, `1.0.0`), with the
+  header tree refreshed to match. It lives in the `cpp-third-party` submodule.
+- **Two library fixes came out of this**, both in `GPU-DECISIONS.md`: `FFmpegWriter::SetOption` now
+  accepts `color_primaries` / `color_trc` / `colorspace` / `color_range` (the x264-only
+  `x264-params` tagging silently did nothing on NVENC), and NVENC no longer inherits upstream's
+  VAAPI-shaped H.264 overrides, which were pinning it to **Main profile at `preset=slow`** with an
+  invalid `tune=zerolatency`. Both encoders now emit profile 100 (High).
 
-**Phase 1 (R1, CPU quick wins) now runs after Phase 2** and is smaller than when written — the
-upstream merge already delivered 1.5's hardware-decode fix and overlaps 1.2's thread budgets.
-Remaining: 1.1 single `WriteFrame` call; 1.2 thread budgets; 1.3 RGBA straight into nvenc;
-1.4 nvenc rate control; 1.5 reader copy removal + threaded swscale; 1.6 `GetImageCV` memoisation.
+*Verified:* `openshot-gpu-checks` 7/7 **inside a container** on a GPU node (`--gpus all`, NVIDIA
+ICD, real A2000) and on a CPU node with `OPENSHOT_GPU` at `off`, `vulkan` and `lavapipe`; the
+preflight reports the NVIDIA ICD on the GPU node and no ICD on the CPU node; `h264_nvenc` probes
+available on the GPU node and falls back on the CPU node; the four-way golden sweep is 292/292.
+
+*What is NOT verified, and needs you:* **the full service image has never been built**, because the
+build-stage base lives in a private registry this machine is not authenticated to
+(`docker pull` → `error getting credentials`). Everything above was verified with a stand-in image
+built from public `nvidia/cuda:12.8.1-runtime-ubuntu24.04` carrying the same capabilities, the same
+Vulkan/NVENC packages, and the real `libopenshot.so` and `gpu-preflight.sh`. Run `gcloud auth login`
+and `docker build .` in the service repo to close the gap, and pin the two base digests while there.
+
+*One plan assumption corrected:* the image does **not** need Skia's Vulkan 1.4 headers, contrary to
+`CLAUDE.md`. libopenshot is vendored as a prebuilt `.so` with Skia static inside, so nothing in the
+image ever compiles against Skia's GPU headers.
 
 ## Known oddities worth a look
 
@@ -402,6 +450,17 @@ Remaining: 1.1 single `WriteFrame` call; 1.2 thread budgets; 1.3 RGBA straight i
 
 ## Log
 
+- 2026-09-15 — **Phase 2 finished: worklist item E / plan step 2.0, the GPU-capable image.**
+  `../video-rendering-service` branch `feature/gpu-rendering`: CUDA/FFmpeg runtime base with
+  `graphics` capability and the Vulkan packages, Chrome dropped, `ENCODER` probed with fallback,
+  `OPENSHOT_GPU` reported at startup, GPU-Skia `libopenshot.so` vendored, helm overlay and README.
+  Two library fixes fell out — codec-agnostic colour tagging in `FFmpegWriter::SetOption`, and NVENC
+  no longer inheriting VAAPI's H.264 overrides (it was emitting Main profile at `preset=slow`).
+  Golden 292/292 four ways; `openshot-gpu-checks` 7/7 inside a container on a GPU node and a CPU
+  node. First measurement on the **A2000**: animated glow text **4.3 → 52 fps at 1080p (12.3×)** and
+  1.3 → 11.4 at 2160p (9.1×); static text is ~5 % *slower* on the GPU, reproducibly, and that is
+  expected rather than a regression. The full service image is still unbuilt — the build-stage base
+  is in a private registry this machine cannot authenticate to.
 - 2026-09-14 — session wrap-up: plan steps 2.5 / 2.6 / 2.7 annotated with what actually happened,
   release gate R2b recorded as met, `GPU-DECISIONS.md` given the three decisions this session took.
   Golden green, tree clean, four commits on `feature/gpu-rendering`.

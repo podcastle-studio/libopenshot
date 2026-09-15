@@ -190,13 +190,18 @@ the frame is already on the GPU, and then the caller just passes its canvas.
 The whole text engine renders on the GPU when one is available. `TextClipReader::renderToQImage`
 picks GPU or raster once per frame and reads back once at the end; every offscreen below it goes
 through `GpuOffscreen::Match(destination, w, h)`, which puts it in the same memory as the canvas it
-will be drawn onto. `text_animated_glow_3` 1.3 → 26.7 fps, `everything` 1.8 → 8.4 fps at 1080p (after the frame-extent
-sizing fix, worklist item A in `doc/gpu-migration/STATUS.md`).
+will be drawn onto. At 1080p on an RTX A2000, `text_animated_glow_3` goes 4.3 → **52 fps** with the
+GPU on and `everything` 5.4 → 8.8 (2026-09-15, `doc/PERFORMANCE-BASELINE.md`). Static text is ~5 %
+*slower* on the GPU — it comes from the resting-frame cache, so there is nothing per frame for the
+GPU to take over. Earlier, lower figures in the docs were measured on an Intel iGPU.
 
 ## Facts that are easy to get wrong
 
-- The service never touches `openshot::Settings`; `HARDWARE_DECODER` is 0 and the codec is
-  hard-coded to libx264 in `ExportData.h`. The runtime image has no GPU today.
+- The service never touches `openshot::Settings`; `HARDWARE_DECODER` is 0. The codec is **no longer
+  hard-coded**: since plan step 2.0 (2026-09-15) `ExportSettings::vCodec` comes from
+  `RenderBackend::videoCodec()`, which reads `ENCODER` (`libx264` default, or `h264_nvenc`), probes
+  it once and falls back to libx264 if no device answers. `OPENSHOT_GPU` is likewise passed through
+  to the library. Both default to the CPU, and the runtime image is GPU-*capable*, not GPU-requiring.
 - Hardware decode (`HARDWARE_DECODER != 0`) throws on the first frame in this fork; the fix is
   plan step 1.5. Upstream 1.0.0 fixed it with `sw_pix_fmt`.
 - Three time→frame conventions and two bezier-handle conventions coexist in the service; see

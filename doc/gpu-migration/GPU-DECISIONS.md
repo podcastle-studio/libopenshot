@@ -351,6 +351,67 @@ layer at alpha 1 would cover fades, but needs an extra surface per frame — whi
 cache *miss*, and the standing constraint forbids slowing the CPU path.
 
 
+### Step 2.0 — the GPU-capable image, and what it did *not* need (2026-09-15)
+
+The service image now runs unchanged on a CPU node and a GPU node.
+`../video-rendering-service` branch `feature/gpu-rendering`.
+
+**The runtime base moves to the shared CUDA 12.8.1 / FFmpeg 6.1 image**
+(`europe-west4-docker.pkg.dev/podcastle-repos/podcastle-dev/cuda12.8.1-cudnn9.7.1-ffmpeg6.1-nvidia24.04:0.1`,
+the one `vfx-processor` and `video-transcoder` already use), not plain `ubuntu:24.04`. That is where
+`h264_nvenc` comes from; Ubuntu's `ffmpeg` / `libav*-dev` packages are consequently **removed** from
+the runtime stage rather than layered on top of it, or the image would carry two copies of the same
+sonames. Google Chrome and `gdebi-core` are dropped: ~130 MB, and nothing in `src/` ever referenced
+`CHROME_PATH`. Base images are `ARG`s so CI can pin digests without editing the Dockerfile.
+
+`NVIDIA_DRIVER_CAPABILITIES=compute,utility,video,graphics`. **`graphics` is the load-bearing word**
+— without it `nvidia-smi` works and NVENC works, but the container runtime does not inject the
+Vulkan ICD, so `OPENSHOT_GPU=vulkan` silently renders on the CPU. That is the failure mode to look
+for first when a GPU node is slower than expected.
+
+**Two things the plan expected that turned out to be wrong:**
+
+- **The image does not need Skia's Vulkan 1.4 headers.** `CLAUDE.md` said it must. It does not:
+  libopenshot is vendored into the service as a *prebuilt* `.so` with Skia static inside, so nothing
+  in the image ever compiles against Skia's GPU headers. What the image does need is `libvulkan1` —
+  on **every** node, GPU or not — because the Graphite-capable `libopenshot.so` names
+  `libvulkan.so.1` in `DT_NEEDED`. With no ICD installed the loader simply reports zero devices,
+  which is the supported answer.
+- **`ENCODER=h264_nvenc` alone was not enough to get usable NVENC output.** See below.
+
+**Fallback is a probe, not a guess.** `RenderBackend::videoCodec()` opens the requested encoder once
+per process and falls back to `libx264` with a logged reason if it fails. The probe encodes at
+**320×240, not 64×64**: NVENC rejects frames below its minimum dimensions ("Frame Dimension less
+than the minimum supported value"), and the first version of the probe read that as "no GPU" on a
+machine that had one. `tools/gpu-preflight.sh` makes the same three checks visible at container
+start and never fails the container.
+
+### FFmpegWriter: colour tagging for every encoder, and NVENC is not VAAPI (2026-09-15)
+
+Two library changes fell out of step 2.0. Both are needed for `h264_nvenc` to be a real option and
+neither touches the software path.
+
+**`SetOption` now accepts `color_primaries` / `color_trc` / `colorspace` / `color_range`.** These
+live on the `AVCodecContext`, not in `priv_data`, so it is one call for every encoder. Before this,
+the only way to tag an H.264 stream was `x264-params colorprim=…:transfer=…:colormatrix=…`, which
+does nothing on any encoder but x264 — the service's BT.709 tagging would have been silently lost
+on NVENC. Verified by encoding with and without: `unknown,unknown,unknown` → `bt709,bt709,bt709`.
+The service's x264 branch is deliberately **left on `x264-params`**, byte-for-byte as it shipped.
+
+**NVENC no longer inherits the VAAPI-shaped H.264 overrides.** Upstream's `USE_HW_ACCEL` block
+applied, to every hardware H.264 encoder, `profile = CONSTRAINED_BASELINE`, `preset = slow` and
+`tune = zerolatency`. On NVENC that is wrong three ways: it supports High profile and B-frames, its
+presets are `p1`..`p7` (legacy `slow` is far slower than wanted by default), and `zerolatency` is
+not one of its `tune` values at all — it fails to parse and logs on every export. Measured effect:
+`h264_nvenc` output came out **profile 77 (Main)** where libx264 gives **100 (High)**, at a preset
+nobody chose. NVENC now keeps whatever the caller set and only has `profile=high` forced, because
+`SetOption("profile")` writes the integer `AVCodecContext` field, which NVENC ignores in favour of
+its private option — there is no way to ask for High from outside. After the change both encoders
+produce profile 100. VAAPI, DXVA2 and VideoToolbox are untouched.
+
+Rate-control tuning proper is still plan step 1.4; the service's NVENC settings (`rc=vbr`, `cq=19`,
+`preset=p5`, `tune=hq`) are a conservative starting point, not a tuned one.
+
 ## Open — decide before plan phase 4
 
 - **Timeline canvas precision.** `kRGBA_8888` (matches today) or `kRGBA_F16` (better blending and
