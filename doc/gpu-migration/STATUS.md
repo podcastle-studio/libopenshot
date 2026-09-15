@@ -3,7 +3,8 @@
 > **Resuming?** Run `/resume`. In short: branch `feature/gpu-rendering`, the golden suite must be
 > green (`tools/golden.sh check`) before and after every change, performance is tracked with
 > `openshot-bench` against `tests/bench/results/baseline-cpu.json`, and the work plan with its
-> numeric gates is `doc/gpu-migration/GPU-RENDER-PLAN.md` section 3.
+> numeric gates is `doc/gpu-migration/GPU-WORKLIST.md` (strict order, W01…W31; the plan holds the
+> reasoning, not the steps).
 > **Read the standing constraint below before planning any step.**
 
 ## Standing constraint — the CPU path ships, the GPU path is an addition
@@ -149,7 +150,7 @@ new algorithm — hence the new **R2a** stop (Skia Vulkan build + glow surfaces 
 ## Phase 2 so far
 
 The plan was reordered on 2026-09-14 so Phase 2 runs before Phase 1; see
-`doc/gpu-migration/GPU-RENDER-PLAN.md` section 3.1 for why. Phase and step numbers are stable
+`doc/gpu-migration/GPU-RENDER-PLAN.md` section 3.1 for why. Those phase and step numbers are stable
 identifiers, not sequence. **What is still to do is the worklist further down, not this list.**
 
 1. **2.0 GPU-capable image** — ✅ **done, 2026-09-15.** (Was step 1.7, moved because Skia Vulkan
@@ -199,10 +200,11 @@ identifiers, not sequence. **What is still to do is the worklist further down, n
 > gate read 6.4 fps, blocked by a 164 MB frame buffer for 920 × 101 of content — see item A for
 > what that actually was.
 
-## Phase 2 worklist — all done (kept for the reasoning)
+## Phase 2 items A–E — all done (kept for the reasoning, not as work)
 
-Items A–D are below; item E (plan step 2.0) is under "Next step", because it is the one that
-finished the phase. Each ended with the four-way golden sweep green at 292/292.
+Historical. These were the ad-hoc A–E labels used while Phase 2 ran; the live, ordered work is
+`GPU-WORKLIST.md` W01…W31. Kept because the measurements and the two rejected approaches below are
+worth not re-discovering. Each ended with the four-way golden sweep green at 292/292.
 
 Originally: do these in order. Each one ends with the four-way golden sweep green at 292/292 and, where it
 claims a speed-up, a back-to-back `openshot-bench` measurement on one machine. Nothing here may
@@ -379,67 +381,24 @@ ask it for you) and none reads the environment for itself — the new `control` 
 
 ## Next step
 
-**Phase 2 is finished.** The work that remains is Phase 1 (CPU quick wins) and the two Phase 0
-leftovers. Nothing is blocked.
+**Phase 2 is finished.** The remaining work is `doc/gpu-migration/GPU-WORKLIST.md`, W01 onwards, in
+that order. One item to a session; the worklist opens with the protocol.
 
-1. **The full `openshot-bench` + `compare` run that the upstream merge still owes** (see "Blocking
-   before the merge branch lands" above). It is the last thing between `feature/gpu-rendering` and
-   `develop`, and it needs a quiet machine — the A/B that stood in for it ran on a box throttled to
-   400 MHz. *Gate:* no scenario more than 5 % slower than `tests/bench/results/baseline-cpu.json`.
-2. **Phase 1 (R1, CPU quick wins)**, smaller than when written — the upstream merge already
-   delivered 1.5's hardware-decode fix and overlaps 1.2's thread budgets. Remaining: 1.1 single
-   `WriteFrame` call (a real production gain the bench cannot show); 1.2 thread budgets; 1.3 RGBA
-   straight into nvenc; **1.4 nvenc rate control — now has a concrete starting point, see item E**;
-   1.5 reader copy removal + threaded swscale; 1.6 `GetImageCV` memoisation.
-3. **Phase 0 leftovers:** **0.5** the six-payload production corpus, **0.6** CI running
-   `tools/golden.sh check` per PR.
+- **W01** — build and pin the real service image. The only thing between the finished GPU work and
+  production. Blocked on registry auth: the build-stage base is private and this machine gets
+  `error getting credentials` from `docker pull`.
+- **W02** — the full `openshot-bench` + `compare` run the upstream merge still owes, on a quiet
+  machine. Gate: nothing more than 5 % slower than `baseline-cpu.json`. This is what stands between
+  `feature/gpu-rendering` and `develop`. It also carries the open `compositing.layer_order` question
+  — clip sort is now insertion-stable rather than address-tie-broken, and someone has to confirm
+  that is what the service wants.
+- **W03, W04** — CI running the golden suite per PR, and the six-payload production corpus. Both are
+  safety net for stage 5, which rewrites `Clip.cpp` and `Timeline.cpp`.
 
-Still awaiting a decision from the owner, unchanged: whether insertion-stable clip sort order is
-what the service wants (`compositing.layer_order`, re-baselined during the merge).
-
-**E. 2.0 — GPU-capable image.** — ✅ **done, 2026-09-15**, in `../video-rendering-service` branch
-`feature/gpu-rendering` (not `main`). One image, two independent switches, both defaulting to the
-CPU; the CPU node is not a degraded mode.
-
-- **Runtime base → the shared CUDA 12.8.1 / FFmpeg 6.1 image**, the one `vfx-processor` and
-  `video-transcoder` already use. That is where `h264_nvenc` comes from, so Ubuntu's `ffmpeg` /
-  `libav*` packages are *removed* from the runtime stage rather than layered on top of it.
-  Google Chrome and `gdebi-core` dropped (~130 MB; nothing in `src/` ever used `CHROME_PATH`).
-  Base images are `ARG`s so CI can pin digests without editing the Dockerfile.
-- **`NVIDIA_DRIVER_CAPABILITIES=compute,utility,video,graphics`.** `graphics` is the load-bearing
-  word — without it NVENC works and Vulkan finds nothing.
-- **`ENCODER=libx264|h264_nvenc`** with a real probe (`RenderBackend`): it opens the encoder once
-  per process and falls back to libx264 with a logged reason. The probe encodes at **320×240** —
-  64×64 is below NVENC's minimum frame size and the first version read that as "no GPU" on a machine
-  that had one.
-- **`OPENSHOT_GPU=off|vulkan|lavapipe`** passed straight to the library; the service only reports
-  what `GpuDevice` resolved to. `libvulkan1` is installed on **every** node because the
-  Graphite-capable `libopenshot.so` names it in `DT_NEEDED`.
-- **`tools/gpu-preflight.sh`** prints driver / NVENC / Vulkan status at container start; purely
-  informational, never fails.
-- **The vendored `libopenshot.so` is now the GPU-Skia build** (soname `.31`, `1.0.0`), with the
-  header tree refreshed to match. It lives in the `cpp-third-party` submodule.
-- **Two library fixes came out of this**, both in `GPU-DECISIONS.md`: `FFmpegWriter::SetOption` now
-  accepts `color_primaries` / `color_trc` / `colorspace` / `color_range` (the x264-only
-  `x264-params` tagging silently did nothing on NVENC), and NVENC no longer inherits upstream's
-  VAAPI-shaped H.264 overrides, which were pinning it to **Main profile at `preset=slow`** with an
-  invalid `tune=zerolatency`. Both encoders now emit profile 100 (High).
-
-*Verified:* `openshot-gpu-checks` 7/7 **inside a container** on a GPU node (`--gpus all`, NVIDIA
-ICD, real A2000) and on a CPU node with `OPENSHOT_GPU` at `off`, `vulkan` and `lavapipe`; the
-preflight reports the NVIDIA ICD on the GPU node and no ICD on the CPU node; `h264_nvenc` probes
-available on the GPU node and falls back on the CPU node; the four-way golden sweep is 292/292.
-
-*What is NOT verified, and needs you:* **the full service image has never been built**, because the
-build-stage base lives in a private registry this machine is not authenticated to
-(`docker pull` → `error getting credentials`). Everything above was verified with a stand-in image
-built from public `nvidia/cuda:12.8.1-runtime-ubuntu24.04` carrying the same capabilities, the same
-Vulkan/NVENC packages, and the real `libopenshot.so` and `gpu-preflight.sh`. Run `gcloud auth login`
-and `docker build .` in the service repo to close the gap, and pin the two base digests while there.
-
-*One plan assumption corrected:* the image does **not** need Skia's Vulkan 1.4 headers, contrary to
-`CLAUDE.md`. libopenshot is vendored as a prebuilt `.so` with Skia static inside, so nothing in the
-image ever compiles against Skia's GPU headers.
+Then W05–W10 (CPU quick wins), W11 (the four decisions), W12–W18 (the GPU compositor — the big one,
+and where the remaining CPU time is), W19–W21 (effects as shaders), W22–W25 (frames stay on the GPU
+— last, because it only pays after W12), W26–W28 (remove Qt), W29–W31 (frames in flight, density,
+observability).
 
 ## Known oddities worth a look
 

@@ -19,13 +19,17 @@ Other project commands: `/check` (golden suite + visual diff), `/bench` (perform
 1. `doc/gpu-migration/STATUS.md` — where the work is right now and what the next step is. **Read it
    before doing anything, and update it at the end of any session that changed code, plans or
    decisions.**
-2. `doc/gpu-migration/GPU-RENDER-PLAN.md` — the multi-phase plan to move rendering fully onto the
-   GPU and remove Qt. Sections 0–2 are background (measurements, GPU primer, Qt inventory);
-   section 3 is the step list; section 4 sizes CPU/RAM/VRAM/NVENC for N parallel export processes.
-3. `tests/golden/README.md` — the regression suite that gates every change.
-4. `doc/PERFORMANCE-BASELINE.md` — benchmark history (`tests/bench`, `openshot-bench`). Re-run at the
+2. `doc/gpu-migration/GPU-WORKLIST.md` — **the work itself**, in strict execution order as
+   W01…W31, one item to a session, each with sub-tasks, dependencies and a numeric gate. Read only
+   the item you are doing. It opens with the protocol for running one item and clearing the context
+   afterwards.
+3. `doc/gpu-migration/GPU-RENDER-PLAN.md` — the reasoning behind the worklist, not a step list:
+   measurements (§0), the GPU primer and why Skia/Graphite/Vulkan (§1), the Qt inventory (§2),
+   sizing for N parallel exports (§4), the parity policy (§5), standing gotchas (§6).
+4. `tests/golden/README.md` — the regression suite that gates every change.
+5. `doc/PERFORMANCE-BASELINE.md` — benchmark history (`tests/bench`, `openshot-bench`). Re-run at the
    end of every optimisation phase, commit the JSON under `tests/bench/results/`, append the table.
-5. `doc/gpu-migration/GPU-DECISIONS.md` — decisions already taken (do not re-litigate) and the ones
+6. `doc/gpu-migration/GPU-DECISIONS.md` — decisions already taken (do not re-litigate) and the ones
    still open.
 
 ## Repo map

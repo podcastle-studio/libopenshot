@@ -1,0 +1,591 @@
+# GPU migration — the worklist
+
+**This is the file you work from.** One strict order, one item at a time. The reasoning behind the
+items — measurements, the GPU primer, the Qt inventory, sizing for parallel exports — stays in
+`GPU-RENDER-PLAN.md`, which no longer carries a step list of its own.
+
+Numbering here is **sequence**: W01 runs before W02. Each item also carries its legacy plan id
+(`2.4`, `3.1`, …) because `STATUS.md`, `GPU-DECISIONS.md` and the commit history refer to those, and
+those ids are *not* in execution order, which is what made the plan hard to follow.
+
+---
+
+## How to run one item
+
+Each item is written so a session that has read nothing else can execute it.
+
+1. Read `CLAUDE.md` and `doc/gpu-migration/STATUS.md`.
+2. Read **only** the item you are doing, plus anything its *Depends on* line names.
+3. `tools/golden.sh check` green **before** touching anything. If it is not, stop and fix that first.
+4. Work the sub-tasks in order.
+5. Run the item's **Gate** and record the actual number.
+6. Commit. Add one line to the `## Log` in `STATUS.md` with the number. Tick the sub-tasks here.
+7. **Stop. Clear the context.** Do not start the next item in the same session.
+
+Rules that apply to every item without being repeated in it:
+
+- The four-way golden sweep (CPU Skia; GPU Skia off; Vulkan; lavapipe) is the acceptance test, all
+  four at 292/292. Commands in `CLAUDE.md`.
+- The CPU path ships. Never delete CPU code because the GPU makes it unnecessary — gate it on
+  `GpuDevice::available()` and keep the branch.
+- Parity classes (`exact` / `close` / `redefine`) and what each permits: `GPU-RENDER-PLAN.md` §5.
+- A change that is *meant* to move pixels: review every failing triptych, re-baseline only those
+  scenarios, commit the PNGs with the code.
+- Anything that fails its gate is reverted or flagged off. It does not stay merged "to fix later".
+
+**Status line:** W01–W04 open · W05 onwards not started · everything before W01 is done
+(see `STATUS.md`).
+
+---
+
+## Stage 1 — Ship what is already built
+
+Phase 2 is code-complete and measured (glow text 4.3 → 52 fps on an A2000, a real 30 s payload 2.1×)
+but runs on a developer machine and nowhere else. These two items are what turn it into production.
+
+### W01 — Build and pin the real service image · legacy `2.0` remainder
+
+**Goal.** The actual image builds and is pinned, not just the stand-in.
+**Depends on.** Nothing. `../video-rendering-service` branch `feature/gpu-rendering` already has the
+Dockerfile, the `ENCODER` probe, `OPENSHOT_GPU` plumbing and `tools/gpu-preflight.sh`.
+**Why it is blocked today.** The build-stage base is in a private registry this machine is not
+authenticated to (`docker pull` → `error getting credentials`).
+
+- [ ] `gcloud auth login`, then `docker build .` in the service repo — the full two-stage build.
+- [ ] Resolve both base images to digests; set them as the `BUILD_BASE` / `RUNTIME_BASE` `ARG`
+      defaults.
+- [ ] Confirm the build stage really has Skia headers. The service includes them transitively
+      (`text/TextClipReader.h` → `TextGlowRenderer.h` → `<skia/...>`) and nothing in the repo
+      installs them, so the base must — if it does not, the `find_path` added to `CMakeLists.txt`
+      needs a corresponding install step in the Dockerfile.
+- [ ] Push to the dev registry and deploy to a CPU node with the defaults.
+- [ ] Deploy to a GPU node with `helm/values_gpu_example.yaml`.
+
+**Gate.** Container starts on a CPU node **and** a GPU node. `vulkaninfo --summary` shows the NVIDIA
+ICD on the GPU node. `ffmpeg -encoders` lists `h264_nvenc`. One export completes on each, and the
+CPU node's output is identical to today's.
+**Done when.** Both nodes have completed an export and `STATUS.md` records the image digest.
+**Size.** ~1 day, mostly waiting on infrastructure.
+
+### W02 — The full post-merge benchmark · merge gate
+
+**Goal.** Clear the last thing standing between `feature/gpu-rendering` and `develop`.
+**Depends on.** Nothing. Needs a **quiet machine** — the A/B that stood in for this ran on a box
+throttled to 400 MHz and both builds landed ~40 % under baseline.
+
+- [ ] Full `openshot-bench --label r2` run (195 cases, ~90 min). Do not run anything else on the box.
+- [ ] `openshot-bench compare tests/bench/results/baseline-cpu.json r2.json --md`.
+- [ ] Commit the JSON and append the table to `doc/PERFORMANCE-BASELINE.md`.
+- [ ] Resolve the open question on `compositing.layer_order`: clip sort is now insertion-stable
+      rather than address-tie-broken. Confirm with the service owner that this is the wanted
+      behaviour, or fix the layer collision so it cannot arise.
+
+**Gate.** No scenario more than 5 % slower than `baseline-cpu.json`.
+**Done when.** The comparison is committed and the layer-order question is answered in
+`GPU-DECISIONS.md`.
+**Size.** ~half a day plus machine time.
+
+---
+
+## Stage 2 — Safety net, before anything rewrites the render path
+
+Stage 5 rewrites `Clip.cpp` and `Timeline.cpp`. Do these first or the rewrite has no net under it.
+
+### W03 — CI: golden suite on every PR · legacy `0.6`
+
+**Goal.** The suite runs without anyone remembering to run it.
+
+- [ ] `tools/golden.sh check` on every PR, on the 8-core runner.
+- [ ] Publish `golden-report/` as a build artifact so a failing triptych can be looked at.
+- [ ] `openshot-bench --quick` on merges to `develop`, appended to a trend file.
+
+**Gate.** A PR that deliberately shifts one pixel fails CI.
+**Done when.** A deliberate-regression PR has been opened and seen to fail.
+**Size.** ~1 day.
+
+### W04 — Production payload corpus · legacy `0.5`
+
+**Goal.** Catch JSON→timeline regressions the golden suite structurally cannot see, because it
+drives the library directly and never parses a payload.
+**Depends on.** `tools/render-payload` in the service repo, which already does one payload offline.
+
+- [ ] Collect six real payloads with their media, covering: text animations, subtitles, transitions,
+      PiP/layout, chroma key + LUT, 4K source.
+- [ ] Script them through `render-payload`, two rounds each.
+- [ ] Hash the output frames; store the hashes.
+- [ ] Wire into CI behind a nightly, not per-PR (media is large).
+
+**Gate.** All six render without error; frame hashes stable across two runs. (Both paths were
+already deterministic on the first payload — two rounds byte-identical each.)
+**Done when.** The nightly has run green twice.
+**Size.** ~2 days, mostly collecting payloads.
+
+---
+
+## Stage 3 — CPU wins that survive the GPU move
+
+All pure CPU, none needs a GPU node, any order among themselves. They are here rather than later
+because W05–W08 keep their value after Stage 5 and 7; W10 does not (see its note).
+
+The honest framing from the baseline: the encoder is 0–30 % of wall time depending on the scenario,
+so this stage helps `single_video` and `source_4k` and does **essentially nothing** for
+`everything`, `text_animated_glow_3` or `heavy_effects`. Do not expect "1.5–2× exports" from it.
+
+### W05 — Service: one `WriteFrame` call · legacy `1.1`
+
+**Goal.** Stop chunking the export into 8-frame calls, which drains the writer pipeline every chunk.
+**Note.** `openshot-bench` already calls `WriteFrame` once for the whole range, so the bench
+**cannot** show this win. Measure it on the service with `tools/render-payload`.
+
+- [ ] Replace the 8-frame loop in `VideoRenderingImpl.cpp` with one `WriteFrame(&timeline, start, end)`.
+- [ ] Add `FFmpegWriter::SetProgressCallback`; drive progress publishing from it.
+- [ ] Raise `pipeline_queue_capacity_` from 8 to 16.
+- [ ] Flag `RENDER_SINGLE_WRITEFRAME=0` restores chunking.
+
+**Gate.** One production payload ≥ **15 %** faster wall-clock through `render-payload`; progress
+messages still arrive at least every second; golden green (library unchanged).
+**Risk.** Progress granularity regressions — that is what the second half of the gate is for.
+**Size.** ~1 day.
+
+### W06 — Service: thread budgets · legacy `1.2`
+
+**Goal.** Stop N processes each assuming they own the whole box.
+**Note.** The upstream merge brought thread-budget settings that overlap this; check what landed
+before writing anything.
+
+- [ ] Derive `Settings::FF_THREADS` and `OMP_THREADS` from `/sys/fs/cgroup/cpu.max` divided by
+      `SERVICE_NUM_INSTANCES_PARALLEL`, minimum 2.
+- [ ] Env override `OPENSHOT_THREADS`.
+
+**Gate.** In an 8-CPU container with 2 processes, no process exceeds ~400 % CPU and wall time does
+not regress. On the dev box `openshot-bench --threads 4` within 10 % of `--threads 16` on
+`single_video`.
+**Size.** ~half a day.
+
+### W07 — `Frame::GetImageCV` memoisation · legacy `1.6`
+
+**Goal.** Stop two colour conversions per call in the effect chain.
+**Note.** W15 and W21 delete most callers. Worth doing anyway — it is cheap and the effect and
+transition scenarios are slow today.
+
+- [ ] Cache `imagecv` with a dirty flag set by `AddImage`.
+- [ ] `SetImageCV` reuses the buffer instead of allocating two conversions per call.
+
+**Gate.** `transitions_chain` 1080p render ≥ **33 fps** (27.4); `heavy_effects` ≥ **13 fps** (11.5);
+golden green **with no updates**.
+**Risk.** A stale cache shows as a frozen frame inside an effect chain — the `effects.*` and
+`transitions.*` scenarios cover it.
+**Size.** ~1 day.
+
+### W08 — Reader: remove copies, thread swscale · legacy `1.5` (copy half)
+
+**Goal.** Delete the per-frame `memset` + `av_image_copy` and let swscale use more than one thread.
+**Note.** The hardware-decode crash fix that used to be part of `1.5` **arrived with the upstream
+merge** — do not re-do it. `HARDWARE_DECODER` stays 0; W23 is what makes hardware decode pay.
+
+- [ ] Drop the `memset` and the `av_image_copy` in `GetAVFrame` / `ProcessVideoPacket`.
+- [ ] Build the scaler with `sws_alloc_context` + `av_opt_set_int(ctx, "threads", n)`.
+- [ ] Run the golden suite once under ASan — `pFrame` must outlive the scale.
+
+**Gate.** Golden green **with no golden updates** (copy removal must be bit-identical; if swscale
+threading moves pixels that is a finding, investigate before re-baselining). `source_4k` 1080p
+render ≥ **70 fps** (61); `single_video` render ≥ **125 fps** (117).
+**Size.** ~2 days.
+
+### W09 — Writer: finish nvenc rate control · legacy `1.4` remainder
+
+**Goal.** Finish what landed as a side effect of the image work.
+**Already done (2026-09-15).** The library no longer forces `preset slow`, `tune zerolatency` or
+constrained-baseline profile on NVENC; it sets `profile=high` and keeps caller settings. The service
+asks for `rc vbr`, `cq 19`, `preset p5`, `tune hq`. Both encoders emit profile 100.
+
+- [ ] Add `b_ref_mode middle` and `spatial-aq 1`.
+- [ ] Stop `SetOption("crf")` hijacking the bitrate when hardware encode is on.
+- [ ] Guard the `hw_en_on`-only branches with `hw_en_supported`.
+- [ ] Run the VMAF comparison that has never been run.
+
+**Gate.** VMAF of the nvenc output ≥ VMAF of the x264 output − 2 points on `podcast_pip`; file size
+within ±20 %; `single_video` nvenc fps does not regress.
+**Size.** ~1 day.
+
+### W10 — Writer: nvenc without the CPU conversion · legacy `1.3` · **optional**
+
+**Goal.** Feed nvenc `rgba` directly instead of converting on the CPU.
+**Read this before starting.** W25 replaces this code entirely — there the frame is already a GPU
+texture and never touches the CPU. Do W10 **only** if you need the nvenc win before Stage 7 lands.
+If Stage 7 is close, skip it.
+
+- [ ] When the codec name contains `_nvenc`: `pix_fmt = AV_PIX_FMT_RGBA`, drop `hw_frames_ctx` and
+      the manual `av_hwframe_transfer_data`, wrap `Frame::GetPixels()` in an `AVFrame`.
+- [ ] Delete the per-frame `av_malloc` + `memcpy` in `process_video_packet`.
+- [ ] Stop draining `avcodec_receive_packet` after every frame.
+- [ ] Colour tagging is already handled — `SetOption("color_primaries"/"color_trc"/"colorspace")`
+      landed with the image work.
+- [ ] Flag `OPENSHOT_NVENC_RGBA=0`.
+
+**Gate.** `single_video` 1080p nvenc ≥ **105 fps** (75); `source_4k` nvenc ≥ **60 fps** (46);
+`tools/golden.sh check --filter export` green; nvenc vs x264 on a BT.709 chart within 2 LSB mean.
+**Size.** ~2 days.
+
+> **Release gate R1** (after W05–W09, W10 if taken). Full `openshot-bench --label r1`;
+> `single_video` nvenc ≥ 105 fps, `source_4k` render ≥ 70 fps, nothing more than 5 % slower than
+> baseline, golden green. Ship behind `ENCODER=` and shadow for a week.
+
+---
+
+## Stage 4 — Decide before the compositor
+
+### W11 — Record the four open decisions · legacy `4.0`
+
+**Goal.** Four choices that Stage 5 and Stage 6 both bake in. Deciding them mid-rewrite means
+redoing work.
+**Why it moved.** The plan listed this as `4.0`, but `3.1` already depends on the canvas-precision
+answer. This is the ordering bug the renumbering exists to fix.
+
+- [ ] **Canvas precision.** `kRGBA_8888` (matches today) or `kRGBA_F16` (better blending and blur,
+      enables 10-bit output, doubles canvas memory). Recommendation on file: F16 for the timeline
+      canvas, 8888 for cached textures.
+- [ ] **Graphite only, or Ganesh Vulkan as a fallback backend.** Both build today
+      (`SKIA_ENABLE_GANESH=true`); decide whether to keep the second alive.
+- [ ] **LUT rounding reference.** Native `ColorMap.cpp` or the WASM `LutApply.cpp` the front end
+      runs — they already disagree. Matching the front end closes an editor-vs-export gap.
+- [ ] **Nearest-neighbour sampling** in `BORDER_REFLECTED_ROTATION` and `DISPLACEMENT_MAP`: keep for
+      bit-parity, or switch to bilinear and re-baseline.
+
+**Gate.** All four written into `GPU-DECISIONS.md` with the reasoning and a "revisit if" line.
+**Size.** ~half a day of discussion, no code.
+
+---
+
+## Stage 5 — The GPU compositor (R3)
+
+**The big one, and where the remaining CPU time actually is.** Baseline attribution: `grid_3x3`
+spends 12 of 19 stack samples in Qt raster `drawImage` + `apply_background`; `heavy_effects` and
+`blend_stack_5` are the same shape. W12–W15 are strictly sequential. W16–W18 can run in parallel
+once W13 lands.
+
+### W12 — Timeline canvas on the GPU · legacy `3.1`
+
+**Depends on.** W11 (canvas precision).
+
+- [ ] `Timeline::GetFrame` takes its output surface from `GpuSurfacePool` and passes its `SkCanvas`
+      down through `add_layer`.
+- [ ] `Frame` gains a `GpuFrame`; `GetImage()` on a GPU frame does one cached readback so every
+      unported path still works.
+- [ ] The writer still reads back once per frame — that is the last CPU copy, removed in W25.
+
+**Gate.** Golden green across the board (PSNR ≥ 50 dB vs the CPU goldens — that is what the suite is
+for); `single_video` render not slower than baseline.
+**Size.** ~1 week.
+
+### W13 — `Clip::draw(SkCanvas&)` · legacy `3.2`
+
+**Depends on.** W12.
+
+- [ ] Collapse `apply_keyframes` + `apply_background` into one draw.
+- [ ] `get_transform` returns an `SkMatrix` from the same arithmetic; paint alpha from the opacity
+      curve; `SkBlendMode` from `blend_mode`; `SkSamplingOptions(kLinear, kLinear)`.
+- [ ] Unit test: 200 random keyframe sets through the old `QTransform` and the new `SkMatrix`, six
+      affine coefficients compared to 1e-6.
+
+**Gate.** `tools/golden.sh check --filter compositing` — all 16 blend modes within PSNR 48 dB;
+`grid_3x3` render ≥ **45 fps** (23).
+**Size.** ~1 week.
+
+### W14 — Blur, shadow, crop, flip on the paint · legacy `3.3`
+
+**Depends on.** W13.
+
+- [ ] `SkImageFilters::Blur` with the existing box→sigma mapping.
+- [ ] `SkImageFilters::DropShadowOnly` with the same offset and colour.
+- [ ] `clipRRect` for crop; negative scale for flip.
+- [ ] Delete `get_shadow_image`, the local `gaussian_blur` and the scalar opacity loop.
+
+**Gate.** `tools/golden.sh check --filter clipfx` (SSIM ≥ 0.97 on shadows, PSNR ≥ 40 dB on blur);
+`podcast_pip` render ≥ **45 fps** (23).
+**Size.** ~3 days.
+
+### W15 — Delete `BlendModes.cpp` · legacy `3.4`
+
+**Depends on.** W14.
+
+- [ ] Delete `BlendModes.cpp` and the `GetImageCV` calls in `Clip.cpp`.
+
+**Gate.** `grep -c QPainter src/Clip.cpp src/Timeline.cpp` is 0; `blend_stack_5` render ≥ **50 fps**
+(19); golden green.
+**Size.** ~2 days.
+
+### W16 — Image and SVG readers on Skia · legacy `3.5`
+
+**Depends on.** W13. Parallel with W17, W18.
+
+- [ ] `SkCodec` for PNG/JPEG, honouring EXIF orientation.
+- [ ] Skia's SVG module or resvg for shapes; one texture cached per reader.
+- [ ] Replaces `QtImageReader`.
+
+**Gate.** 20 production PNG/JPEG and 20 shape SVGs at PSNR ≥ 50 dB vs `QtImageReader`; transparent
+PNG edges show no fringing over a coloured background; `tools/golden.sh check --filter readers`.
+**Size.** ~1 week.
+
+### W17 — Subtitles and text into the timeline canvas · legacy `3.6`
+
+**Depends on.** W12. Parallel with W16, W18.
+**Note.** The capability already exists — `SubtitleManager::renderAtFrame(SkCanvas*, w, h, frame)`
+was added in Phase 2 and is bit-identical on GPU and raster. The Timeline passes a raster canvas on
+purpose, because a full-frame round trip costs 5.6 ms at 1080p against 0.27 ms of drawing. **Once
+W12 lands the frame is already on the GPU and that arithmetic inverts** — this item is then mostly
+deleting the raster wrapper.
+
+- [ ] Timeline passes its own canvas to `SubtitleManager::renderAtFrame`.
+- [ ] Same for the text reader — no intermediate surface, no readback.
+
+**Gate.** `subtitles_words` render ≥ **120 fps**; golden green.
+**Size.** ~2 days.
+
+### W18 — Qt off the render path · legacy `3.7`
+
+**Depends on.** W13. Parallel with W16, W17.
+
+- [ ] Build options `ENABLE_PLAYER=OFF` and `ENABLE_MAGICK=OFF`.
+- [ ] Replace `QString`/`QDir`/`QFile`/`QRegularExpression` in `Timeline`, `Profiles`, `ColorMap`,
+      `ChunkReader/Writer` with the standard library.
+- [ ] `Color` without `QColor`.
+- [ ] Unit tests for path rewriting, `.cube` parsing, hex colour round-trips.
+
+**Gate.** Golden green; `grep -rn QPainter src/*.cpp src/effects/*.cpp` matches only files behind
+`ENABLE_LEGACY_EFFECTS`.
+**Size.** ~1 week.
+
+> **Release gate R3.** `grid_3x3` ≥ 60 fps, `blend_stack_5` ≥ 50 fps, `podcast_pip` ≥ 45 fps,
+> `single_video` ≥ 200 fps, `everything` ≥ 8 fps, all 1080p; golden green; no `QPainter` on the
+> render path. Default `OPENSHOT_GPU=vulkan` on GPU nodes.
+
+---
+
+## Stage 6 — Effects and transitions as shaders (R4, first half)
+
+Depends on W12/W13 only — **not** on Stage 7. Can run in parallel with Stage 7 and with each other.
+
+### W19 — `GpuEffect` base and the per-pixel shaders · legacy `4.5`
+
+- [ ] `GpuEffect` base class.
+- [ ] One SkSL fragment each, with a parity test against the C++ twin: Alpha, Brightness, Exposure,
+      ColorShift, Bars, ChromaKey, ColorAdjustment, LightAdjustment, Enhancement, ColorMap (3-D LUT
+      texture), Mask, Crop, CameraMovement.
+
+**Gate per effect.** PSNR ≥ 48 dB vs the CPU effect on eight test images including transparent and
+semi-transparent pixels, ≤ 0.2 ms at 1080p.
+**Gate.** `heavy_effects` render ≥ **60 fps** (11.5); `chroma_key_green` ≥ **70 fps** (12.9);
+`tools/golden.sh check --filter effects`.
+**Size.** ~2 weeks.
+
+### W20 — Transition shaders · legacy `4.6`
+
+- [ ] Port the `image-processing-lib` vocabulary to SkSL: box/diagonal/rotational/zoom blur, zoom,
+      border-reflected move and rotation, threshold wipe, circle mask, split shift, colour shift.
+- [ ] Keep the sources in `image-processing-lib/shaders/` so CanvasKit can load the same code.
+- [ ] The C++ stays as the oracle.
+
+**Gate.** PSNR ≥ 45 dB against the OpenCV version at three parameter values each;
+`transitions_chain` render ≥ **70 fps** (27.4).
+**Size.** ~1.5 weeks.
+
+### W21 — Overlay clips as textures · legacy `4.7`
+
+**Depends on.** W19.
+
+- [ ] Overlay renders to a pooled surface; additive blend becomes `kPlus` on RGB via a runtime
+      blender; displacement map becomes a two-texture shader.
+- [ ] Deletes the last `GetImageCV` round trips.
+
+**Gate.** `tools/golden.sh check --filter overlay`; a transition frame costs no more than a plain
+two-clip frame ±10 %.
+**Size.** ~3 days.
+
+---
+
+## Stage 7 — Frames never leave the GPU (R4, second half)
+
+**This is the decode/encode chunk, and it is last for a reason.** NVENC and hardware decode already
+exist in the library and barely move the needle: main-thread samples of an nvenc export are 60 % Qt
+compositing, 25 % writer `sws_scale`, ~**0 % encoding**, and nvenc alone took a trivial export 62 →
+82 fps and heavy ones nowhere. The reason is that the frame is read back to the CPU and colour
+converted either way. **W25 only pays once W12 has put the frame on the GPU.** Strictly sequential.
+
+### W22 — `src/gpu/CudaInterop` · legacy `4.1`
+
+- [ ] Import a Vulkan image's memory and semaphore into CUDA (`vkGetMemoryFdKHR` →
+      `cuImportExternalMemory`, `cuImportExternalSemaphore`).
+- [ ] `copyNV12(AVFrame* cudaFrame, GpuImage& y, GpuImage& uv, stream)` as two device-to-device
+      `cuMemcpy2DAsync`.
+
+**Gate.** Fill a CUDA NV12 buffer with a known pattern, copy, sample both planes in a trivial SkSL
+shader, read back, compare **exactly**; clean under `compute-sanitizer`; ≤ **0.3 ms** per 4K frame.
+**Size.** ~1 week. ~300 lines.
+
+### W23 — Reader keeps frames on the GPU · legacy `4.2`
+
+**Depends on.** W22.
+**Note for this deployment.** H.264 only means NVDEC coverage is not a risk — the "extend to HEVC,
+VP9, AV1, MPEG-4" sub-task is optional here.
+
+- [ ] Decoder output stays `AV_PIX_FMT_CUDA`.
+- [ ] YUV→RGBA becomes an SkSL pass (matrix and range from the stream, default BT.709 at ≥ 720p)
+      that also applies the pre-scale.
+- [ ] Remove `DE_LIMIT_*`. Software decode + `upload()` stays the fallback.
+- [ ] *(optional)* extend `IsHardwareDecodeSupported` to HEVC, VP9, AV1, MPEG-4.
+
+**Gate.** Decode-only 4K ≥ **120 fps** and < 1 core; decoded frame vs software decode PSNR ≥ 48 dB;
+a BT.709 chart decodes to the right sRGB values.
+**Expected re-baseline.** This intentionally *differs* from the CPU goldens, which apply swscale's
+BT.601 default. Record it in `GPU-DECISIONS.md` and re-baseline the affected `readers.*` scenarios
+once.
+**Size.** ~1.5 weeks.
+
+### W24 — Decode read-ahead · legacy `4.3`
+
+**Depends on.** W23.
+
+- [ ] One thread per reader keeps four decoded surfaces ahead for sequential access; seeks flush it.
+
+**Gate.** Decode no longer appears in an `nsys`/gdb profile of `source_4k`; `source_4k` x264 ≥
+**90 fps** (47.5).
+**Size.** ~3 days.
+
+### W25 — Writer consumes textures · legacy `4.4`
+
+**Depends on.** W12, W22.
+
+- [ ] Allocate `hw_frames_ctx` (NV12, or P010 for 10-bit).
+- [ ] RGBA→NV12 as an SkSL pass into a CUDA-mapped buffer.
+- [ ] Send `AV_PIX_FMT_CUDA` frames; keep the encoder queue four deep.
+- [ ] Software encoders keep the readback path.
+
+**Gate.** `single_video` 1080p nvenc ≥ **250 fps**; 2160p ≥ **60 fps**; CPU per export < **2 cores**;
+RGBA→NV12→RGBA round trip within 1 LSB.
+**Size.** ~1.5 weeks.
+
+> **Release gate R4.** `heavy_effects` ≥ 60 fps, `chroma_key_green` ≥ 70 fps, `transitions_chain`
+> ≥ 70 fps, `grid_3x3` ≥ 90 fps, `everything` ≥ 20 fps, all 1080p; CPU per export < 2 cores; golden
+> green with only the documented BT.709 re-baseline.
+
+---
+
+## Stage 8 — Remove Qt and the rest of the CPU stack (R5)
+
+**This phase must not alter rendering.** Zero pixel change versus R4 is its gate.
+
+### W26 — `Frame` drops `QImage` · legacy `5.1`
+
+- [ ] `readback()` returns an `SkPixmap`.
+- [ ] The golden harness's `Image.cpp` switches to `SkPngEncoder`/`SkPngDecoder` — that file is the
+      suite's only Qt user, by design.
+
+**Size.** ~3 days.
+
+### W27 — Delete the dead code · legacy `5.2`
+
+**Depends on.** W26.
+
+- [ ] Delete `BlendModes.cpp`, `QtImageReader`, `QtTextReader`, `QtHtmlReader`, `TextReader`,
+      ImageMagick `ImageReader`/`ImageWriter`/`MagickUtilities`, `CacheDisk`,
+      `ScreenCaptureReader*`, `src/Qt/*`, `QtPlayer`, `PlayerBase`, `RendererBase`, `FrameScope`.
+- [ ] The unported effects in `GPU-RENDER-PLAN.md` §2.4 go too, unless product asks for them.
+
+**Size.** ~2 days.
+
+### W28 — Remove the dependencies from the build · legacy `5.3`
+
+**Depends on.** W27.
+
+- [ ] Remove `find_package(Qt…)`, ImageMagick and babl from `src/CMakeLists.txt`.
+- [ ] Remove `Qt5::Widgets/Gui` from the service; rebuild the image without Qt, Chrome and
+      ImageMagick.
+- [ ] Keep the Skia raster backend as the no-GPU fallback — it costs nothing and keeps laptops and
+      CI working. **This is not optional; see the standing constraint.**
+
+**Gate.** `ldd libopenshot.so | grep -ci qt` is 0; image at least **300 MB** smaller; golden green
+with **zero** pixel change versus R4; the service builds on a machine with no Qt installed.
+**Size.** ~3 days.
+
+---
+
+## Stage 9 — Depth and density (R6)
+
+### W29 — Frames in flight · legacy `6.1`
+
+**This is the "frames are rendered one by one" item.**
+**Read this first.** Rendering frames N and N+1 on two CPU threads was **considered and rejected**:
+Graphite uses one `Context` per process and gets parallelism from pipeline depth, not width, so that
+machinery would be thrown away here. Width is left to the process manager, which the service already
+does.
+
+- [ ] A ring of four pooled canvases with a fence each: record frame n+2 while n+1 executes and n
+      encodes.
+- [ ] Remove `Timeline::getFrameMutex` from the read path. Keep it for edits.
+
+**Gate.** `everything` 1080p ≥ **30 fps**; GPU busy ≥ **70 %** during a 1080p export (NVML); no VRAM
+growth over 10 000 frames.
+**Size.** ~1 week.
+
+### W30 — Density · legacy `6.2`
+
+**Depends on.** W29.
+
+- [ ] Re-run `openshot-bench --parallel 1,2,4` on the target GPU SKU.
+- [ ] Set `SERVICE_NUM_INSTANCES_PARALLEL`, the GPU time-slicing replica count and the pod requests
+      from the measurements.
+- [ ] Update `GPU-RENDER-PLAN.md` §4 with real numbers instead of laptop estimates.
+
+**Gate.** Four concurrent 1080p exports each ≥ 2× real time on an L4; aggregate ≥ 3.2× a single
+export.
+**Size.** ~3 days.
+
+### W31 — Observability · legacy `6.3`
+
+- [ ] Per export: frames, wall time, GPU busy %, NVENC/NVDEC utilisation, VRAM peak, fallback events.
+
+**Gate.** The numbers appear for a production export and match `nvidia-smi` within 10 %.
+**Size.** ~2 days.
+
+> **Release gate R6 / end state.** 1080p `everything` ≥ 30 fps (real time, a 17× improvement),
+> 4K `everything` ≥ 10 fps, CPU per export < 2 cores, four concurrent 1080p exports per L4.
+
+---
+
+## Legacy id → worklist id
+
+For reading old commits, `STATUS.md` and `GPU-DECISIONS.md`.
+
+| legacy | here | legacy | here |
+|---|---|---|---|
+| 0.1–0.4 | done (R0) | 3.4 | W15 |
+| 0.5 | W04 | 3.5 | W16 |
+| 0.6 | W03 | 3.6 | W17 |
+| 1.1 | W05 | 3.7 | W18 |
+| 1.2 | W06 | 4.0 | **W11** (moved earlier) |
+| 1.3 | W10 (optional) | 4.1 | W22 |
+| 1.4 | W09 (half already done) | 4.2 | W23 |
+| 1.5 | W08 (hw-decode half done) | 4.3 | W24 |
+| 1.6 | W07 | 4.4 | W25 |
+| 2.0 | done, W01 is the remainder | 4.5 | W19 |
+| 2.1–2.4 | done | 4.6 | W20 |
+| 2.5 | rejected on measurement | 4.7 | W21 |
+| 2.6 | done differently (glow cache) | 5.1–5.3 | W26–W28 |
+| 2.7 | done; W17 finishes it | 5.4 | policy, not a step |
+| 3.1 | W12 | 6.1 | W29 |
+| 3.2 | W13 | 6.2 | W30 |
+| 3.3 | W14 | 6.3 | W31 |
+
+## Releasable builds
+
+| build | items | key gate (1080p) |
+|---|---|---|
+| R0 ✅ | — | suite green, baseline recorded |
+| R2a ✅ | — | `text_animated_glow_3` 1.4 → ≥ 4 · **met: 52** |
+| R2b ✅ | — | `subtitles_words` 56 → ≥ 85 · **met: 113** |
+| R1 | W05–W10 | `single_video` nvenc 75 → ≥ 105 |
+| R3 | W12–W18 | `grid_3x3` 23 → ≥ 60 |
+| R4 | W19–W25 | `heavy_effects` 11.5 → ≥ 60; CPU < 2 cores |
+| R5 | W26–W28 | no pixel change; −300 MB |
+| R6 | W29–W31 | `everything` 1.8 → ≥ 30; GPU busy ≥ 70 % |
