@@ -1,0 +1,46 @@
+{
+  "cases" : 
+  [
+    {
+      "agg_fps" : 139.09495548961425,
+      "avg_ms" : 7.1890000000000001,
+      "build_ms" : 82.599999999999994,
+      "cpu_cores" : 1.098349796177317,
+      "cpu_seconds" : 4.9207320000000001,
+      "description" : "four static styled text clips (gradient+stroke+shadow, box, curved, plain) over video",
+      "error" : "",
+      "fps" : 139.09399999999999,
+      "frames" : 600,
+      "height" : 1080,
+      "max_ms" : 280.37299999999999,
+      "max_rss_kb" : 830660,
+      "mode" : "render",
+      "ok" : true,
+      "p50_ms" : 3.1059999999999999,
+      "p95_ms" : 16.254000000000001,
+      "parallel" : 1,
+      "res" : "1080p",
+      "scenario" : "text_static_4",
+      "wall_s" : 4.3136000000000001,
+      "width" : 1920
+    }
+  ],
+  "date" : "2026-09-15T05:10:46",
+  "frames" : 600,
+  "label" : "st-vulkan-1",
+  "machine" : 
+  {
+    "build_type" : "Release",
+    "cpu" : "12th Gen Intel(R) Core(TM) i7-12700H",
+    "ffmpeg" : "6.1",
+    "git" : "e2340c09",
+    "git_branch" : "feature/gpu-rendering",
+    "gpu" : "NVIDIA RTX A2000 8GB Laptop GPU, 580.126.20, 8192 MiB",
+    "hardware_threads" : 20,
+    "kernel" : "7.0.0-31-generic",
+    "mem_total" : "32521724 kB",
+    "threads_setting" : "library defaults (FF_THREADS=16, OMP_THREADS=16)"
+  },
+  "parallel" : 1,
+  "total_seconds" : 4.4802732150000004
+}

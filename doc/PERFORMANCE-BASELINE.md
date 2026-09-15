@@ -239,7 +239,8 @@ runs, `render` mode (no encoder). **"CPU" here is the GPU-capable build with `OP
 not the CPU-Skia build — so the only variable is the switch. 150 frames is the window the text
 scenarios are actually animated over, and the one the baseline above uses.
 
-Raw results: `tests/bench/results/20260915-0930_p2-*.json`.
+Raw results: `tests/bench/results/phase2-gpu-vs-cpu/`. (Dated run files at the top level of
+`results/` are gitignored; this set is committed because the table above is read against it.)
 
 | scenario | res | frames | CPU (`off`) | GPU (`vulkan`) | speed-up |
 |---|---|---:|---:|---:|---:|
