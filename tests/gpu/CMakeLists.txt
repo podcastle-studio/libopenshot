@@ -61,4 +61,11 @@ if(DEFINED PROJECT_NAME AND TARGET openshot AND SKIA_GPU_FOUND)
   target_include_directories(openshot-gpu-canvas-cost BEFORE PRIVATE
     ${SKIA_VULKAN_INCLUDE_DIR} ${SKIA_INCLUDE_DIRS} ${PROJECT_SOURCE_DIR}/src)
   target_link_libraries(openshot-gpu-canvas-cost PRIVATE openshot)
+
+  # Does SkBlendMode agree with BlendModes.cpp on identical pixels? (W13)
+  add_executable(openshot-gpu-blend-parity gpu_blend_parity.cpp)
+  target_compile_features(openshot-gpu-blend-parity PRIVATE cxx_std_20)
+  target_include_directories(openshot-gpu-blend-parity BEFORE PRIVATE
+    ${SKIA_VULKAN_INCLUDE_DIR} ${SKIA_INCLUDE_DIRS} ${PROJECT_SOURCE_DIR}/src)
+  target_link_libraries(openshot-gpu-blend-parity PRIVATE openshot)   # openshot links Qt PUBLIC
 endif()

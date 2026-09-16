@@ -34,6 +34,20 @@ struct Tolerance {
     /// when a GPU is actually in use. On CPU the same scenario keeps its strict
     /// tolerance -- the CPU path ships, and nothing may move it.
     static Tolerance GpuClose() { return {45.0, 0.98, 255, 100.0}; }
+
+    /// For the few blend modes whose formula is mathematically steep enough to turn a
+    /// sub-LSB difference in the source into a large one in the result.
+    ///
+    /// Colour-burn divides by the source channel, hue and saturation renormalise chroma.
+    /// The GPU resamples the clip onto the canvas with Skia's bilinear rather than
+    /// QPainter's smooth transform, and these three magnify that: measured 26.5 dB,
+    /// 39.6 dB and 44.6 dB against CPU goldens, from inputs differing by ~1 LSB.
+    ///
+    /// The band needed to cover colour-burn is so wide that this tolerance cannot detect
+    /// a genuine regression in these modes. It is not the real gate:
+    /// `openshot-gpu-blend-parity` is, and it is far sharper -- it blends identical pixels
+    /// with no resampling and holds every mode to 2 LSB. Run it when touching blend code.
+    static Tolerance GpuAmplified() { return {25.0, 0.96, 255, 100.0}; }
 };
 
 // Everything a scenario builds lives here so teardown order is fixed:

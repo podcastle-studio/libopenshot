@@ -1090,9 +1090,18 @@ std::shared_ptr<Frame> Timeline::GetFrame(int64_t requested_frame)
 			// and turned a 3 LSB difference into 255 (26.7 dB), saturation into 128.
 			// Keeping a frame on one path removes that whole class of error, at the cost of
 			// giving up the GPU on mixed frames until W13 puts the blend modes on SkBlendMode.
+			// W13 relaxes this from "every clip draws on the GPU" to "no clip reads the
+			// backdrop on the CPU". A clip that falls back (shadow, blur, a post-keyframe
+			// effect) reads the canvas back and composites on the CPU against a backdrop the
+			// GPU built -- harmless for plain source-over, but the non-linear W3C modes
+			// magnify the sub-LSB difference badly. So a fallback clip is tolerated only when
+			// its own blend mode is BLEND_NORMAL.
 			bool all_clips_can_draw = true;
 			for (const auto clip : nearby_clips)
-				if (!clip->can_draw_to_canvas()) { all_clips_can_draw = false; break; }
+				if (!clip->can_draw_to_canvas() && clip->Blend() != BLEND_NORMAL) {
+					all_clips_can_draw = false;
+					break;
+				}
 
 			if (all_clips_can_draw && GpuDevice::Instance().available()) {
 				if (auto gpu_canvas = GpuFrame::Create(preview_width, preview_height,

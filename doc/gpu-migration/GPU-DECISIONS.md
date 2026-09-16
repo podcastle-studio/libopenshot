@@ -600,6 +600,51 @@ speed — and the fix belongs to W22–W25, where decoded frames stop being uplo
 it there. If GPU is switched on for a `podcast_pip`-shaped workload before then, that is the reason
 to gate the fast path on clip count or source size.
 
+### The blend-mode mapping is a naming table, and it is verified as one (2026-09-16, W13)
+
+`BlendModes.cpp` and Skia both implement W3C "Compositing and Blending Level 1", so `ToSkBlendMode`
+is a rename rather than a translation. That claim is checked by `tests/gpu/gpu_blend_parity.cpp`
+(`openshot-gpu-blend-parity`), which blends the same two 256×256 images — sweeping every (Cb, Cs)
+pair including the 0 and 1 edges the spec special-cases — once through `BlendImages()` and once
+through `SkBlendMode` with **no transform and no filtering**, so the formula is isolated from the
+resampling:
+
+- **lavapipe: all 16 modes agree**, max 1 LSB, mean ≤ 0.002 LSB.
+- **NVIDIA: 13 of 16 within 1 LSB**; colour-dodge (max 28), colour-burn (7) and hue (3) have
+  outliers on **0.001–0.006 %** of channels, at the division singularities — colour-dodge divides by
+  (1 − Cs), colour-burn by Cs — where the driver's float lands the other side of a clamp. Mean stays
+  ≤ 0.05 LSB for every mode.
+
+That lavapipe, which is strict software IEEE, is clean on all 16 is what identifies those outliers
+as driver float behaviour rather than a mapping error. The test therefore judges on the bulk (mean
+≤ 0.2 LSB, ≤ 0.05 % of channels over 2 LSB) and still prints the max, so a genuine divergence — which
+would be wrong everywhere — cannot hide behind the threshold.
+
+**This test, not the golden suite, is the real gate on blend correctness.** See the next entry for
+why the golden suite cannot be.
+
+### Three blend modes get a tolerance too wide to catch a regression (2026-09-16, W13, project owner)
+
+`compositing.blend_color_burn` (26.5 dB), `blend_hue` (39.6) and `blend_saturation` (44.6) fail even
+the `GpuClose` band against the CPU goldens. The cause is **not** the blend: the parity test above
+shows the formulas agree on identical pixels. It is that the GPU resamples the clip onto the canvas
+with Skia's bilinear rather than QPainter's smooth transform, and these three formulas are steep
+enough to magnify that ~1 LSB input difference into a large output one — colour-burn divides by the
+source channel, hue and saturation renormalise chroma.
+
+Two options were put to the project owner: keep those three on the CPU path and preserve golden
+coverage, or accept the GPU output and widen the band. **The owner chose to widen it**
+(`Tolerance::GpuAmplified()`, PSNR ≥ 25 / SSIM ≥ 0.96), keeping all 16 modes accelerated. The GPU
+result is also arguably the one the front end produces, since CanvasKit is Skia.
+
+**State the cost plainly: that band cannot detect a real regression in those three modes on a GPU
+configuration.** It has to be wide enough to admit colour-burn at 26.5 dB. What guards them instead
+is `openshot-gpu-blend-parity`, which is far sharper — run it whenever blend code changes. On the
+CPU the same three scenarios remain gated `exact`, and nothing about the CPU path has moved.
+
+*Revisit at:* W22–W25. Once decoded frames stay on the GPU the upload-time resample goes away, the
+amplification with it, and these three should return to the normal `GpuClose` band.
+
 
 ## Open — decide before plan phase 4
 

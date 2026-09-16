@@ -23,11 +23,20 @@ std::string slug(std::string s) {
 void golden::registerCompositingScenarios() {
     for (int mode = 0; mode < openshot::BLEND_MODE_COUNT; ++mode) {
         const auto bm = static_cast<openshot::BlendMode>(mode);
-        // BLEND_NORMAL is the one mode the GPU fast path composites itself, so it is the
-        // one that cannot match the CPU goldens bit-for-bit. The other 15 read the backdrop
-        // per pixel and stay on BlendImages() until W13, so they must stay exact.
-        std::vector<std::string> tags{"compositing", "blend", "exact"};
-        if (bm == openshot::BLEND_NORMAL) tags.push_back("gpu-composite");
+        // Since W13 every mode composites on the GPU via SkBlendMode, so none of them can
+        // match the CPU goldens bit-for-bit: the clip is resampled onto the canvas with
+        // Skia's bilinear rather than QPainter's smooth transform. They stay exact on the
+        // CPU, where nothing has changed. That the *formula* mapping is right is checked
+        // separately and far more sharply by openshot-gpu-blend-parity, which blends
+        // identical pixels with no resampling at all.
+        std::vector<std::string> tags{"compositing", "blend", "exact", "gpu-composite"};
+        // Colour-burn divides by the source channel; hue and saturation renormalise chroma.
+        // All three turn the ~1 LSB resampling difference into a large one, so on GPU they
+        // need a band too wide to catch a real regression -- openshot-gpu-blend-parity is
+        // what actually gates them. See Tolerance::GpuAmplified().
+        if (bm == openshot::BLEND_COLOR_BURN || bm == openshot::BLEND_HUE ||
+            bm == openshot::BLEND_SATURATION)
+            tags.push_back("gpu-amplified");
         add("compositing.blend_" + slug(openshot::BlendModeToString(bm)), tags, {15},
             [bm](Scene& s) {
                 auto& tl = s.makeTimeline();

@@ -1653,12 +1653,46 @@ void Clip::RemoveEffect(EffectBase* effect)
 
 
 // Apply background image to the current clip image (i.e. flatten this image onto previous layer)
+namespace {
+
+/// The W3C "Compositing and Blending Level 1" mode that @a mode names, as Skia spells it.
+///
+/// BlendModes.cpp implements that spec directly (see BlendImages()) and so does Skia, so this is a
+/// naming table rather than a translation -- there is no approximation in it. Both evaluate the
+/// blend on non-premultiplied colour and composite source-over afterwards, and the pooled surfaces
+/// carry a null colour space, matching the 8-bit sRGB values BlendImages() works on, so neither
+/// side silently linearises.
+///
+/// Kept here rather than in BlendModes.h so that header stays free of Skia for the Qt-only callers.
+SkBlendMode ToSkBlendMode(openshot::BlendMode mode)
+{
+	switch (mode) {
+		case openshot::BLEND_NORMAL:      return SkBlendMode::kSrcOver;
+		case openshot::BLEND_MULTIPLY:    return SkBlendMode::kMultiply;
+		case openshot::BLEND_SCREEN:      return SkBlendMode::kScreen;
+		case openshot::BLEND_OVERLAY:     return SkBlendMode::kOverlay;
+		case openshot::BLEND_DARKEN:      return SkBlendMode::kDarken;
+		case openshot::BLEND_LIGHTEN:     return SkBlendMode::kLighten;
+		case openshot::BLEND_COLOR_DODGE: return SkBlendMode::kColorDodge;
+		case openshot::BLEND_COLOR_BURN:  return SkBlendMode::kColorBurn;
+		case openshot::BLEND_HARD_LIGHT:  return SkBlendMode::kHardLight;
+		case openshot::BLEND_SOFT_LIGHT:  return SkBlendMode::kSoftLight;
+		case openshot::BLEND_DIFFERENCE:  return SkBlendMode::kDifference;
+		case openshot::BLEND_EXCLUSION:   return SkBlendMode::kExclusion;
+		case openshot::BLEND_HUE:         return SkBlendMode::kHue;
+		case openshot::BLEND_SATURATION:  return SkBlendMode::kSaturation;
+		case openshot::BLEND_COLOR:       return SkBlendMode::kColor;
+		case openshot::BLEND_LUMINOSITY:  return SkBlendMode::kLuminosity;
+	}
+	return SkBlendMode::kSrcOver;
+}
+
+} // namespace
+
 bool Clip::can_draw_to_canvas() const
 {
-	// The 15 non-normal blend modes read the backdrop per pixel (BlendImages, following
-	// the W3C spec). They become SkBlendMode in W13; until then they stay on the CPU.
-	if (blend_mode != BLEND_NORMAL)
-		return false;
+	// Every blend mode qualifies since W13: BlendImages() and SkBlendMode implement the
+	// same W3C spec, so the mode is set on the paint and Skia does the backdrop read.
 
 	// Shadow and blur rewrite the source before it is drawn (W14 turns them into
 	// SkImageFilters on the paint). The frame-number overlay and the waveform draw extra
@@ -1721,7 +1755,7 @@ bool Clip::draw_to_canvas(std::shared_ptr<openshot::Frame> frame,
 
 	SkCanvas* canvas = gpu->canvas();
 	SkPaint paint;
-	paint.setBlendMode(SkBlendMode::kSrcOver);   // QPainter::CompositionMode_SourceOver
+	paint.setBlendMode(ToSkBlendMode(blend_mode));
 
 	// Match what QPainter actually does, which is not "always resample". For a transform
 	// no more complex than a translation by whole pixels, Qt blits the image straight

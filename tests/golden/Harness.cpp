@@ -54,6 +54,8 @@ void add(const std::string& name, std::vector<std::string> tags, std::vector<int
     Tolerance gpu_tol = tol;
     if (std::find(tags.begin(), tags.end(), "gpu-composite") != tags.end())
         gpu_tol = Tolerance::GpuClose();
+    if (std::find(tags.begin(), tags.end(), "gpu-amplified") != tags.end())
+        gpu_tol = Tolerance::GpuAmplified();
     registry().push_back(Scenario{name, std::move(tags), std::move(frames), tol, gpu_tol,
                                   std::move(build), nullptr});
 }
