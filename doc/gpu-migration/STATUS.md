@@ -26,15 +26,16 @@ Stated by the project owner, 2026-09-14. This overrides anything in
    GPU Skia with the GPU off; GPU Skia on Vulkan; GPU Skia on lavapipe) is the acceptance test,
    and all four must be 292/292. Commands are in `CLAUDE.md` under "GPU rendering (`src/gpu`)".
 
-Last updated: 2026-09-15 · branch `feature/gpu-rendering`.
+Last updated: 2026-09-16 · branch `feature/gpu-rendering`.
 **Phase 2 is complete.** 2.0 landed 2026-09-15 (the GPU-capable image, in
 `../video-rendering-service` branch `feature/gpu-rendering`), which was the last thing in it and the
 only thing stopping R2a and R2b from shipping. **R2a complete** (2.1, 2.2, 2.3); **2.4 done, gate
 met**; worklist **A done**, **B rejected on
 measurement**, **C done differently**, **D done**, **E done**. The Skia text and subtitle engines now both run
 on the GPU under one control (`GpuDevice::SetBackend`), and the image that can run them exists.
-**Phase 1 (CPU quick wins) is what a resuming session picks up next**, along with the two Phase 0
-leftovers (0.5 corpus, 0.6 CI) — see "Next step".
+**W11 is done** (2026-09-16) and **W12 — the timeline canvas on the GPU — is what a resuming session
+picks up next**. W01 and W02 are **deferred to the end of the migration** by the project owner: no
+image build, no release, no merge to `develop` until the GPU work is finished. See "Next step".
 
 ## Where we are
 
@@ -381,26 +382,48 @@ ask it for you) and none reads the environment for itself — the new `control` 
 
 ## Next step
 
-**Phase 2 is finished.** The remaining work is `doc/gpu-migration/GPU-WORKLIST.md`, W01 onwards, in
-that order. One item to a session; the worklist opens with the protocol.
+**Phase 2 is finished.** The remaining work is `doc/gpu-migration/GPU-WORKLIST.md`. One item to a
+session; the worklist opens with the protocol.
 
-- **W01** — build and pin the real service image. The only thing between the finished GPU work and
-  production. Blocked on registry auth: the build-stage base is private and this machine gets
-  `error getting credentials` from `docker pull`.
-- **W02** — the full `openshot-bench` + `compare` run the upstream merge still owes, on a quiet
-  machine. Gate: nothing more than 5 % slower than `baseline-cpu.json`. This is what stands between
-  `feature/gpu-rendering` and `develop`. It also carries the open `compositing.layer_order` question
-  — clip sort is now insertion-stable rather than address-tie-broken, and someone has to confirm
-  that is what the service wants.
-- **W03, W04** — CI running the golden suite per PR, and the six-payload production corpus. Both are
-  safety net for stage 5, which rewrites `Clip.cpp` and `Timeline.cpp`.
+> **2026-09-16, project owner — no release work until the GPU migration is done.** **W01** (build and
+> push the service image) and **W02** (the full post-merge benchmark, the `develop` merge gate) are
+> **deferred to the very end**. Develop and test locally, without container images, and keep moving
+> the render path onto the GPU. Both items stay in the worklist, marked DEFERRED; nothing depends on
+> either.
 
-Then W05–W10 (CPU quick wins), W11 (the four decisions), W12–W18 (the GPU compositor — the big one,
-and where the remaining CPU time is), W19–W21 (effects as shaders), W22–W25 (frames stay on the GPU
-— last, because it only pays after W12), W26–W28 (remove Qt), W29–W31 (frames in flight, density,
-observability).
+**W11 is done** (2026-09-16), taken out of order because W12 depends on it and nothing else does.
+The four decisions the compositor bakes in are recorded in `GPU-DECISIONS.md`:
+
+- **Canvas precision → `kRGBA_8888`**, overriding the F16 recommendation that was on file. Output is
+  8-bit H.264 throughout; pooled surfaces are null-colour-space, so F16 would buy precision between
+  stages but not gamma-correct blending; and 8888 keeps the GPU canvas bit-identical to the CPU path.
+- **Graphite only**, no Ganesh fallback — there is no Ganesh code in `src/` to keep alive.
+- **LUT → match the front end at the native cube size.** Measured: the `ColorMap.cpp` 17³ resample,
+  not the interpolation kind, is essentially the whole editor-vs-export gap (17.05 LSB max / 0.404
+  mean, against 4.34 / 0.060 for trilinear-vs-tetrahedral).
+- **Nearest-neighbour sampling stays nearest** — both sites are in the submodule the front end runs
+  through WASM.
+
+**Next is W12 — the timeline canvas on the GPU**, the first item of Stage 5 and where the remaining
+CPU time actually is. It now opens with a sub-task that did not exist before: tag the bit-exact
+golden scenarios `"exact"` *before* touching the render path, because the suite currently gates
+"close" and not "exact" (see below) and the 8888 decision is only enforceable if it does.
+
+W03/W04 (CI, production corpus) remain open and are the safety net for Stage 5; W05–W10 are the CPU
+quick wins. Then W13–W18 (the rest of the compositor), W19–W21 (effects as shaders), W22–W25 (frames
+stay on the GPU — last, because it only pays after W12), W26–W28 (remove Qt), W29–W31 (frames in
+flight, density, observability).
 
 ## Known oddities worth a look
+
+- **The golden suite gates "close", not "exact".** No scenario uses `Tolerance::Exact()`: of 64
+  registrations, 3 take `Loose()`, 1 takes `Codec()` and the other 60 take the default — PSNR ≥ 45,
+  SSIM ≥ 0.98, `maxAbs` unconstrained. So "292/292 four ways" certifies PSNR ≥ 45 dB, **not**
+  bit-identity, even though 282 of the 292 frames are bit-exact in practice. `Tolerance::Exact()`
+  and its `"exact"` tag exist and are wired in `Harness.cpp:48`, just unused. Tagging the bit-exact
+  scenarios is now the first sub-task of W12. The 10 frames that are not bit-exact are all
+  text/glow: `text.glow` f15 (43.5 dB, max 53, passing under `Loose()`) and 9 frames of the two
+  animated-glow scenarios at max 1–2.
 
 - `effects.stack_crop_chroma_light_lut` golden shows harsh white blotches (ChromaKey + Light + LUT
   stacked). Baseline as-is; may be a real rendering quirk.
@@ -408,6 +431,19 @@ observability).
   x264 loss, not a matrix bug.
 
 ## Log
+
+- 2026-09-16 — **W11 done: the four decisions the compositor bakes in**, taken out of order because
+  W12 depends on W11 and nothing else does. Canvas `kRGBA_8888` (overriding the F16 recommendation
+  on file), Graphite only, LUT matched to the front end at native cube size, nearest sampling kept.
+  Each decided from a measurement or from the tree rather than the plan's recommendation: the LUT
+  gap was quantified by replicating `resampleLut3D` verbatim over 636,056 colours (the 17³ resample
+  is 17.05 LSB max / 0.404 mean; trilinear-vs-tetrahedral only 4.34 / 0.060 — but up to **98 LSB**
+  on a coarse 2³ LUT), and the Ganesh question was settled by finding no Ganesh code in `src/` at
+  all. Two consequences carried into W19 rather than left to be discovered there. Separately, found
+  that the golden suite gates "close" and not "exact" — no scenario uses `Tolerance::Exact()` —
+  which makes tagging the bit-exact scenarios the first sub-task of W12. W01 and W02 deferred to
+  the end of the migration by the project owner; no code changed, suite green 292/292 before and
+  after.
 
 - 2026-09-15 — **Phase 2 finished: worklist item E / plan step 2.0, the GPU-capable image.**
   `../video-rendering-service` branch `feature/gpu-rendering`: CUDA/FFmpeg runtime base with

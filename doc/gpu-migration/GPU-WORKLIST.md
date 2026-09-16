@@ -33,8 +33,14 @@ Rules that apply to every item without being repeated in it:
   scenarios, commit the PNGs with the code.
 - Anything that fails its gate is reverted or flagged off. It does not stay merged "to fix later".
 
-**Status line:** W01–W04 open · W05 onwards not started · everything before W01 is done
-(see `STATUS.md`).
+**Status line:** W11 done (2026-09-16) · W01/W02 **deferred by the project owner** — no release,
+no image, no merge to `develop` until the GPU work is finished · W03/W04 open · W05–W10 open ·
+W12 is the next item · everything before W01 is done (see `STATUS.md`).
+
+> **2026-09-16, project owner.** Do not build or push the service image (W01) and do not run the
+> merge/release gate (W02) — those happen at the very end. Develop and test locally, and keep
+> moving the render path onto the GPU. W11 was taken out of order for that reason: W12 depends on
+> it and nothing else does.
 
 ---
 
@@ -43,7 +49,10 @@ Rules that apply to every item without being repeated in it:
 Phase 2 is code-complete and measured (glow text 4.3 → 52 fps on an A2000, a real 30 s payload 2.1×)
 but runs on a developer machine and nowhere else. These two items are what turn it into production.
 
-### W01 — Build and pin the real service image · legacy `2.0` remainder
+### W01 — Build and pin the real service image · legacy `2.0` remainder · **DEFERRED**
+
+> **Deferred 2026-09-16** by the project owner, to the very end of the migration. Nothing depends
+> on it; develop and test locally without a container.
 
 **Goal.** The actual image builds and is pinned, not just the stand-in.
 **Depends on.** Nothing. `../video-rendering-service` branch `feature/gpu-rendering` already has the
@@ -67,7 +76,11 @@ CPU node's output is identical to today's.
 **Done when.** Both nodes have completed an export and `STATUS.md` records the image digest.
 **Size.** ~1 day, mostly waiting on infrastructure.
 
-### W02 — The full post-merge benchmark · merge gate
+### W02 — The full post-merge benchmark · merge gate · **DEFERRED**
+
+> **Deferred 2026-09-16** by the project owner. There is no release and no merge to `develop`
+> until the GPU work is finished, so the gate has nothing to gate yet. Re-run it then, on a quiet
+> machine.
 
 **Goal.** Clear the last thing standing between `feature/gpu-rendering` and `develop`.
 **Depends on.** Nothing. Needs a **quiet machine** — the A/B that stood in for this ran on a box
@@ -242,18 +255,28 @@ redoing work.
 **Why it moved.** The plan listed this as `4.0`, but `3.1` already depends on the canvas-precision
 answer. This is the ordering bug the renumbering exists to fix.
 
-- [ ] **Canvas precision.** `kRGBA_8888` (matches today) or `kRGBA_F16` (better blending and blur,
-      enables 10-bit output, doubles canvas memory). Recommendation on file: F16 for the timeline
-      canvas, 8888 for cached textures.
-- [ ] **Graphite only, or Ganesh Vulkan as a fallback backend.** Both build today
-      (`SKIA_ENABLE_GANESH=true`); decide whether to keep the second alive.
-- [ ] **LUT rounding reference.** Native `ColorMap.cpp` or the WASM `LutApply.cpp` the front end
-      runs — they already disagree. Matching the front end closes an editor-vs-export gap.
-- [ ] **Nearest-neighbour sampling** in `BORDER_REFLECTED_ROTATION` and `DISPLACEMENT_MAP`: keep for
-      bit-parity, or switch to bilinear and re-baseline.
+- [x] **Canvas precision.** → **`kRGBA_8888`**, overriding the F16 recommendation that was on file.
+      Output is 8-bit H.264 throughout; pooled surfaces are null-colour-space, so F16 buys precision
+      between stages but not gamma-correct blending; and 8888 keeps the GPU canvas bit-identical to
+      the CPU path. Revisit on 10-bit/HDR, or on measured banding after W19.
+- [x] **Graphite only, or Ganesh Vulkan as a fallback backend.** → **Graphite only.** There is no
+      Ganesh code in `src/` at all — it is a GN flag, and `/usr/local/skia-gpu` was built without it.
+      Keeping it "alive" would mean writing a second backend, not preserving one.
+- [x] **LUT rounding reference.** → **match the front end at the LUT's native cube size.** Measured:
+      the `ColorMap.cpp` 17³ resample, not the interpolation kind, is the whole editor-vs-export gap
+      (17.05 LSB max / 0.404 mean, vs 4.34 / 0.060 for trilinear-vs-tetrahedral). A 3-D LUT texture
+      with hardware trilinear filtering *is* the front end's path.
+- [x] **Nearest-neighbour sampling** in `BORDER_REFLECTED_ROTATION` and `DISPLACEMENT_MAP`: → **keep
+      nearest.** Both live in the submodule the front end runs through WASM; moving only the GPU
+      shader to bilinear opens the very editor-vs-export gap the LUT decision closes.
 
 **Gate.** All four written into `GPU-DECISIONS.md` with the reasoning and a "revisit if" line.
 **Size.** ~half a day of discussion, no code.
+**Done 2026-09-16.** All four recorded in `GPU-DECISIONS.md` under "W11 — the four decisions the
+compositor bakes in", each with its measurement and a *revisit if* line. One question could not be
+answered from this repo and is now the top entry under **Open**: which interpolation the front end
+passes to `apply_lut` (≤ 4.3 LSB on a fine LUT, up to **98 LSB** on a coarse one — it dominates
+there because no resample happens and there are only 8 corners). Needed before W19, not before W12.
 
 ---
 
@@ -266,8 +289,16 @@ once W13 lands.
 
 ### W12 — Timeline canvas on the GPU · legacy `3.1`
 
-**Depends on.** W11 (canvas precision).
+**Depends on.** W11 — settled: the canvas is **`kRGBA_8888`**, matching the CPU path, so GPU and
+CPU output should stay bit-identical and any drift is a finding rather than an expected cost.
 
+- [ ] **Tag the bit-exact scenarios `"exact"` first, before touching the render path.** No scenario
+      uses `Tolerance::Exact()` today — 60 of 64 registrations take the default (PSNR ≥ 45, SSIM
+      ≥ 0.98, `maxAbs` unconstrained), so "292/292 four ways" certifies *close*, not *bit-identical*,
+      and a precision regression in the compositor would go green silently. 282 of 292 frames are
+      bit-exact today; the 10 that are not are all text/glow. The tolerance class and the `"exact"`
+      tag already exist and are wired in `Harness.cpp:48` — they are just unused. Do this while the
+      suite is still green, or it proves nothing.
 - [ ] `Timeline::GetFrame` takes its output surface from `GpuSurfacePool` and passes its `SkCanvas`
       down through `add_layer`.
 - [ ] `Frame` gains a `GpuFrame`; `GetImage()` on a GPU frame does one cached readback so every
@@ -372,6 +403,13 @@ Depends on W12/W13 only — **not** on Stage 7. Can run in parallel with Stage 7
 - [ ] One SkSL fragment each, with a parity test against the C++ twin: Alpha, Brightness, Exposure,
       ColorShift, Bars, ChromaKey, ColorAdjustment, LightAdjustment, Enhancement, ColorMap (3-D LUT
       texture), Mask, Crop, CameraMovement.
+- [ ] **ColorMap carries two W11 consequences.** (a) The shader matches the *front end* at the LUT's
+      native cube size, so `ColorMap.cpp` must **drop its 17³ resample too** — otherwise CPU and GPU
+      diverge by up to 17 LSB and the four-way sweep stops meaning anything. That re-baselines the
+      `effects.*lut*` goldens and costs CPU LUT throughput (the resample exists for L1 cache
+      friendliness); measure it rather than assuming it is free. (b) Confirm which interpolation the
+      front end passes to `apply_lut` before writing the shader — on a coarse LUT trilinear and
+      tetrahedral diverge by up to 98 LSB.
 
 **Gate per effect.** PSNR ≥ 48 dB vs the CPU effect on eight test images including transparent and
 semi-transparent pixels, ≤ 0.2 ms at 1080p.

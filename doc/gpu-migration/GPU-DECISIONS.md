@@ -412,18 +412,108 @@ produce profile 100. VAAPI, DXVA2 and VideoToolbox are untouched.
 Rate-control tuning proper is still plan step 1.4; the service's NVENC settings (`rc=vbr`, `cq=19`,
 `preset=p5`, `tune=hq`) are a conservative starting point, not a tuned one.
 
+### W11 — the four decisions the compositor bakes in (2026-09-16)
+
+Taken together because Stage 5 and Stage 6 both depend on them, and deciding them mid-rewrite means
+redoing work. Each was decided from a measurement or from what is actually in the tree, not from the
+recommendation the plan carried.
+
+**Timeline canvas precision: `kRGBA_8888`, not F16.** This overrides the recommendation that stood
+in this file ("F16 for the timeline canvas, 8888 for cached textures"), which was written before the
+surrounding constraints were settled. Three reasons:
+
+- Everything the service ships is **8-bit H.264**. F16's headline benefits — 10-bit output, HDR —
+  buy nothing that is on the roadmap today.
+- Pooled surfaces are deliberately **null-colour-space** (see the entry above), matching the
+  `SkImageInfo::MakeN32Premul` raster surfaces they replace. F16 on a null colour space buys
+  precision through stacked blends, **not** gamma-correct blending; it does not make compositing
+  more correct, only less lossy between stages.
+- 8888 keeps the GPU canvas **bit-identical to the CPU path**, which is the strongest regression
+  signal available and currently free: 282 of the suite's 292 frames come out bit-exact today.
+
+Cost of the choice: repeated 8-bit rounding between composite stages, which shows as banding on
+deeply stacked blends before it shows anywhere else.
+*Revisit if:* 10-bit or HDR output reaches the roadmap, or `blend_stack_5` / `heavy_effects` show
+visible banding once the effect shaders land in W19. Measure before switching — the cost is a
+doubling of pool memory (1080p 8.3 → 16.6 MB, 2160p 33 → 66 MB per surface **per thread**).
+
+**Graphite only. Ganesh is not kept as a fallback.** Settled by what is in the tree rather than by
+preference: there is **no Ganesh code in `src/`**. `GrDirectContext` and `skgpu::ganesh` match
+nothing under `src/` or `tests/gpu/` except one explanatory comment in `GpuFrame.h`, and
+`/usr/local/skia-gpu` was built with `SKIA_ENABLE_GANESH=false`. Keeping Ganesh "alive" would mean
+*writing* a second backend and then maintaining two, not preserving something that exists. Graphite's
+two known sharp edges are already understood and guarded (no synchronous `readPixels` — `GpuFrame::readback`
+is the only route; no automatic raster-image upload — everything goes through `GpuFrame::ToTexture`).
+*Revisit if:* Graphite drops or breaks a feature the compositor needs and the workaround is worse
+than a second backend. The GN flag stays, so rebuilding with Ganesh remains a build away.
+
+**Nearest-neighbour sampling stays nearest.** `BORDER_REFLECTED_ROTATION`
+(`image-processing-lib/src/Effects/effects.cpp:253`, `cv::INTER_NEAREST` with `cv::INTER_LINEAR`
+commented out beside it — a deliberate choice, not an oversight) and `applyDisplacementMapEffect`
+(explicit `static_cast<int>(nx + 0.5f)`) both live in the **submodule the web front end runs through
+WASM**. Switching only the GPU shader to bilinear would open exactly the editor-vs-export gap that
+the LUT decision below exists to close, and would do it on the two effects where the artefact is
+most visible.
+*Revisit if:* the front end moves to bilinear — then both move together, in the submodule, and the
+affected goldens are re-baselined in one change.
+
+**LUT rounding: match the front end at the LUT's native cube size.** Measured rather than asserted,
+with `tools/analysis/lut-parity.cpp` (standalone; `resampleLut3D` copied verbatim from
+`ColorGradingCore.cpp`). Both paths evaluated over the 8-bit cube — 636,056 colours, every 3rd level
+per channel — on the golden 33³ LUT:
+
+| comparison | max | mean | >1 LSB | >2 LSB |
+|---|---|---|---|---|
+| `ColorMap` 17³ vs front end 33³ trilinear | **17.05 LSB** | 0.404 | 9.79 % | 2.38 % |
+| tetrahedral vs trilinear, both 33³ | 4.34 LSB | 0.060 | 0.18 % | 0.01 % |
+
+The editor-vs-export gap is therefore **almost entirely the 17³ resample**, not the interpolation
+kind — which reframes the question as the plan posed it ("trilinear or tetrahedral?"). Note the
+resample loses nothing at its own sample points: 33 → 17 lands every destination sample exactly on
+an even source index (`ir * (1/16) * 32 == ir*2`), so the whole 17 LSB is the coarser grid being a
+worse approximation, not resampling error.
+
+A GPU 3-D LUT texture with hardware trilinear filtering **is** the front end's native-size trilinear,
+so matching it is simultaneously the more accurate option and the simpler shader; reproducing
+`ColorMap.cpp` would mean re-implementing an L1-cache optimisation that has no reason to exist on a
+GPU.
+
+Two consequences that must be carried into W19, not discovered there:
+
+1. **The CPU `ColorMap.cpp` has to drop the 17³ resample too**, or CPU and GPU diverge by up to
+   17 LSB and the four-way sweep stops meaning anything. That re-baselines the `effects.*lut*`
+   goldens and costs CPU LUT throughput — the resample exists for cache friendliness. Measure it.
+2. **Which interpolation the front end passes is still unknown from this repo.** `apply_lut(w, h,
+   amount, interpolation)` takes it as a caller argument (`lutWrappers.cpp:87`). On fine LUTs the
+   choice is worth ≤ 4.3 LSB and does not matter much; on a **coarse** LUT it dominates everything
+   else — on the 2³ `domain-3d-lut.cube` trilinear and tetrahedral diverge by up to **98 LSB**
+   (mean 20.8, 64 % of channels over 1 LSB), because no resample happens and there are only 8
+   corners to interpolate between. Confirm the front end's value before writing the shader.
+
+*Revisit if:* the front end changes cube handling or interpolation. The two must move together.
+
+### The golden suite gates "close", not "exact" (2026-09-16, finding)
+
+Recorded because the W11 canvas decision leans on bit-exactness that the suite does not currently
+enforce. **No scenario uses `Tolerance::Exact()`**: of 64 registrations, 3 take `Loose()` (text AA
+and large blurs), 1 takes `Codec()`, and the remaining 60 take the default — PSNR ≥ 45, SSIM ≥ 0.98,
+`maxAbs` unconstrained at 255. So "292/292 four ways" certifies PSNR ≥ 45 dB, **not** bit-identity,
+even though 282 of the 292 frames are in fact bit-exact (the 10 that are not are all text/glow:
+`text.glow` f15 at 43.5 dB / max 53, and 9 frames of the two animated-glow scenarios at max 1–2).
+
+`Tolerance::Exact()` (PSNR ≥ 60, SSIM ≥ 0.995, `maxAbs` ≤ 1, `pctOver2` ≤ 0.5) and its `"exact"`
+tag already exist and are wired in `Harness.cpp:48` — they are simply unused. Until the bit-exact
+scenarios are tagged, a precision regression in the compositor can go green without reporting that
+anything moved. Tagging them is a sub-task of W12.
+
+
 ## Open — decide before plan phase 4
 
-- **Timeline canvas precision.** `kRGBA_8888` (matches today) or `kRGBA_F16` (better blending and
-  blur, enables 10-bit output, doubles canvas memory). Recommendation: F16 for the timeline canvas,
-  8888 for cached textures.
-- **Graphite only, or Ganesh as a fallback backend.** Build both in phase 2 and decide at the end of
-  phase 3 from the feature checks.
-- **LUT rounding reference.** The native `ColorMap.cpp` (OpenMP trilinear, stride 3) and the WASM
-  `LutApply.cpp` the front end runs (SIMD, trilinear or tetrahedral) already disagree. The shader
-  must match one of them; matching the front end closes an editor-vs-export gap.
-- **Nearest-neighbour sampling.** `BORDER_REFLECTED_ROTATION` and `DISPLACEMENT_MAP` use nearest
-  today. Keep it for bit-parity, or switch to bilinear for quality and re-baseline.
+The four that blocked the compositor were taken on 2026-09-16; see the W11 entry above.
+
+- **Which interpolation the front end passes to `apply_lut`.** Follows from the W11 LUT decision and
+  is the one fact that repo could not supply. Worth ≤ 4.3 LSB on a fine LUT, up to 98 LSB on a
+  coarse one. Needed before the W19 `ColorMap` shader, not before W12.
 - **GPU SKU for the node pool.** L4 is the working assumption (24 GB, two NVENC engines, no session
   cap, AV1).
 - **Whether the front end adopts the same SkSL sources** through CanvasKit. Not required for the
