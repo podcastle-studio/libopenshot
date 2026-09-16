@@ -24,6 +24,16 @@ struct Tolerance {
     static Tolerance Exact()   { return {60.0, 0.995, 1, 0.5}; }
     static Tolerance Codec()   { return {35.0, 0.92, 255, 100.0}; }   // lossy round trips
     static Tolerance Loose()   { return {38.0, 0.95, 255, 100.0}; }   // text AA / large blurs
+
+    /// What a GPU compositor is allowed to differ from the CPU goldens by.
+    ///
+    /// The goldens are CPU-rendered, and the GPU composite resamples with Skia's
+    /// bilinear where QPainter uses its own smooth transform. The two do not agree
+    /// bit-for-bit and never will, so a scenario the compositor touches is held to the
+    /// parity policy's "close" class (GPU-RENDER-PLAN.md §5) rather than to "exact"
+    /// when a GPU is actually in use. On CPU the same scenario keeps its strict
+    /// tolerance -- the CPU path ships, and nothing may move it.
+    static Tolerance GpuClose() { return {45.0, 0.98, 255, 100.0}; }
 };
 
 // Everything a scenario builds lives here so teardown order is fixed:
@@ -63,6 +73,9 @@ struct Scenario {
     std::vector<std::string> tags;          // {"effects"}; "exact" switches to Tolerance::Exact()
     std::vector<int64_t> frames;            // 1-based timeline frames captured by the default capture
     Tolerance tol;
+    /// Tolerance used instead of @c tol when the run has a GPU active. Same as @c tol
+    /// unless the scenario is tagged "gpu-composite"; see Tolerance::GpuClose().
+    Tolerance gpuTol;
     std::function<void(Scene&)> build;      // adds clips to scene.makeTimeline(), must call Open()
     // Optional custom capture (export scenarios). Default: GetFrame(n) for each frame.
     std::function<void(Scene&, std::vector<Captured>&, std::vector<Check>&)> capture;

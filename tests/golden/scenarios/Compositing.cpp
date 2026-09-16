@@ -5,6 +5,8 @@
 #include "Timeline.h"
 
 #include <algorithm>
+#include <string>
+#include <vector>
 
 using namespace golden;
 using namespace golden::recipes;
@@ -21,7 +23,12 @@ std::string slug(std::string s) {
 void golden::registerCompositingScenarios() {
     for (int mode = 0; mode < openshot::BLEND_MODE_COUNT; ++mode) {
         const auto bm = static_cast<openshot::BlendMode>(mode);
-        add("compositing.blend_" + slug(openshot::BlendModeToString(bm)), {"compositing", "blend", "exact"}, {15},
+        // BLEND_NORMAL is the one mode the GPU fast path composites itself, so it is the
+        // one that cannot match the CPU goldens bit-for-bit. The other 15 read the backdrop
+        // per pixel and stay on BlendImages() until W13, so they must stay exact.
+        std::vector<std::string> tags{"compositing", "blend", "exact"};
+        if (bm == openshot::BLEND_NORMAL) tags.push_back("gpu-composite");
+        add("compositing.blend_" + slug(openshot::BlendModeToString(bm)), tags, {15},
             [bm](Scene& s) {
                 auto& tl = s.makeTimeline();
                 tl.AddClip(backgroundClip(s, s.media("background_960x540.png")));
@@ -51,7 +58,7 @@ void golden::registerCompositingScenarios() {
             tl.Open();
         });
 
-    add("compositing.alpha_fade_ghost", {"compositing", "alpha", "exact"}, {1, 8, 16, 31, 40, 45, 75, 89},
+    add("compositing.alpha_fade_ghost", {"compositing", "alpha", "exact", "gpu-composite"}, {1, 8, 16, 31, 40, 45, 75, 89},
         [](Scene& s) {
             auto& tl = s.makeTimeline();
             tl.AddClip(backgroundClip(s, s.media("background_960x540.png")));
@@ -74,7 +81,7 @@ void golden::registerCompositingScenarios() {
             tl.Open();
         });
 
-    add("compositing.layer_order", {"compositing", "exact"}, {30},
+    add("compositing.layer_order", {"compositing", "exact", "gpu-composite"}, {30},
         [](Scene& s) {
             auto& tl = s.makeTimeline();
             tl.AddClip(backgroundClip(s, s.media("background_960x540.png")));

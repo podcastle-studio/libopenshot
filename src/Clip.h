@@ -164,6 +164,25 @@ namespace openshot {
 		/// Apply keyframes to an openshot::Frame and use an existing background frame (if any)
 		void apply_keyframes(std::shared_ptr<Frame> frame, QSize timeline_size);
 
+	public:
+		/// True when this clip can be composited straight onto a GPU timeline canvas,
+		/// collapsing apply_keyframes() and apply_background() into one transformed draw.
+		///
+		/// Deliberately narrow. Everything it excludes -- the 15 non-normal blend modes,
+		/// shadow, blur, overlays, the frame-number overlay, waveforms, and any effect or
+		/// timeline effect that runs *after* the keyframes -- stays on the QPainter path
+		/// that ships today, because each of those reads or rewrites the composited image
+		/// in a way the single draw does not reproduce.
+		bool can_draw_to_canvas() const;
+
+	private:
+
+		/// Composite this clip onto @a background_frame's GPU canvas in one draw.
+		/// Returns false if the draw could not be made, leaving the canvas untouched so
+		/// the caller can fall back to the CPU path.
+		bool draw_to_canvas(std::shared_ptr<openshot::Frame> frame,
+							std::shared_ptr<openshot::Frame> background_frame);
+
         void apply_scale_options(std::shared_ptr<Frame> frame, std::shared_ptr<openshot::Frame> background_frame);
 
 		/// Apply waveform image to an openshot::Frame and use an existing background frame (if any)

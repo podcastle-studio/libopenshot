@@ -38,7 +38,7 @@ void golden::registerReaderScenarios() {
             tl.Open();
         });
 
-    add("readers.image_jpg", {"readers", "exact"}, {1},
+    add("readers.image_jpg", {"readers", "exact", "gpu-composite"}, {1},
         [](Scene& s) {
             auto& tl = s.makeTimeline();
             MediaSpec m; m.path = s.media("image_rgb_400x300.jpg"); m.isImage = true;
@@ -47,7 +47,7 @@ void golden::registerReaderScenarios() {
             tl.Open();
         });
 
-    add("readers.svg_shapes", {"readers", "shapes", "exact"}, {1},
+    add("readers.svg_shapes", {"readers", "shapes", "exact", "gpu-composite"}, {1},
         [](Scene& s) {
             auto& tl = s.makeTimeline();
             tl.AddClip(backgroundClip(s, s.media("background_960x540.png")));

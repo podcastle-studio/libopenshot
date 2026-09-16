@@ -46,14 +46,14 @@ void golden::registerTransitionScenarios() {
     for (auto e : all) {
         // Every one of these is bit-identical across the four-way sweep today (verified 2026-09-16),
         // so they are gated exact: the compositor must not move a transition pixel.
-        add(std::string("transitions.") + name(e), {"transitions", name(e), "exact"}, kRamp, [e](Scene& s) {
+        add(std::string("transitions.") + name(e), {"transitions", name(e), "exact", "gpu-composite"}, kRamp, [e](Scene& s) {
             Pair p = pairScene(s);
             applyOverlappingTransition(*p.out, *p.in, 1.0, s.fps.ToDouble(), {e});
             finish(s, p);
         });
     }
 
-    add("transitions.holds_freeze_layers", {"transitions", "freeze", "exact"}, {30, 31, 45, 60, 61, 75, 76},
+    add("transitions.holds_freeze_layers", {"transitions", "freeze", "exact", "gpu-composite"}, {30, 31, 45, 60, 61, 75, 76},
         [](Scene& s) {
             Pair p = pairScene(s);
             applyOverlappingTransition(*p.out, *p.in, 1.0, s.fps.ToDouble(), {});
@@ -77,7 +77,7 @@ void golden::registerTransitionScenarios() {
         finish(s, p);
     });
 
-    add("transitions.stack_zoom_blur_alpha", {"transitions", "stack", "exact"}, kRamp, [](Scene& s) {
+    add("transitions.stack_zoom_blur_alpha", {"transitions", "stack", "exact", "gpu-composite"}, kRamp, [](Scene& s) {
         Pair p = pairScene(s);
         applyOverlappingTransition(*p.out, *p.in, 1.0, s.fps.ToDouble(),
                                    {TransitionEffect::Zoom, TransitionEffect::Blur, TransitionEffect::Alpha});

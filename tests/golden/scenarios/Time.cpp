@@ -21,12 +21,12 @@ openshot::Clip* speedScene(Scene& s, double speed, double end = 3.0, double trim
 } // namespace
 
 void golden::registerTimeScenarios() {
-    add("time.speed_2x", {"time", "speed", "exact"}, {1, 15, 30, 45}, [](Scene& s) {
+    add("time.speed_2x", {"time", "speed", "exact", "gpu-composite"}, {1, 15, 30, 45}, [](Scene& s) {
         speedScene(s, 2.0);
         s.timeline->Open();
     });
 
-    add("time.speed_half", {"time", "speed", "exact"}, {1, 30, 60, 89}, [](Scene& s) {
+    add("time.speed_half", {"time", "speed", "exact", "gpu-composite"}, {1, 30, 60, 89}, [](Scene& s) {
         speedScene(s, 0.5);
         s.timeline->Open();
     });
@@ -36,7 +36,7 @@ void golden::registerTimeScenarios() {
         s.timeline->Open();
     });
 
-    add("time.freeze_head_tail", {"time", "freeze", "exact"}, {1, 15, 16, 30, 74, 75, 76, 89}, [](Scene& s) {
+    add("time.freeze_head_tail", {"time", "freeze", "exact", "gpu-composite"}, {1, 15, 16, 30, 74, 75, 76, 89}, [](Scene& s) {
         // A 2 s clip at 0.5 s grown by 0.5 s holds on both sides (what an overlapping transition does).
         auto& tl = s.makeTimeline();
         tl.AddClip(backgroundClip(s, s.media("background_960x540.png")));
@@ -54,7 +54,7 @@ void golden::registerTimeScenarios() {
         tl.Open();
     });
 
-    add("time.image_clip_long_duration", {"time", "exact"}, {1, 200}, [](Scene& s) {
+    add("time.image_clip_long_duration", {"time", "exact", "gpu-composite"}, {1, 200}, [](Scene& s) {
         auto& tl = s.makeTimeline();
         MediaSpec m; m.path = s.media("image_rgb_400x300.jpg"); m.isImage = true; m.end = 10.0;
         m.transform = Transform{BBox{0.5f, 0.5f, 0.8f, 0.8f}};

@@ -38,19 +38,19 @@ openshot::Clip* baseScene(Scene& s, const std::string& file = "clip_a_640x360_30
 void golden::registerEffectScenarios() {
     const std::vector<int64_t> F = {1, 45, 89};
 
-    add("effects.crop_radius", {"effects", "crop", "exact"}, F, [](Scene& s) {
+    add("effects.crop_radius", {"effects", "crop", "exact", "gpu-composite"}, F, [](Scene& s) {
         auto* c = baseScene(s);
         c->AddEffect(cropEffect(ramp(0, 0.25), openshot::Keyframe(0.1), openshot::Keyframe(0.1), ramp(0, 0.25), ramp(0.05, 0.45)));
         s.timeline->Open();
     });
 
-    add("effects.chromakey_ycbcr", {"effects", "chromakey", "exact"}, F, [](Scene& s) {
+    add("effects.chromakey_ycbcr", {"effects", "chromakey", "exact", "gpu-composite"}, F, [](Scene& s) {
         auto* c = baseScene(s, "clip_green_640x360_30.mp4");
         c->AddEffect(new openshot::ChromaKey(openshot::Color(0, 255, 0, 0), 70, 20, openshot::CHROMAKEY_YCBCR));
         s.timeline->Open();
     });
 
-    add("effects.color_adjustment", {"effects", "filters", "exact"}, F, [](Scene& s) {
+    add("effects.color_adjustment", {"effects", "filters", "exact", "gpu-composite"}, F, [](Scene& s) {
         auto* c = baseScene(s);
         c->AddEffect(new openshot::ColorAdjustment(ramp(-60, 60), openshot::Keyframe(20), ramp(0, 70), openshot::Keyframe(40)));
         s.timeline->Open();
@@ -63,31 +63,31 @@ void golden::registerEffectScenarios() {
         s.timeline->Open();
     });
 
-    add("effects.enhancement", {"effects", "filters", "exact"}, F, [](Scene& s) {
+    add("effects.enhancement", {"effects", "filters", "exact", "gpu-composite"}, F, [](Scene& s) {
         auto* c = baseScene(s);
         c->AddEffect(new openshot::Enhancement(openshot::Keyframe(0.3), ramp(0, 0.9), ramp(-0.5, 0.8)));
         s.timeline->Open();
     }, Tolerance::Loose());
 
-    add("effects.colormap_lut", {"effects", "lut", "exact"}, F, [](Scene& s) {
+    add("effects.colormap_lut", {"effects", "lut", "exact", "gpu-composite"}, F, [](Scene& s) {
         auto* c = baseScene(s);
         c->AddEffect(new openshot::ColorMap(s.media("lut_example.cube"), ramp(0, 1)));
         s.timeline->Open();
     });
 
-    add("effects.mask_image_radial", {"effects", "mask", "exact"}, {1, 45}, [](Scene& s) {
+    add("effects.mask_image_radial", {"effects", "mask", "exact", "gpu-composite"}, {1, 45}, [](Scene& s) {
         auto* c = baseScene(s);
         c->AddEffect(imageMask(s, s.media("matte_radial_640x360.png")));
         s.timeline->Open();
     });
 
-    add("effects.mask_video_clip_synced_2x", {"effects", "mask", "framemapper", "exact"}, {5, 20, 35, 45}, [](Scene& s) {
+    add("effects.mask_video_clip_synced_2x", {"effects", "mask", "framemapper", "exact", "gpu-composite"}, {5, 20, 35, 45}, [](Scene& s) {
         auto* c = baseScene(s, "clip_a_640x360_30.mp4", 2.0);
         c->AddEffect(videoMask(s, s.media("matte_wipe_640x360_30.mp4"), *c, s.fps.ToDouble()));
         s.timeline->Open();
     });
 
-    add("effects.camera_movement", {"effects", "animation", "exact"}, F, [](Scene& s) {
+    add("effects.camera_movement", {"effects", "animation", "exact", "gpu-composite"}, F, [](Scene& s) {
         auto* c = baseScene(s);
         addCameraMovement(*c, 0.0, 3.0, s.fps.ToDouble(),
                           {{0.0, 100}, {1.0, 170, kEaseInOut}}, {{0.0, 0}, {1.0, 20}},
@@ -95,13 +95,13 @@ void golden::registerEffectScenarios() {
         s.timeline->Open();
     });
 
-    add("effects.alpha_effect", {"effects", "exact"}, F, [](Scene& s) {
+    add("effects.alpha_effect", {"effects", "exact", "gpu-composite"}, F, [](Scene& s) {
         auto* c = baseScene(s);
         c->AddEffect(new openshot::Alpha(ramp(1.0, 0.15)));
         s.timeline->Open();
     });
 
-    add("effects.stack_crop_chroma_light_lut", {"effects", "stack", "exact"}, {45}, [](Scene& s) {
+    add("effects.stack_crop_chroma_light_lut", {"effects", "stack", "exact", "gpu-composite"}, {45}, [](Scene& s) {
         auto* c = baseScene(s, "clip_green_640x360_30.mp4");
         c->AddEffect(cropEffect(0.05, 0.05, 0.05, 0.05, 0.2));
         c->AddEffect(new openshot::ChromaKey(openshot::Color(0, 255, 0, 0), 70, 20, openshot::CHROMAKEY_YCBCR));

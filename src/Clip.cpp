@@ -27,8 +27,24 @@
 #include <algorithm>
 #include <cmath>
 #include <sstream>
+#include <cstdio>
+#include <cstdlib>
+
 #include <QPainter>
 #include <QPainterPath>
+
+#include "gpu/GpuDevice.h"
+#include "gpu/GpuFrame.h"
+
+#include "skia/include/core/SkImage.h"
+#include "skia/include/core/SkMatrix.h"
+#include "skia/include/core/SkPaint.h"
+#include "skia/include/core/SkSamplingOptions.h"
+#include "skia/include/core/SkImageInfo.h"
+#include "skia/include/core/SkPixmap.h"
+#include "skia/include/core/SkAlphaType.h"
+#include "skia/include/core/SkColorType.h"
+#include "skia/include/core/SkBlendMode.h"
 
 #ifdef USE_IMAGEMAGICK
 	#include "MagickUtilities.h"
@@ -557,7 +573,15 @@ std::shared_ptr<Frame> Clip::GetFrame(std::shared_ptr<openshot::Frame> backgroun
 		// Get frame object
 		std::shared_ptr<Frame> frame = NULL;
 
-		if (requested_clip_frame_number > mFreezeFramesCountAtBeginning) {
+		// Decide before consulting the cache, because the two paths cache different things.
+		// final_cache holds the timeline-sized, already transformed image; the GPU path
+		// never builds that image, so it neither reads nor writes the cache. Mixing them
+		// would composite an untransformed frame as though it had been transformed.
+		const bool gpu_path = !isOverlay && background_frame && background_frame->IsGpuBacked() &&
+							  can_draw_to_canvas();
+		bool drawn_on_canvas = false;
+
+		if (!gpu_path && requested_clip_frame_number > mFreezeFramesCountAtBeginning) {
 			// Check cache
 			frame = final_cache.GetFrame(requested_clip_frame_number);
 		}
@@ -646,14 +670,26 @@ std::shared_ptr<Frame> Clip::GetFrame(std::shared_ptr<openshot::Frame> backgroun
 				}
 			}
 
-            // Apply keyframe / transforms to current clip image
-            apply_keyframes(frame, timeline_size);
+            // One transformed draw straight onto the timeline's GPU canvas, replacing both
+            // the timeline-sized intermediate that apply_keyframes builds and the
+            // full-frame composite that apply_background does. If the draw cannot be made
+            // it leaves the canvas untouched and says so, and the CPU path runs as usual.
+            if (gpu_path && frame->has_image_data)
+                drawn_on_canvas = draw_to_canvas(frame, background_frame);
 
-		// Apply effects AFTER applying keyframes (if any local or global effects are used)
-		apply_effects(frame, timeline_frame_number, options, false);
+            if (!drawn_on_canvas) {
+                // Apply keyframe / transforms to current clip image
+                apply_keyframes(frame, timeline_size);
 
-            // Add final frame to cache (before flattening into background_frame)
-            final_cache.Add(frame);
+                // Apply effects AFTER applying keyframes (if any local or global effects are used)
+                apply_effects(frame, timeline_frame_number, options, false);
+
+                // Add final frame to cache (before flattening into background_frame). The GPU
+                // path deliberately does not reach here: what it would cache is the
+                // untransformed source, which a later cache hit would composite on the CPU
+                // path as though it had already been transformed.
+                final_cache.Add(frame);
+            }
         }
 
 
@@ -663,8 +699,9 @@ std::shared_ptr<Frame> Clip::GetFrame(std::shared_ptr<openshot::Frame> backgroun
                                                        "#00000000",  frame->GetAudioSamplesCount(), frame->GetAudioChannelsCount());
         }
 
-		// Apply background canvas (i.e. flatten this image onto previous layer image)
-		if (!isOverlay) {
+		// Apply background canvas (i.e. flatten this image onto previous layer image).
+		// Already done, as one draw, when the clip went onto the GPU canvas.
+		if (!isOverlay && !drawn_on_canvas) {
 			apply_background(frame, background_frame);
 		}
 
@@ -1616,6 +1653,101 @@ void Clip::RemoveEffect(EffectBase* effect)
 
 
 // Apply background image to the current clip image (i.e. flatten this image onto previous layer)
+bool Clip::can_draw_to_canvas() const
+{
+	// The 15 non-normal blend modes read the backdrop per pixel (BlendImages, following
+	// the W3C spec). They become SkBlendMode in W13; until then they stay on the CPU.
+	if (blend_mode != BLEND_NORMAL)
+		return false;
+
+	// Shadow and blur rewrite the source before it is drawn (W14 turns them into
+	// SkImageFilters on the paint). The frame-number overlay and the waveform draw extra
+	// content onto the clip's own canvas, which there no longer is.
+	if (shadow || blur || display != FRAME_DISPLAY_NONE || waveform)
+		return false;
+
+	// Overlay clips composite through OpenCV on the clip's own image.
+	if (!overlayClips.empty())
+		return false;
+
+	// Anything applied *after* the keyframes expects the timeline-sized, already
+	// transformed image. Collapsing the transform into the final draw means that image
+	// never exists, so a clip with post-keyframe effects has to take the CPU path.
+	for (const auto effect : effects)
+		if (!effect->info.apply_before_clip)
+			return false;
+	if (timeline != NULL) {
+		Timeline* timeline_instance = static_cast<Timeline*>(timeline);
+		if (!timeline_instance->Effects().empty())
+			return false;
+	}
+
+	return true;
+}
+
+bool Clip::draw_to_canvas(std::shared_ptr<openshot::Frame> frame,
+						  std::shared_ptr<openshot::Frame> background_frame)
+{
+	const std::shared_ptr<openshot::GpuFrame>& gpu = background_frame->GpuBacking();
+	if (!gpu)
+		return false;
+
+	// get_transform() also applies the alpha/opacity curve to the source pixels in place,
+	// exactly as it does on the CPU path, so it has to run before the image is uploaded.
+	const QTransform t = get_transform(frame, gpu->width(), gpu->height());
+	std::shared_ptr<QImage> source_image = frame->GetImage();
+	if (!source_image || source_image->isNull())
+		return false;
+
+	// Format_RGBA8888_Premultiplied is byte-for-byte kRGBA_8888 premultiplied.
+	const SkPixmap src(SkImageInfo::Make(source_image->width(), source_image->height(),
+										 kRGBA_8888_SkColorType, kPremul_SkAlphaType),
+					   source_image->constBits(), source_image->bytesPerLine());
+	// Wrap the QImage's pixels rather than copying them: the upload below is synchronous
+	// and source_image outlives it, so the extra full-frame CPU copy RasterFromPixmapCopy
+	// would make is pure cost on a path whose whole expense is moving the image.
+	sk_sp<SkImage> texture =
+		openshot::GpuFrame::ToTexture(SkImages::RasterFromPixmap(src, nullptr, nullptr));
+	if (!texture)
+		return false;   // caller falls back; the canvas has not been touched
+
+	// Qt stores an affine transform row-vector style (x' = m11*x + m21*y + m31), Skia
+	// column-vector style, so the six coefficients transpose across directly and the
+	// mapping is exact rather than approximate.
+	SkMatrix m;
+	m.setAll((SkScalar) t.m11(), (SkScalar) t.m21(), (SkScalar) t.m31(),
+			 (SkScalar) t.m12(), (SkScalar) t.m22(), (SkScalar) t.m32(),
+			 (SkScalar) t.m13(), (SkScalar) t.m23(), (SkScalar) t.m33());
+
+	SkCanvas* canvas = gpu->canvas();
+	SkPaint paint;
+	paint.setBlendMode(SkBlendMode::kSrcOver);   // QPainter::CompositionMode_SourceOver
+
+	// Match what QPainter actually does, which is not "always resample". For a transform
+	// no more complex than a translation by whole pixels, Qt blits the image straight
+	// across -- no filtering, no edge antialiasing. Resampling those instead softens every
+	// edge in the image, which costs most on content that is nearly all antialiased edges:
+	// it took the text scenarios from ~46 dB to ~36 dB against the CPU goldens.
+	const bool whole_pixel_translate = t.type() <= QTransform::TxTranslate;
+
+	SkSamplingOptions sampling(SkFilterMode::kLinear, SkMipmapMode::kNone);
+	if (whole_pixel_translate) {
+		sampling = SkSamplingOptions();   // nearest, no mipmaps: a straight blit
+	} else {
+		paint.setAntiAlias(true);         // QPainter::Antialiasing, for the transformed edge
+	}
+
+	canvas->save();
+	if (whole_pixel_translate)
+		canvas->translate((SkScalar) std::round(t.dx()), (SkScalar) std::round(t.dy()));
+	else
+		canvas->concat(m);
+	// Otherwise QPainter::SmoothPixmapTransform is bilinear, and this is its counterpart.
+	canvas->drawImage(texture, 0, 0, sampling, &paint);
+	canvas->restore();
+	return true;
+}
+
 void Clip::apply_background(std::shared_ptr<openshot::Frame> frame,
                             std::shared_ptr<openshot::Frame> background_frame,
                             bool update_frame_image) {

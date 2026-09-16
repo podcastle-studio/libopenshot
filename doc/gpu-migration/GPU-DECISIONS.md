@@ -542,6 +542,64 @@ someone writes down, instead of a silent drift inside a PSNR ≥ 45 budget.
 
 *Revisit if:* a scenario starts failing its exact gate — that is the signal to look, not to relax
 the tolerance.
+### The GPU compositor draws whole frames or none of a frame (2026-09-16, W12)
+
+The fast-path clip draw (`Clip::draw_to_canvas`) resamples with Skia's bilinear where
+`apply_keyframes` uses QPainter's smooth transform. The two differ by a few LSB — harmless on its
+own, median 58.8 dB across the scenarios it touches.
+
+It stops being harmless the moment a **CPU** blend mode reads that backdrop. The non-linear W3C
+modes magnify it violently: measured on a mixed frame, `compositing.blend_color_burn` came out at
+**26.68 dB with a max difference of 255** (colour-burn divides by the backdrop) and
+`blend_saturation` at 44.71 dB / max 128, from a backdrop that differed by about 3 LSB.
+
+So the canvas is attached only when **every** clip on the frame qualifies for the GPU path
+(`Timeline::GetFrame` asks each of `nearby_clips` before allocating). One frame, one path. That
+removes the entire amplification class rather than tuning tolerances around it, at the cost of
+giving up the GPU on mixed frames until W13 puts the blend modes on `SkBlendMode`.
+
+*Revisit at:* W13. Once the blend modes composite on the GPU too, "every clip qualifies" stops being
+restrictive, and the all-or-nothing rule can relax to per-clip.
+
+### QPainter rounds a translate-only transform; the GPU path must too (2026-09-16, W12)
+
+Worth recording because it cost real quality and was invisible without instrumenting the draw.
+
+The first version of `draw_to_canvas` always resampled. That took the text scenarios from ~46 dB
+against the CPU goldens down to ~36 dB — `text.curved` to 32.02, well under even the `Loose()` gate
+of 38 that text runs on. The cause was not scaling: a text clip's transform is a **translation by
+190.5, 165.0** — half a pixel. Qt's raster engine reduces a transform of type `TxTranslate` to an
+integer blit, with no filtering and no edge antialiasing; Skia resampled it and softened every glyph
+edge.
+
+Reproducing Qt's rule — `t.type() <= QTransform::TxTranslate` → round and blit unfiltered — restored
+those scenarios to **exactly** their previous numbers (45.86, 43.12, 39.99), which is the sign the
+rule is right rather than merely better. A tolerance-based check would have absorbed this silently;
+the exact gating is what surfaced it.
+
+### What the fast-path clip draw actually buys (2026-09-16, W12)
+
+Measured interleaved on one machine, 1080p render, GPU off against Vulkan on the A2000:
+
+| scenario | GPU off | Vulkan | change |
+|---|---|---|---|
+| `grid_3x3` | 19.3–19.9 | **26.7–27.4** | **+38 %** |
+| `single_video` | 96.9–101.6 | 101.4–104.3 | +4 % |
+| `podcast_pip` | 19.4–20.1 | 18.0–18.9 | **−5 %** |
+
+The pattern is the per-clip upload. This slice still moves every source image across PCIe once per
+clip per frame, so it wins where a clip's source is small relative to the area it is drawn over
+(`grid_3x3`: nine small tiles, nine intermediates and nine full-frame composites removed) and loses
+where a few large sources are uploaded to replace composites that were already cheap
+(`podcast_pip`). Dropping the redundant `RasterFromPixmapCopy` was tried and changed nothing, so it
+is the upload itself, not the CPU copy.
+
+**The `podcast_pip` regression is accepted for now, not ignored.** It is confined to GPU-enabled
+deployments — `OPENSHOT_GPU` defaults to off, and the CPU path is bit-identical and unchanged in
+speed — and the fix belongs to W22–W25, where decoded frames stop being uploaded at all. Re-measure
+it there. If GPU is switched on for a `podcast_pip`-shaped workload before then, that is the reason
+to gate the fast path on clip count or source size.
+
 
 ## Open — decide before plan phase 4
 

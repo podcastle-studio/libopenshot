@@ -20,14 +20,14 @@ void withBackground(Scene& s) {
 } // namespace
 
 void golden::registerTransformScenarios() {
-    add("transform.static_bbox_rotation", {"transform", "exact"}, {1, 45},
+    add("transform.static_bbox_rotation", {"transform", "exact", "gpu-composite"}, {1, 45},
         [](Scene& s) {
             withBackground(s);
             s.timeline->AddClip(clipA(s, Transform{BBox{0.35f, 0.45f, 0.5f, 0.5f}, 1.f, 1.f, 15.f}));
             s.timeline->Open();
         });
 
-    add("transform.keyframed_bezier", {"transform", "keyframes", "exact"}, {1, 20, 40, 60},
+    add("transform.keyframed_bezier", {"transform", "keyframes", "exact", "gpu-composite"}, {1, 20, 40, 60},
         [](Scene& s) {
             withBackground(s);
             Transform t;
@@ -38,7 +38,7 @@ void golden::registerTransformScenarios() {
             s.timeline->Open();
         });
 
-    add("transform.keyframed_linear_scale_only", {"transform", "keyframes", "exact"}, {1, 30, 60, 89},
+    add("transform.keyframed_linear_scale_only", {"transform", "keyframes", "exact", "gpu-composite"}, {1, 30, 60, 89},
         [](Scene& s) {
             withBackground(s);
             Transform t;
@@ -48,7 +48,7 @@ void golden::registerTransformScenarios() {
             s.timeline->Open();
         });
 
-    add("transform.rotation_full_turn", {"transform", "exact"}, {1, 23, 45, 68},
+    add("transform.rotation_full_turn", {"transform", "exact", "gpu-composite"}, {1, 23, 45, 68},
         [](Scene& s) {
             withBackground(s);
             Transform t{BBox{0.5f, 0.5f, 0.6f, 0.6f}};
@@ -57,7 +57,7 @@ void golden::registerTransformScenarios() {
             s.timeline->Open();
         });
 
-    add("transform.constant_steps", {"transform", "keyframes", "exact"}, {14, 15, 16, 45},
+    add("transform.constant_steps", {"transform", "keyframes", "exact", "gpu-composite"}, {14, 15, 16, 45},
         [](Scene& s) {
             withBackground(s);
             Transform t{BBox{0.3f, 0.5f, 0.4f, 0.4f}};
@@ -66,7 +66,7 @@ void golden::registerTransformScenarios() {
             s.timeline->Open();
         });
 
-    add("transform.flip_h_v", {"transform", "flip", "exact"}, {30},
+    add("transform.flip_h_v", {"transform", "flip", "exact", "gpu-composite"}, {30},
         [](Scene& s) {
             withBackground(s);
             auto* h = clipA(s, Transform{BBox{0.25f, 0.5f, 0.45f, 0.45f}}, 0);
@@ -78,7 +78,7 @@ void golden::registerTransformScenarios() {
             s.timeline->Open();
         });
 
-    add("transform.flip_both_rotated", {"transform", "flip", "exact"}, {30},
+    add("transform.flip_both_rotated", {"transform", "flip", "exact", "gpu-composite"}, {30},
         [](Scene& s) {
             withBackground(s);
             auto* c = clipA(s, Transform{BBox{0.5f, 0.5f, 0.6f, 0.6f}, 1.f, 1.f, 30.f});

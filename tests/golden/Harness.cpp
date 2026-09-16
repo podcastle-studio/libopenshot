@@ -1,5 +1,7 @@
 #include "Harness.h"
 
+#include "gpu/GpuDevice.h"
+
 #include "Clip.h"
 #include "Frame.h"
 #include "ReaderBase.h"
@@ -46,7 +48,14 @@ void add(const std::string& name, std::vector<std::string> tags, std::vector<int
     for (const auto& s : registry())
         if (s.name == name) { std::cerr << "duplicate scenario " << name << "\n"; std::abort(); }
     if (std::find(tags.begin(), tags.end(), "exact") != tags.end()) tol = Tolerance::Exact();
-    registry().push_back(Scenario{name, std::move(tags), std::move(frames), tol, std::move(build), nullptr});
+    // A scenario the GPU compositor draws cannot match CPU goldens bit-for-bit -- Skia's
+    // bilinear is not QPainter's smooth transform. Such a scenario keeps its strict CPU
+    // tolerance and is held to the parity policy's "close" class only when a GPU is in use.
+    Tolerance gpu_tol = tol;
+    if (std::find(tags.begin(), tags.end(), "gpu-composite") != tags.end())
+        gpu_tol = Tolerance::GpuClose();
+    registry().push_back(Scenario{name, std::move(tags), std::move(frames), tol, gpu_tol,
+                                  std::move(build), nullptr});
 }
 
 void addCustom(const std::string& name, std::vector<std::string> tags, std::function<void(Scene&)> build,
@@ -86,6 +95,12 @@ void defaultCapture(const Scenario& s, Scene& scene, std::vector<Captured>& out)
 RunSummary runAll(const Options& opts) {
     const auto t0 = std::chrono::steady_clock::now();
     RunSummary summary;
+
+    // Which tolerance applies is a property of the run, not of the scenario: the same
+    // scenario is held bit-exact on the CPU and "close" when a GPU composites it.
+    const bool gpu_active = openshot::GpuDevice::Instance().available();
+    if (gpu_active)
+        std::printf("GPU active — scenarios tagged gpu-composite use the close tolerance\n");
 
     auto* settings = openshot::Settings::Instance();
     settings->OMP_THREADS = opts.threads;
@@ -159,7 +174,7 @@ RunSummary runAll(const Options& opts) {
                 continue;
             }
             r.metrics = compare(*golden, cap.image);
-            r.pass = passes(r.metrics, s.tol);
+            r.pass = passes(r.metrics, gpu_active ? s.gpuTol : s.tol);
             if (!r.pass) ++summary.failures;
             if (!r.pass || opts.allImages) {
                 const std::string base = (opts.reportDir.empty() ? opts.outDir : opts.reportDir) + "/" + s.name + "/" + cap.label;

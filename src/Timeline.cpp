@@ -1082,7 +1082,19 @@ std::shared_ptr<Frame> Timeline::GetFrame(int64_t requested_frame)
 			// The clear below has to reproduce what the CPU path starts from exactly --
 			// the timeline colour when one is set, and otherwise the opaque black that
 			// Frame's "#000000" constructor colour yields on its first GetImage().
-			if (GpuDevice::Instance().available()) {
+			// All of this frame's clips, or none of them. A clip that takes the CPU path
+			// reads the canvas back mid-composite, and every clip after it then composites
+			// on the CPU against a backdrop the GPU produced -- a backdrop that differs by
+			// a few LSB from the one the CPU path would have built. Most blend modes hide
+			// that, but the non-linear ones magnify it: color-burn divides by the backdrop
+			// and turned a 3 LSB difference into 255 (26.7 dB), saturation into 128.
+			// Keeping a frame on one path removes that whole class of error, at the cost of
+			// giving up the GPU on mixed frames until W13 puts the blend modes on SkBlendMode.
+			bool all_clips_can_draw = true;
+			for (const auto clip : nearby_clips)
+				if (!clip->can_draw_to_canvas()) { all_clips_can_draw = false; break; }
+
+			if (all_clips_can_draw && GpuDevice::Instance().available()) {
 				if (auto gpu_canvas = GpuFrame::Create(preview_width, preview_height,
 													   kRGBA_8888_SkColorType)) {
 					SkColor clear_color = SK_ColorBLACK;
