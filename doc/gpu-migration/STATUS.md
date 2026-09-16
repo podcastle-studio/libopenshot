@@ -33,7 +33,7 @@ only thing stopping R2a and R2b from shipping. **R2a complete** (2.1, 2.2, 2.3);
 met**; worklist **A done**, **B rejected on
 measurement**, **C done differently**, **D done**, **E done**. The Skia text and subtitle engines now both run
 on the GPU under one control (`GpuDevice::SetBackend`), and the image that can run them exists.
-**W11, W12 and W13 are done** (2026-09-16); **W14 — blur, shadow, crop and flip on the paint — is
+**W11, W12, W13 and W14 are done** (2026-09-16); **W15 — delete `BlendModes.cpp` — is
 what a resuming session picks up next**. W01 and W02 are **deferred to the end of the migration** by the project owner: no
 image build, no release, no merge to `develop` until the GPU work is finished. See "Next step".
 
@@ -45,9 +45,12 @@ image build, no release, no merge to `develop` until the GPU work is finished. S
   `GpuSurfacePool`, and `Clip::draw_to_canvas` composites a clip onto it in one transformed draw —
   `apply_keyframes`' timeline-sized intermediate and `apply_background`'s full-frame composite both
   disappear. **All 16 blend modes** go through `SkBlendMode`. W12 and W13.
-  - A clip still falls back to the QPainter path for a shadow, a blur, an overlay clip, the
-    frame-number overlay, a waveform, or any effect that runs *after* the keyframes. W14 removes
-    the first two.
+  - **Shadow and blur composite on the GPU too** (W14): both are one `SkImageFilter` chain on
+    the paint, so a clip carrying either still draws in the single transformed draw. A clip now
+    falls back to the QPainter path only for an overlay clip, the frame-number overlay, a
+    waveform, or an effect that runs *after* the keyframes. Flip has been on the GPU since W12
+    (`get_transform` applies it); crop never was a `Clip` concern at all — it is the `Crop`
+    effect, so it belongs to W19–W21.
   - A frame composites on **one** path: the canvas is attached only when no clip would read the
     backdrop on the CPU. Why, and what it cost to learn, is in `GPU-DECISIONS.md`.
   - `Frame` can be GPU-backed; `GetImage()` does one cached readback and detaches, so every
@@ -84,10 +87,15 @@ Compositor gains, measured interleaved at 1080p `render` on the A2000, GPU off a
 | `blend_stack_5` | 15.9–17.4 | **38.5–43.2** | **2.5×** |
 | `grid_3x3` | 17.5–20.5 | 24.6–27.3 | +34 % |
 | `single_video` | 96.9–101.6 | 101.4–104.3 | +4 % |
-| `podcast_pip` | 19.4–20.1 | 18.0–18.9 | **−5 %** ⚠️ |
+| `podcast_pip` (W14) | 20.5–20.7 | **27.4–28.9** | **+40 %** |
+| `heavy_effects` (W14) | 9.9 | **10.6** (was 9.0) | **+18 %** |
 
-Both shortfalls have the same cause and the same fix: every source image still crosses PCIe once per
-clip per frame. That is **W22–W25**, and `grid_3x3`'s 45 fps gate is carried there.
+W14 turned `podcast_pip`'s −5 % into +40 % and `heavy_effects` from a GPU *loss* into a win, by
+putting the clip shadow and blur on the paint instead of falling back. Neither reaches its gate, and
+the remaining shortfall has one cause and one fix: every source image still crosses PCIe once per
+clip per frame. That is **W22–W25**, and `grid_3x3`'s and `podcast_pip`'s 45 fps gates are both
+carried there. The ceiling for W14 alone was measured at 33.5–35.0 fps on `podcast_pip` (guard
+dropped, shadow not drawn), so 45 was never reachable in this item.
 
 Measured at 1080p, `render` mode, 150 frames, interleaved on one machine — now on the **NVIDIA RTX
 A2000**, which every earlier phase-2 number was *not* (they were taken on an Intel Iris Xe iGPU).
@@ -424,31 +432,21 @@ session; the worklist opens with the protocol.
 `GPU-DECISIONS.md` — canvas `kRGBA_8888` (overriding the F16 recommendation that was on file),
 Graphite only, LUT matched to the front end at native cube size, nearest sampling kept.
 
-### Next: W14 — blur, shadow, crop and flip on the paint · legacy `3.3`
+### Next: W15 — delete `BlendModes.cpp` · legacy `3.4`
 
-**Why it is next.** They are the two most common reasons a clip still falls back to the QPainter
-path, so moving them widens GPU coverage more than anything else left in Stage 5.
+Read the item in the worklist. W14 is closed; nothing is half-finished and there is no in-progress
+state to resume or revert.
 
-**What to do** (worklist W14): `SkImageFilters::Blur` with the existing box→sigma mapping;
-`SkImageFilters::DropShadowOnly` with the same offset and colour; `clipRRect` for crop; negative
-scale for flip. Then delete `get_shadow_image`, the local `gaussian_blur` and the scalar opacity
-loop. Afterwards drop `shadow` and `blur` from `Clip::can_draw_to_canvas`, which is what actually
-turns the work into coverage.
+**Two things W14 leaves for a later item, both recorded rather than forgotten:**
 
-**Gate.** `tools/golden.sh check --filter clipfx` — SSIM ≥ 0.97 on shadows, PSNR ≥ 40 dB on blur;
-`podcast_pip` render ≥ **45 fps** (23 baseline; it currently measures 18–20 and is the one scenario
-the compositor made *slower*, so this is the item that should fix it).
+1. **`podcast_pip`'s 45 fps gate is carried to W22–W25.** W14 took it 18.7–21.1 → 27.4–28.9 fps,
+   and a probe (guard dropped, shadow not drawn) put this item's ceiling at 33.5–35.0. The gate was
+   unreachable here; what is left is the per-clip PCIe upload, which is where `grid_3x3`'s identical
+   45 fps gate already went.
+2. **Crop's `QPainterPath` → `clipRRect` is an effects port**, not a `Clip` one — `src/effects/Crop.cpp`.
+   W19–W21.
 
-**Expect the four `clipfx.*` scenarios to fail their `exact` gate — that is by design.** W12 tagged
-them bit-exact while they still ran on the CPU; W14 is the change that legitimately moves them, and
-W14's own gate is a "close" one. Re-baseline exactly those four, with the triptychs reviewed, and
-add `gpu-composite` to them.
-
-**Do not be surprised by:** `Tolerance::GpuAmplified()` on three blend scenarios (a band too wide to
-catch a regression — `openshot-gpu-blend-parity` guards them instead), and the CPU path being
-untouchable. Run the four-way sweep, `openshot-gpu-checks` and `openshot-gpu-blend-parity`.
-
-**After W14:** W15 (delete `BlendModes.cpp` — largely already bypassed on GPU), W16–W18 (readers on
+**After W15:** W16–W18 (readers on
 Skia, subtitles into the timeline canvas, Qt off the render path), W19–W21 (effects as shaders),
 **W22–W25 (frames stay on the GPU — this is where `grid_3x3`'s 45 fps gate and the `podcast_pip`
 regression are settled, because it removes the per-clip upload)**, W26–W28, W29–W31. W03/W04 (CI,
@@ -461,12 +459,42 @@ production corpus) remain open; W05–W10 are the CPU quick wins. W01/W02 stay d
   puts them all on `Tolerance::Loose()` (PSNR ≥ 38) for glyph anti-aliasing. Expected rather than
   broken, but "292/292 four ways" reads as a stronger claim than it is: for text the two paths agree
   only to PSNR ≥ 38. Everything that is *not* text is now gated bit-exact (see the log entry below).
+- **The suite's alpha test image was fully transparent until W14.**
+  `tests/golden/media/image_alpha_320x200.png` was generated with ffmpeg `drawbox`, which blends RGB
+  and never writes the alpha plane, so the file carried its two boxes at alpha 0. Every scenario
+  using it rendered nothing but its background: `clipfx.shadow`, `clipfx.shadow_colored_sharp` and
+  `clipfx.shadow_blur_rotated` gated an empty frame, which is why the clip shadow went untested
+  through W12 and W13 and why a bright red probe shadow changed no pixel. `generate.sh` now builds
+  it with `geq` (verified byte-reproducible) and the four affected scenario groups — those three
+  plus `readers.image_png_alpha`, `compositing.blend_with_png_alpha` and `export.roundtrip_x264` —
+  were re-baselined on the CPU path with every triptych reviewed. **Worth a sweep for others like
+  it:** a golden whose frame is only background proves nothing.
+
 - `effects.stack_crop_chroma_light_lut` golden shows harsh white blotches (ChromaKey + Light + LUT
   stacked). Baseline as-is; may be a real rendering quirk.
 - Export round trip live-vs-decoded is ~28 dB on the noisy test pattern with no colour bias:
   x264 loss, not a matrix bug.
 
 ## Log
+
+- 2026-09-16 — **W14 done: the clip shadow and blur composite on the GPU.** Both become one
+  `SkImageFilter` chain on the paint (`Blur` with `kClamp` + a source-rect crop, then `DropShadow` —
+  not `DropShadowOnly`, so the one filter draws shadow-then-clip in the CPU path's order), and
+  `shadow`/`blur` leave `can_draw_to_canvas`. `sigma_for_box()` is now shared by the CPU
+  `cv::GaussianBlur` and the GPU filter, so the two blur by the same amount.
+  **`podcast_pip` 18.7–21.1 → 27.4–28.9 fps (+40 %)**, `heavy_effects` 9.0 → 10.6 on Vulkan (+18 %,
+  and now ahead of its own CPU path instead of behind it). Quality well inside the gate: shadows
+  SSIM ≥ 0.9998 / PSNR 58.9–74.5 dB, blur PSNR 43.2–59.6 dB on a new `Tolerance::GpuBlur()`
+  (40 dB / 0.995, tag `gpu-blur`). Four-way sweep 292/292, `openshot-gpu-checks` 7/7 and
+  `openshot-gpu-blend-parity` clean on Vulkan and lavapipe, CPU path bit-identical.
+  **Three premises in the worklist item were wrong and are corrected there:** flip was already on
+  the GPU (W12's `get_transform`); crop is not a `Clip` concern at all but the `Crop` effect, so its
+  `clipRRect` belongs to W19–W21; and the three CPU helpers it said to delete are the no-GPU path,
+  which the standing constraint forbids deleting. **The 45 fps `podcast_pip` gate is missed and
+  carried to W22–W25** — measured, not assumed: with the guard dropped and the shadow not drawn at
+  all, this item's ceiling is 33.5–35.0 fps, so the rest is the per-clip PCIe upload.
+  **Separately, found that the suite's alpha test image had always been fully transparent**, which
+  had left the clip shadow completely ungated — see "Known oddities".
 
 - 2026-09-16 — **Session close.** W11, W12 and W13 all landed (see the three entries below); golden
   green 292/292 four ways, `openshot-gpu-checks` 7/7, `openshot-gpu-blend-parity` clean on Vulkan

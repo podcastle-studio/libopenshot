@@ -35,6 +35,13 @@ struct Tolerance {
     /// tolerance -- the CPU path ships, and nothing may move it.
     static Tolerance GpuClose() { return {45.0, 0.98, 255, 100.0}; }
 
+    /// For a clip whose blur the GPU applies as an SkImageFilter rather than an in-place
+    /// cv::GaussianBlur on the source. Both use the same box->sigma mapping, but Skia has
+    /// no mirror tile mode, so the edge band within ~3 sigma is clamped where OpenCV
+    /// reflects, and the blur is applied after the transform rather than before it.
+    /// W14's gate for blur, measured 43.2 dB / SSIM 0.9986 at the widest.
+    static Tolerance GpuBlur() { return {40.0, 0.995, 255, 100.0}; }
+
     /// For the few blend modes whose formula is mathematically steep enough to turn a
     /// sub-LSB difference in the source into a large one in the result.
     ///

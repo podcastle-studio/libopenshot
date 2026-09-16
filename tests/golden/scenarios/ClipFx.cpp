@@ -24,7 +24,7 @@ openshot::Keyframe ramp(double a, double b, int f0 = 1, int f1 = 90) {
 } // namespace
 
 void golden::registerClipFxScenarios() {
-    add("clipfx.shadow", {"clipfx", "shadow", "exact"}, {1, 45, 89},
+    add("clipfx.shadow", {"clipfx", "shadow", "exact", "gpu-composite"}, {1, 45, 89},
         [](Scene& s) {
             auto& tl = s.makeTimeline();
             tl.AddClip(backgroundClip(s, s.media("background_960x540.png")));
@@ -38,7 +38,7 @@ void golden::registerClipFxScenarios() {
             tl.Open();
         });
 
-    add("clipfx.shadow_colored_sharp", {"clipfx", "shadow", "exact"}, {30},
+    add("clipfx.shadow_colored_sharp", {"clipfx", "shadow", "exact", "gpu-composite"}, {30},
         [](Scene& s) {
             auto& tl = s.makeTimeline();
             tl.AddClip(backgroundClip(s, s.media("background_960x540.png")));
@@ -52,7 +52,7 @@ void golden::registerClipFxScenarios() {
             tl.Open();
         });
 
-    add("clipfx.blur", {"clipfx", "blur", "exact"}, {1, 45, 89},
+    add("clipfx.blur", {"clipfx", "blur", "exact", "gpu-composite", "gpu-blur"}, {1, 45, 89},
         [](Scene& s) {
             auto& tl = s.makeTimeline();
             tl.AddClip(backgroundClip(s, s.media("background_960x540.png")));
@@ -65,7 +65,7 @@ void golden::registerClipFxScenarios() {
             tl.Open();
         });
 
-    add("clipfx.shadow_blur_rotated", {"clipfx", "shadow", "blur", "exact"}, {30},
+    add("clipfx.shadow_blur_rotated", {"clipfx", "shadow", "blur", "exact", "gpu-composite"}, {30},
         [](Scene& s) {
             auto& tl = s.makeTimeline();
             tl.AddClip(backgroundClip(s, s.media("background_960x540.png")));

@@ -18,8 +18,16 @@ ffmpeg -y -hide_banner -v error -f lavfi -i "color=c=0x00FF00:size=640x360:rate=
 ffmpeg -y -hide_banner -v error -f lavfi -i "nullsrc=size=640x360:rate=30,geq=lum='clip(255*((X/W)-(T/4))*4+128,0,255)':cb=128:cr=128" -t 6 $X264 matte_wipe_640x360_30.mp4
 # overlay clip (light-leak stand-in): drifting soft gradients on black (additive blend / displacement)
 ffmpeg -y -hide_banner -v error -f lavfi -i "gradients=size=640x360:rate=30:speed=0.05:nb_colors=3:c0=0x000000:c1=0xFFB040:c2=0x000000" -t 6 $X264 overlay_gradients_640x360_30.mp4
-# PNG with alpha (image clip, premultiplication check)
-ffmpeg -y -hide_banner -v error -f lavfi -i "color=c=0x00000000@0.0:size=320x200,format=rgba,drawbox=x=20:y=20:w=280:h=160:color=0x3060FF@0.85:t=fill,drawbox=x=60:y=60:w=200:h=80:color=0xFFD040@1.0:t=fill" -frames:v 1 image_alpha_320x200.png
+# PNG with alpha (image clip, premultiplication check): a transparent border, a 280x160
+# blue box at 85% alpha and an opaque 200x80 yellow box inside it. Built with geq rather
+# than drawbox because drawbox blends RGB only and never writes the alpha plane, so the
+# drawbox version of this file was fully transparent -- every scenario using it rendered
+# nothing but its background, which is how the clip shadow went untested until W14.
+ffmpeg -y -hide_banner -v error -f lavfi -i "nullsrc=size=320x200,format=rgba,geq=\
+r='if(between(X,60,259)*between(Y,60,139),255,if(between(X,20,299)*between(Y,20,179),48,0))':\
+g='if(between(X,60,259)*between(Y,60,139),208,if(between(X,20,299)*between(Y,20,179),96,0))':\
+b='if(between(X,60,259)*between(Y,60,139),64,if(between(X,20,299)*between(Y,20,179),255,0))':\
+a='if(between(X,60,259)*between(Y,60,139),255,if(between(X,20,299)*between(Y,20,179),217,0))'" -frames:v 1 image_alpha_320x200.png
 # opaque JPEG
 ffmpeg -y -hide_banner -v error -f lavfi -i "rgbtestsrc=size=400x300" -frames:v 1 -q:v 2 image_rgb_400x300.jpg
 # static luminance matte image

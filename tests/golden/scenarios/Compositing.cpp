@@ -53,7 +53,7 @@ void golden::registerCompositingScenarios() {
             });
     }
 
-    add("compositing.blend_with_png_alpha", {"compositing", "blend", "exact"}, {15},
+    add("compositing.blend_with_png_alpha", {"compositing", "blend", "exact", "gpu-composite"}, {15},
         [](Scene& s) {
             auto& tl = s.makeTimeline();
             tl.AddClip(backgroundClip(s, s.media("background_960x540.png")));

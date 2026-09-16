@@ -45,6 +45,11 @@
 #include "skia/include/core/SkAlphaType.h"
 #include "skia/include/core/SkColorType.h"
 #include "skia/include/core/SkBlendMode.h"
+#include "skia/include/core/SkColor.h"
+#include "skia/include/core/SkImageFilter.h"
+#include "skia/include/core/SkRect.h"
+#include "skia/include/core/SkTileMode.h"
+#include "skia/include/effects/SkImageFilters.h"
 
 #ifdef USE_IMAGEMAGICK
 	#include "MagickUtilities.h"
@@ -60,15 +65,19 @@
 using namespace openshot;
 
 namespace {
-	// High-quality Gaussian blur over a cv::Mat, in place. The amount uses the same units
-	// as the image-processing-lib box blur (applyBlurEffect): a box-equivalent kernel size
-	// in pixels. A box of width w has variance (w^2 - 1)/12, so we build a Gaussian of the
-	// matching variance — same blur spread as that box size, but smooth instead of boxy.
+	// Blur amount -> Gaussian sigma. `blur_amount` and `shadow_blur` are box-equivalent
+	// kernel sizes in pixels, the same unit the image-processing-lib box blur
+	// (applyBlurEffect) uses. A box of width w has variance (w^2 - 1)/12, so a Gaussian of
+	// the matching variance has the same spread, smooth instead of boxy. The CPU
+	// (cv::GaussianBlur) and GPU (SkImageFilters) paths share this one mapping so the two
+	// blur the same amount.
+	double sigma_for_box(int box_size) {
+		const double w = std::max(1, box_size);
+		return std::sqrt(std::max(0.0, (w * w - 1.0) / 12.0));
+	}
+
+	// High-quality Gaussian blur over a cv::Mat, in place.
 	void gaussian_blur(cv::Mat& image, int horizontal, int vertical) {
-		auto sigma_for_box = [](int box_size) -> double {
-			const double w = std::max(1, box_size);
-			return std::sqrt(std::max(0.0, (w * w - 1.0) / 12.0));
-		};
 		// Smallest odd kernel covering ~+/-3 sigma (1 = no blur along that axis).
 		auto kernel_for_sigma = [](double sigma) -> int {
 			if (sigma <= 0.0) return 1;
@@ -1694,10 +1703,10 @@ bool Clip::can_draw_to_canvas() const
 	// Every blend mode qualifies since W13: BlendImages() and SkBlendMode implement the
 	// same W3C spec, so the mode is set on the paint and Skia does the backdrop read.
 
-	// Shadow and blur rewrite the source before it is drawn (W14 turns them into
-	// SkImageFilters on the paint). The frame-number overlay and the waveform draw extra
-	// content onto the clip's own canvas, which there no longer is.
-	if (shadow || blur || display != FRAME_DISPLAY_NONE || waveform)
+	// Shadow and blur qualify since W14: both are SkImageFilters on the paint, so they
+	// ride the same single transformed draw. The frame-number overlay and the waveform
+	// draw extra content onto the clip's own canvas, which there no longer is.
+	if (display != FRAME_DISPLAY_NONE || waveform)
 		return false;
 
 	// Overlay clips composite through OpenCV on the clip's own image.
@@ -1756,6 +1765,53 @@ bool Clip::draw_to_canvas(std::shared_ptr<openshot::Frame> frame,
 	SkCanvas* canvas = gpu->canvas();
 	SkPaint paint;
 	paint.setBlendMode(ToSkBlendMode(blend_mode));
+
+	// W14: the clip blur and the drop shadow become one SkImageFilter chain on the paint,
+	// so a clip carrying either still composites in this single transformed draw. Both are
+	// built in the source image's own coordinate space and the canvas transform below
+	// carries them, exactly as the QPainter path draws the shadow under the same transform
+	// as the clip. The CPU equivalents -- apply_keyframes()' cv::GaussianBlur and
+	// get_shadow_image() -- are untouched and still run whenever this draw is not taken.
+	const SkRect source_rect = SkRect::MakeWH((SkScalar) source_image->width(),
+											  (SkScalar) source_image->height());
+	sk_sp<SkImageFilter> filter;
+	if (blur) {
+		const int blur_radius = std::max(0, (int) std::lround(blur_amount.GetValue(frame->number)));
+		const SkScalar sigma = (SkScalar) sigma_for_box(blur_radius);
+		if (sigma > 0.0f) {
+			// kClamp is the nearest Skia has to the BORDER_REFLECT_101 cv::GaussianBlur
+			// uses (kMirror is not implemented), and cropping to the source rect keeps the
+			// blur inside the image the way an in-place blur on the source does, instead of
+			// letting it bleed 3 sigma past every edge.
+			filter = SkImageFilters::Blur(sigma, sigma, SkTileMode::kClamp, nullptr, source_rect);
+		}
+	}
+	if (shadow) {
+		const int shadow_box = std::max(0, (int) std::lround(shadow_blur.GetValue(frame->number)));
+		const SkScalar sigma = (SkScalar) sigma_for_box(shadow_box);
+		// Polar (distance, angle) -> source-space x/y, the same conversion the CPU path
+		// makes: degrees clockwise from +X with +Y pointing down.
+		const double distance = shadow_distance.GetValue(frame->number);
+		const double angle_rad = shadow_angle.GetValue(frame->number) * M_PI / 180.0;
+		const auto channel = [](double v) {
+			return (U8CPU) std::min(255, std::max(0, (int) std::lround(v)));
+		};
+		// The colour's alpha is an overall shadow-opacity multiplier on the source's
+		// blurred alpha, which is what DropShadow does with the alpha it is given.
+		const SkColor color = SkColorSetARGB(channel(shadow_color.alpha.GetValue(frame->number)),
+											 channel(shadow_color.red.GetValue(frame->number)),
+											 channel(shadow_color.green.GetValue(frame->number)),
+											 channel(shadow_color.blue.GetValue(frame->number)));
+		// DropShadow (not DropShadowOnly) draws the shadow and then the clip over it, in
+		// the one filter, which is the order apply_keyframes() paints them in. Chaining it
+		// on top of the blur filter reproduces the CPU path's ordering too: the shadow's
+		// silhouette is taken from the *blurred* source.
+		filter = SkImageFilters::DropShadow((SkScalar) (distance * std::cos(angle_rad)),
+											(SkScalar) (distance * std::sin(angle_rad)),
+											sigma, sigma, color, std::move(filter));
+	}
+	if (filter)
+		paint.setImageFilter(std::move(filter));
 
 	// Match what QPainter actually does, which is not "always resample". For a transform
 	// no more complex than a translation by whole pixels, Qt blits the image straight

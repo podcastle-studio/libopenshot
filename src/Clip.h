@@ -168,11 +168,11 @@ namespace openshot {
 		/// True when this clip can be composited straight onto a GPU timeline canvas,
 		/// collapsing apply_keyframes() and apply_background() into one transformed draw.
 		///
-		/// Deliberately narrow. Everything it excludes -- the 15 non-normal blend modes,
-		/// shadow, blur, overlays, the frame-number overlay, waveforms, and any effect or
-		/// timeline effect that runs *after* the keyframes -- stays on the QPainter path
-		/// that ships today, because each of those reads or rewrites the composited image
-		/// in a way the single draw does not reproduce.
+		/// Deliberately narrow. Everything it excludes -- overlays, the frame-number
+		/// overlay, waveforms, and any effect or timeline effect that runs *after* the
+		/// keyframes -- stays on the QPainter path that ships today, because each of those
+		/// reads or rewrites the composited image in a way the single draw does not
+		/// reproduce.
 		bool can_draw_to_canvas() const;
 
 	private:
