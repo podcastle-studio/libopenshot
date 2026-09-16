@@ -54,4 +54,11 @@ if(DEFINED PROJECT_NAME AND TARGET openshot AND SKIA_GPU_FOUND)
   target_include_directories(openshot-gpu-checks BEFORE PRIVATE
     ${SKIA_VULKAN_INCLUDE_DIR} ${SKIA_INCLUDE_DIRS} ${PROJECT_SOURCE_DIR}/src)
   target_link_libraries(openshot-gpu-checks PRIVATE openshot)
+
+  # What a GPU timeline canvas costs before a GPU consumer exists for it (W12/W13 sequencing).
+  add_executable(openshot-gpu-canvas-cost gpu_canvas_cost.cpp)
+  target_compile_features(openshot-gpu-canvas-cost PRIVATE cxx_std_20)
+  target_include_directories(openshot-gpu-canvas-cost BEFORE PRIVATE
+    ${SKIA_VULKAN_INCLUDE_DIR} ${SKIA_INCLUDE_DIRS} ${PROJECT_SOURCE_DIR}/src)
+  target_link_libraries(openshot-gpu-canvas-cost PRIVATE openshot)
 endif()

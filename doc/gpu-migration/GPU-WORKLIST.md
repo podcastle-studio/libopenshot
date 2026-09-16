@@ -303,6 +303,25 @@ CPU output should stay bit-identical and any drift is a finding rather than an e
       rasterisation differing between backends, not a regression. Expect `clipfx.*` blur/shadow to
       lose the exact gate at **W14** and `subtitles.*` at **W17**; both are deliberate, and the tag
       is what forces them to be written down rather than absorbed silently.
+> **Premise check, 2026-09-16 — W12 as written cannot meet its own gate, because W13 is what pays
+> for it.** Two things the item assumes are not how the code works:
+>
+> 1. **`add_layer` does not composite.** It copies audio. The image composite happens inside
+>    `Clip::GetFrame` → `apply_keyframes` (transform onto a clip-sized canvas) and
+>    `apply_background` (QPainter source-over, or `BlendImages()` for the 15 non-normal blend
+>    modes, painting **in place** into the timeline frame's `QImage`). So "pass the `SkCanvas` down
+>    through `add_layer`" has no composite to reach until `Clip::draw(SkCanvas&)` exists — W13.
+> 2. **Until then a GPU timeline canvas is pure overhead.** Every frame would acquire a pooled
+>    surface, clear it, and read it straight back so QPainter can touch the pixels, with nothing
+>    drawn on the GPU in return. Measured with `tests/gpu/gpu_canvas_cost.cpp`
+>    (`openshot-gpu-canvas-cost`, 200 frames, A2000): **1.65 ms median at 1080p** (p95 2.35),
+>    6.93 ms at 2160p; 2.21 ms / 7.18 ms on lavapipe. Against the baseline that is
+>    `single_video` **117 → 98 fps (−16 %)**, `source_4k` −9 %, `podcast_pip` −4 % — and the gate
+>    below says *not slower than baseline*.
+>
+> The fix is sequencing, not scope: the canvas needs a GPU consumer in the same change. See the
+> chosen approach recorded in `GPU-DECISIONS.md`.
+
 - [ ] `Timeline::GetFrame` takes its output surface from `GpuSurfacePool` and passes its `SkCanvas`
       down through `add_layer`.
 - [ ] `Frame` gains a `GpuFrame`; `GetImage()` on a GPU frame does one cached readback so every
