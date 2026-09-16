@@ -37,7 +37,7 @@ void golden::registerCompositingScenarios() {
             });
     }
 
-    add("compositing.blend_with_png_alpha", {"compositing", "blend"}, {15},
+    add("compositing.blend_with_png_alpha", {"compositing", "blend", "exact"}, {15},
         [](Scene& s) {
             auto& tl = s.makeTimeline();
             tl.AddClip(backgroundClip(s, s.media("background_960x540.png")));
@@ -51,7 +51,7 @@ void golden::registerCompositingScenarios() {
             tl.Open();
         });
 
-    add("compositing.alpha_fade_ghost", {"compositing", "alpha"}, {1, 8, 16, 31, 40, 45, 75, 89},
+    add("compositing.alpha_fade_ghost", {"compositing", "alpha", "exact"}, {1, 8, 16, 31, 40, 45, 75, 89},
         [](Scene& s) {
             auto& tl = s.makeTimeline();
             tl.AddClip(backgroundClip(s, s.media("background_960x540.png")));
@@ -64,7 +64,7 @@ void golden::registerCompositingScenarios() {
             tl.Open();
         });
 
-    add("compositing.opacity_keyframes_merge", {"compositing", "alpha"}, {1, 30, 60, 89},
+    add("compositing.opacity_keyframes_merge", {"compositing", "alpha", "exact"}, {1, 30, 60, 89},
         [](Scene& s) {
             auto& tl = s.makeTimeline();
             tl.AddClip(backgroundClip(s, s.media("background_960x540.png")));

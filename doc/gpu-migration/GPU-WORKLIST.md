@@ -292,13 +292,17 @@ once W13 lands.
 **Depends on.** W11 — settled: the canvas is **`kRGBA_8888`**, matching the CPU path, so GPU and
 CPU output should stay bit-identical and any drift is a finding rather than an expected cost.
 
-- [ ] **Tag the bit-exact scenarios `"exact"` first, before touching the render path.** No scenario
-      uses `Tolerance::Exact()` today — 60 of 64 registrations take the default (PSNR ≥ 45, SSIM
-      ≥ 0.98, `maxAbs` unconstrained), so "292/292 four ways" certifies *close*, not *bit-identical*,
-      and a precision regression in the compositor would go green silently. 282 of 292 frames are
-      bit-exact today; the 10 that are not are all text/glow. The tolerance class and the `"exact"`
-      tag already exist and are wired in `Harness.cpp:48` — they are just unused. Do this while the
-      suite is still green, or it proves nothing.
+- [x] **Tag the bit-exact scenarios `"exact"` first, before touching the render path.** Done
+      2026-09-16. Measured every scenario across the full four-way sweep and took the worst result
+      per scenario: **77 are bit-exact in all four configurations**, 25 already gated
+      `Tolerance::Exact()`, so **51 newly tagged — 76 now gated exact**. All four stay 292/292 under
+      the tighter gate, so the rewrite below cannot move a compositing, transform, transition,
+      effect or reader pixel without failing. `export.roundtrip_x264` left out on purpose (lossy
+      round trip; its `Codec()` tolerance also governs its checks). The 17 `text.*` scenarios are
+      **not** bit-exact GPU-vs-CPU — up to 106 LSB — and stay on `Loose()`; that is Skia's glyph
+      rasterisation differing between backends, not a regression. Expect `clipfx.*` blur/shadow to
+      lose the exact gate at **W14** and `subtitles.*` at **W17**; both are deliberate, and the tag
+      is what forces them to be written down rather than absorbed silently.
 - [ ] `Timeline::GetFrame` takes its output surface from `GpuSurfacePool` and passes its `SkCanvas`
       down through `add_layer`.
 - [ ] `Frame` gains a `GpuFrame`; `GetImage()` on a GPU frame does one cached readback so every

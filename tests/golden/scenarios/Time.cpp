@@ -21,12 +21,12 @@ openshot::Clip* speedScene(Scene& s, double speed, double end = 3.0, double trim
 } // namespace
 
 void golden::registerTimeScenarios() {
-    add("time.speed_2x", {"time", "speed"}, {1, 15, 30, 45}, [](Scene& s) {
+    add("time.speed_2x", {"time", "speed", "exact"}, {1, 15, 30, 45}, [](Scene& s) {
         speedScene(s, 2.0);
         s.timeline->Open();
     });
 
-    add("time.speed_half", {"time", "speed"}, {1, 30, 60, 89}, [](Scene& s) {
+    add("time.speed_half", {"time", "speed", "exact"}, {1, 30, 60, 89}, [](Scene& s) {
         speedScene(s, 0.5);
         s.timeline->Open();
     });

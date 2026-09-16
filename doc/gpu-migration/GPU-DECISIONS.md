@@ -492,20 +492,56 @@ Two consequences that must be carried into W19, not discovered there:
 
 *Revisit if:* the front end changes cube handling or interpolation. The two must move together.
 
-### The golden suite gates "close", not "exact" (2026-09-16, finding)
+### The golden suite now gates 76 of 95 scenarios bit-exact (2026-09-16, W12 sub-task)
 
-Recorded because the W11 canvas decision leans on bit-exactness that the suite does not currently
-enforce. **No scenario uses `Tolerance::Exact()`**: of 64 registrations, 3 take `Loose()` (text AA
-and large blurs), 1 takes `Codec()`, and the remaining 60 take the default — PSNR ≥ 45, SSIM ≥ 0.98,
-`maxAbs` unconstrained at 255. So "292/292 four ways" certifies PSNR ≥ 45 dB, **not** bit-identity,
-even though 282 of the 292 frames are in fact bit-exact (the 10 that are not are all text/glow:
-`text.glow` f15 at 43.5 dB / max 53, and 9 frames of the two animated-glow scenarios at max 1–2).
+**Correction to the first version of this entry**, which claimed no scenario used
+`Tolerance::Exact()`. That was wrong: the grep behind it searched `tests/golden/*.cpp` and missed
+`tests/golden/scenarios/`. **25 scenarios were already exact-gated** — 10 registration sites, one of
+them a loop over all 16 blend modes.
 
-`Tolerance::Exact()` (PSNR ≥ 60, SSIM ≥ 0.995, `maxAbs` ≤ 1, `pctOver2` ≤ 0.5) and its `"exact"`
-tag already exist and are wired in `Harness.cpp:48` — they are simply unused. Until the bit-exact
-scenarios are tagged, a precision regression in the compositor can go green without reporting that
-anything moved. Tagging them is a sub-task of W12.
+What was true is that the gate was looser than the evidence allowed. Measuring every scenario across
+the full four-way sweep (CPU Skia; GPU Skia off; Vulkan; lavapipe) and taking the worst result per
+scenario:
 
+| | scenarios |
+|---|---|
+| bit-exact in **all four** configurations | 77 |
+| of those, already gated `Tolerance::Exact()` | 25 |
+| **newly tagged `"exact"`** | **51** |
+| now gated exact | **76** |
+| deliberately left out: `export.roundtrip_x264` | 1 |
+
+`export.roundtrip_x264` is excluded on purpose — its frames happen to match, but it is a lossy codec
+round trip and its `Tolerance::Codec()` also governs its `Check` entries. "Exact" is the wrong idea
+for it.
+
+No already-tagged scenario failed to qualify, so nothing was mis-gated before. All four
+configurations stay at 292/292 with the tighter gate.
+
+**The 17 `text.*` scenarios are not bit-exact and are not tagged.** They are the one real finding
+here: text drifts **GPU-vs-CPU by up to 106 LSB** (`text.curved`, worst PSNR 39.99;
+`text.gradient_fill_stroke_shadow` 41.68 with 20.9 % of pixels over 2 LSB). This is expected rather
+than broken — Skia rasterises glyphs differently on the GPU than on the CPU, which is why
+`Text.cpp` puts them all on `Tolerance::Loose()` with the comment "glyph anti-aliasing differs
+across Skia/FreeType builds". But it is worth stating plainly, because "292/292 four ways" reads as
+a much stronger claim than it is: **for text, the GPU and CPU paths are visibly different images,
+agreeing only to PSNR ≥ 38.**
+
+Two groups will stop being exact later, by design, and a session that hits it should not think it
+broke something:
+
+- `clipfx.blur`, `clipfx.shadow`, `clipfx.shadow_blur_rotated`, `clipfx.shadow_colored_sharp` —
+  **W14** replaces the hand-rolled blur and shadow with `SkImageFilters`, and W14's own gate already
+  declares that "close" (SSIM ≥ 0.97 on shadows, PSNR ≥ 40 dB on blur).
+- `subtitles.animated_in_out`, `subtitles.one_word_container`, `subtitles.per_time` — bit-exact only
+  because the Timeline deliberately hands subtitles a *raster* canvas today. **W17** puts them on
+  the GPU canvas, at which point they will drift the way `text.*` already does.
+
+In both cases the exact tag is doing its job: it forces the re-classification to be a decision
+someone writes down, instead of a silent drift inside a PSNR ≥ 45 budget.
+
+*Revisit if:* a scenario starts failing its exact gate — that is the signal to look, not to relax
+the tolerance.
 
 ## Open — decide before plan phase 4
 

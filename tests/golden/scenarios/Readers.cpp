@@ -19,16 +19,16 @@ void videoScene(Scene& scene, const std::string& file, double end) {
 } // namespace
 
 void golden::registerReaderScenarios() {
-    add("readers.video_a_30fps", {"readers"}, {1, 30, 75, 150},
+    add("readers.video_a_30fps", {"readers", "exact"}, {1, 30, 75, 150},
         [](Scene& s) { videoScene(s, "clip_a_640x360_30.mp4", 6.0); });
 
-    add("readers.video_b_24fps_prescale", {"readers", "framemapper"}, {1, 2, 5, 30, 75, 150},
+    add("readers.video_b_24fps_prescale", {"readers", "framemapper", "exact"}, {1, 2, 5, 30, 75, 150},
         [](Scene& s) { videoScene(s, "clip_b_854x480_24.mp4", 6.0); });
 
-    add("readers.video_c_25fps_prescale_720p", {"readers", "framemapper"}, {1, 5, 6, 30, 60, 89},
+    add("readers.video_c_25fps_prescale_720p", {"readers", "framemapper", "exact"}, {1, 5, 6, 30, 60, 89},
         [](Scene& s) { videoScene(s, "clip_c_1280x720_25.mp4", 3.0); });
 
-    add("readers.image_png_alpha", {"readers", "alpha"}, {1},
+    add("readers.image_png_alpha", {"readers", "alpha", "exact"}, {1},
         [](Scene& s) {
             auto& tl = s.makeTimeline();
             tl.AddClip(backgroundClip(s, s.media("background_960x540.png")));
@@ -47,7 +47,7 @@ void golden::registerReaderScenarios() {
             tl.Open();
         });
 
-    add("readers.svg_shapes", {"readers", "shapes"}, {1},
+    add("readers.svg_shapes", {"readers", "shapes", "exact"}, {1},
         [](Scene& s) {
             auto& tl = s.makeTimeline();
             tl.AddClip(backgroundClip(s, s.media("background_960x540.png")));

@@ -416,15 +416,11 @@ flight, density, observability).
 
 ## Known oddities worth a look
 
-- **The golden suite gates "close", not "exact".** No scenario uses `Tolerance::Exact()`: of 64
-  registrations, 3 take `Loose()`, 1 takes `Codec()` and the other 60 take the default — PSNR ≥ 45,
-  SSIM ≥ 0.98, `maxAbs` unconstrained. So "292/292 four ways" certifies PSNR ≥ 45 dB, **not**
-  bit-identity, even though 282 of the 292 frames are bit-exact in practice. `Tolerance::Exact()`
-  and its `"exact"` tag exist and are wired in `Harness.cpp:48`, just unused. Tagging the bit-exact
-  scenarios is now the first sub-task of W12. The 10 frames that are not bit-exact are all
-  text/glow: `text.glow` f15 (43.5 dB, max 53, passing under `Loose()`) and 9 frames of the two
-  animated-glow scenarios at max 1–2.
-
+- **Text is visibly different on the GPU.** The `text.*` scenarios are not bit-exact between the CPU
+  and GPU paths — worst case 106 LSB (`text.curved`, PSNR 39.99) — and pass only because `Text.cpp`
+  puts them all on `Tolerance::Loose()` (PSNR ≥ 38) for glyph anti-aliasing. Expected rather than
+  broken, but "292/292 four ways" reads as a stronger claim than it is: for text the two paths agree
+  only to PSNR ≥ 38. Everything that is *not* text is now gated bit-exact (see the log entry below).
 - `effects.stack_crop_chroma_light_lut` golden shows harsh white blotches (ChromaKey + Light + LUT
   stacked). Baseline as-is; may be a real rendering quirk.
 - Export round trip live-vs-decoded is ~28 dB on the noisy test pattern with no colour bias:
@@ -441,9 +437,20 @@ flight, density, observability).
   on a coarse 2³ LUT), and the Ganesh question was settled by finding no Ganesh code in `src/` at
   all. Two consequences carried into W19 rather than left to be discovered there. Separately, found
   that the golden suite gates "close" and not "exact" — no scenario uses `Tolerance::Exact()` —
-  which makes tagging the bit-exact scenarios the first sub-task of W12. W01 and W02 deferred to
-  the end of the migration by the project owner; no code changed, suite green 292/292 before and
-  after.
+  which made tagging the bit-exact scenarios the first sub-task of W12. **That claim was wrong and
+  is corrected in the 2026-09-16 W12 entry below** — 25 scenarios were already exact-gated; the grep
+  behind it missed `tests/golden/scenarios/`. W01 and W02 deferred to the end of the migration by
+  the project owner; no code changed, suite green 292/292 before and after.
+
+- 2026-09-16 — **W12 sub-task: the golden suite now gates 76 of 95 scenarios bit-exact.** Measured
+  every scenario across the full four-way sweep and took the worst result per scenario: 77 are
+  bit-exact in all four configurations, 25 of which were already gated `Tolerance::Exact()`, so 51
+  were newly tagged. `export.roundtrip_x264` deliberately left out (lossy round trip; its
+  `Codec()` tolerance also governs its checks). All four configurations stay **292/292** under the
+  tighter gate, so the compositor rewrite starting now cannot move a compositing, transform,
+  transition, effect or reader pixel without failing. The 17 `text.*` scenarios are **not**
+  bit-exact GPU-vs-CPU (up to 106 LSB) and stay on `Loose()`; `clipfx.*` blur/shadow and
+  `subtitles.*` are expected to lose their exact gate at W14 and W17 respectively, by design.
 
 - 2026-09-15 — **Phase 2 finished: worklist item E / plan step 2.0, the GPU-capable image.**
   `../video-rendering-service` branch `feature/gpu-rendering`: CUDA/FFmpeg runtime base with

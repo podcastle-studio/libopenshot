@@ -23,8 +23,8 @@ void golden::registerSubtitleScenarios() {
     const Tolerance text = Tolerance::Loose();
     const std::vector<int64_t> F = {5, 20, 40, 55, 75};
 
-    add("subtitles.per_time", {"subtitles"}, F, [](Scene& s) { subtitleScene(s, SubtitleVariant::PerTime); }, text);
-    add("subtitles.one_word_container", {"subtitles"}, F, [](Scene& s) { subtitleScene(s, SubtitleVariant::OneWordContainer); }, text);
-    add("subtitles.animated_in_out", {"subtitles", "animation"}, {1, 3, 6, 16, 18, 46, 68},
+    add("subtitles.per_time", {"subtitles", "exact"}, F, [](Scene& s) { subtitleScene(s, SubtitleVariant::PerTime); }, text);
+    add("subtitles.one_word_container", {"subtitles", "exact"}, F, [](Scene& s) { subtitleScene(s, SubtitleVariant::OneWordContainer); }, text);
+    add("subtitles.animated_in_out", {"subtitles", "animation", "exact"}, {1, 3, 6, 16, 18, 46, 68},
         [](Scene& s) { subtitleScene(s, SubtitleVariant::AnimatedInOut); }, text);
 }

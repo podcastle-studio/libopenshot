@@ -44,7 +44,9 @@ void golden::registerTransitionScenarios() {
         TransitionEffect::Brightness, TransitionEffect::ColorShift};
 
     for (auto e : all) {
-        add(std::string("transitions.") + name(e), {"transitions", name(e)}, kRamp, [e](Scene& s) {
+        // Every one of these is bit-identical across the four-way sweep today (verified 2026-09-16),
+        // so they are gated exact: the compositor must not move a transition pixel.
+        add(std::string("transitions.") + name(e), {"transitions", name(e), "exact"}, kRamp, [e](Scene& s) {
             Pair p = pairScene(s);
             applyOverlappingTransition(*p.out, *p.in, 1.0, s.fps.ToDouble(), {e});
             finish(s, p);
@@ -58,7 +60,7 @@ void golden::registerTransitionScenarios() {
             finish(s, p);
         });
 
-    add("transitions.overlay_additive_blend", {"transitions", "overlay"}, kRamp, [](Scene& s) {
+    add("transitions.overlay_additive_blend", {"transitions", "overlay", "exact"}, kRamp, [](Scene& s) {
         Pair p = pairScene(s);
         applyOverlappingTransition(*p.out, *p.in, 1.0, s.fps.ToDouble(), {});
         auto* overlay = addOverlayClip(s, s.media("overlay_gradients_640x360_30.mp4"), 1.0,
@@ -67,7 +69,7 @@ void golden::registerTransitionScenarios() {
         finish(s, p);
     });
 
-    add("transitions.overlay_displacement_map", {"transitions", "overlay"}, kRamp, [](Scene& s) {
+    add("transitions.overlay_displacement_map", {"transitions", "overlay", "exact"}, kRamp, [](Scene& s) {
         Pair p = pairScene(s);
         applyOverlappingTransition(*p.out, *p.in, 1.0, s.fps.ToDouble(), {});
         addOverlayClip(s, s.media("overlay_gradients_640x360_30.mp4"), 1.0,
@@ -75,7 +77,7 @@ void golden::registerTransitionScenarios() {
         finish(s, p);
     });
 
-    add("transitions.stack_zoom_blur_alpha", {"transitions", "stack"}, kRamp, [](Scene& s) {
+    add("transitions.stack_zoom_blur_alpha", {"transitions", "stack", "exact"}, kRamp, [](Scene& s) {
         Pair p = pairScene(s);
         applyOverlappingTransition(*p.out, *p.in, 1.0, s.fps.ToDouble(),
                                    {TransitionEffect::Zoom, TransitionEffect::Blur, TransitionEffect::Alpha});
