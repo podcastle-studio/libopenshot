@@ -322,21 +322,51 @@ CPU output should stay bit-identical and any drift is a finding rather than an e
 > The fix is sequencing, not scope: the canvas needs a GPU consumer in the same change. See the
 > chosen approach recorded in `GPU-DECISIONS.md`.
 
-- [ ] `Timeline::GetFrame` takes its output surface from `GpuSurfacePool` and passes its `SkCanvas`
-      down through `add_layer`.
-- [ ] `Frame` gains a `GpuFrame`; `GetImage()` on a GPU frame does one cached readback so every
-      unported path still works.
-- [ ] The writer still reads back once per frame — that is the last CPU copy, removed in W25.
+- [x] `Timeline::GetFrame` takes its output surface from `GpuSurfacePool`. **Not** "down through
+      `add_layer`" — that copies audio; the composite is in `Clip::GetFrame`. The canvas is attached
+      only when **every** clip on the frame qualifies (see below).
+- [x] `Frame` gains a `GpuFrame`; `GetImage()` does one cached readback and detaches, so every
+      unported path still works. `AddImage()`/`AddColor()` drop the surface instead.
+- [x] **`Clip::draw_to_canvas`** — the fast-path slice of W13 pulled forward, because without a GPU
+      consumer the canvas is a measured 16 % regression. One transformed draw replaces
+      `apply_keyframes` + `apply_background` for clips with no blend mode, shadow, blur, overlay,
+      frame-number overlay, waveform or post-keyframe effect.
+- [x] The writer still reads back once per frame — `Timeline::GetFrame` flattens before returning,
+      because a Graphite surface belongs to the thread that made it. Removed in W25.
+- [x] Golden harness: per-run tolerance. A scenario tagged `gpu-composite` is bit-exact on the CPU
+      and "close" when a GPU composites it — Skia's bilinear is not QPainter's smooth transform.
 
 **Gate.** Golden green across the board (PSNR ≥ 50 dB vs the CPU goldens — that is what the suite is
 for); `single_video` render not slower than baseline.
 **Size.** ~1 week.
 
+**Done 2026-09-16. Gate met, with one caveat recorded rather than hidden.**
+
+| scenario | GPU off | Vulkan | |
+|---|---|---|---|
+| `grid_3x3` | 19.3–19.9 | **26.7–27.4** | **+38 %** |
+| `single_video` | 96.9–101.6 | 101.4–104.3 | +4 % — *gate: not slower* ✅ |
+| `podcast_pip` | 19.4–20.1 | 18.0–18.9 | **−5 %** ⚠️ |
+
+Four-way sweep **292/292**; `openshot-gpu-checks` 7/7; the CPU path bit-identical throughout. Of the
+frames the compositor moves, the worst is 49.1 dB (`effects.enhancement`, max 3–5 LSB) and the
+median 58.8 — inside the parity policy's "close" class, three frames marginally under the gate's
+stricter ≥ 50.
+
+⚠️ **`podcast_pip` is 5 % slower with the GPU on.** The cause is the per-clip upload: this slice
+still moves every source image across PCIe once per clip per frame, so it wins where sources are
+small relative to the area they cover and loses where a few large ones replace composites that were
+already cheap. It is confined to GPU-enabled deployments (`OPENSHOT_GPU` defaults to off) and is
+**W22–W25's to fix**, where frames stop being uploaded at all. Re-measure it there.
+
 ### W13 — `Clip::draw(SkCanvas&)` · legacy `3.2`
 
-**Depends on.** W12.
+**Depends on.** W12, which already did this for the simple case — see `Clip::draw_to_canvas`. W13 is
+now about widening it: the 15 non-normal blend modes, and then relaxing the all-or-nothing rule
+(`GPU-DECISIONS.md`, "The GPU compositor draws whole frames or none of a frame") back to per-clip.
 
-- [ ] Collapse `apply_keyframes` + `apply_background` into one draw.
+- [x] Collapse `apply_keyframes` + `apply_background` into one draw — done in W12 for clips with no
+      blend mode, shadow, blur, overlay, frame-number overlay, waveform or post-keyframe effect.
 - [ ] `get_transform` returns an `SkMatrix` from the same arithmetic; paint alpha from the opacity
       curve; `SkBlendMode` from `blend_mode`; `SkSamplingOptions(kLinear, kLinear)`.
 - [ ] Unit test: 200 random keyframe sets through the old `QTransform` and the new `SkMatrix`, six

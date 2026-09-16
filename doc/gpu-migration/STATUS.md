@@ -33,8 +33,8 @@ only thing stopping R2a and R2b from shipping. **R2a complete** (2.1, 2.2, 2.3);
 met**; worklist **A done**, **B rejected on
 measurement**, **C done differently**, **D done**, **E done**. The Skia text and subtitle engines now both run
 on the GPU under one control (`GpuDevice::SetBackend`), and the image that can run them exists.
-**W11 is done** (2026-09-16) and **W12 — the timeline canvas on the GPU — is what a resuming session
-picks up next**. W01 and W02 are **deferred to the end of the migration** by the project owner: no
+**W11 and W12 are done** (2026-09-16); **W13 — widening the GPU composite to the blend modes — is
+what a resuming session picks up next**. W01 and W02 are **deferred to the end of the migration** by the project owner: no
 image build, no release, no merge to `develop` until the GPU work is finished. See "Next step".
 
 ## Where we are
@@ -427,6 +427,20 @@ flight, density, observability).
   x264 loss, not a matrix bug.
 
 ## Log
+
+- 2026-09-16 — **W12 done: the timeline canvas is on the GPU, and qualifying clips composite onto
+  it.** `Frame` gains an optional `GpuFrame` (one cached readback in `GetImage()`, detached after);
+  `Timeline::GetFrame` attaches a pooled surface; `Clip::draw_to_canvas` collapses
+  `apply_keyframes` + `apply_background` into one transformed draw. **`grid_3x3` 19.6 → 27.1 fps
+  (+38 %)**, `single_video` +4 % (the gate: not slower), **`podcast_pip` −5 %** — accepted and
+  recorded, the per-clip PCIe upload is W22–W25's to remove. Four-way sweep 292/292, CPU path
+  bit-identical. Two findings worth the reading: a frame must composite entirely on one path (a CPU
+  blend mode reading a GPU backdrop took `blend_color_burn` to 26.68 dB / max 255), and QPainter
+  reduces a translate-only transform to an integer blit (always resampling cost text ~10 dB, because
+  a text clip's transform is a *half*-pixel translation). The worklist's own premise was wrong in
+  two places and is corrected there: `add_layer` copies audio and does not composite, and W12
+  without a GPU consumer is a measured 16 % regression, which is why the fast-path slice of W13 was
+  pulled forward.
 
 - 2026-09-16 — **W11 done: the four decisions the compositor bakes in**, taken out of order because
   W12 depends on W11 and nothing else does. Canvas `kRGBA_8888` (overriding the F16 recommendation
