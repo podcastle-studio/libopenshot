@@ -33,9 +33,9 @@ Rules that apply to every item without being repeated in it:
   scenarios, commit the PNGs with the code.
 - Anything that fails its gate is reverted or flagged off. It does not stay merged "to fix later".
 
-**Status line:** W11 done (2026-09-16) · W01/W02 **deferred by the project owner** — no release,
-no image, no merge to `develop` until the GPU work is finished · W03/W04 open · W05–W10 open ·
-W12 is the next item · everything before W01 is done (see `STATUS.md`).
+**Status line:** W11, W12, W13 done (2026-09-16) · **W14 is the next item** · W01/W02 **deferred by
+the project owner** — no release, no image, no merge to `develop` until the GPU work is finished ·
+W03/W04 open · W05–W10 open · everything before W01 is done (see `STATUS.md`).
 
 > **2026-09-16, project owner.** Do not build or push the service image (W01) and do not run the
 > merge/release gate (W02) — those happen at the very end. Develop and test locally, and keep
