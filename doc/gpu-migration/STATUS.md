@@ -33,7 +33,7 @@ only thing stopping R2a and R2b from shipping. **R2a complete** (2.1, 2.2, 2.3);
 met**; worklist **A done**, **B rejected on
 measurement**, **C done differently**, **D done**, **E done**. The Skia text and subtitle engines now both run
 on the GPU under one control (`GpuDevice::SetBackend`), and the image that can run them exists.
-**W11 and W12 are done** (2026-09-16); **W13 — widening the GPU composite to the blend modes — is
+**W11, W12 and W13 are done** (2026-09-16); **W14 — blur, shadow, crop and flip on the paint — is
 what a resuming session picks up next**. W01 and W02 are **deferred to the end of the migration** by the project owner: no
 image build, no release, no merge to `develop` until the GPU work is finished. See "Next step".
 
@@ -427,6 +427,16 @@ flight, density, observability).
   x264 loss, not a matrix bug.
 
 ## Log
+
+- 2026-09-16 — **W13 done: every blend mode composites on the GPU.** The 15 non-normal modes move
+  from `BlendImages()` to `SkBlendMode`, a mapping verified by the new `openshot-gpu-blend-parity`
+  (identical pixels, no resampling: all 16 agree on lavapipe, 13/16 within 1 LSB on NVIDIA, the
+  outliers being driver float at the division singularities on 0.001–0.006 % of channels).
+  **`blend_stack_5` 16.6 → 41.3 fps (2.5×)**, `grid_3x3` +34 % to ~26 fps — short of the 45 fps
+  gate, which is **carried to W22–W25** because every source still crosses PCIe once per clip per
+  frame. `color_burn`/`hue`/`saturation` take a deliberately wide GPU tolerance on the owner's
+  decision; the cost — that band cannot catch a regression in them — is recorded in
+  `GPU-DECISIONS.md`, with the parity test as the real guard. Four-way sweep 292/292, CPU untouched.
 
 - 2026-09-16 — **W12 done: the timeline canvas is on the GPU, and qualifying clips composite onto
   it.** `Frame` gains an optional `GpuFrame` (one cached readback in `GetImage()`, detached after);

@@ -367,13 +367,37 @@ now about widening it: the 15 non-normal blend modes, and then relaxing the all-
 
 - [x] Collapse `apply_keyframes` + `apply_background` into one draw — done in W12 for clips with no
       blend mode, shadow, blur, overlay, frame-number overlay, waveform or post-keyframe effect.
-- [ ] `get_transform` returns an `SkMatrix` from the same arithmetic; paint alpha from the opacity
-      curve; `SkBlendMode` from `blend_mode`; `SkSamplingOptions(kLinear, kLinear)`.
-- [ ] Unit test: 200 random keyframe sets through the old `QTransform` and the new `SkMatrix`, six
-      affine coefficients compared to 1e-6.
+- [x] `SkBlendMode` from `blend_mode` — all 16, verified by `openshot-gpu-blend-parity`.
+- [x] Relax the all-or-nothing frame rule to "no clip reads the backdrop on the CPU".
+- [x] Paint alpha comes from the opacity curve via `get_transform`, as on the CPU path.
+- [x] ~~`get_transform` returns an `SkMatrix`~~ / ~~200-keyframe coefficient test~~. **Not needed,
+      and doing it would add risk rather than remove it.** Qt stores an affine transform
+      row-vector style and Skia column-vector style, so `draw_to_canvas` transposes the same six
+      numbers `get_transform` already computed — there is no second arithmetic path for a
+      comparison test to disagree with. Re-deriving the matrix in Skia terms would *create* the
+      divergence the test was meant to catch.
 
 **Gate.** `tools/golden.sh check --filter compositing` — all 16 blend modes within PSNR 48 dB;
 `grid_3x3` render ≥ **45 fps** (23).
+
+**Done 2026-09-16 — delivered, with one half of the gate carried forward.**
+
+| scenario | GPU off | Vulkan | |
+|---|---|---|---|
+| `blend_stack_5` | 15.9–17.4 | **38.5–43.2** | **2.5×** |
+| `grid_3x3` | 17.5–20.5 | 24.6–27.3 | +34 %, gate wants 45 ⚠️ |
+
+- **Blend parity: met, and by a sharper instrument than the gate names.** 13 of 16 modes agree with
+  `BlendImages()` within 1 LSB on identical pixels; all 16 do on lavapipe. Three scenarios
+  (`color_burn`, `hue`, `saturation`) sit at 26.5/39.6/44.6 dB against CPU goldens — *not* a blend
+  error but the resampling difference magnified by a steep formula, and on the project owner's
+  decision they take `Tolerance::GpuAmplified()`. That band cannot catch a regression in those
+  three; `openshot-gpu-blend-parity` is what does. See `GPU-DECISIONS.md`.
+- ⚠️ **`grid_3x3` reaches ~26 fps, not 45, and cannot get there in this stage.** Every source image
+  still crosses PCIe once per clip per frame, and `grid_3x3` is nine clips. **Carried to W22–W25**,
+  which removes the upload; re-test the 45 fps gate there. Not reverted — the `blend_stack_5` 2.5×
+  is real.
+
 **Size.** ~1 week.
 
 ### W14 — Blur, shadow, crop, flip on the paint · legacy `3.3`
