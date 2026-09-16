@@ -17,6 +17,7 @@
 
 #include "Frame.h"
 #include "AudioBufferSource.h"
+#include "gpu/GpuFrame.h"
 #include "AudioResampler.h"
 #include "QtUtilities.h"
 
@@ -703,6 +704,7 @@ void Frame::AddColor(const QColor& new_color)
 {
 	// Create new image object, and fill with pixel data
 	const std::lock_guard<std::recursive_mutex> lock(addingImageMutex);
+	gpu_frame.reset();   // a solid fill supersedes whatever was on the GPU
 	image = std::make_shared<QImage>(width, height, QImage::Format_RGBA8888_Premultiplied);
 
 	// Fill with solid color
@@ -741,6 +743,9 @@ void Frame::AddImage(std::shared_ptr<QImage> new_image)
 
 	// assign image data
 	const std::lock_guard<std::recursive_mutex> lock(addingImageMutex);
+	// A CPU image replaces the frame's pixels outright, so any GPU surface behind it is
+	// now stale. Drop it without a readback — reading it back would only be overwritten.
+	gpu_frame.reset();
 	image = new_image;
 
 	// Always convert to Format_RGBA8888_Premultiplied (if different)
@@ -871,12 +876,60 @@ void Frame::ApplyGainRamp(int destChannel, int destStartSample, int numSamples, 
 // Get pointer to Magick++ image object
 std::shared_ptr<QImage> Frame::GetImage()
 {
+	// A GPU-backed frame keeps its pixels in a texture. Bring them across once, here,
+	// so that every path written against GetImage() — the whole QPainter composite, the
+	// effects, the writer — keeps working untouched on a frame the Timeline rendered on
+	// the GPU. After this the frame is an ordinary CPU frame.
+	if (gpu_frame)
+		FlattenGpuFrame();
+
 	// Check for blank image
 	if (!image)
 		// Fill with black
 		AddColor(width, height, color);
 
 	return image;
+}
+
+void Frame::AttachGpuFrame(std::shared_ptr<openshot::GpuFrame> gpu)
+{
+	const std::lock_guard<std::recursive_mutex> lock(addingImageMutex);
+	gpu_frame = std::move(gpu);
+	if (gpu_frame) {
+		// The surface now holds the truth; anything cached from before it does not.
+		width = gpu_frame->width();
+		height = gpu_frame->height();
+		image.reset();
+		has_image_data = true;
+	}
+}
+
+void Frame::FlattenGpuFrame()
+{
+	const std::lock_guard<std::recursive_mutex> lock(addingImageMutex);
+	if (!gpu_frame)
+		return;
+
+	// Detach first, unconditionally. A failed readback must leave an ordinary CPU frame
+	// rather than a frame that tries the same failing readback on every GetImage().
+	std::shared_ptr<openshot::GpuFrame> gpu = std::move(gpu_frame);
+	gpu_frame.reset();
+
+	const int w = gpu->width();
+	const int h = gpu->height();
+	auto flattened = std::make_shared<QImage>(w, h, QImage::Format_RGBA8888_Premultiplied);
+
+	// Format_RGBA8888_Premultiplied is byte-for-byte kRGBA_8888 premultiplied, so the
+	// readback lands directly in the QImage with no conversion and no channel swap.
+	const SkPixmap dst(SkImageInfo::Make(w, h, kRGBA_8888_SkColorType, kPremul_SkAlphaType),
+					   flattened->bits(), flattened->bytesPerLine());
+	if (!gpu->readback(dst))
+		return;
+
+	image = flattened;
+	width = w;
+	height = h;
+	has_image_data = true;
 }
 
 #ifdef USE_OPENCV

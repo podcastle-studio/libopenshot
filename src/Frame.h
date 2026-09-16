@@ -86,11 +86,18 @@ namespace openshot
 	 *
 	 * @endcode
 	 */
+	class GpuFrame;
+
 	class Frame
 	{
 	private:
 		std::shared_ptr<QImage> image;
 		std::shared_ptr<QImage> wave_image;
+
+		/// GPU surface holding this frame's pixels, when it has one. While it is set the
+		/// surface is authoritative and @c image is stale or absent; the first GetImage()
+		/// brings the pixels across once and detaches it. See AttachGpuFrame().
+		std::shared_ptr<openshot::GpuFrame> gpu_frame;
 
 		std::shared_ptr<QApplication> previewApp;
 		std::recursive_mutex addingImageMutex;
@@ -205,7 +212,35 @@ namespace openshot
 		int64_t GetBytes();
 
 		/// Get pointer to Qt QImage image object
+		///
+		/// On a GPU-backed frame this performs the one readback that brings the pixels
+		/// to the CPU and detaches the GPU surface, so every unported path keeps working
+		/// unchanged. It is therefore the point where a frame stops being GPU-backed.
 		std::shared_ptr<QImage> GetImage();
+
+		/// Make @a gpu this frame's pixels.
+		///
+		/// The surface becomes authoritative: GetImage() will read it back once, and any
+		/// AddImage() drops it because the CPU image then supersedes it. Pass null to
+		/// detach without a readback.
+		///
+		/// @note A Graphite surface belongs to the thread whose recorder created it, so a
+		/// frame must not still be GPU-backed when it crosses to another thread. The
+		/// Timeline flattens its frame before returning it for exactly this reason.
+		void AttachGpuFrame(std::shared_ptr<openshot::GpuFrame> gpu);
+
+		/// The GPU surface backing this frame, or null when it is a normal CPU frame.
+		const std::shared_ptr<openshot::GpuFrame>& GpuBacking() const { return gpu_frame; }
+
+		/// True when this frame's pixels live on the GPU.
+		bool IsGpuBacked() const { return gpu_frame != nullptr; }
+
+		/// Bring a GPU-backed frame's pixels to the CPU and detach the surface.
+		///
+		/// Idempotent, and a no-op on a frame that is not GPU-backed. Called by
+		/// GetImage(); call it directly to release the surface at a chosen point — in
+		/// particular on the thread that created it.
+		void FlattenGpuFrame();
 
 		/// Set Pixel Aspect Ratio
 		openshot::Fraction GetPixelRatio() { return pixel_ratio; };

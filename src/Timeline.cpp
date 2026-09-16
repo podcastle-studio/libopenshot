@@ -30,6 +30,9 @@
 
 #include "subtitle/SubtitleTypes.h"
 
+#include "gpu/GpuDevice.h"
+#include "gpu/GpuFrame.h"
+
 using namespace openshot;
 
 // Default Constructor for the timeline (which sets the canvas width and height)
@@ -1064,10 +1067,33 @@ std::shared_ptr<Frame> Timeline::GetFrame(int64_t requested_frame)
 					"info.height", info.height);
 
 			// Add Background Color to 1st layer (if animated or not black)
-			if ((color.red.GetCount() > 1 || color.green.GetCount() > 1 || color.blue.GetCount() > 1) ||
+			const bool has_background_color =
+				(color.red.GetCount() > 1 || color.green.GetCount() > 1 || color.blue.GetCount() > 1) ||
 				(color.red.GetValue(requested_frame) != 0.0 || color.green.GetValue(requested_frame) != 0.0 ||
-				 color.blue.GetValue(requested_frame) != 0.0))
+				 color.blue.GetValue(requested_frame) != 0.0);
+			if (has_background_color)
 				new_frame->AddColor(preview_width, preview_height, color.GetColorHex(requested_frame));
+
+			// Put this frame's canvas on the GPU when one is available, so clips that
+			// qualify can composite straight onto it (Clip::draw_to_canvas). Everything
+			// else keeps working unchanged: the first GetImage() reads the surface back
+			// once and the frame becomes an ordinary CPU frame from there on.
+			//
+			// The clear below has to reproduce what the CPU path starts from exactly --
+			// the timeline colour when one is set, and otherwise the opaque black that
+			// Frame's "#000000" constructor colour yields on its first GetImage().
+			if (GpuDevice::Instance().available()) {
+				if (auto gpu_canvas = GpuFrame::Create(preview_width, preview_height,
+													   kRGBA_8888_SkColorType)) {
+					SkColor clear_color = SK_ColorBLACK;
+					if (has_background_color) {
+						const QColor bg(QString::fromStdString(color.GetColorHex(requested_frame)));
+						clear_color = SkColorSetARGB(bg.alpha(), bg.red(), bg.green(), bg.blue());
+					}
+					gpu_canvas->canvas()->clear(clear_color);
+					new_frame->AttachGpuFrame(std::move(gpu_canvas));
+				}
+			}
 
 			// Debug output
 			ZmqLogger::Instance()->AppendDebugMethod(
@@ -1159,6 +1185,12 @@ std::shared_ptr<Frame> Timeline::GetFrame(int64_t requested_frame)
 					"requested_frame", requested_frame,
 					"info.width", info.width,
 					"info.height", info.height);
+
+			// Bring the frame back to the CPU before it leaves this thread. A Graphite
+			// surface belongs to the recorder that made it, so a frame must not still be
+			// GPU-backed when it is cached or handed to the writer -- both reach it from
+			// other threads. This is the one readback per frame that W25 removes.
+			new_frame->FlattenGpuFrame();
 
 			// Set frame # on mapped frame
 			new_frame->SetFrameNumber(requested_frame);
