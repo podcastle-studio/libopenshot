@@ -39,8 +39,20 @@ image build, no release, no merge to `develop` until the GPU work is finished. S
 
 ## Where we are
 
-### What works today (verified 2026-09-15, all four configurations green)
+### What works today (verified 2026-09-16, all four configurations green)
 
+- **The timeline composites on the GPU.** `Timeline::GetFrame` takes its canvas from
+  `GpuSurfacePool`, and `Clip::draw_to_canvas` composites a clip onto it in one transformed draw —
+  `apply_keyframes`' timeline-sized intermediate and `apply_background`'s full-frame composite both
+  disappear. **All 16 blend modes** go through `SkBlendMode`. W12 and W13.
+  - A clip still falls back to the QPainter path for a shadow, a blur, an overlay clip, the
+    frame-number overlay, a waveform, or any effect that runs *after* the keyframes. W14 removes
+    the first two.
+  - A frame composites on **one** path: the canvas is attached only when no clip would read the
+    backdrop on the CPU. Why, and what it cost to learn, is in `GPU-DECISIONS.md`.
+  - `Frame` can be GPU-backed; `GetImage()` does one cached readback and detaches, so every
+    unported path keeps working. The Timeline flattens before returning, because a Graphite surface
+    belongs to the thread that made it.
 - **The Skia text engine renders entirely on the GPU** when one is enabled, with one readback at
   the reader boundary (`TextClipReader::renderToQImage`). Steps 2.1–2.4 plus worklist items A and C.
 - **The Skia subtitle engine is GPU-capable**: `SubtitleManager::renderAtFrame(SkCanvas*, w, h, n)`
@@ -58,7 +70,24 @@ image build, no release, no merge to `develop` until the GPU work is finished. S
   and `OPENSHOT_GPU=off|vulkan|lavapipe` (read by the library). See item E below.
 - `tools/golden.sh check` **292/292** on CPU Skia and on GPU Skia with the GPU off, on Vulkan and on
   lavapipe. `openshot-gpu-checks` **7/7** on Vulkan and lavapipe, on the host *and inside a
-  container* on both a GPU node and a CPU node.
+  container* on both a GPU node and a CPU node. `openshot-gpu-blend-parity` clean on both backends.
+- **The suite now gates what it can prove.** 76 of 95 scenarios are held bit-exact
+  (`Tolerance::Exact()`); a scenario the GPU compositor moves is held bit-exact on the CPU and to
+  the parity policy's "close" class only when a GPU is actually compositing (`gpu-composite` tag).
+  Three blend modes carry a deliberately wide GPU band — read the caveat in `GPU-DECISIONS.md`
+  before trusting them.
+
+Compositor gains, measured interleaved at 1080p `render` on the A2000, GPU off against Vulkan:
+
+| scenario | GPU off | Vulkan | |
+|---|---|---|---|
+| `blend_stack_5` | 15.9–17.4 | **38.5–43.2** | **2.5×** |
+| `grid_3x3` | 17.5–20.5 | 24.6–27.3 | +34 % |
+| `single_video` | 96.9–101.6 | 101.4–104.3 | +4 % |
+| `podcast_pip` | 19.4–20.1 | 18.0–18.9 | **−5 %** ⚠️ |
+
+Both shortfalls have the same cause and the same fix: every source image still crosses PCIe once per
+clip per frame. That is **W22–W25**, and `grid_3x3`'s 45 fps gate is carried there.
 
 Measured at 1080p, `render` mode, 150 frames, interleaved on one machine — now on the **NVIDIA RTX
 A2000**, which every earlier phase-2 number was *not* (they were taken on an Intel Iris Xe iGPU).
@@ -391,28 +420,39 @@ session; the worklist opens with the protocol.
 > the render path onto the GPU. Both items stay in the worklist, marked DEFERRED; nothing depends on
 > either.
 
-**W11 is done** (2026-09-16), taken out of order because W12 depends on it and nothing else does.
-The four decisions the compositor bakes in are recorded in `GPU-DECISIONS.md`:
+**W11, W12 and W13 are done** (2026-09-16). The four decisions the compositor bakes in are in
+`GPU-DECISIONS.md` — canvas `kRGBA_8888` (overriding the F16 recommendation that was on file),
+Graphite only, LUT matched to the front end at native cube size, nearest sampling kept.
 
-- **Canvas precision → `kRGBA_8888`**, overriding the F16 recommendation that was on file. Output is
-  8-bit H.264 throughout; pooled surfaces are null-colour-space, so F16 would buy precision between
-  stages but not gamma-correct blending; and 8888 keeps the GPU canvas bit-identical to the CPU path.
-- **Graphite only**, no Ganesh fallback — there is no Ganesh code in `src/` to keep alive.
-- **LUT → match the front end at the native cube size.** Measured: the `ColorMap.cpp` 17³ resample,
-  not the interpolation kind, is essentially the whole editor-vs-export gap (17.05 LSB max / 0.404
-  mean, against 4.34 / 0.060 for trilinear-vs-tetrahedral).
-- **Nearest-neighbour sampling stays nearest** — both sites are in the submodule the front end runs
-  through WASM.
+### Next: W14 — blur, shadow, crop and flip on the paint · legacy `3.3`
 
-**Next is W12 — the timeline canvas on the GPU**, the first item of Stage 5 and where the remaining
-CPU time actually is. It now opens with a sub-task that did not exist before: tag the bit-exact
-golden scenarios `"exact"` *before* touching the render path, because the suite currently gates
-"close" and not "exact" (see below) and the 8888 decision is only enforceable if it does.
+**Why it is next.** They are the two most common reasons a clip still falls back to the QPainter
+path, so moving them widens GPU coverage more than anything else left in Stage 5.
 
-W03/W04 (CI, production corpus) remain open and are the safety net for Stage 5; W05–W10 are the CPU
-quick wins. Then W13–W18 (the rest of the compositor), W19–W21 (effects as shaders), W22–W25 (frames
-stay on the GPU — last, because it only pays after W12), W26–W28 (remove Qt), W29–W31 (frames in
-flight, density, observability).
+**What to do** (worklist W14): `SkImageFilters::Blur` with the existing box→sigma mapping;
+`SkImageFilters::DropShadowOnly` with the same offset and colour; `clipRRect` for crop; negative
+scale for flip. Then delete `get_shadow_image`, the local `gaussian_blur` and the scalar opacity
+loop. Afterwards drop `shadow` and `blur` from `Clip::can_draw_to_canvas`, which is what actually
+turns the work into coverage.
+
+**Gate.** `tools/golden.sh check --filter clipfx` — SSIM ≥ 0.97 on shadows, PSNR ≥ 40 dB on blur;
+`podcast_pip` render ≥ **45 fps** (23 baseline; it currently measures 18–20 and is the one scenario
+the compositor made *slower*, so this is the item that should fix it).
+
+**Expect the four `clipfx.*` scenarios to fail their `exact` gate — that is by design.** W12 tagged
+them bit-exact while they still ran on the CPU; W14 is the change that legitimately moves them, and
+W14's own gate is a "close" one. Re-baseline exactly those four, with the triptychs reviewed, and
+add `gpu-composite` to them.
+
+**Do not be surprised by:** `Tolerance::GpuAmplified()` on three blend scenarios (a band too wide to
+catch a regression — `openshot-gpu-blend-parity` guards them instead), and the CPU path being
+untouchable. Run the four-way sweep, `openshot-gpu-checks` and `openshot-gpu-blend-parity`.
+
+**After W14:** W15 (delete `BlendModes.cpp` — largely already bypassed on GPU), W16–W18 (readers on
+Skia, subtitles into the timeline canvas, Qt off the render path), W19–W21 (effects as shaders),
+**W22–W25 (frames stay on the GPU — this is where `grid_3x3`'s 45 fps gate and the `podcast_pip`
+regression are settled, because it removes the per-clip upload)**, W26–W28, W29–W31. W03/W04 (CI,
+production corpus) remain open; W05–W10 are the CPU quick wins. W01/W02 stay deferred.
 
 ## Known oddities worth a look
 
@@ -427,6 +467,12 @@ flight, density, observability).
   x264 loss, not a matrix bug.
 
 ## Log
+
+- 2026-09-16 — **Session close.** W11, W12 and W13 all landed (see the three entries below); golden
+  green 292/292 four ways, `openshot-gpu-checks` 7/7, `openshot-gpu-blend-parity` clean on Vulkan
+  and lavapipe, working tree clean. **Next session starts at W14** (blur/shadow/crop/flip on the
+  paint) — see "Next step" for what to do, its gate, and the two things to expect. Nothing is
+  half-finished; there is no in-progress state to resume or revert.
 
 - 2026-09-16 — **W13 done: every blend mode composites on the GPU.** The 15 non-normal modes move
   from `BlendImages()` to `SkBlendMode`, a mapping verified by the new `openshot-gpu-blend-parity`

@@ -471,6 +471,20 @@ the report and re-baseline only those scenarios.
   `doc/gpu-migration/GPU-DECISIONS.md`, compare against the editor's CanvasKit render instead, and
   update the golden set with a dated note.
 
+**Which class applies is a property of the run, not only of the scenario** (added 2026-09-16, W12).
+The goldens are CPU-rendered, and a GPU composite resamples with Skia's bilinear where QPainter uses
+its own smooth transform; the two do not agree bit-for-bit and never will. So a scenario the
+compositor touches is gated **exact on the CPU** — the path that ships, where nothing may move — and
+**close when a GPU is actually compositing**. In `tests/golden` that is the `gpu-composite` tag and
+`Tolerance::GpuClose()`, chosen from what measurably moved rather than from what might.
+
+One further class exists and is a compromise, not a pattern to copy: `Tolerance::GpuAmplified()`
+covers three blend modes whose formulas magnify a sub-LSB input difference into a large output one.
+That band is too wide to catch a genuine regression, so those modes are gated instead by
+`openshot-gpu-blend-parity`, which compares the formulas on identical pixels with no resampling.
+**Where a tolerance has to be widened past usefulness, replace it with a sharper instrument rather
+than accepting the blind spot.**
+
 Anything that fails its parity gate is reverted or feature-flagged; it does not stay
 merged "to fix later".
 
@@ -497,3 +511,18 @@ merged "to fix later".
   and the GPU phases must re-check VRAM.
 - `openshot-bench` calls `WriteFrame` once for the whole range, so service-side scheduling fixes
   (step 1.1) are invisible to it. Measure those on the service.
+- **QPainter does not always resample.** For a transform no more complex than `TxTranslate` its
+  raster engine rounds to an integer blit — no filtering, no edge antialiasing. Skia has no such
+  rule. Missing this cost the text scenarios ~10 dB (a text clip's transform turned out to be a
+  *half*-pixel translation), and it was invisible until the draw was instrumented. Any new Skia
+  draw that replaces a QPainter one has to reproduce it: `Clip::draw_to_canvas` does.
+- **A frame composites on one path, not two.** Letting a CPU blend mode read a GPU-built backdrop
+  takes `blend_color_burn` to 26.7 dB with a max difference of 255, from inputs differing by ~3 LSB:
+  the non-linear W3C modes divide by the backdrop. Whenever part of a frame moves to the GPU, check
+  what still reads that frame on the CPU afterwards.
+- **The per-clip upload is the ceiling on Stage 5.** Every source image crosses PCIe once per clip
+  per frame, so GPU compositing wins where a source is small relative to the area it covers
+  (`grid_3x3` +34 %, `blend_stack_5` 2.5×) and loses where a few large sources replace composites
+  that were already cheap (`podcast_pip` −5 %). `grid_3x3`'s 45 fps gate and that regression are
+  both carried to W22–W25, which is the stage that removes the upload. Do not expect to tune around
+  it before then.
