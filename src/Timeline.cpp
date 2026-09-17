@@ -1192,11 +1192,30 @@ std::shared_ptr<Frame> Timeline::GetFrame(int64_t requested_frame)
 			// SUBTITLE INTEGRATION POINT - Apply subtitles AFTER all clips are processed
 			// ===========================================================================
 			if (subtitleManager->hasActiveSubtitlesAtFrame(requested_frame)) {
-				// Get the frame's QImage
-				std::shared_ptr<QImage> frameImage = new_frame->GetImage();
-				if (frameImage && !frameImage->isNull()) {
-					// Render subtitles directly onto the frame
-					subtitleManager->renderAtFrame(frameImage, requested_frame);
+				// Subtitles build no offscreen of their own -- every renderer draws straight
+				// onto the canvas it is handed -- so on a GPU-backed frame the whole pass
+				// stays where the frame already is. What that saves is the drawing, not a
+				// transfer: GetImage() below performs the very readback FlattenGpuFrame()
+				// does a few lines further on, so the frame crosses once either way (W17).
+				//
+				// The canvas is kRGBA_8888 and is read back as kRGBA_8888, so its pixels are
+				// never reinterpreted the way the QImage path's are -- hence Logical, which
+				// switches off the R/B swap that cancels that reinterpretation. See
+				// ColorConvention in subtitle/SubtitleTypes.h.
+				const std::shared_ptr<openshot::GpuFrame>& gpu_canvas = new_frame->GpuBacking();
+				if (gpu_canvas && gpu_canvas->canvas()) {
+					subtitleManager->renderAtFrame(gpu_canvas->canvas(),
+												   (float) gpu_canvas->width(),
+												   (float) gpu_canvas->height(),
+												   requested_frame,
+												   openshot::subtitle::ColorConvention::Logical);
+				} else {
+					// The CPU path, unchanged, and what a no-GPU machine always runs.
+					std::shared_ptr<QImage> frameImage = new_frame->GetImage();
+					if (frameImage && !frameImage->isNull()) {
+						// Render subtitles directly onto the frame
+						subtitleManager->renderAtFrame(frameImage, requested_frame);
+					}
 				}
 			}
 
