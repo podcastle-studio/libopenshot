@@ -101,6 +101,13 @@ void Frame::DeepCopy(const Frame& other)
 	max_audio_sample = other.max_audio_sample;
 	audio_is_increasing = other.audio_is_increasing;
 
+	// Share the GPU surface rather than copying or flattening it. The copy exists so a
+	// clip can modify pixels without touching the reader's frame, and that still holds:
+	// every mutator drops this frame's own gpu_frame and installs a CPU image, so a
+	// write on either side leaves the other alone. Readers hand out GPU-backed frames
+	// (TextClipReader) and Clip::GetOrCreateFrame copies every one of them, so without
+	// this the copy would arrive with no image and no surface and composite as blank.
+	gpu_frame = other.gpu_frame;
 	if (other.image)
 		image = std::make_shared<QImage>(*(other.image));
 	if (other.audio)
@@ -399,6 +406,11 @@ int64_t Frame::GetBytes()
 // Get pixel data (as packets)
 const unsigned char* Frame::GetPixels()
 {
+	// A GPU-backed frame keeps its pixels in a texture; without this the blank-image
+	// branch below would quietly hand back a black frame.
+	if (gpu_frame)
+		FlattenGpuFrame();
+
 	// Check for blank image
 	if (!image)
 		// Fill with black
@@ -411,6 +423,9 @@ const unsigned char* Frame::GetPixels()
 // Get pixel data (for only a single scan-line)
 const unsigned char* Frame::GetPixels(int row)
 {
+	if (gpu_frame)
+		FlattenGpuFrame();
+
 	// Check for blank image
 	if (!image)
 		// Fill with black
@@ -960,6 +975,11 @@ cv::Mat Frame::Qimage2mat(std::shared_ptr<QImage> qimage) {
 // Get pointer to OpenCV image object
 cv::Mat Frame::GetImageCV()
 {
+	// As GetImage(): bring a GPU-backed frame across once, or the blank-image branch
+	// below converts a black frame. Reachable through the overlay-clip path.
+	if (gpu_frame)
+		FlattenGpuFrame();
+
 	// Check for blank image
 	if (!image)
 		// Fill with black
@@ -1042,6 +1062,8 @@ std::shared_ptr<QImage> Frame::Mat2Qimage(const cv::Mat& srcMat) {
 // Set pointer to OpenCV image object
 void Frame::SetImageCV(const cv::Mat& imageCv)
 {
+	const std::lock_guard<std::recursive_mutex> lock(addingImageMutex);
+	gpu_frame.reset();   // the CPU image supersedes whatever was on the GPU
 	image = Mat2Qimage(imageCv);
 }
 #endif

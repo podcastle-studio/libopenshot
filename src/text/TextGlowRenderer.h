@@ -8,6 +8,7 @@
 // frames for live editing), the backend builds a fresh one-shot silhouette per
 // render — the reader rasterizes each frame once.
 
+#include "../subtitle/SubtitleTypes.h"
 #include "TextAnimationEngine.h"
 #include "TextClipTypes.h"
 #include "TextCurvedText.h"
@@ -50,19 +51,28 @@ struct GlowFrameCache {
     sk_sp<SkImage> image;
     double opacityMul = 0.0;
     double extraLetterSpacing = 0.0;
+    // The colours baked into the stored image follow one convention; serving it to a
+    // renderer using the other exchanges red and blue. With a GPU present neither path
+    // populates this cache at all (paintGlowFromSilhouette returns null and it resets),
+    // so today only a GPU that comes and goes mid-clip could mix the two -- keying on it
+    // costs a comparison and removes the possibility. See subtitle/SubtitleTypes.h.
+    subtitle::ColorConvention convention = subtitle::ColorConvention::QImageBytes;
     bool valid = false;
 
     void reset() { image.reset(); valid = false; }
 
-    bool matches(double opacity_mul, double extra_letter_spacing) const {
+    bool matches(double opacity_mul, double extra_letter_spacing,
+                 subtitle::ColorConvention conv) const {
         return valid && image && opacityMul == opacity_mul
-               && extraLetterSpacing == extra_letter_spacing;
+               && extraLetterSpacing == extra_letter_spacing && convention == conv;
     }
 
-    void store(sk_sp<SkImage> img, double opacity_mul, double extra_letter_spacing) {
+    void store(sk_sp<SkImage> img, double opacity_mul, double extra_letter_spacing,
+               subtitle::ColorConvention conv) {
         image = std::move(img);
         opacityMul = opacity_mul;
         extraLetterSpacing = extra_letter_spacing;
+        convention = conv;
         valid = image != nullptr;
     }
 };

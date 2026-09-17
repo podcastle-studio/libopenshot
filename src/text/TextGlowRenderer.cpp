@@ -90,7 +90,7 @@ void TextGlowRenderer::drawGlowLayer(
     // owner says the glow is frame-invariant and the per-frame inputs match, redrawing the stored
     // image is the same draw call with the same image: bit-identical, and it skips the march that
     // is ~91 % of the frame on the raster path.
-    if (cache && cache->matches(opacityMul, extraLetterSpacing)) {
+    if (cache && cache->matches(opacityMul, extraLetterSpacing, renderer->colorConvention())) {
         compositeGlow(cache->image, geom.imageMargin, geom.rectPadX, geom.rectPadY,
                       geom.renderScale, originX, originY);
         return;
@@ -109,7 +109,8 @@ void TextGlowRenderer::drawGlowLayer(
     // Null means the glow was composited straight out of a pooled GPU surface, which must not
     // outlive this frame — drop whatever was held rather than serve it next frame.
     if (cache) {
-        if (combined) cache->store(std::move(combined), opacityMul, extraLetterSpacing);
+        if (combined) cache->store(std::move(combined), opacityMul, extraLetterSpacing,
+                                   renderer->colorConvention());
         else cache->reset();
     }
 }

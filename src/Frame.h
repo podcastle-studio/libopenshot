@@ -97,6 +97,12 @@ namespace openshot
 		/// GPU surface holding this frame's pixels, when it has one. While it is set the
 		/// surface is authoritative and @c image is stale or absent; the first GetImage()
 		/// brings the pixels across once and detaches it. See AttachGpuFrame().
+		///
+		/// Copying a Frame shares this pointer rather than duplicating the surface. That
+		/// is safe because every mutator (AddColor, AddImage, SetImageCV) drops its own
+		/// frame's pointer and installs a CPU image, so neither copy can write through
+		/// the other. Drawing into GpuBacking()->canvas() directly is the exception, and
+		/// only the Timeline does that, to a canvas it made itself.
 		std::shared_ptr<openshot::GpuFrame> gpu_frame;
 
 		std::shared_ptr<QApplication> previewApp;

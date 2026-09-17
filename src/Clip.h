@@ -192,7 +192,15 @@ namespace openshot {
 		int64_t adjust_timeline_framenumber(int64_t clip_frame_number);
 		
 		/// Get QTransform from keyframes
-		QTransform get_transform(std::shared_ptr<Frame> frame, int width, int height);
+		/// The clip's keyframed transform for this frame, onto a @a width x @a height canvas.
+		///
+		/// Also applies the alpha/opacity curve to the source pixels in place, which a
+		/// GPU-backed source cannot do -- its pixels are in a texture. Pass
+		/// @a deferred_alpha and the curve's value is written there instead, for the
+		/// caller to set on the paint; the source is then left untouched. Null keeps the
+		/// in-place behaviour, which is what every CPU caller wants.
+		QTransform get_transform(std::shared_ptr<Frame> frame, int width, int height,
+								 float* deferred_alpha = nullptr);
 
 		/// Build a blurred, tinted drop-shadow image from a source image (in the source
 		/// image's own coordinate space). The returned image is padded on all sides to make

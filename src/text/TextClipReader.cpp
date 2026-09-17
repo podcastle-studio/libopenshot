@@ -553,6 +553,49 @@ TextClipReader::ResolvedPlan TextClipReader::resolvePlanAtFrame(int64_t frame) c
     return p;
 }
 
+void TextClipReader::drawFrame(SkCanvas* canvas, subtitle::ColorConvention convention,
+                               const ResolvedPlan& plan,
+                               const std::optional<text::TextClipAnimationFrame>& animation) {
+    subtitle::SkiaRenderer renderer(canvas, convention);
+
+    // Centre the content box at the frame's centre; rotate around that centre.
+    canvas->save();
+    canvas->translate(static_cast<float>(frame_width)  / 2.0f,
+                      static_cast<float>(frame_height) / 2.0f);
+    if (data.transformation.rotation != 0.0) {
+        canvas->rotate(static_cast<float>(data.transformation.rotation));
+    }
+    // A style keyframe can move the glow's colour, intensity or geometry between frames, so
+    // only a clip without one gets the cache; everything else it depends on is fixed by the
+    // plan. renderTextFrame narrows this further — only the BLOCK-mode paths take it.
+    text::renderTextFrame(plan_layout, plan.paint, plan.background,
+                          plan.origin_x, plan.origin_y, 1.0, animation, &renderer,
+                          has_style_keyframes ? nullptr : &glow_cache);
+    canvas->restore();
+}
+
+std::shared_ptr<openshot::GpuFrame> TextClipReader::renderToGpuFrame(
+    const ResolvedPlan& plan,
+    const std::optional<text::TextClipAnimationFrame>& animation) {
+    // An empty plan keeps the 1x1 transparent QImage: not worth a surface, and the caller
+    // has a cheaper answer for it.
+    if (plan_empty || !GpuDevice::Instance().available())
+        return nullptr;
+
+    std::shared_ptr<GpuFrame> gpu =
+        GpuFrame::Create(frame_width, frame_height, kRGBA_8888_SkColorType);
+    if (!gpu)
+        return nullptr;   // pool exhausted; the caller falls back and merely looks slower
+    SkCanvas* canvas = gpu->canvas();
+    if (!canvas)
+        return nullptr;
+
+    // Pooled surfaces are recycled, so this is load-bearing, not tidiness.
+    canvas->clear(SK_ColorTRANSPARENT);
+    drawFrame(canvas, subtitle::ColorConvention::Logical, plan, animation);
+    return gpu;
+}
+
 std::shared_ptr<QImage> TextClipReader::renderToQImage(
     const ResolvedPlan& plan,
     const std::optional<text::TextClipAnimationFrame>& animation) {
@@ -564,29 +607,6 @@ std::shared_ptr<QImage> TextClipReader::renderToQImage(
 
     auto img = std::make_shared<QImage>(frame_width, frame_height, QImage::Format_RGBA8888_Premultiplied);
     img->fill(QColor(0, 0, 0, 0));
-
-    // The whole frame is drawn through this, onto whichever canvas it is handed. Everything
-    // below it — the glow silhouettes, the baked 3D block textures, the large-sigma shadow —
-    // matches its offscreens to that canvas (GpuOffscreen), so the choice made here decides
-    // where the entire text engine renders, and there is no crossing back and forth inside it.
-    auto drawFrame = [&](SkCanvas* canvas) {
-        subtitle::SkiaRenderer renderer(canvas);
-
-        // Centre the content box at the frame's centre; rotate around that centre.
-        canvas->save();
-        canvas->translate(static_cast<float>(frame_width)  / 2.0f,
-                          static_cast<float>(frame_height) / 2.0f);
-        if (data.transformation.rotation != 0.0) {
-            canvas->rotate(static_cast<float>(data.transformation.rotation));
-        }
-        // A style keyframe can move the glow's colour, intensity or geometry between frames, so
-        // only a clip without one gets the cache; everything else it depends on is fixed by the
-        // plan. renderTextFrame narrows this further — only the BLOCK-mode paths take it.
-        text::renderTextFrame(plan_layout, plan.paint, plan.background,
-                              plan.origin_x, plan.origin_y, 1.0, animation, &renderer,
-                              has_style_keyframes ? nullptr : &glow_cache);
-        canvas->restore();
-    };
 
     // N32 premultiplied over the QImage's own buffer. A GPU frame is kRGBA_8888 and this is
     // BGRA on x86, but that is exactly why the readback below lands the same bytes as drawing
@@ -604,7 +624,7 @@ std::shared_ptr<QImage> TextClipReader::renderToQImage(
             if (canvas) {
                 // Pooled surfaces are recycled, so this is load-bearing, not tidiness.
                 canvas->clear(SK_ColorTRANSPARENT);
-                drawFrame(canvas);
+                drawFrame(canvas, subtitle::ColorConvention::QImageBytes, plan, animation);
                 SkPixmap pixels(skiaInfo, img->bits(), img->bytesPerLine());
                 if (gpu->readback(pixels))
                     return img;
@@ -620,7 +640,7 @@ std::shared_ptr<QImage> TextClipReader::renderToQImage(
         return img;
     }
     SkCanvas canvas(bitmap);
-    drawFrame(&canvas);
+    drawFrame(&canvas, subtitle::ColorConvention::QImageBytes, plan, animation);
 
     return img;
 }
@@ -716,6 +736,19 @@ std::shared_ptr<Frame> TextClipReader::GetFrame(int64_t requested_frame) {
             frame = text::buildStatic3DFrame(rp.tiltX, rp.tiltY);
             if (forceTexture) frame->forceBlockTexture = true;
         }
+        // Leave the frame on the GPU when there is one: the compositor draws it as a
+        // texture, so nothing here reads back, nothing copies the QImage and nothing
+        // uploads it again (W17). Only this per-frame branch can do it -- the resting
+        // image below is cached across frames and a pooled surface must not outlive the
+        // frame that borrowed it.
+        if (std::shared_ptr<GpuFrame> gpu = renderToGpuFrame(rp, frame)) {
+            auto gpu_frame = std::make_shared<Frame>(
+                requested_frame, gpu->width(), gpu->height(),
+                "#00000000", sample_count, info.channels);
+            gpu_frame->AttachGpuFrame(std::move(gpu));
+            return gpu_frame;
+        }
+
         image = renderToQImage(rp, frame);
     }
 

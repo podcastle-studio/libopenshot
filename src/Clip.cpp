@@ -1735,22 +1735,42 @@ bool Clip::draw_to_canvas(std::shared_ptr<openshot::Frame> frame,
 	if (!gpu)
 		return false;
 
-	// get_transform() also applies the alpha/opacity curve to the source pixels in place,
-	// exactly as it does on the CPU path, so it has to run before the image is uploaded.
-	const QTransform t = get_transform(frame, gpu->width(), gpu->height());
-	std::shared_ptr<QImage> source_image = frame->GetImage();
-	if (!source_image || source_image->isNull())
-		return false;
+	// A source that is already on the GPU -- a text clip since W17 -- is taken as a
+	// texture and never crosses to the CPU at all. get_transform() cannot apply the
+	// opacity curve to its pixels in that case, so it hands the value back and it goes
+	// on the paint below; on every CPU-backed source it still writes the pixels in
+	// place, exactly as it always has, which is why that path moves no goldens.
+	const std::shared_ptr<openshot::GpuFrame>& source_gpu = frame->GpuBacking();
+	float deferred_alpha = 1.0f;
+	const QTransform t = get_transform(frame, gpu->width(), gpu->height(),
+									   source_gpu ? &deferred_alpha : nullptr);
 
-	// Format_RGBA8888_Premultiplied is byte-for-byte kRGBA_8888 premultiplied.
-	const SkPixmap src(SkImageInfo::Make(source_image->width(), source_image->height(),
-										 kRGBA_8888_SkColorType, kPremul_SkAlphaType),
-					   source_image->constBits(), source_image->bytesPerLine());
-	// Wrap the QImage's pixels rather than copying them: the upload below is synchronous
-	// and source_image outlives it, so the extra full-frame CPU copy RasterFromPixmapCopy
-	// would make is pure cost on a path whose whole expense is moving the image.
-	sk_sp<SkImage> texture =
-		openshot::GpuFrame::ToTexture(SkImages::RasterFromPixmap(src, nullptr, nullptr));
+	sk_sp<SkImage> texture;
+	int source_w = 0, source_h = 0;
+	std::shared_ptr<QImage> source_image;   // held until the synchronous upload is done
+	if (source_gpu) {
+		// snapshot() copies the contents, so it stays valid once the pooled surface
+		// behind it goes back to the pool at the end of this frame.
+		texture = source_gpu->snapshot();
+		source_w = source_gpu->width();
+		source_h = source_gpu->height();
+	} else {
+		source_image = frame->GetImage();
+		if (!source_image || source_image->isNull())
+			return false;
+		source_w = source_image->width();
+		source_h = source_image->height();
+
+		// Format_RGBA8888_Premultiplied is byte-for-byte kRGBA_8888 premultiplied.
+		const SkPixmap src(SkImageInfo::Make(source_w, source_h,
+											 kRGBA_8888_SkColorType, kPremul_SkAlphaType),
+						   source_image->constBits(), source_image->bytesPerLine());
+		// Wrap the QImage's pixels rather than copying them: the upload below is
+		// synchronous and source_image outlives it, so the extra full-frame CPU copy
+		// RasterFromPixmapCopy would make is pure cost on a path whose whole expense is
+		// moving the image.
+		texture = openshot::GpuFrame::ToTexture(SkImages::RasterFromPixmap(src, nullptr, nullptr));
+	}
 	if (!texture)
 		return false;   // caller falls back; the canvas has not been touched
 
@@ -1765,6 +1785,9 @@ bool Clip::draw_to_canvas(std::shared_ptr<openshot::Frame> frame,
 	SkCanvas* canvas = gpu->canvas();
 	SkPaint paint;
 	paint.setBlendMode(ToSkBlendMode(blend_mode));
+	// Only ever anything but 1.0 for a GPU-backed source; see get_transform above.
+	if (deferred_alpha != 1.0f)
+		paint.setAlphaf(deferred_alpha);
 
 	// W14: the clip blur and the drop shadow become one SkImageFilter chain on the paint,
 	// so a clip carrying either still composites in this single transformed draw. Both are
@@ -1772,8 +1795,7 @@ bool Clip::draw_to_canvas(std::shared_ptr<openshot::Frame> frame,
 	// carries them, exactly as the QPainter path draws the shadow under the same transform
 	// as the clip. The CPU equivalents -- apply_keyframes()' cv::GaussianBlur and
 	// get_shadow_image() -- are untouched and still run whenever this draw is not taken.
-	const SkRect source_rect = SkRect::MakeWH((SkScalar) source_image->width(),
-											  (SkScalar) source_image->height());
+	const SkRect source_rect = SkRect::MakeWH((SkScalar) source_w, (SkScalar) source_h);
 	sk_sp<SkImageFilter> filter;
 	if (blur) {
 		const int blur_radius = std::max(0, (int) std::lround(blur_amount.GetValue(frame->number)));
@@ -2143,38 +2165,62 @@ QSize Clip::scale_size(QSize source_size, ScaleType source_scale, int target_wid
 }
 
 // Get QTransform from keyframes
-QTransform Clip::get_transform(std::shared_ptr<Frame> frame, int width, int height)
+QTransform Clip::get_transform(std::shared_ptr<Frame> frame, int width, int height,
+							   float* deferred_alpha)
 {
-	// Get image from clip
-	std::shared_ptr<QImage> source_image = frame->GetImage();
+	// A GPU-backed source has no QImage to touch, and asking for one would read the
+	// texture back -- exactly what the caller passing deferred_alpha is avoiding. Take
+	// the size from the frame, which AttachGpuFrame keeps in step with the surface.
+	const bool defer = deferred_alpha != nullptr;
+	if (defer)
+		*deferred_alpha = 1.0f;
+	std::shared_ptr<QImage> source_image;
+	QSize image_size;
+	if (defer && frame->IsGpuBacked()) {
+		image_size = QSize(frame->GetWidth(), frame->GetHeight());
+	} else {
+		// Get image from clip
+		source_image = frame->GetImage();
+		image_size = source_image->size();
+	}
 
 	/* ALPHA & OPACITY */
 	if (alpha.GetValue(frame->number) != 1.0)
 	{
 		float alpha_value = alpha.GetValue(frame->number);
 
-		// Get source image's pixels
-		unsigned char *pixels = source_image->bits();
+		if (!source_image) {
+			// Hand the curve to the caller to set on its paint, and leave the texture be.
+			*deferred_alpha = alpha_value;
 
-		// Loop through pixels
-		for (int pixel = 0, byte_index=0; pixel < source_image->width() * source_image->height(); pixel++, byte_index+=4)
-		{
-			// Apply alpha to pixel values (since we use a premultiplied value, we must
-			// multiply the alpha with all colors).
-			pixels[byte_index + 0] *= alpha_value;
-			pixels[byte_index + 1] *= alpha_value;
-			pixels[byte_index + 2] *= alpha_value;
-			pixels[byte_index + 3] *= alpha_value;
+			// Debug output
+			ZmqLogger::Instance()->AppendDebugMethod("Clip::get_transform (Defer Alpha & Opacity)",
+				"alpha_value", alpha_value,
+				"frame->number", frame->number);
+		} else {
+			// Get source image's pixels
+			unsigned char *pixels = source_image->bits();
+
+			// Loop through pixels
+			for (int pixel = 0, byte_index=0; pixel < source_image->width() * source_image->height(); pixel++, byte_index+=4)
+			{
+				// Apply alpha to pixel values (since we use a premultiplied value, we must
+				// multiply the alpha with all colors).
+				pixels[byte_index + 0] *= alpha_value;
+				pixels[byte_index + 1] *= alpha_value;
+				pixels[byte_index + 2] *= alpha_value;
+				pixels[byte_index + 3] *= alpha_value;
+			}
+
+			// Debug output
+			ZmqLogger::Instance()->AppendDebugMethod("Clip::get_transform (Set Alpha & Opacity)",
+				"alpha_value", alpha_value,
+				"frame->number", frame->number);
 		}
-
-		// Debug output
-		ZmqLogger::Instance()->AppendDebugMethod("Clip::get_transform (Set Alpha & Opacity)",
-			"alpha_value", alpha_value,
-			"frame->number", frame->number);
 	}
 
 	/* RESIZE SOURCE IMAGE - based on scale type */
-	QSize source_size = scale_size(source_image->size(), scale, width, height);
+	QSize source_size = scale_size(image_size, scale, width, height);
 
 	// Initialize parent object's properties (Clip or Tracked Object)
 	float parentObject_location_x = 0.0;
@@ -2341,8 +2387,8 @@ QTransform Clip::get_transform(std::shared_ptr<Frame> frame, int width, int heig
 	}
 
 	// SCALE CLIP (if needed)
-	float source_width_scale = (float(source_size.width()) / float(source_image->width())) * sx;
-	float source_height_scale = (float(source_size.height()) / float(source_image->height())) * sy;
+	float source_width_scale = (float(source_size.width()) / float(image_size.width())) * sx;
+	float source_height_scale = (float(source_size.height()) / float(image_size.height())) * sy;
 	if (!isNear(source_width_scale, 1.0) || !isNear(source_height_scale, 1.0)) {
 		transform.scale(source_width_scale, source_height_scale);
 	}
