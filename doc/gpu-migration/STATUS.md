@@ -33,10 +33,11 @@ only thing stopping R2a and R2b from shipping. **R2a complete** (2.1, 2.2, 2.3);
 met**; worklist **A done**, **B rejected on
 measurement**, **C done differently**, **D done**, **E done**. The Skia text and subtitle engines now both run
 on the GPU under one control (`GpuDevice::SetBackend`), and the image that can run them exists.
-**W11–W14 are done** (2026-09-16) and **W15 is void — examined 2026-09-17 and closed with no code
-change**, because everything it asked for is either forbidden by the standing constraint or already
-true (see the worklist item). **W16 — image and SVG readers on Skia — is what a resuming session
-picks up next**. W01 and W02 are **deferred to the end of the migration** by the project owner: no
+**W11–W14 are done** (2026-09-16). **W15 and W16 are both void** — examined 2026-09-17 and closed
+with no code change, because everything they ask for is already done, unnecessary, or forbidden by
+the standing constraint (see the worklist items, and the note below on why Stage 5 reads this way).
+**W17 — subtitles and text into the timeline canvas — is what a resuming session picks up next, and
+it is real work.** W01 and W02 are **deferred to the end of the migration** by the project owner: no
 image build, no release, no merge to `develop` until the GPU work is finished. See "Next step".
 
 ## Where we are
@@ -434,10 +435,25 @@ session; the worklist opens with the protocol.
 `GPU-DECISIONS.md` — canvas `kRGBA_8888` (overriding the F16 recommendation that was on file),
 Graphite only, LUT matched to the front end at native cube size, nearest sampling kept.
 
-### Next: W16 — image and SVG readers on Skia · legacy `3.5`
+### Next: W17 — subtitles and text into the timeline canvas · legacy `3.6`
 
-Read the item in the worklist. W14 is closed and W15 is void; nothing is half-finished and there is
-no in-progress state to resume or revert.
+Read the item in the worklist. W14 is closed, W15 and W16 are void; nothing is half-finished and
+there is no in-progress state to resume or revert.
+
+**Why W17 is real when the two before it were not.** Its own note explains it: the capability has
+existed since Phase 2 (`SubtitleManager::renderAtFrame(SkCanvas*, w, h, frame)`, bit-identical on
+GPU and raster), and the Timeline passed a raster canvas on purpose because a full-frame round trip
+cost 5.6 ms at 1080p against 0.27 ms of drawing. **W12 landed, so the frame is already on the GPU
+and that arithmetic inverts.** The item is now mostly deleting the raster wrapper and letting the
+Timeline hand over its own canvas, for both subtitles and the text reader. Gate:
+`subtitles_words` ≥ 120 fps, against ~113 measured at W13. Nothing blocks it.
+
+**Stage 5's Qt items were written before the standing constraint and before W13**, which is why
+two in a row came out void: they assume Qt code gets rewritten and deleted, and the constraint
+requires the CPU path be kept and gated instead. **W18 is mixed** — its build options and the
+`QString`/`QDir`/`QColor` work in `Timeline`, `Profiles`, `ColorMap` and `ChunkReader/Writer` are
+genuine (none of those is the CPU render fallback), but its "no `QPainter` on the render path" gate
+hits W15's wall unless the answer is gating rather than deletion. Read it accordingly.
 
 **Three things carried forward, all recorded rather than forgotten:**
 
@@ -454,7 +470,7 @@ no in-progress state to resume or revert.
    `src/effects/Crop.cpp`, W19–W21. The Qt inventory table in `GPU-RENDER-PLAN.md` §2 lists it
    against `Clip.cpp` in error.
 
-**After W16:** W17–W18 (readers on
+**After W17:** W18 (readers on
 Skia, subtitles into the timeline canvas, Qt off the render path), W19–W21 (effects as shaders),
 **W22–W25 (frames stay on the GPU — this is where `grid_3x3`'s 45 fps gate and the `podcast_pip`
 regression are settled, because it removes the per-clip upload)**, W26–W28, W29–W31. W03/W04 (CI,
@@ -484,6 +500,24 @@ production corpus) remain open; W05–W10 are the CPU quick wins. W01/W02 stay d
   x264 loss, not a matrix bug.
 
 ## Log
+
+- 2026-09-17 — **W16 void: the image and SVG readers stay on Qt, and no code changed.** Examined and
+  closed without an edit. The item has **no throughput to win**: `QtImageReader` caches the decoded,
+  scaled image in `cached_image` (invalidated only on a `max_size` change), so an image decodes once
+  per reader and the per-frame cost is a `shared_ptr` copy. Its three sub-tasks: EXIF orientation is
+  **already honoured** (`setAutoTransform(true)`, `QtImageReader.cpp:82`); **Skia's SVG DOM is not
+  in this build** — `libskia.a` has only `SkSVGCanvas`/`SkSVGDevice`, the SVG *writer*, and
+  `modules/svg` is neither built nor installed, so adding it means editing both build scripts and
+  the installer against `CLAUDE.md`'s rules, while resvg is an already-optional path that is off
+  (`HAVE_RESVG=FALSE`); and replacing the reader is **cross-repo on the shipping path**, since the
+  service constructs `openshot::QtImageReader` by name twice and `ShapeRenderer` documents that its
+  sizing matches QtImageReader's SVG sizing. Checked the one thing that could have been a real bug:
+  the service's whole SVG surface is `<path>`/`<circle>` with basic paint attributes, and Qt
+  **honours `preserveAspectRatio="none"`** — tested, a 100x100 viewBox in a 200x100 raster fills all
+  200x100 — so the documented contract between the repos holds. Gate not runnable either: it wants a
+  40-asset production corpus that does not exist. **Next is W17, which is real work** for the reason
+  its own note gives; W18 is mixed. Machine was quiet for this session (load ~1.3), but no
+  benchmark was needed.
 
 - 2026-09-17 — **W15 void: `BlendModes.cpp` stays, and no code changed.** Examined and closed
   without an edit. `BlendImages()` has two live users — `Clip::apply_background`, which is the CPU

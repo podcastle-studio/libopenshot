@@ -33,7 +33,7 @@ Rules that apply to every item without being repeated in it:
   scenarios, commit the PNGs with the code.
 - Anything that fails its gate is reverted or flagged off. It does not stay merged "to fix later".
 
-**Status line:** W11–W14 done (2026-09-16), W15 **void** (2026-09-17) · **W16 is the next item** · W01/W02 **deferred by
+**Status line:** W11–W14 done (2026-09-16), W15 and W16 **void** (2026-09-17) · **W17 is the next item** · W01/W02 **deferred by
 the project owner** — no release, no image, no merge to `develop` until the GPU work is finished ·
 W03/W04 open · W05–W10 open · everything before W01 is done (see `STATUS.md`).
 
@@ -488,17 +488,60 @@ for no measurable gain is the project owner's call, not this item's; flagged rat
 
 **Size.** ~2 days as written; ~0 in fact.
 
-### W16 — Image and SVG readers on Skia · legacy `3.5`
+### W16 — Image and SVG readers on Skia · legacy `3.5` · **VOID 2026-09-17 — no code change**
 
 **Depends on.** W13. Parallel with W17, W18.
 
-- [ ] `SkCodec` for PNG/JPEG, honouring EXIF orientation.
-- [ ] Skia's SVG module or resvg for shapes; one texture cached per reader.
-- [ ] Replaces `QtImageReader`.
+Examined and closed without a code change. Every sub-task is already done, unnecessary, or blocked,
+and the item has **no throughput to win at all**: `QtImageReader` caches the decoded and scaled
+image in `cached_image`, invalidated only when `max_size` changes, so an image decodes **once per
+reader** and the per-frame cost is a `shared_ptr` copy into the frame. Recorded here so it is not
+re-attempted.
 
-**Gate.** 20 production PNG/JPEG and 20 shape SVGs at PSNR ≥ 50 dB vs `QtImageReader`; transparent
-PNG edges show no fringing over a coloured background; `tools/golden.sh check --filter readers`.
-**Size.** ~1 week.
+- [x] ~~`SkCodec` for PNG/JPEG, honouring EXIF orientation~~ — **EXIF is already honoured.**
+      `QtImageReader.cpp:82` sets `imgReader.setAutoTransform(true)`, which is exactly what the
+      sub-task asks for. With decode cached per reader there is no per-frame cost to remove either,
+      so swapping the decoder means re-qualifying every format Qt reads for no measurable gain.
+- [x] ~~Skia's SVG module or resvg for shapes~~ — **not available, and not needed.**
+      1. **Skia's SVG DOM is not in this build.** `libskia.a` contains only `SkSVGCanvas` /
+         `SkSVGDevice` — the SVG *writer*. `modules/svg` (`SkSVGDOM`, the parser) is a separate
+         target that is not built and whose headers are not installed; `skia_enable_svg = true` in
+         the GN args enables the writer, not the reader. Adding it means editing **both** build
+         scripts and `install_skia_gpu.sh`, against `CLAUDE.md`'s rule that the two scripts stay
+         byte-identical except for four things and that the CPU build stays reproducible.
+      2. **resvg is already an optional path and is off** (`HAVE_RESVG:BOOL=FALSE`); the
+         `USE_RESVG` branches in `QtImageReader.cpp` are unused today.
+      3. **Qt renders the service's shapes correctly.** `ShapeRenderer`'s entire emitted surface is
+         `<svg viewBox … preserveAspectRatio="none">` containing `<path>` and `<circle>` with
+         `fill`, `stroke`, `stroke-width`, `stroke-opacity`, `fill-opacity`, `stroke-linecap`,
+         `stroke-linejoin` and `stroke-dasharray`. No gradients, filters, text, masks or
+         transforms — nothing at the edge of Qt's SVG support. The one documented cross-repo
+         contract, `preserveAspectRatio="none"` (`ShapeRenderer.cpp`'s comment relies on it so the
+         ≤1 px raster-size truncation cannot letterbox a shape), was **tested and holds**: a
+         100x100 viewBox in a 200x100 raster stretches to fill all 200x100.
+- [x] ~~Replaces `QtImageReader`~~ — **cross-repo, and on the shipping path.**
+      `../video-rendering-service` constructs `openshot::QtImageReader` by name twice
+      (`VideoRenderingImpl.cpp:140` for media, `:359` for shapes, where the comment reads
+      "QtImageReader only — the SVG is generated locally, and no other reader can rasterize it"),
+      and `ShapeRenderer.cpp:17` documents that its size computation "matches the one QtImageReader
+      computes for the same SVG". Replacing the reader changes shape geometry on the path production
+      runs today.
+
+**Gate.** Not runnable as written and not worth making runnable: it wants "20 production PNG/JPEG
+and 20 shape SVGs", a corpus that does not exist (W04 holds one payload so far), to compare a
+replacement that should not be built against a reader that is already correct.
+
+**Size.** ~1 week as written; ~0 in fact.
+
+> **Stage 5's remaining Qt items were written before the standing constraint and before W13.**
+> W15 and W16 are both void for the same underlying reason: they assume a rewrite-and-delete model
+> where Qt code is removed, and the constraint requires the CPU path be kept and gated instead.
+> **W17 is not affected and is real work** — its own note says the arithmetic inverts once W12
+> lands, which it has. **W18 is mixed**: the build options and the `QString`/`QDir`/`QColor`
+> replacements in `Timeline`, `Profiles`, `ColorMap` and `ChunkReader/Writer` are genuine (none of
+> those is the CPU render fallback), but its "no `QPainter` on the render path" gate hits the same
+> wall as W15's unless the answer is an `ENABLE_LEGACY_EFFECTS`-style gate rather than deletion.
+> Read W18 with that in mind rather than taking its checklist at face value.
 
 ### W17 — Subtitles and text into the timeline canvas · legacy `3.6`
 
