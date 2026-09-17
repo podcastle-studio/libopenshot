@@ -33,8 +33,10 @@ only thing stopping R2a and R2b from shipping. **R2a complete** (2.1, 2.2, 2.3);
 met**; worklist **A done**, **B rejected on
 measurement**, **C done differently**, **D done**, **E done**. The Skia text and subtitle engines now both run
 on the GPU under one control (`GpuDevice::SetBackend`), and the image that can run them exists.
-**W11, W12, W13 and W14 are done** (2026-09-16); **W15 — delete `BlendModes.cpp` — is
-what a resuming session picks up next**. W01 and W02 are **deferred to the end of the migration** by the project owner: no
+**W11–W14 are done** (2026-09-16) and **W15 is void — examined 2026-09-17 and closed with no code
+change**, because everything it asked for is either forbidden by the standing constraint or already
+true (see the worklist item). **W16 — image and SVG readers on Skia — is what a resuming session
+picks up next**. W01 and W02 are **deferred to the end of the migration** by the project owner: no
 image build, no release, no merge to `develop` until the GPU work is finished. See "Next step".
 
 ## Where we are
@@ -432,21 +434,27 @@ session; the worklist opens with the protocol.
 `GPU-DECISIONS.md` — canvas `kRGBA_8888` (overriding the F16 recommendation that was on file),
 Graphite only, LUT matched to the front end at native cube size, nearest sampling kept.
 
-### Next: W15 — delete `BlendModes.cpp` · legacy `3.4`
+### Next: W16 — image and SVG readers on Skia · legacy `3.5`
 
-Read the item in the worklist. W14 is closed; nothing is half-finished and there is no in-progress
-state to resume or revert.
+Read the item in the worklist. W14 is closed and W15 is void; nothing is half-finished and there is
+no in-progress state to resume or revert.
 
-**Two things W14 leaves for a later item, both recorded rather than forgotten:**
+**Three things carried forward, all recorded rather than forgotten:**
 
-1. **`podcast_pip`'s 45 fps gate is carried to W22–W25.** W14 took it 18.7–21.1 → 27.4–28.9 fps,
-   and a probe (guard dropped, shadow not drawn) put this item's ceiling at 33.5–35.0. The gate was
-   unreachable here; what is left is the per-clip PCIe upload, which is where `grid_3x3`'s identical
-   45 fps gate already went.
-2. **Crop's `QPainterPath` → `clipRRect` is an effects port**, not a `Clip` one — `src/effects/Crop.cpp`.
-   W19–W21.
+1. **Three 45–50 fps gates now sit on W22–W25**, all with the same single cause — every source
+   image crosses PCIe once per clip per frame. `grid_3x3` (45, at ~26), `podcast_pip` (45, at
+   27.4–28.9 after W14, with W14's own ceiling measured at 33.5–35.0) and `blend_stack_5` (50, at
+   ~41–42, unreachable from W15 by construction). W22–W25 is the item that has to clear all three,
+   and it should be sized accordingly.
+2. **Taking Qt off the render path is W16–W18, and it is gating, not deletion.** `src/Timeline.cpp`
+   is already QPainter-free; `src/Clip.cpp`'s 15 references are all the CPU fallback. The GPU path
+   still uses Qt as the image container (`QImage` from `frame->GetImage()`) and `QTransform` to
+   build the matrix — that is the part W16–W18 can actually remove.
+3. **Crop's `QPainterPath` → `clipRRect` is an effects port**, not a `Clip` one —
+   `src/effects/Crop.cpp`, W19–W21. The Qt inventory table in `GPU-RENDER-PLAN.md` §2 lists it
+   against `Clip.cpp` in error.
 
-**After W15:** W16–W18 (readers on
+**After W16:** W17–W18 (readers on
 Skia, subtitles into the timeline canvas, Qt off the render path), W19–W21 (effects as shaders),
 **W22–W25 (frames stay on the GPU — this is where `grid_3x3`'s 45 fps gate and the `podcast_pip`
 regression are settled, because it removes the per-clip upload)**, W26–W28, W29–W31. W03/W04 (CI,
@@ -476,6 +484,23 @@ production corpus) remain open; W05–W10 are the CPU quick wins. W01/W02 stay d
   x264 loss, not a matrix bug.
 
 ## Log
+
+- 2026-09-17 — **W15 void: `BlendModes.cpp` stays, and no code changed.** Examined and closed
+  without an edit. `BlendImages()` has two live users — `Clip::apply_background`, which is the CPU
+  implementation of all 15 non-normal modes, and `openshot-gpu-blend-parity`, which uses it as the
+  **oracle** `SkBlendMode` is validated against, so deleting the file would delete the GPU's own
+  correctness test. Neither `GetImageCV` call in `Clip.cpp` is dead either (overlay clips, CPU clip
+  blur). Its gate: `grep -c QPainter src/Timeline.cpp` is already 0, and `src/Clip.cpp`'s 15 hits
+  are all CPU fallback, so reaching 0 means deleting the path the constraint protects;
+  `blend_stack_5` ≥ 50 fps is unreachable here **by construction** — W13 put every mode on
+  `SkBlendMode` and `apply_background` is guarded by `!drawn_on_canvas`, so `BlendImages()` is not
+  on the GPU path at all and no edit to it can move a Vulkan number. Measured ~41–42 fps, gate
+  carried to **W22–W25**, which now owns three 45–50 fps gates with one shared cause. One genuinely
+  dead symbol found (`BlendPixel`, no caller anywhere including the two consumer repos) and
+  deliberately left: it is public library API and removing it gains nothing measurable — the owner's
+  call. Also: the machine was carrying heavy unrelated load all session (load average 9–20, one
+  `blend_stack_5` run swinging 20→48 fps), so **no new benchmark from today should be trusted as a
+  baseline**; the conclusion above rests on the code structure, not on those numbers.
 
 - 2026-09-16 — **W14 done: the clip shadow and blur composite on the GPU.** Both become one
   `SkImageFilter` chain on the paint (`Blur` with `kClamp` + a source-rect crop, then `DropShadow` —

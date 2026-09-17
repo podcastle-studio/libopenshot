@@ -33,7 +33,7 @@ Rules that apply to every item without being repeated in it:
   scenarios, commit the PNGs with the code.
 - Anything that fails its gate is reverted or flagged off. It does not stay merged "to fix later".
 
-**Status line:** W11–W14 done (2026-09-16) · **W15 is the next item** · W01/W02 **deferred by
+**Status line:** W11–W14 done (2026-09-16), W15 **void** (2026-09-17) · **W16 is the next item** · W01/W02 **deferred by
 the project owner** — no release, no image, no merge to `develop` until the GPU work is finished ·
 W03/W04 open · W05–W10 open · everything before W01 is done (see `STATUS.md`).
 
@@ -444,15 +444,49 @@ guessed:
 
 **Size.** ~3 days.
 
-### W15 — Delete `BlendModes.cpp` · legacy `3.4`
+### W15 — Delete `BlendModes.cpp` · legacy `3.4` · **VOID 2026-09-17 — no code change**
 
 **Depends on.** W14.
 
-- [ ] Delete `BlendModes.cpp` and the `GetImageCV` calls in `Clip.cpp`.
+Examined and closed without a code change. Every part of the item is either forbidden by the
+standing constraint or already true, and its throughput gate cannot move from inside it. Recorded
+here so it is not re-attempted.
 
-**Gate.** `grep -c QPainter src/Clip.cpp src/Timeline.cpp` is 0; `blend_stack_5` render ≥ **50 fps**
-(19); golden green.
-**Size.** ~2 days.
+- [x] ~~Delete `BlendModes.cpp`~~ — **must not be deleted.** Two live users:
+      1. `Clip::apply_background` calls `BlendImages()` for all 15 non-normal modes. That is the
+         **CPU implementation** of the fork's blend modes — the path a no-GPU machine runs. The
+         standing constraint forbids deleting it.
+      2. `tests/gpu/gpu_blend_parity.cpp` blends with `BlendImages()` as the **reference** that
+         `SkBlendMode` is validated against. Deleting the file would delete the GPU's own
+         correctness oracle — the one W13 relies on, because three modes' golden tolerance is too
+         wide to catch a regression.
+- [x] ~~Delete the `GetImageCV` calls in `Clip.cpp`~~ — **none are dead.** Two sites: the overlay-clip
+      compositor (`additiveBlend` / `applyDisplacementMapEffect`, still a `can_draw_to_canvas`
+      disqualifier) and the CPU clip blur in `apply_keyframes`. Both are live fallback code.
+
+**Gate — the first half is already met, the second cannot move here.**
+
+- `grep -c QPainter src/Timeline.cpp` is **already 0**; `src/Clip.cpp` is **15**, and all 15 are the
+  CPU path: 2 includes, 5 comments explaining how the GPU draw matches QPainter, the
+  `apply_background` compositor, and `apply_keyframes`' painter (transform, shadow, frame number).
+  Reaching 0 means deleting the CPU fallback, which the standing constraint forbids. Taking Qt off
+  the *GPU* path — where a QImage is still the image container and QTransform still builds the
+  matrix — is **W16–W18**, and there too it is gating, not deletion.
+- `blend_stack_5` ≥ 50 fps is **unreachable from this item by construction, not by measurement**:
+  W13 already routes all 16 modes through `SkBlendMode`, and `BlendImages()`'s only caller
+  (`apply_background`) is guarded by `!drawn_on_canvas`, so it is unreachable whenever a clip
+  composites on the GPU. No edit to `BlendModes.cpp` can change a Vulkan number. The scenario
+  measures **~41–42 fps** (41.3 recorded at W13, 41.1–42.4 best-of today), so the gate is missed and
+  **carried to W22–W25** with `grid_3x3`'s and `podcast_pip`'s identical 45/50 fps gates — the
+  per-clip PCIe upload is the whole remainder.
+
+**One genuinely dead symbol, deliberately left in place.** `openshot::BlendPixel` has no caller
+anywhere — not in `src/`, not in the tests, not in `../video-rendering-service` or
+`../text-metrics`. It is documented public API, the only public way to evaluate the non-separable
+modes per pixel, and referenced by `BlendChannel`'s doc comment. Removing ~15 lines of library API
+for no measurable gain is the project owner's call, not this item's; flagged rather than done.
+
+**Size.** ~2 days as written; ~0 in fact.
 
 ### W16 — Image and SVG readers on Skia · legacy `3.5`
 
