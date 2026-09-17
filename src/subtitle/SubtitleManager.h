@@ -39,18 +39,23 @@ public:
     // pass on the GPU and a raster one behaves exactly as it always has. That is
     // the whole of what subtitles need to run on the GPU — see the note on the
     // QImage overload for why the Timeline still hands it a raster canvas.
+    // @a convention must match where the canvas's pixels eventually go: the default
+    // suits a canvas that is read back through an N32 pixmap into a QImage, and
+    // ColorConvention::Logical suits one composited and read back as kRGBA_8888 (the
+    // Timeline's GPU canvas). Getting it wrong exchanges red and blue -- see the enum.
     void renderAtFrame(SkCanvas* canvas, float canvasWidth, float canvasHeight,
-                       int64_t frameNumber) const;
+                       int64_t frameNumber,
+                       ColorConvention convention = ColorConvention::QImageBytes) const;
 
     // Convenience for a caller holding a raster QImage: wraps the image's pixels
     // in a raster canvas and draws onto them in place.
     //
-    // Deliberately NOT routed through a GPU surface. Subtitles composite onto an
-    // existing video frame, so doing that on the GPU means uploading the frame and
-    // reading it back: measured at 5.6 ms round trip for 1080p and 18.7 ms for
-    // 2160p, against 0.27 ms / 0.61 ms for the drawing itself. It only becomes
-    // worth it once the frame is already on the GPU, at which point the caller
-    // uses the canvas overload above and there is no transfer at all.
+    // Deliberately NOT routed through a GPU surface of its own. Subtitles composite
+    // onto an existing video frame, so doing that here means uploading the frame and
+    // reading it back, which costs far more than the drawing it replaces. A caller
+    // whose frame is ALREADY on the GPU uses the canvas overload above instead and
+    // pays no transfer at all -- that is what Timeline::GetFrame does since W17.
+    // This overload remains the whole of the CPU path and a no-GPU machine's route.
     void renderAtFrame(std::shared_ptr<QImage> frameImage, int64_t frameNumber) const;
 
     bool hasActiveSubtitlesAtFrame(const int64_t frameNumber) const;

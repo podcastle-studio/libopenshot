@@ -10,6 +10,26 @@
 namespace openshot {
 namespace subtitle {
 
+/// Which colour convention a renderer's parsed colours follow.
+///
+/// SkiaRenderer::parseColorString swaps R and B on every colour it parses. That swap is
+/// not a byte order and it is not a property of the canvas -- the glow already draws
+/// parsed colours onto a kRGBA_8888 surface and reads them back through an N32 pixmap,
+/// and Skia converts correctly at every such hop. It is a property of the *output
+/// boundary*: every CPU path ends by handing an N32-declared pixmap's bytes to a QImage
+/// that declares them Format_RGBA8888, and the swap is what cancels that one
+/// reinterpretation.
+///
+/// A result that never gets reinterpreted -- drawn onto the Timeline's kRGBA_8888 canvas
+/// and read back as kRGBA_8888 by Frame::FlattenGpuFrame -- must therefore NOT be
+/// swapped, or red and blue come out exchanged. Callers compositing straight onto the
+/// timeline canvas pass Logical; everything else keeps the default and behaves exactly
+/// as it always has.
+enum class ColorConvention {
+    QImageBytes,   ///< legacy: the result is reinterpreted once at a QImage
+    Logical        ///< no swap: the result stays in Skia's own colour space
+};
+
 enum class TextAlignment { LEFT, CENTER, RIGHT };
 enum class TextTransform { NONE, UPPERCASE, LOWERCASE, CAPITALIZE };
 enum class TextAppearance { ONE_WORD, PER_TIME };

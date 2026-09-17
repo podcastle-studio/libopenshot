@@ -1,5 +1,7 @@
 #pragma once
 
+#include "SubtitleTypes.h"
+
 #include <skia/include/core/SkCanvas.h>
 #include <skia/include/core/SkFont.h>
 #include <skia/include/core/SkPaint.h>
@@ -73,7 +75,12 @@ struct PaintProps {
 
 class SkiaRenderer {
 public:
-    explicit SkiaRenderer(SkCanvas* canvas);
+    // Colour convention: see ColorConvention in SubtitleTypes.h for why the R/B swap
+    // belongs to the output boundary rather than to the canvas.
+    explicit SkiaRenderer(SkCanvas* canvas,
+                          ColorConvention convention = ColorConvention::QImageBytes);
+
+    ColorConvention colorConvention() const { return convention; }
 
     SkCanvas* getCanvas() const { return canvas; }
 
@@ -90,8 +97,9 @@ public:
     SkPaint* getPaint(const PaintProps& paintProps);
 
     // Build a linear-gradient shader between two points. `stops` are (CSS colour, position 0..1)
-    // pairs, parsed with the same parseColorString used everywhere else (so the platform BGR
-    // swap stays consistent). Returns null if fewer than two stops. Clamps at both ends.
+    // pairs, parsed with the same parseColorString used everywhere else (so this renderer's
+    // colour convention stays consistent). Returns null if fewer than two stops. Clamps at
+    // both ends.
     sk_sp<SkShader> makeLinearGradientShader(
         const SkPoint pts[2],
         const std::vector<std::pair<std::string, double>>& stops);
@@ -167,6 +175,7 @@ private:
 
 private:
     SkCanvas* canvas;
+    ColorConvention convention;
     // Per-instance, cheap-to-rebuild caches. The expensive half — the fontconfig SkFontMgr
     // (~16 ms to build) and typeface resolution (opens/decompresses the font file and probes
     // glyph coverage) — lives in the process-wide SkiaFontResources cache in the .cpp, because

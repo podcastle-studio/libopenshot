@@ -254,7 +254,8 @@ private:
 
 } // namespace
 
-SkiaRenderer::SkiaRenderer(SkCanvas* canvas) : canvas(canvas) {
+SkiaRenderer::SkiaRenderer(SkCanvas* canvas, ColorConvention convention)
+    : canvas(canvas), convention(convention) {
     // Touch the shared cache here so the one-time fontconfig load happens at construction
     // rather than inside the first glyph measurement.
     SkiaFontResources::Instance();
@@ -344,8 +345,8 @@ sk_sp<SkShader> SkiaRenderer::makeLinearGradientShader(
     colors.reserve(stops.size());
     positions.reserve(stops.size());
     for (const auto& stop : stops) {
-        // parseColorString already applies the platform BGR swap; keep the stop opaque unless the
-        // colour itself carries alpha (opacity arg = 1.0).
+        // parseColorString already applies this renderer's colour convention; keep the stop
+        // opaque unless the colour itself carries alpha (opacity arg = 1.0).
         colors.push_back(SkColor4f::FromColor(parseColorString(stop.first, 1.0f)));
         positions.push_back(static_cast<float>(std::clamp(stop.second, 0.0, 1.0)));
     }
@@ -401,8 +402,12 @@ SkColor SkiaRenderer::parseColorString(const std::string& colorStr, const float 
     g = std::clamp(g, 0, 255);
     b = std::clamp(b, 0, 255);
 
-    // Platform-specific: This build/platform expects BGR order instead of RGB
-    // Despite the function name suggesting RGB order, we need to swap R and B
+    // The swap cancels the one reinterpretation every CPU path ends at: N32-declared
+    // bytes handed to a QImage that declares them Format_RGBA8888. A renderer whose
+    // result is never reinterpreted asks for Logical and gets the colour as written.
+    // See ColorConvention in the header for why this is not a canvas property.
+    if (convention == ColorConvention::Logical)
+        return SkColorSetARGB(static_cast<U8CPU>(alpha), r, g, b);
     return SkColorSetARGB(static_cast<U8CPU>(alpha), b, g, r);
 }
 

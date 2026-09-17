@@ -429,6 +429,109 @@ void checkSubtitleOnGpuCanvas() {
     report("subtitle-gpu", ok, detail);
 }
 
+// The colour convention the Timeline's canvas needs, which the check above cannot see.
+//
+// SkiaRenderer::parseColorString swaps R and B so that the swap cancels at the one place
+// every CPU path ends: N32-declared bytes handed to a QImage that declares them
+// Format_RGBA8888. The check above draws onto a kN32 surface and so keeps that cancelling
+// pair intact. The Timeline's canvas is kRGBA_8888 and is read back as kRGBA_8888, so
+// nothing is ever reinterpreted and the swap must be switched off -- otherwise every
+// subtitle composites with red and blue exchanged, which no existing check would notice.
+//
+// Draw the same frame both ways, each through its own boundary, and require the colours
+// that come out to agree. The clear colour is grey so it cannot itself hide a swap.
+void checkSubtitleCanvasColors() {
+    const char* fontDir = std::getenv("OPENSHOT_TEST_FONT");
+    if (!fontDir) {
+        report("subtitle-colors", true, "skipped (set OPENSHOT_TEST_FONT to a .ttf)");
+        return;
+    }
+    const int W = 640, H = 360;
+    // A strongly red-biased fill and a blue stroke: a swap turns one into the other.
+    std::string json =
+            std::string("{\"settings\":{\"defaultStyle\":{\"fontFamily\":\"") + fontDir +
+            "\",\"fontSize\":64,\"fontWeight\":700,\"color\":\"#FF2010\","
+            "\"strokeColor\":\"#1020FF\",\"strokeWidth\":4},"
+            "\"transformation\":{\"maxWidth\":480,\"center\":{\"x\":0.5,\"y\":0.5}},"
+            "\"containerStyle\":{\"appearance\":\"ONE_WORD\",\"textAlign\":\"CENTER\"}},"
+            "\"segments\":[{\"id\":\"s0\",\"startTime\":0,\"endTime\":2000,\"visible\":true,"
+            "\"attached\":true,\"wordDetails\":[{\"word\":\"RED\",\"startTime\":0,\"endTime\":2000}]}]}";
+
+    openshot::subtitle::SubtitleManager manager(30.f);
+    manager.loadFromJSONString(json);
+
+    const SkColor grey = SkColorSetARGB(255, 0x40, 0x40, 0x40);   // swap-invariant
+
+    // Reference: the CPU boundary. Draw with the legacy swap onto kN32, then read the raw
+    // bytes back as kRGBA_8888 -- which is exactly what Frame's QImage does to them.
+    SkBitmap rasterPixels;
+    if (!rasterPixels.tryAllocN32Pixels(W, H)) {
+        report("subtitle-colors", false, "raster allocation failed");
+        return;
+    }
+    rasterPixels.eraseColor(grey);
+    SkCanvas rasterCanvas(rasterPixels);
+    manager.renderAtFrame(&rasterCanvas, W, H, 10,
+                          openshot::subtitle::ColorConvention::QImageBytes);
+    const SkPixmap reinterpreted(
+            SkImageInfo::Make(W, H, kRGBA_8888_SkColorType, kPremul_SkAlphaType),
+            rasterPixels.getPixels(), rasterPixels.rowBytes());
+
+    // The Timeline's boundary: kRGBA_8888 canvas, no swap, read back as kRGBA_8888.
+    std::shared_ptr<openshot::GpuFrame> frame =
+            openshot::GpuFrame::Create(W, H, kRGBA_8888_SkColorType);
+    if (!frame || !frame->canvas()) {
+        report("subtitle-colors", false, "no GPU frame");
+        return;
+    }
+    frame->canvas()->clear(grey);
+    manager.renderAtFrame(frame->canvas(), W, H, 10,
+                          openshot::subtitle::ColorConvention::Logical);
+
+    SkBitmap gpuPixels;
+    if (!gpuPixels.tryAllocPixels(
+                SkImageInfo::Make(W, H, kRGBA_8888_SkColorType, kPremul_SkAlphaType))) {
+        report("subtitle-colors", false, "readback allocation failed");
+        return;
+    }
+    SkPixmap gpuMap;
+    if (!gpuPixels.peekPixels(&gpuMap) || !frame->readback(gpuMap)) {
+        report("subtitle-colors", false, "readback failed");
+        return;
+    }
+
+    // Both sides now hold logical colours. Compare them, and also against the swapped
+    // reference, so the failure message says which way round it went wrong.
+    long long changed = 0, differing = 0, worst = 0;
+    double sumDirect = 0.0, sumSwapped = 0.0;
+    for (int y = 0; y < H; ++y) {
+        for (int x = 0; x < W; ++x) {
+            const SkColor r = reinterpreted.getColor(x, y);
+            const SkColor g = gpuMap.getColor(x, y);
+            if (r != grey) changed++;
+            const int dr = std::abs((int)SkColorGetR(r) - (int)SkColorGetR(g));
+            const int dg = std::abs((int)SkColorGetG(r) - (int)SkColorGetG(g));
+            const int db = std::abs((int)SkColorGetB(r) - (int)SkColorGetB(g));
+            sumDirect += dr + dg + db;
+            sumSwapped += std::abs((int)SkColorGetR(r) - (int)SkColorGetB(g)) + dg +
+                          std::abs((int)SkColorGetB(r) - (int)SkColorGetR(g));
+            const long long d = std::max({dr, dg, db});
+            if (d > 8) differing++;
+            worst = std::max(worst, d);
+        }
+    }
+    const double differingPct = 100.0 * differing / (double)(W * H);
+    const double meanDirect = sumDirect / (double)(W * H * 3);
+    const double meanSwapped = sumSwapped / (double)(W * H * 3);
+    const bool ok = changed > 500 && differingPct < 0.5 && meanDirect < meanSwapped;
+    char detail[320];
+    std::snprintf(detail, sizeof(detail),
+                  "%lld px drawn, %.3f%% differ by >8, worst %lld, mean err %.3f "
+                  "(R/B swapped would be %.3f)",
+                  changed, differingPct, worst, meanDirect, meanSwapped);
+    report("subtitle-colors", ok, detail);
+}
+
 }  // namespace
 
 int main() {
@@ -463,6 +566,7 @@ int main() {
     checkPoolSurvivesDeviceRestart();
     checkSingleControl();
     checkSubtitleOnGpuCanvas();
+    checkSubtitleCanvasColors();
 
     std::printf("\n%d failure(s)\n", failures);
     return failures == 0 ? 0 : 1;

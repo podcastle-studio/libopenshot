@@ -328,14 +328,14 @@ void SubtitleManager::renderAtFrame(std::shared_ptr<QImage> frameImage, int64_t 
 }
 
 void SubtitleManager::renderAtFrame(SkCanvas* canvas, float canvasWidth, float canvasHeight,
-                                    int64_t frameNumber) const {
+                                    int64_t frameNumber, ColorConvention convention) const {
     if (segments.empty() || !canvas || canvasWidth <= 0.f || canvasHeight <= 0.f) return;
 
     // Convert frame to time
     float timeMs = frameToMs(frameNumber, fps);
 
     // Create renderer
-    SkiaRenderer skiaRenderer(canvas);
+    SkiaRenderer skiaRenderer(canvas, convention);
     SubtitleRenderer subtitleRenderer(&skiaRenderer, fps);
 
     // Find and render active segments. The active window is HALF-OPEN [startTimeMs, endTimeMs):
