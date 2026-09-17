@@ -33,7 +33,8 @@ Rules that apply to every item without being repeated in it:
   scenarios, commit the PNGs with the code.
 - Anything that fails its gate is reverted or flagged off. It does not stay merged "to fix later".
 
-**Status line:** W11–W14 done (2026-09-16), W15 and W16 **void** (2026-09-17) · **W17 is the next item** · W01/W02 **deferred by
+**Status line:** W11–W14 done (2026-09-16), W15 and W16 **void** (2026-09-17) · **W17 code complete
+(2026-09-17), its fps gate owed on mains power — see the item** · **W18 is the next item** · W01/W02 **deferred by
 the project owner** — no release, no image, no merge to `develop` until the GPU work is finished ·
 W03/W04 open · W05–W10 open · everything before W01 is done (see `STATUS.md`).
 
@@ -552,10 +553,54 @@ purpose, because a full-frame round trip costs 5.6 ms at 1080p against 0.27 ms o
 W12 lands the frame is already on the GPU and that arithmetic inverts** — this item is then mostly
 deleting the raster wrapper.
 
-- [ ] Timeline passes its own canvas to `SubtitleManager::renderAtFrame`.
-- [ ] Same for the text reader — no intermediate surface, no readback.
+> **2026-09-17 — the note above is wrong on both counts, and the code is done anyway.** Measured
+> before implementing, as the protocol requires:
+>
+> 1. **There was never a round trip here to delete.** `Timeline.cpp`'s subtitle block called
+>    `new_frame->GetImage()`, which *is* `FlattenGpuFrame()` — the same readback the Timeline does
+>    a few lines later. The frame crossed exactly once either way. What the item saves is the
+>    **drawing**, not a transfer. `single_video` is `subtitles_words` minus the subtitles, so
+>    differencing them measures it exactly: **0.62 ms of an 8.19 ms frame**, interleaved three
+>    times on Vulkan at 1080p.
+> 2. **The round trip is 1.62 ms at 1080p on the A2000, not 5.6 ms** (`openshot-gpu-canvas-cost`).
+>    The 5.6 ms on file was measured on the Intel iGPU.
+> 3. **The gate was already met at HEAD**, before any change: `subtitles_words` 120.0 / 121.3 /
+>    125.0 fps on Vulkan, interleaved against `single_video` at 131.7 / 130.1 / 134.3. The ~113
+>    on file was stale.
+> 4. **A latent bug blocked the naive change.** `SkiaRenderer::parseColorString` swaps R and B;
+>    that swap cancels only at the QImage boundary, and the timeline canvas is `kRGBA_8888` and is
+>    read back as `kRGBA_8888`. Handing it over unchanged renders subtitles with red and blue
+>    exchanged. The swap is now `ColorConvention`, a property of the output boundary
+>    (`subtitle/SubtitleTypes.h`), and the new `subtitle-colors` check in `openshot-gpu-checks`
+>    guards it. The existing `subtitle-gpu` check could not — it builds its frame as `kN32`.
+>
+> The text half was also not "delete the wrapper": `Frame::DeepCopy` did not carry `gpu_frame`,
+> three `Frame` accessors would have handed back a black frame, and `get_transform` writes the
+> opacity curve into pixels a texture does not have. All three are fixed; see commit `eb028074`.
+
+- [x] Timeline passes its own canvas to `SubtitleManager::renderAtFrame` (`54be69d4`).
+- [x] Same for the text reader — no intermediate surface, no readback (`eb028074`).
 
 **Gate.** `subtitles_words` render ≥ **120 fps**; golden green.
+**Gate status — golden met, fps number OWED.** Golden **292/292 four ways** (CPU Skia; GPU Skia
+off; Vulkan; lavapipe) with no re-baseline, `openshot-gpu-checks` **8/8** and blend parity clean on
+Vulkan and lavapipe. The fps figure could not be recorded: the machine spent the measurement window
+**on battery** (`/sys/class/power_supply/AC*/online` = 0), which caps it to about a third — the same
+binary that read 120–125 fps in the morning read 40–41 fps. The *interleaved* pre/post ratios from
+that window are still valid, both builds having run back to back under identical conditions:
+
+| scenario (1080p, Vulkan, 150 frames) | pre-W17 | W17 | |
+|---|---|---|---|
+| `subtitles_words` | 39.1 / 39.1 / 40.1 | 40.8 / 41.2 / 40.8 | **+3.5 %** |
+| `text_animated_glow_3` | 29.4 / 29.9 | 32.1 / 31.9 | **+8 %** |
+| `everything` | 5.4 / 5.5 | 5.2 / 5.5 | flat |
+
++3.5 % on `subtitles_words` is about half the 7.5 % ceiling the 0.62 ms measurement set, which is
+the expected shape. **To close this:** on AC and a quiet machine, re-run the three scenarios
+interleaved against a pre-W17 build and record the absolute `subtitles_words` number. Recreate the
+comparison build with `git worktree add <dir> 76a756cb`, `cmake -S . -B build-gpu -DCMAKE_BUILD_TYPE=Release
+-DSkia_ROOT=/usr/local/skia-gpu`, and symlink `tests/bench/media/*` from the main tree (the media is
+gitignored).
 **Size.** ~2 days.
 
 ### W18 — Qt off the render path · legacy `3.7`

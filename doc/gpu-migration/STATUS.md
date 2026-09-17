@@ -26,7 +26,7 @@ Stated by the project owner, 2026-09-14. This overrides anything in
    GPU Skia with the GPU off; GPU Skia on Vulkan; GPU Skia on lavapipe) is the acceptance test,
    and all four must be 292/292. Commands are in `CLAUDE.md` under "GPU rendering (`src/gpu`)".
 
-Last updated: 2026-09-16 · branch `feature/gpu-rendering`.
+Last updated: 2026-09-17 · branch `feature/gpu-rendering`.
 **Phase 2 is complete.** 2.0 landed 2026-09-15 (the GPU-capable image, in
 `../video-rendering-service` branch `feature/gpu-rendering`), which was the last thing in it and the
 only thing stopping R2a and R2b from shipping. **R2a complete** (2.1, 2.2, 2.3); **2.4 done, gate
@@ -435,7 +435,24 @@ session; the worklist opens with the protocol.
 `GPU-DECISIONS.md` — canvas `kRGBA_8888` (overriding the F16 recommendation that was on file),
 Graphite only, LUT matched to the front end at native cube size, nearest sampling kept.
 
-### Next: W17 — subtitles and text into the timeline canvas · legacy `3.6`
+### Next: W18 — Qt off the render path · legacy `3.7`
+
+**W17 is code complete** (2026-09-17, commits `25b9623d`, `54be69d4`, `eb028074`), with one thing
+outstanding: **its fps gate number is owed on mains power.** Golden is 292/292 four ways with no
+re-baseline, `openshot-gpu-checks` 8/8 and blend parity clean on Vulkan and lavapipe, so the
+correctness half of the gate is met. The absolute `subtitles_words` figure could not be recorded
+because the machine was on battery for the measurement window (a third of its AC speed: the same
+binary read 120–125 fps in the morning and 40–41 fps on battery). Interleaved ratios from that
+window are valid and are in the worklist item, along with how to recreate the comparison build.
+**Nothing is half-written and nothing needs reverting** — the gate was already met at HEAD before
+W17 touched anything, so the owed number confirms rather than unblocks.
+
+**W18 is mixed, and read it accordingly.** Its build options and the `QString`/`QDir`/`QColor` work
+in `Timeline`, `Profiles`, `ColorMap` and `ChunkReader/Writer` are genuine — none of those is the
+CPU render fallback. Its "no `QPainter` on the render path" gate hits the same wall that made W15
+and W16 void: under the standing constraint the answer is **gating, not deletion**.
+
+### W17 — subtitles and text into the timeline canvas · legacy `3.6` (done 2026-09-17)
 
 Read the item in the worklist. W14 is closed, W15 and W16 are void; nothing is half-finished and
 there is no in-progress state to resume or revert.
@@ -500,6 +517,35 @@ production corpus) remain open; W05–W10 are the CPU quick wins. W01/W02 stay d
   x264 loss, not a matrix bug.
 
 ## Log
+
+- 2026-09-17 — **W17 done: subtitles and text frames both composite on the timeline's GPU canvas.**
+  Three commits. **Both of the item's premises were wrong, measured before implementing.** (1) There
+  was no round trip to delete: the subtitle block's `GetImage()` *is* `FlattenGpuFrame()`, the same
+  readback the Timeline performs a few lines later, so the frame crossed once either way. What W17
+  saves is the drawing — `single_video` is `subtitles_words` minus the subtitles, and differencing
+  them gives **0.62 ms of an 8.19 ms frame**. (2) The round trip is **1.62 ms at 1080p** on the
+  A2000, not the 5.6 ms on file, which was an iGPU number. And (3) **the gate was already met at
+  HEAD**: `subtitles_words` 120.0/121.3/125.0 fps on Vulkan against `single_video` 131.7/130.1/134.3,
+  interleaved; the ~113 on file was stale. A **latent bug** blocked the naive change and is the
+  first commit: `parseColorString`'s R/B swap cancels only at the QImage boundary, and the timeline
+  canvas is `kRGBA_8888` read back as `kRGBA_8888`, so handing it over unchanged exchanges red and
+  blue. The swap is now `ColorConvention` — a property of the output boundary, not of the canvas,
+  which is what the glow already proved by drawing parsed colours onto an RGBA8888 surface — and a
+  new `subtitle-colors` check guards it (0.024 mean error against 2.732 if swapped). The text half
+  needed three fixes nobody had hit yet: `Frame::DeepCopy` dropped `gpu_frame` (every reader frame
+  is copied by `Clip::GetOrCreateFrame`, so it would have composited blank), `GetPixels`/
+  `GetImageCV`/`SetImageCV` would have handed back or kept a stale black frame, and `get_transform`
+  writes the opacity curve into pixels a texture does not have (it now hands the value to the paint).
+  Golden **292/292 four ways with no re-baseline**; the three `subtitles.*` scenarios take the
+  `gpu-composite` tag as expected (worst 55.4 dB / SSIM 0.9999, sub-pixel edges in the subtitle band;
+  mean error 0.037 LSB against the CPU goldens, 111.5 against an R/B-swapped version).
+  **Owed: the absolute fps gate on mains power.** The measurement window ran on battery, which caps
+  the machine to a third of its AC speed; interleaved pre/post ratios from it are valid
+  (`subtitles_words` +3.5 %, `text_animated_glow_3` +8 %, `everything` flat) and are in the worklist
+  item with instructions for recreating the comparison build. Machine notes for the next session:
+  `stills_tests` drove load averages to 9–20 for part of the day, self-inflicted builds pushed the
+  package to 80 °C, and the battery cap was the largest effect of the three — check
+  `/sys/class/power_supply/AC*/online` before trusting any number.
 
 - 2026-09-17 — **W16 void: the image and SVG readers stay on Qt, and no code changed.** Examined and
   closed without an edit. The item has **no throughput to win**: `QtImageReader` caches the decoded,
