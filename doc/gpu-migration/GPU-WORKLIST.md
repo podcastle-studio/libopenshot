@@ -736,6 +736,15 @@ semi-transparent pixels, ≤ 0.2 ms at 1080p.
 
 ### W20 — Transition shaders · legacy `4.6`
 
+> **Read `TRANSITION-PARITY.md` before starting this.** W20 is the item that ends editor/export
+> identity-by-construction: today both run the same C++ compiled twice (native and WASM), and a
+> server-only SkSL port makes them two implementations. That note sets out the achievable target,
+> the shared-source design, the six conventions that must be pinned, and the three-way parity
+> harness — plus a **measured bug that exists today**: the blur radii have no declared reference
+> resolution, so the same authored value is 0.33x as wide exported from a 4K source as it looks in
+> a 720p preview, and 1.33x in the front end's own slow-effect proxy path. Fix that first; no
+> amount of shared shader source addresses it.
+
 - [ ] Port the `image-processing-lib` vocabulary to SkSL: box/diagonal/rotational/zoom blur, zoom,
       border-reflected move and rotation, threshold wipe, circle mask, split shift, colour shift.
 - [ ] Keep the sources in `image-processing-lib/shaders/` so CanvasKit can load the same code.

@@ -31,6 +31,9 @@ Other project commands: `/check` (golden suite + visual diff), `/bench` (perform
    end of every optimisation phase, commit the JSON under `tests/bench/results/`, append the table.
 6. `doc/gpu-migration/GPU-DECISIONS.md` — decisions already taken (do not re-litigate) and the ones
    still open.
+7. `doc/gpu-migration/TRANSITION-PARITY.md` — **read before W20.** How the editor (PixiJS + the
+   OpenCV WASM) and the export stay visually identical once transitions move to shaders, and the
+   measured parameter-resolution bug that already breaks them today.
 
 ## Repo map
 
