@@ -1,0 +1,133 @@
+# W04/W03 — the golden-frame regression suite on every PR.
+#
+# This is the fork's own workflow. `ci.yml` and `../../.gitlab-ci.yml` next to it are upstream
+# OpenShot's, unmodified: they build upstream libopenshot, which has no Skia, no submodules and no
+# pinned FFmpeg, so they cannot gate this fork's render path.
+#
+# READ BEFORE ENABLING — two things are not settled, and both are recorded in
+# doc/gpu-migration/STATUS.md under W03:
+#
+#  1. FFmpeg. The dev box and the service's runtime image both use an FFmpeg 6.1 built
+#     --enable-nvenc that lives in /usr/local, from the private base image
+#     `cuda12.8.1-cudnn9.7.1-ffmpeg6.1-nvidia24.04`. This workflow uses Ubuntu 24.04's apt FFmpeg
+#     (6.1.1) instead, because that image is in a registry the project is not authenticated to here
+#     — the same blocker W01 carries. `export.roundtrip_x264` compares decoded frames against
+#     committed goldens at PSNR >= 45 dB, so a different x264 may fail it. That would be a
+#     toolchain difference, not a regression. The fix is to run this job `container:`-ed on the
+#     pinned base image once credentials exist.
+#  2. `src/effects/image-processing-lib` is a private submodule cloned over SSH. CI needs a deploy
+#     key in `secrets.SUBMODULE_SSH_KEY`, or the URL rewritten to HTTPS with a token.
+#
+# Skia is built from source on the first run (slow — it is a full Skia build) and cached after,
+# keyed on the build script so a script change rebuilds it.
+
+name: golden
+
+on:
+  pull_request:
+  push:
+    branches: [feature/gpu-rendering, develop]
+  workflow_dispatch:
+
+concurrency:
+  group: golden-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  golden:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+
+    # The `secrets` context is not available in a step `if`, so it is mapped to an env var here
+    # and the condition tests that instead.
+    env:
+      SUBMODULE_SSH_KEY_SET: ${{ secrets.SUBMODULE_SSH_KEY != '' }}
+
+    steps:
+      - name: Set up the submodule deploy key
+        if: env.SUBMODULE_SSH_KEY_SET == 'true'
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.SUBMODULE_SSH_KEY }}
+
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake ninja-build pkg-config python3 git \
+            qtbase5-dev qtbase5-dev-tools libqt5svg5-dev \
+            libavformat-dev libavcodec-dev libavutil-dev libavdevice-dev \
+            libswscale-dev libswresample-dev \
+            libzmq3-dev libjsoncpp-dev libopencv-dev \
+            libfreetype6-dev libfontconfig1-dev libpng-dev libjpeg-dev zlib1g-dev \
+            libomp-dev libmagick++-dev
+
+      # libopenshot-audio is a separate repository and is not packaged. Pinned by tag so a
+      # library release cannot silently change what the suite renders.
+      - name: Build and install libopenshot-audio
+        run: |
+          git clone --depth 1 --branch v0.4.0 \
+            https://github.com/OpenShot/libopenshot-audio.git /tmp/libopenshot-audio
+          cmake -S /tmp/libopenshot-audio -B /tmp/libopenshot-audio/build \
+                -DCMAKE_BUILD_TYPE=Release -G Ninja
+          cmake --build /tmp/libopenshot-audio/build
+          sudo cmake --install /tmp/libopenshot-audio/build
+
+      - name: Restore the Skia install tree
+        id: skia-cache
+        uses: actions/cache@v4
+        with:
+          path: /usr/local/skia-install
+          key: skia-cpu-${{ runner.os }}-${{ hashFiles('skia_build_script.sh') }}
+
+      - name: Build Skia (only on a cache miss)
+        if: steps.skia-cache.outputs.cache-hit != 'true'
+        run: |
+          # The script builds CPU-only Skia and emits its own installer, which puts the library in
+          # /usr/local/lib and the headers in /usr/local/include/skia. Everything the next run
+          # needs is then collected into one directory for the cache to carry.
+          ./skia_build_script.sh
+          sudo ./install_skia.sh
+          sudo mkdir -p /usr/local/skia-install
+          sudo cp -a /usr/local/include/skia   /usr/local/skia-install/include-skia
+          sudo cp -a /usr/local/lib/libskia.a  /usr/local/skia-install/
+          # SkRuntimeEffect (the text glow) includes modules/skcms/skcms.h, which the installer
+          # does not ship. FindSkia.cmake finds it through SKIA_SOURCE_DIR, so the module tree has
+          # to survive in the cache too, or a cache hit configures without it.
+          sudo cp -a "$HOME/skia-stable/skia/modules" /usr/local/skia-install/modules
+
+      - name: Install Skia from the cache
+        if: steps.skia-cache.outputs.cache-hit == 'true'
+        run: |
+          sudo mkdir -p /usr/local/include /usr/local/lib
+          sudo cp -a /usr/local/skia-install/include-skia /usr/local/include/skia
+          sudo cp -a /usr/local/skia-install/libskia.a /usr/local/lib/
+
+      - name: Configure
+        run: |
+          # SKIA_SOURCE_DIR points at the cached tree, not at ~/skia-stable: on a cache hit the
+          # Skia checkout was never made, and modules/skcms lives under the cached directory.
+          cmake -S . -B cmake-build-release \
+                -DCMAKE_BUILD_TYPE=Release -G Ninja \
+                -DENABLE_PLAYER=OFF \
+                -DSKIA_SOURCE_DIR=/usr/local/skia-install
+
+      - name: Build
+        run: cmake --build cmake-build-release --target openshot openshot-golden
+
+      - name: Golden suite
+        run: tools/golden.sh check
+
+      # The report is how a failing triptych gets looked at without reproducing the run locally.
+      - name: Upload the golden report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: golden-report
+          path: cmake-build-release/golden-report/
+          retention-days: 14

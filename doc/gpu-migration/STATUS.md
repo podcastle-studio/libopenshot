@@ -444,38 +444,55 @@ ask it for you) and none reads the environment for itself — the new `control` 
 `GPU-DECISIONS.md` — canvas `kRGBA_8888` (overriding the F16 recommendation that was on file),
 Graphite only, LUT matched to the front end at native cube size, nearest sampling kept.
 
-### Next: Stage 2 — W03 (CI) and W04 (production payload corpus)
+### Next: finish Stage 2 — five more payloads (W04) and turning CI on (W03)
 
 > **2026-09-18, project owner.** Stage 5 is finished and Stage 6 (effects as shaders) is the obvious
-> next thing, but **Stage 2 and Stage 3 were skipped past and are to be closed first**, so
-> everything up to the effects work is complete. Stage 1 has been **moved to the end as Stage 10** —
-> nothing ships until the whole migration is done, so the release items now sit where they run.
+> next thing, but **Stage 2 and Stage 3 are to be closed first**, so everything up to the effects
+> work is complete. Stage 1 has been **moved to the end as Stage 10** — nothing ships until the
+> whole migration is done.
 
-**W04 is blocked, and the fix is small.** The corpus has **zero runnable payloads today**, not one:
-the capture's signed URLs expired 2026-09-17, and although the media *is* archived in
-`tmp/payloads/prod-2026-09-16/media/` with a `urls.txt` fileId→file map, the service's
-`HTTPFileTransfer::download` opens the destination `"wb"` — truncate — on every attempt, with no
-skip-if-exists. So pre-seeding the archive does not help and `render-payload` re-downloads into a
-403. A **local-media mode in the service** (~half a day) fixes it, and it is what makes any payload
-corpus durable rather than a 24-hour asset. It also unblocks **W05's gate**, which is measured
-through `render-payload`.
+**W04's mechanism is done and its first payload is green** (2026-09-18). What was wrong when the
+session started: **the corpus had zero runnable payloads, not one.** A capture's signed `fileUrl`s
+expire 24 h after issue, and although the media was archived at capture time,
+`HTTPFileTransfer::download` opens its destination `"wb"` on every attempt and re-fetches
+unconditionally — so pre-seeding the archive did nothing and `render-payload` downloaded into a 403.
 
-**W03 is bigger than "add a golden step".** `.github/workflows/ci.yml` and `.gitlab-ci.yml` are
-**upstream OpenShot's, unmodified** — no podcastle references, and they build upstream libopenshot,
-not this fork (no Skia, no submodules, no pinned FFmpeg). The fork is on GitHub
-(`podcastle-studio/libopenshot`), so this is GitHub Actions, but it means standing CI up rather than
-extending it — and a runner that builds Skia from source per PR is not viable, so it needs a
-prebuilt image or a cache.
+- **`MediaFetch` in the service** replays a capture offline: `RENDER_MEDIA_CACHE=<dir>` serves each
+  file from the archive keyed by the URL's basename, and `RENDER_MEDIA_CACHE_STRICT=1` makes a
+  missing entry an error rather than a silent network fetch. It covers all six fetch sites,
+  including the **Redis-cached path** used for clip media and sound effects, which is separate from
+  the plain download and is what the first attempt missed. Unset — every production run — behaviour
+  is unchanged. **This also unblocks W05's gate**, which is measured through `render-payload`.
+- **`tests/payloads/run-corpus.sh`** runs two rounds per payload, hashes the decoded frames with
+  `ffmpeg -f framemd5`, and compares round-to-round and against a recorded hash.
+- **First payload green:** `prod-2026-09-16-pip-lut-whoosh`, **750 frames, both rounds identical**,
+  hash recorded and re-verified through the `check` path. ~8 min per round in a **Release** build of
+  `render-payload`; Debug is ~25x slower and makes this impractical.
+- The archive was incomplete — the WHOOSH transition's `whoosh.opus` sound effect had never been
+  saved. Now fetched, and the README calls sound effects out because their URLs are unsigned and
+  easy to miss.
 
-**On generating scenarios from the payload.** Worth knowing before starting: W04 exists to catch
-**JSON→timeline** regressions, which `tests/golden` structurally cannot see because it drives the
-library directly through `Recipes.h` and never parses a payload. Decomposing the payload into golden
-scenarios adds rendering coverage but loses exactly that property — the two are complementary.
-Checked against the 98 existing scenarios, the payload's genuinely uncovered shapes are three: a
-clip rotated 90° at opacity 0.25 **split across a trim boundary**; an **overlapping** transition
-(`isOverlapping`); and a **`.mov` watermark with alpha** across the whole timeline. Everything else
-it exercises — crop + corner radius, LUT, stacked filters, layer order, background colour — is
-already covered.
+**What is left in W04: five more captures** — text animations, subtitles, a transition-heavy
+timeline, chroma key, a 4K source. That needs fresh exports from the app, and **the media has to be
+archived the same day** or the capture is dead on arrival. This is the one part of Stage 2 that
+cannot be done from this machine alone.
+
+**W03 is "stand CI up", not "add a step".** `.github/workflows/ci.yml` and `.gitlab-ci.yml` are
+upstream OpenShot's, unmodified, and build upstream libopenshot — no Skia, no submodules, no pinned
+FFmpeg. `.github/workflows/golden.yml` is written (submodules, apt deps, `libopenshot-audio` pinned
+by tag, Skia built from source and cached on the build script's hash, `ENABLE_PLAYER=OFF`, the
+suite, the report as an artifact) but **has never run**, and two things need a decision first:
+
+1. **FFmpeg.** The dev box and the runtime image both use an FFmpeg 6.1 built `--enable-nvenc` in
+   `/usr/local`, from the private base image `cuda12.8.1-cudnn9.7.1-ffmpeg6.1-nvidia24.04`. The
+   workflow falls back to apt's 6.1.1 because that registry is not authenticated here — **the same
+   blocker W01 carries, which the worklist never recorded as shared**. `export.roundtrip_x264`
+   compares decoded frames to committed goldens at PSNR ≥ 45 dB, so a different x264 may fail it,
+   and that would be a toolchain difference rather than a regression.
+2. **The private submodule** clones over SSH, so CI needs a deploy key or an HTTPS+token rewrite.
+
+Enabling the workflow and opening the deliberate-regression PR that W03's gate asks for are actions
+on the GitHub repo, so they are the project owner's to take.
 
 ### After Stage 2: Stage 3 — W05–W10, the CPU wins
 
@@ -608,6 +625,29 @@ production corpus) remain open; W05–W10 are the CPU quick wins. W01/W02 stay d
   x264 loss, not a matrix bug.
 
 ## Log
+
+- 2026-09-18 — **W04's mechanism done and its first payload green; W03's workflow written but not
+  enabled.** The corpus turned out to have **zero runnable payloads, not one**: signed `fileUrl`s
+  expire after 24 h, and `HTTPFileTransfer::download` opens its destination `"wb"` on every attempt,
+  so the archived media could not be used and `render-payload` downloaded into a 403. `MediaFetch`
+  in the service fixes it — `RENDER_MEDIA_CACHE` serves each file from the archive keyed by the
+  URL's basename, `RENDER_MEDIA_CACHE_STRICT` makes a missing entry an error rather than a quiet
+  network fetch, and behaviour is unchanged when unset. It had to cover the **Redis-cached path**
+  used for clip media and sound effects as well as the plain download; the first attempt missed it
+  and the run still went to the network. **This also unblocks W05's gate.**
+  `tests/payloads/run-corpus.sh` runs two rounds and compares decoded-frame hashes
+  (`ffmpeg -f framemd5`). `prod-2026-09-16-pip-lut-whoosh`: **750 frames, four independent rounds
+  identical** (two to record, two to verify the `check` path against a rebuilt binary). ~8 min per
+  round in a **Release** `render-payload`; Debug is ~25x slower, which is why the first attempt
+  looked like it would take hours. The archive was also incomplete — the WHOOSH transition's
+  `whoosh.opus` had never been saved, and sound-effect URLs are unsigned and easy to miss, so the
+  README now says so. **Five captures still missing** (text, subtitles, transition-heavy, chroma
+  key, 4K) and they need same-day archiving, so that part cannot be done from this machine.
+  W03: `.github/workflows/golden.yml` written and its YAML validated, but **never run**. Two
+  blockers, both decisions rather than code — the pinned FFmpeg lives in a private base image this
+  machine cannot pull (**the same blocker W01 carries, which the worklist never recorded as
+  shared**), and the private submodule needs a deploy key. Enabling it and opening the
+  deliberate-regression PR the gate asks for are actions on the GitHub repo.
 
 - 2026-09-18 — **Order changed by the project owner, and Stage 1 moved to the end.** Stage 5 is
   finished, but Stages 2 and 3 were skipped past on the way to the compositor. They are to be closed

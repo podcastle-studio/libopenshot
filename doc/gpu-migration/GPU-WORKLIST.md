@@ -56,37 +56,79 @@ W01/W02 are now **Stage 10**, at the end · everything else before Stage 6 is do
 
 Stage 5 rewrites `Clip.cpp` and `Timeline.cpp`. Do these first or the rewrite has no net under it.
 
-### W03 — CI: golden suite on every PR · legacy `0.6`
+### W03 — CI: golden suite on every PR · legacy `0.6` (workflow written 2026-09-18, not yet enabled)
 
 **Goal.** The suite runs without anyone remembering to run it.
 
-- [ ] `tools/golden.sh check` on every PR, on the 8-core runner.
-- [ ] Publish `golden-report/` as a build artifact so a failing triptych can be looked at.
-- [ ] `openshot-bench --quick` on merges to `develop`, appended to a trend file.
+> **2026-09-18 — this is "stand CI up", not "add a step".** `.github/workflows/ci.yml` and
+> `.gitlab-ci.yml` are **upstream OpenShot's, unmodified** — no podcastle references — and build
+> upstream libopenshot, which has no Skia, no submodules and no pinned FFmpeg. Nothing in this repo
+> currently gates the fork's render path. The fork is on GitHub
+> (`podcastle-studio/libopenshot`), so this is GitHub Actions.
+
+- [x] `.github/workflows/golden.yml` — submodules, apt dependencies, `libopenshot-audio` pinned by
+      tag, Skia built from source and cached on the build script's hash, `ENABLE_PLAYER=OFF`,
+      `tools/golden.sh check`, report uploaded as an artifact. The golden media and the expected
+      PNGs are committed, so nothing has to be generated on the runner.
+- [ ] **Two blockers, both needing a decision rather than code:**
+      1. **FFmpeg.** The dev box and the runtime image both use an FFmpeg 6.1 built
+         `--enable-nvenc` in `/usr/local`, from the private base image
+         `cuda12.8.1-cudnn9.7.1-ffmpeg6.1-nvidia24.04`. The workflow falls back to Ubuntu 24.04's
+         apt FFmpeg 6.1.1 because that registry is not authenticated here — the same blocker W01
+         carries, which the worklist did not record as shared. `export.roundtrip_x264` compares
+         decoded frames to committed goldens at PSNR ≥ 45 dB, so a different x264 may fail it, and
+         that would be a toolchain difference rather than a regression. The clean fix is to run the
+         job `container:`-ed on the pinned base image.
+      2. **The private submodule.** `src/effects/image-processing-lib` clones over SSH, so CI needs
+         a deploy key in `secrets.SUBMODULE_SSH_KEY` or an HTTPS+token rewrite.
+- [ ] `openshot-bench --quick` on merges to `develop`, appended to a trend file. Deliberately left
+      until the suite job is actually green — a benchmark trend from a runner of unknown
+      consistency is worse than none.
 
 **Gate.** A PR that deliberately shifts one pixel fails CI.
-**Done when.** A deliberate-regression PR has been opened and seen to fail.
-**Size.** ~1 day.
+**Gate status — not met, and cannot be from here.** The workflow has never run: enabling it and
+opening the deliberate-regression PR are actions on the GitHub repo, which is the project owner's
+call, and the first run needs the two decisions above. What *is* verified is that the YAML parses
+and that every dependency it installs is one the local build actually uses.
+**Size.** ~1 day as written; realistically that plus whatever the base-image access costs.
 
-### W04 — Production payload corpus · legacy `0.5`
+### W04 — Production payload corpus · legacy `0.5` (mechanism done 2026-09-18; corpus still 1 of 6)
 
 **Goal.** Catch JSON→timeline regressions the golden suite structurally cannot see, because it
 drives the library directly and never parses a payload.
-**Depends on.** `tools/render-payload` in the service repo, which already does one payload offline.
+**Depends on.** `tools/render-payload` in the service repo.
 
-- [ ] Collect six real payloads with their media, covering: text animations, subtitles, transitions,
-      PiP/layout, chroma key + LUT, 4K source. **One captured so far**, with its media and the
-      export production made from it: `tests/payloads/` (see its README) — 1280x720, crop + corner
-      radius, LUT, stacked filters, a WHOOSH transition, watermark. Signed URLs expire 24 h after
-      capture, so archive the media at capture time.
-- [ ] Script them through `render-payload`, two rounds each.
-- [ ] Hash the output frames; store the hashes.
-- [ ] Wire into CI behind a nightly, not per-PR (media is large).
+> **2026-09-18 — the corpus had zero runnable payloads, not one.** A capture's signed `fileUrl`s
+> expire 24 h after issue, and although the media was archived at capture time,
+> `HTTPFileTransfer::download` opens its destination `"wb"` on every attempt and re-fetches
+> unconditionally, so pre-seeding it did nothing and `render-payload` downloaded into a 403. The
+> whole item was unrunnable and nothing said so.
 
-**Gate.** All six render without error; frame hashes stable across two runs. (Both paths were
-already deterministic on the first payload — two rounds byte-identical each.)
-**Done when.** The nightly has run green twice.
-**Size.** ~2 days, mostly collecting payloads.
+- [x] **Offline replay.** `MediaFetch` in the service (`RENDER_MEDIA_CACHE`, plus
+      `RENDER_MEDIA_CACHE_STRICT` so a missing archive entry is an error rather than a silent
+      network fetch) serves each file from the archive, keyed by the URL's basename. It covers all
+      six fetch sites including the Redis-cached one used for clip media and sound effects, which
+      is a separate path from the plain download. Unset — every production run — behaviour is
+      unchanged. **This also unblocks W05's gate**, which is measured through `render-payload`.
+- [x] **`tests/payloads/run-corpus.sh`** — two rounds per payload, decoded-frame hashes
+      (`ffmpeg -f framemd5`, so container metadata is ignored and every pixel is not), compared
+      round-to-round and against `tests/payloads/expected/<payload>.sha256`.
+- [x] **First payload green.** `prod-2026-09-16-pip-lut-whoosh`: **750 frames, the two rounds
+      identical, hash recorded.** ~8 min per round in a Release build of `render-payload` — a Debug
+      build is ~25x slower and makes this impractical, which is now in the README.
+- [x] The capture's archive was incomplete: the WHOOSH transition's `whoosh.opus` sound effect had
+      never been archived. Fetched and added, and the README now calls out sound effects explicitly
+      because their URLs are unsigned and easy to miss.
+- [ ] **Five more payloads**: text animations, subtitles, a transition-heavy timeline, chroma key,
+      a 4K source. This is the remaining work and it needs fresh captures — the media must be
+      archived the same day.
+- [ ] Wire into CI behind a nightly, not per-PR (media is large). Blocked with W03 on there being
+      CI for this fork at all.
+
+**Gate.** All six render without error; frame hashes stable across two runs.
+**Gate status — met for the one payload that exists.** 750 frames, two rounds identical, recorded
+and re-verified through the `check` path. The gate cannot be fully met until the corpus is six.
+**Size.** ~2 days, mostly collecting payloads — unchanged, and now genuinely only collection.
 
 ---
 
