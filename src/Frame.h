@@ -31,9 +31,7 @@
 #include <QColor>
 #include <QImage>
 
-#ifdef USE_QT_PLAYER
 class QApplication;
-#endif
 
 namespace juce {
 	template <typename Type> class AudioBuffer;
@@ -107,9 +105,12 @@ namespace openshot
 		/// only the Timeline does that, to a canvas it made itself.
 		std::shared_ptr<openshot::GpuFrame> gpu_frame;
 
-#ifdef USE_QT_PLAYER
+		/// Deliberately NOT behind USE_QT_PLAYER. Only Display()/DisplayWaveform() use it, but this
+		/// is a private data member of a public class: guarding it would make sizeof(Frame) depend
+		/// on a build option, and a consumer compiling against these headers without the macro
+		/// while linking a player-enabled library would disagree about the layout of every member
+		/// after it. The methods can be guarded; the storage cannot.
 		std::shared_ptr<QApplication> previewApp;
-#endif
 		std::recursive_mutex addingImageMutex;
 		std::recursive_mutex addingAudioMutex;
 		openshot::Fraction pixel_ratio;
