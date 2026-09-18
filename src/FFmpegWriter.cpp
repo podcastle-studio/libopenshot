@@ -44,24 +44,44 @@ class BoundedFrameQueue {
 public:
 	explicit BoundedFrameQueue(size_t max_size) : max_size_(max_size) {}
 
-	void push(std::shared_ptr<Frame> frame) {
+	/// False once the queue has been aborted, so the producer knows to stop.
+	bool push(std::shared_ptr<Frame> frame) {
 		std::unique_lock<std::mutex> lock(mutex_);
-		not_full_.wait(lock, [this]() { return queue_.size() < max_size_; });
+		not_full_.wait(lock, [this]() { return aborted_ || queue_.size() < max_size_; });
+		if (aborted_)
+			return false;
 		queue_.push(std::move(frame));
 		not_empty_.notify_one();
+		return true;
 	}
 
 	std::shared_ptr<Frame> pop() {
 		std::unique_lock<std::mutex> lock(mutex_);
-		not_empty_.wait(lock, [this]() { return !queue_.empty(); });
+		not_empty_.wait(lock, [this]() { return aborted_ || !queue_.empty(); });
+		if (aborted_)
+			return nullptr;
 		auto frame = std::move(queue_.front());
 		queue_.pop();
 		not_full_.notify_one();
 		return frame;
 	}
 
+	/// Wake both ends and refuse any further work. Without this, a consumer that throws leaves the
+	/// producer blocked forever on a full queue nobody is draining -- which is reachable as soon as
+	/// anything inside the encode can fail, and now that a progress callback runs on the consumer
+	/// it is the normal way an export gets cancelled.
+	void abort() {
+		{
+			std::lock_guard<std::mutex> lock(mutex_);
+			aborted_ = true;
+		}
+		not_full_.notify_all();
+		not_empty_.notify_all();
+	}
+
 private:
 	const size_t max_size_;
+	bool aborted_ = false;
 	std::queue<std::shared_ptr<Frame>> queue_;
 	std::mutex mutex_;
 	std::condition_variable not_full_;
@@ -851,6 +871,10 @@ void FFmpegWriter::SetPipelineQueueCapacity(size_t capacity) {
 	pipeline_queue_capacity_ = (capacity == 0) ? 1 : capacity;
 }
 
+void FFmpegWriter::SetProgressCallback(std::function<void(int64_t, int64_t)> cb) {
+	progress_callback_ = std::move(cb);
+}
+
 // Write a block of frames from a reader
 void FFmpegWriter::WriteFrame(ReaderBase *reader, int64_t start, int64_t length) {
 	// When the reader is a Timeline, tell it whether clips should run audio time-mapping.
@@ -868,9 +892,14 @@ void FFmpegWriter::WriteFrame(ReaderBase *reader, int64_t start, int64_t length)
 
 	if (!pipeline_mode_) {
 		// Sequential: get frame then encode (original behavior)
+		const int64_t total = length - start + 1;
+		int64_t done = 0;
 		for (int64_t number = start; number <= length; number++) {
 			std::shared_ptr<Frame> f = reader->GetFrame(number);
 			WriteFrame(f);
+			++done;
+			if (progress_callback_)
+				progress_callback_(done, total);
 		}
 		return;
 	}
@@ -880,27 +909,34 @@ void FFmpegWriter::WriteFrame(ReaderBase *reader, int64_t start, int64_t length)
 	BoundedFrameQueue queue(queue_capacity);
 	std::exception_ptr consumer_exception;
 
-	std::thread consumer([this, &queue, &consumer_exception]() {
+	const int64_t total_frames = length - start + 1;
+	std::thread consumer([this, &queue, &consumer_exception, total_frames]() {
 		try {
+			int64_t written = 0;
 			for (;;) {
 				std::shared_ptr<Frame> f = queue.pop();
 				if (!f)
 					break;
 				WriteFrame(f);
+				++written;
+				if (progress_callback_)
+					progress_callback_(written, total_frames);
 			}
 		} catch (...) {
 			consumer_exception = std::current_exception();
+			queue.abort();   // or the producer blocks on a queue nobody is draining
 		}
 	});
 
 	try {
 		for (int64_t number = start; number <= length; number++) {
 			std::shared_ptr<Frame> f = reader->GetFrame(number);
-			queue.push(std::move(f));
+			if (!queue.push(std::move(f)))
+				break;      // consumer has gone; its exception is rethrown below
 		}
 		queue.push(nullptr);  // poison pill
 	} catch (...) {
-		queue.push(nullptr);  // unblock consumer
+		queue.abort();        // unblock the consumer
 		consumer.join();
 		throw;
 	}

@@ -21,6 +21,7 @@
 
 // Include FFmpeg headers and macros
 #include "FFmpegUtilities.h"
+#include <functional>
 
 namespace openshot {
 
@@ -128,6 +129,9 @@ namespace openshot {
 		bool silent_audio_mode_ = false; ///< When true, write silent audio instead of decoding frame audio
 		bool pipeline_mode_ = false;
 		size_t pipeline_queue_capacity_ = 8;
+		/// Called after each frame is handed to the encoder, so a caller can report progress without
+		/// having to chop the export into short WriteFrame() calls. See SetProgressCallback.
+		std::function<void(int64_t, int64_t)> progress_callback_;
 		bool allow_b_frames;
 
 		AVFormatContext* oc;
@@ -354,6 +358,16 @@ namespace openshot {
 		/// Larger values allow more overlap but use more memory. Call before WriteFrame.
 		/// @param capacity desired queue size (0 or 1 = minimum 1)
 		void SetPipelineQueueCapacity(size_t capacity);
+
+		/// @brief Report progress from inside WriteFrame(reader, start, length).
+		///
+		/// Without this a caller that wants progress has to call WriteFrame() in short ranges, and in
+		/// pipeline mode every one of those calls builds a queue, starts a producer and a consumer
+		/// thread and joins them again -- so an 8-frame progress step tears the pipeline down 8 frames
+		/// at a time. The callback is invoked on the encoding thread after each frame is written, with
+		/// (frames_written, total_frames) counted within the current call. Keep it cheap and do not
+		/// call back into the writer from it.
+		void SetProgressCallback(std::function<void(int64_t frames_written, int64_t total_frames)> cb);
 
 	};
 
