@@ -494,19 +494,51 @@ suite, the report as an artifact) but **has never run**, and two things need a d
 Enabling the workflow and opening the deliberate-regression PR that W03's gate asks for are actions
 on the GitHub repo, so they are the project owner's to take.
 
-### After Stage 2: Stage 3 — W05–W10, the CPU wins
+### Stage 3 — W05, W07, W08 done (2026-09-18); W06, W09 left, W10 skipped
 
-Two are unblocked and worth taking first:
+**All three measured their premise before implementing, and in every one of them part of the
+item's plan did not survive the measurement.** That is now the expected outcome often enough to
+treat "measure first" as the protocol rather than the exception.
 
-- **W07** (`Frame::GetImageCV` memoisation) — pure library, bench-gated (`transitions_chain` ≥ 33,
-  `heavy_effects` ≥ 13). Its note says "W15 and W21 delete most callers"; **W15 is void**, so those
-  callers are staying and the item is worth *more* than when it was written.
-- **W08** (reader copies + threaded swscale) — pure library, bench-gated (`source_4k` ≥ 70,
-  `single_video` ≥ 125). Carries a real ASan requirement.
+| item | result | gate |
+|---|---|---|
+| **W07** `GetImageCV` memoisation | `SetImageCV` converted twice; now once. 336 → 102 ms on `transitions_chain`, 1.04 → 0.32 ms a call. `transitions_chain` **27.4 → 28.7 fps (+4.8 %)**, `heavy_effects` within noise. | fps gates **unreachable by this item** — see below |
+| **W08** reader copies | `memset` dropped; `av_image_copy` → `av_frame_ref`. `source_4k` **61.3 → 70.1 (+14.4 %)**, `single_video` **116.6 → 124.9 (+7.1 %)**. ASan clean. | `source_4k` ≥ 70 **met**; `single_video` ≥ 125 **0.1 % short** |
+| **W05** one `WriteFrame` | Built and working, **flag defaults OFF**. ≈ −6 % against a ≥ 15 % gate. | **not met** — flagged off, not reverted |
 
-W05's code is straightforward but its **gate** needs the payload fix above. W06 wants a
-cgroup-limited container to validate honestly. W09 needs VMAF tooling that has never been run.
-**W10 should be skipped** — it is explicitly optional and W25 replaces the code entirely.
+**What was rejected on measurement rather than skipped**, all recorded in the worklist items:
+the `imagecv` dirty-flag cache (access is strictly alternating — 300 Get against 300 Set — so the
+flag is dirty on essentially every Get); reusing `imagecv`'s buffer (`cv::Mat::create` reuses an
+allocation *regardless of refcount*, so it would corrupt any Mat a caller still held); and
+**threaded swscale** (the option works, but with decoder threads held fixed `source_4k` measured
+663.8 / 674.0 / 650.0 / 682.9 ms at 1/2/4/8 threads — memory-bandwidth bound, not compute bound).
+
+**W07's fps gates are unreachable by W07.** `transitions_chain` needs 749 ms to reach 33 fps and
+`heavy_effects` 1276 ms to reach 13; the *entire* conversion cost was 476 ms and 443 ms. Deleting
+100 % of it gives 30.8 and 12.1. The targets predate the compositor work that already moved these
+scenarios. **This needs restating by the project owner** — nothing has been changed about it.
+
+**A bug of this session's own making, found and fixed.** W18 put `previewApp` behind
+`USE_QT_PLAYER`, but it is a data member of the public `Frame` class: `sizeof(Frame)` was **256
+without the macro and 272 with it**, and `../video-rendering-service` compiles these headers without
+it while linking a player-enabled library. Now 272 either way; only the methods stay guarded.
+
+**Two things about instrumenting this codebase, both of which cost time here:**
+`openshot-bench` **forks a child per case and redirects its stderr to `/dev/null`**, so probes only
+surface through the in-process `--case` path — the first W07 measurements read zero and looked like
+the effects were never running. And a bench window that is too short misses what it is measuring:
+`transitions_chain`'s transition sits at 2.0–2.5 s, so a 60-frame run never reaches it.
+
+**Left in Stage 3:**
+
+- **W06 thread budgets** — needs a cgroup-limited container to validate honestly, which is the one
+  thing this machine cannot provide. The item also warns that the upstream merge brought overlapping
+  settings; check what landed before writing anything.
+- **W09 nvenc rate control** — needs the VMAF comparison that has never been run. The A2000 gives
+  nvenc locally, so this is doable here; it just was not reached.
+- **W10 nvenc RGBA — skip.** Explicitly optional and W25 replaces the code entirely.
+
+**Also pending from Stage 2:** five more payload captures, and the two CI decisions. See above.
 
 ### Then: Stage 6 — W19–W21, effects and transitions as shaders
 
@@ -625,6 +657,31 @@ production corpus) remain open; W05–W10 are the CPU quick wins. W01/W02 stay d
   x264 loss, not a matrix bug.
 
 ## Log
+
+- 2026-09-18 — **Stage 3: W07, W08 and W05 done; every one of them had a sub-task that did not
+  survive measurement.** W07: `SetImageCV` was converting twice (temp `cv::Mat`, then
+  `QImage::copy()`); now once, 336 → 102 ms on `transitions_chain`, +4.8 % fps there and within
+  noise on `heavy_effects`. Its dirty-flag cache was **rejected** — access is strictly alternating
+  (300 Get / 300 Set), so the flag is dirty on essentially every Get — and so was reusing
+  `imagecv`'s buffer, because `cv::Mat::create` reuses an allocation regardless of refcount.
+  **W07's fps gates are unreachable by W07**: the scenarios need 749 ms and 1276 ms, the entire
+  conversion cost was 476 ms and 443 ms. W08: `memset` dropped (part of its cost migrates — it was
+  pre-faulting the pages `sws_scale` then faults itself) and `av_image_copy` → `av_frame_ref`,
+  giving `source_4k` **61.3 → 70.1 fps (+14.4 %, gate met)** and `single_video` **116.6 → 124.9
+  (+7.1 %, 0.1 % short)**; the golden suite also runs **clean under ASan**, which is what that item
+  exists to check. Its **threaded swscale was rejected on measurement** — the option works, but
+  with decoder threads fixed `source_4k` read 663.8 / 674.0 / 650.0 / 682.9 ms at 1/2/4/8 threads.
+  W05: single `WriteFrame` built and byte-identical, but **≈ −6 % against a ≥ 15 % gate, so it
+  ships flagged off**; the ceiling is the encoder's share of wall time and this payload is
+  render-bound. Its progress reporting needed two redesigns — the writer callback runs on the
+  *encoding* thread, which works in bursts, and then polling `isCancelled()` every 100 ms turned out
+  to be a Redis round trip, 10 req/s per export. Both fixed; progress and cancellation now share one
+  one-second tick. **A bug of our own was found on the way**: W18 had put `previewApp` behind
+  `USE_QT_PLAYER`, making `sizeof(Frame)` 256 without the macro and 272 with it, while the service
+  compiles these headers without it and links a player-enabled library. Fixed and proven both ways.
+  Two instrumentation traps worth remembering: `openshot-bench` forks per case and sends the child's
+  stderr to `/dev/null`, and a 60-frame window never reaches `transitions_chain`'s transition at
+  2.0–2.5 s.
 
 - 2026-09-18 — **W04's mechanism done and its first payload green; W03's workflow written but not
   enabled.** The corpus turned out to have **zero runnable payloads, not one**: signed `fileUrl`s

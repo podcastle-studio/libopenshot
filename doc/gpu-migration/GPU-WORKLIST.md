@@ -35,9 +35,12 @@ Rules that apply to every item without being repeated in it:
 
 **Status line:** Stage 5 (the GPU compositor) is **finished** — W11–W14 done (2026-09-16), W15 and
 W16 **void** (2026-09-17), W17 **done** (2026-09-17, fps gate closed 2026-09-18), W18 **done**
-(2026-09-18, scoped to the render path because its written gate was unsatisfiable) · **Stage 2
-(W03, W04) is the current work**, then Stage 3 (W05–W10), then Stage 6 (W19–W21, effects) ·
-W01/W02 are now **Stage 10**, at the end · everything else before Stage 6 is done (see `STATUS.md`).
+(2026-09-18, scoped to the render path because its written gate was unsatisfiable) · **Stage 3:
+W05, W07, W08 done (2026-09-18)** — W07's fps gates are unreachable by W07 and want restating,
+W05 is built but **flagged off** for missing its gate, W08 met one of two · **W06 and W09 are what
+is left of Stage 3**, W10 skipped · **Stage 2 is part done** — W04's mechanism works and its first
+payload is green, but the corpus needs five more captures and W03's workflow has never run ·
+then Stage 6 (W19–W21, effects) · W01/W02 are now **Stage 10**, at the end.
 
 > **2026-09-18, project owner — finish Stages 2 and 3 before the effects work.** Stage 5 is done and
 > Stage 6 (effects and transitions as shaders) is the obvious next thing, but the safety net (Stage
@@ -141,20 +144,44 @@ The honest framing from the baseline: the encoder is 0–30 % of wall time depen
 so this stage helps `single_video` and `source_4k` and does **essentially nothing** for
 `everything`, `text_animated_glow_3` or `heavy_effects`. Do not expect "1.5–2× exports" from it.
 
-### W05 — Service: one `WriteFrame` call · legacy `1.1`
+### W05 — Service: one `WriteFrame` call · legacy `1.1` (built 2026-09-18, **shipped OFF — gate not met**)
 
 **Goal.** Stop chunking the export into 8-frame calls, which drains the writer pipeline every chunk.
 **Note.** `openshot-bench` already calls `WriteFrame` once for the whole range, so the bench
 **cannot** show this win. Measure it on the service with `tools/render-payload`.
 
-- [ ] Replace the 8-frame loop in `VideoRenderingImpl.cpp` with one `WriteFrame(&timeline, start, end)`.
-- [ ] Add `FFmpegWriter::SetProgressCallback`; drive progress publishing from it.
-- [ ] Raise `pipeline_queue_capacity_` from 8 to 16.
-- [ ] Flag `RENDER_SINGLE_WRITEFRAME=0` restores chunking.
+- [x] `FFmpegWriter::SetProgressCallback` (libopenshot), plus `BoundedFrameQueue::abort()` — the
+      consumer throwing used to leave the producer blocked forever on a queue nobody drains, which
+      was already reachable from any encode failure and is the normal cancellation path now.
+- [x] Single `WriteFrame(&timeline, start, end - 1)` behind `RENDER_SINGLE_WRITEFRAME=1`, queue
+      capacity 8 → 16. **The flag defaults to OFF** — see the gate.
+- [x] **Progress moved to a timer thread, which is the real lesson here.** Driving it from the
+      writer callback does not work: that callback runs on the *encoding* thread, which drains the
+      queue in milliseconds and then waits for the renderer, so a per-callback throttle collapsed
+      into bursts — 25 messages spaced 21–70 s apart, far worse than the chunked loop's one per
+      5.7 s. The callback now only stores two atomics; a timer thread publishes and checks
+      cancellation on one one-second tick. Cancellation shares that tick rather than being polled:
+      it was briefly checked every 100 ms, and `isCancelled()` is a **Redis round trip**, so that
+      would have been 10 req/s on Redis per running export against roughly one per 30 s of video
+      before.
 
 **Gate.** One production payload ≥ **15 %** faster wall-clock through `render-payload`; progress
 messages still arrive at least every second; golden green (library unchanged).
-**Risk.** Progress granularity regressions — that is what the second half of the gate is for.
+**Gate status — NOT met; the change is therefore flagged off rather than reverted.** Five
+interleaved pairs on the same binary with only the flag differing: **583.3 → 549.5 s mean, ≈ −6 %**,
+per-pair deltas −1.6 % to −13.4 %, ~10 % run-to-run spread on a loaded host. Output **byte-identical**
+between modes on every pair; golden green (the library change is additive).
+
+**Why it falls short, and when it would not.** Overlapping render with encode can save at most the
+encoder's share of wall time. The one payload in the corpus is 720p with a LUT, stacked filters and
+a transition — it is render-bound, so ~6 % is close to the ceiling *for this job*. A lighter, more
+encode-bound payload (4K source, few effects) would show more. **The 15 % figure was never checked
+against a payload; re-measure it when the corpus reaches six rather than assuming either number.**
+
+**The second half of the gate is unverified and cannot be verified here.** `render-payload` points
+Pub/Sub and Redis at dead addresses on purpose, so every publish and every `isCancelled()` blocks on
+a retry — the observed cadence is the harness, not the code. Watch it once in an environment where
+those services answer, then decide whether to default the flag on.
 **Size.** ~1 day.
 
 ### W06 — Service: thread budgets · legacy `1.2`
