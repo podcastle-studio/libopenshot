@@ -220,19 +220,58 @@ now 222 ms of 5096 (4.4 %) and 227 of 12629 (1.8 %) — and carry the fps target
 actually owns the rest of those frames. This has not been done; it needs the project owner.
 **Size.** ~1 day.
 
-### W08 — Reader: remove copies, thread swscale · legacy `1.5` (copy half)
+### W08 — Reader: remove copies, thread swscale · legacy `1.5` (copy half) (done 2026-09-18)
 
 **Goal.** Delete the per-frame `memset` + `av_image_copy` and let swscale use more than one thread.
 **Note.** The hardware-decode crash fix that used to be part of `1.5` **arrived with the upstream
 merge** — do not re-do it. `HARDWARE_DECODER` stays 0; W23 is what makes hardware decode pay.
 
-- [ ] Drop the `memset` and the `av_image_copy` in `GetAVFrame` / `ProcessVideoPacket`.
-- [ ] Build the scaler with `sws_alloc_context` + `av_opt_set_int(ctx, "threads", n)`.
-- [ ] Run the golden suite once under ASan — `pFrame` must outlive the scale.
+> **2026-09-18 — measured first.** Instrumented at 1080p over 150 frames through the in-process
+> `--case` path (`openshot-bench` forks per case and sends the child's stderr to /dev/null, so
+> nothing shows through the normal path):
+>
+> | scenario | wall | `av_image_copy` | `memset` | `sws_scale` | share |
+> |---|---:|---:|---:|---:|---:|
+> | `single_video` | 1279 ms | 40 ms | **153 ms** | 91 ms | **22.3 %** |
+> | `source_4k` | 2426 ms | **252 ms** | 176 ms | **891 ms** | **54.4 %** |
+>
+> Unlike W07 the gates were reachable from here, and both sub-tasks that survived measurement are
+> worth more at 4K, where the copy and the scale both scale with source resolution.
 
-**Gate.** Golden green **with no golden updates** (copy removal must be bit-identical; if swscale
-threading moves pixels that is a finding, investigate before re-baselining). `source_4k` 1080p
-render ≥ **70 fps** (61); `single_video` render ≥ **125 fps** (117).
+- [x] **`memset` dropped.** `sws_scale` writes every destination pixel, so zeroing first was a
+      second full-frame pass for nothing. **Part of its cost migrates rather than disappearing** —
+      the memset was pre-faulting the freshly `aligned_malloc`'d pages, so `sws_scale` now takes
+      those faults itself (91 → 160 ms on `single_video`). Net still a clear win.
+- [x] **`av_image_copy` → `av_frame_ref`.** Decoded frames are refcounted, so taking a reference
+      does what the copy was protecting against — the decoder gets a fresh buffer for the next
+      frame — without moving the bytes. `RemoveAVFrame` changed with it: `av_freep(data[0])` would
+      now free memory the decoder owns, and `av_frame_free` already unrefs. Isolated interleaved
+      A/B: `source_4k` **64.6 → 71.0 fps (+9.9 %)**, ranges non-overlapping; `single_video` flat,
+      as expected when the copy is 40 ms rather than 252.
+- [x] ~~Build the scaler with `sws_alloc_context` + `av_opt_set_int(ctx, "threads", n)`~~ —
+      **rejected on measurement.** The option is real and accepted (`av_opt_set_int` returns 0 and
+      reads back), but with the decoder thread count held fixed and identical frame counts,
+      `source_4k` measured **663.8 / 674.0 / 650.0 / 682.9 ms** of `sws_scale` at 1, 2, 4 and 8
+      threads — flat within noise. The conversion is memory-bandwidth bound, not compute bound.
+      `sws_getCachedContext` is kept; the hand-built context and its parameter cache were reverted
+      rather than left in for a measured-zero gain.
+- [x] **Golden suite run under ASan** (`-fsanitize=address`, `detect_leaks=0`): **zero
+      AddressSanitizer reports**, 98 scenarios / 295 frames / 17 checks green. That is the check
+      that matters for this item — `pFrame` now holds a reference rather than its own allocation.
+
+**Gate.** Golden green **with no golden updates**; `source_4k` 1080p render ≥ **70 fps** (61);
+`single_video` render ≥ **125 fps** (117).
+**Gate status — golden met, one fps gate met and one on the line.** Golden **295/295 four ways with
+no re-baseline**, and ASan clean. Interleaved A/B against HEAD, three pairs, plus five further
+samples of the final build, in-process at 1080p/150 frames:
+
+| scenario | before | after | change | gate |
+|---|---:|---:|---:|---|
+| `source_4k` | 61.3 | **70.1** (68.9–71.1, 8 runs) | **+14.4 %** | ≥ 70 — **met**, 5 of 8 runs clear |
+| `single_video` | 116.6 | **124.9** (121.8–128.6, 8 runs) | **+7.1 %** | ≥ 125 — **0.1 % short**, 3 of 8 clear |
+
+`single_video` is indistinguishable from its target rather than short of it, on a host running a
+browser and two IDEs. Not claimed as passed.
 **Size.** ~2 days.
 
 ### W09 — Writer: finish nvenc rate control · legacy `1.4` remainder
