@@ -27,7 +27,7 @@ Stated by the project owner, 2026-09-14. This overrides anything in
    and all four must be **295/295** (292 until W18 added three frames of background-colour
    coverage). Commands are in `CLAUDE.md` under "GPU rendering (`src/gpu`)".
 
-Last updated: 2026-09-18 · branch `feature/gpu-rendering`.
+Last updated: 2026-09-18 (end of session) · branch `feature/gpu-rendering`.
 **Phase 2 is complete.** 2.0 landed 2026-09-15 (the GPU-capable image, in
 `../video-rendering-service` branch `feature/gpu-rendering`), which was the last thing in it and the
 only thing stopping R2a and R2b from shipping. **R2a complete** (2.1, 2.2, 2.3); **2.4 done, gate
@@ -40,9 +40,11 @@ the standing constraint (see the worklist items, and the note below on why Stage
 **W17 is done** (2026-09-17; its fps gate closed on mains power 2026-09-18) and **W18 is done**
 (2026-09-18), the latter scoped to the render path because its written gate names a build flag that
 does not exist. **Stage 5 is finished.**
-**A resuming session starts Stage 2 — W03 and W04** (2026-09-18, project owner): Stage 6 (effects)
-is the obvious next thing, but Stage 2 (the safety net) and Stage 3 (the CPU wins) were skipped past
-and are to be closed first, so everything up to the effects work is complete.
+**A resuming session starts W09** (nvenc rate control). Stage 2 and Stage 3 were reopened on
+2026-09-18 by owner decision — Stage 6 (effects) is the obvious next thing, but the safety net and
+the CPU wins had been skipped past. Of those, **W04's mechanism, W05, W07 and W08 are done and W09
+is the only item left that this machine can finish unaided**; everything else is waiting on the
+project owner or on a container. See "Start here" under "Next step".
 W01 and W02 have **moved to the end as Stage 10** — no image build, no release, no merge to
 `develop` until the GPU work is finished, so they now sit where they actually run. See "Next step".
 
@@ -432,7 +434,18 @@ ask it for you) and none reads the environment for itself — the new `control` 
 
 **Phase 2 and Stage 5 are both finished.** The remaining work is
 `doc/gpu-migration/GPU-WORKLIST.md`. One item to a session; the worklist opens with the protocol.
-**The order is now Stage 2 → Stage 3 → Stage 6**, by owner decision on 2026-09-18.
+**The order is Stage 2 → Stage 3 → Stage 6**, by owner decision on 2026-09-18.
+
+> ## Start here (2026-09-18, end of session)
+>
+> **W09 — nvenc rate control — is the one item that is fully actionable on this machine.** Take it
+> first. Everything else still open in Stages 2 and 3 is waiting on the project owner or on a
+> container this box cannot provide; the list is under "Blocked on the project owner" below.
+>
+> After W09, the next real work is **W19** (`GpuEffect` base and the per-pixel shaders) — but read
+> its ColorMap note first: that one shader is blocked on an open decision about the front end's
+> LUT interpolation, so W19 can be done *minus* ColorMap. **W20 should not be started** until the
+> transition-parity decisions in `TRANSITION-PARITY.md` are taken.
 
 > **2026-09-16, project owner — no release work until the GPU migration is done.** **W01** (build and
 > push the service image) and **W02** (the full post-merge benchmark, the `develop` merge gate)
@@ -444,12 +457,51 @@ ask it for you) and none reads the environment for itself — the new `control` 
 `GPU-DECISIONS.md` — canvas `kRGBA_8888` (overriding the F16 recommendation that was on file),
 Graphite only, LUT matched to the front end at native cube size, nearest sampling kept.
 
-### Next: finish Stage 2 — five more payloads (W04) and turning CI on (W03)
+### Next on this machine: W09 — Writer: finish nvenc rate control · legacy `1.4` remainder
 
-> **2026-09-18, project owner.** Stage 5 is finished and Stage 6 (effects as shaders) is the obvious
-> next thing, but **Stage 2 and Stage 3 are to be closed first**, so everything up to the effects
-> work is complete. Stage 1 has been **moved to the end as Stage 10** — nothing ships until the
-> whole migration is done.
+The only item left before Stage 6 that needs nothing from anyone else. The A2000 provides nvenc
+locally, so the VMAF comparison the item asks for — and which has never been run — can be done here.
+Its remaining sub-tasks are `b_ref_mode middle` and `spatial-aq 1`, stopping `SetOption("crf")`
+hijacking the bitrate when hardware encode is on, and guarding the `hw_en_on`-only branches with
+`hw_en_supported`. Gate: VMAF of the nvenc output ≥ VMAF of the x264 output − 2 points on
+`podcast_pip`, file size within ±20 %, `single_video` nvenc fps not regressed.
+
+**Do W09 before W19**, not because anything depends on it, but because it closes Stage 3's last
+actionable item and the effects work is long.
+
+### Blocked on the project owner (nothing here can proceed without an answer)
+
+1. **Five more payload captures** (W04) — text animations, subtitles, a transition-heavy timeline,
+   chroma key, a 4K source. Needs fresh exports from the app, and **the media must be archived the
+   same day** or the capture is dead on arrival (signed URLs last 24 h). The mechanism works and the
+   first payload is green; this is collection, not code.
+2. **Two CI decisions** (W03) — the pinned FFmpeg lives in a private base image this machine cannot
+   pull (the same blocker W01 carries), and the private submodule needs a deploy key. The workflow
+   is written and its YAML validated but has **never run**; enabling it and opening the
+   deliberate-regression PR its gate asks for are actions on the GitHub repo.
+3. **W07's fps gates want restating** — they are arithmetically unreachable by W07 (the scenarios
+   need 749 ms and 1276 ms; the whole conversion cost was 476 ms and 443 ms). Deliberately left
+   unchanged.
+4. **W05's flag stays off** until the 1/s progress cadence is watched somewhere Pub/Sub and Redis
+   answer. `render-payload` points both at dead addresses, so that half of the gate cannot be
+   checked here at all.
+5. **The transition-parity decisions** (`TRANSITION-PARITY.md`) — these gate **W20**, and one of
+   them is a product call: fixing the blur radii's missing reference resolution shifts existing
+   projects, so it needs versioning or acceptance.
+6. **`compositing.layer_order`** — insertion-stable clip sort versus address-tie-broken, in
+   `GPU-DECISIONS.md`'s open list.
+7. **The vendored libopenshot refresh** in `../video-rendering-service/cpp-third-party` was
+   committed **locally and unpushed** (the service would not build without it). Push it, or revert
+   both it and the W05 commit.
+
+### Needs a container, not a decision
+
+**W06 thread budgets** — deriving `FF_THREADS`/`OMP_THREADS` from `/sys/fs/cgroup/cpu.max` can be
+written here, but its gate ("in an 8-CPU container with 2 processes, no process exceeds ~400 % CPU")
+cannot be validated on this box. The item also warns that the upstream merge brought overlapping
+thread settings — **check what landed before writing anything**.
+
+**W10 is skipped**, as the item itself recommends: optional, and W25 replaces the code entirely.
 
 **W04's mechanism is done and its first payload is green** (2026-09-18). What was wrong when the
 session started: **the corpus had zero runnable payloads, not one.** A capture's signed `fileUrl`s

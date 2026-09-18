@@ -37,8 +37,9 @@ Rules that apply to every item without being repeated in it:
 W16 **void** (2026-09-17), W17 **done** (2026-09-17, fps gate closed 2026-09-18), W18 **done**
 (2026-09-18, scoped to the render path because its written gate was unsatisfiable) · **Stage 3:
 W05, W07, W08 done (2026-09-18)** — W07's fps gates are unreachable by W07 and want restating,
-W05 is built but **flagged off** for missing its gate, W08 met one of two · **W06 and W09 are what
-is left of Stage 3**, W10 skipped · **Stage 2 is part done** — W04's mechanism works and its first
+W05 is built but **flagged off** for missing its gate, W08 met one of two · **W09 is the next item** — the only
+one left before Stage 6 that needs nothing from anyone else — with **W06 needing a cgroup-limited
+container** and W10 skipped · **Stage 2 is part done** — W04's mechanism works and its first
 payload is green, but the corpus needs five more captures and W03's workflow has never run ·
 then Stage 6 (W19–W21, effects) · W01/W02 are now **Stage 10**, at the end.
 
@@ -315,6 +316,20 @@ asks for `rc vbr`, `cq 19`, `preset p5`, `tune hq`. Both encoders emit profile 1
 
 **Gate.** VMAF of the nvenc output ≥ VMAF of the x264 output − 2 points on `podcast_pip`; file size
 within ±20 %; `single_video` nvenc fps does not regress.
+
+> **2026-09-18 — the tooling is present, checked so the next session does not have to.** The local
+> FFmpeg has the `libvmaf` filter and scores with its default model out of the box
+> (`ffmpeg -i out.mp4 -i ref.mp4 -lavfi libvmaf -f null -` prints "VMAF score:"); extra models sit in
+> `~/ffmpeg-build/vmaf/model/`. `h264_nvenc` and `hevc_nvenc` are both listed, and the A2000
+> provides the encoder. So this item needs nothing that is not already on the machine — which is why
+> it is the next one to take.
+>
+> Two cautions. `openshot-bench`'s `nvenc` mode is the fast way to the fps half of the gate, but the
+> **VMAF half wants a real encode of `podcast_pip` at matched settings** — compare like for like, and
+> remember the service asks for `rc vbr, cq 19, preset p5, tune hq` against x264's `crf 18,
+> preset medium`. And check the power state before any timing: on battery this box runs at about a
+> third of its AC speed.
+
 **Size.** ~1 day.
 
 ### W10 — Writer: nvenc without the CPU conversion · legacy `1.3` · **optional**
