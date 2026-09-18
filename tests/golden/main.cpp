@@ -75,6 +75,7 @@ int main(int argc, char** argv) {
     golden::registerSubtitleScenarios();
     golden::registerTimeScenarios();
     golden::registerExportScenarios();
+    golden::registerUnitScenarios();
 
     if (opts.list) {
         for (const auto& s : golden::registry()) {

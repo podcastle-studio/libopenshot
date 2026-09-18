@@ -21,6 +21,37 @@ std::string slug(std::string s) {
 } // namespace
 
 void golden::registerCompositingScenarios() {
+    // Timeline background colour. Two paths produce it and they must agree: on the CPU
+    // Timeline::GetFrame calls Frame::AddColor with GetColorHex(), and on the GPU it clears
+    // the pooled canvas with the same colour. W18 took QColor out of the second one, and
+    // nothing in the suite covered it until these two scenarios -- every other scenario
+    // leaves the background black, which is the one case the code skips entirely.
+    add("compositing.timeline_background_color", {"compositing", "exact", "gpu-composite"}, {15},
+        [](Scene& s) {
+            auto& tl = s.makeTimeline();
+            tl.color = openshot::Color(std::string("#3c78d8"));
+            MediaSpec m; m.path = s.media("clip_a_640x360_30.mp4");
+            m.transform = Transform{BBox{0.5f, 0.5f, 0.5f, 0.5f}};
+            tl.AddClip(mediaClip(s, m));
+            tl.Open();
+        });
+
+    // An animated background exercises the other half of the has_background_color test,
+    // the GetCount() > 1 branch, and proves the colour is sampled at the requested frame.
+    add("compositing.timeline_background_animated", {"compositing", "exact", "gpu-composite"}, {1, 30},
+        [](Scene& s) {
+            auto& tl = s.makeTimeline();
+            tl.color.red = openshot::Keyframe(0.0);
+            tl.color.red.AddPoint(30.0, 255.0);
+            tl.color.green = openshot::Keyframe(160.0);
+            tl.color.blue = openshot::Keyframe(255.0);
+            tl.color.blue.AddPoint(30.0, 0.0);
+            MediaSpec m; m.path = s.media("clip_a_640x360_30.mp4");
+            m.transform = Transform{BBox{0.5f, 0.5f, 0.5f, 0.5f}};
+            tl.AddClip(mediaClip(s, m));
+            tl.Open();
+        });
+
     for (int mode = 0; mode < openshot::BLEND_MODE_COUNT; ++mode) {
         const auto bm = static_cast<openshot::BlendMode>(mode);
         // Since W13 every mode composites on the GPU via SkBlendMode, so none of them can

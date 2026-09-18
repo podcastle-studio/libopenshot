@@ -101,12 +101,13 @@ set(OPENSHOT_SOURCES
   Json.cpp
   KeyFrame.cpp
   OpenShotVersion.cpp
-  PlayerBase.cpp
   Point.cpp
   Profiles.cpp
+  # Filed under Qt/ but Widgets-free: a JUCE/std cache thread that AudioReaderSource
+  # calls into, so it is built even when ENABLE_PLAYER is OFF.
+  Qt/VideoCacheThread.cpp
   QtHtmlReader.cpp
   QtImageReader.cpp
-  QtPlayer.cpp
   QtTextReader.cpp
   Settings.cpp
   TimelineBase.cpp
@@ -203,15 +204,20 @@ set(EFFECTS_SOURCES
   audio_effects/Robotization.cpp
   audio_effects/Whisperization.cpp)
 
-# Qt video player components
-set(QT_PLAYER_SOURCES
-  Qt/AudioPlaybackThread.cpp
-  Qt/PlayerDemo.cpp
-  Qt/PlayerPrivate.cpp
-  Qt/VideoCacheThread.cpp
-  Qt/VideoPlaybackThread.cpp
-  Qt/VideoRenderer.cpp
-  Qt/VideoRenderWidget.cpp)
+# Qt video player components. Desktop-only, and the sole reason this library needs Qt
+# Widgets, so a headless build (ENABLE_PLAYER=OFF) leaves all of it out.
+set(QT_PLAYER_SOURCES "")
+if (ENABLE_PLAYER)
+  set(QT_PLAYER_SOURCES
+    PlayerBase.cpp
+    QtPlayer.cpp
+    Qt/AudioPlaybackThread.cpp
+    Qt/PlayerDemo.cpp
+    Qt/PlayerPrivate.cpp
+    Qt/VideoPlaybackThread.cpp
+    Qt/VideoRenderer.cpp
+    Qt/VideoRenderWidget.cpp)
+endif()
 
 # Disable RPATH
 set(CMAKE_MACOSX_RPATH 0)
@@ -409,7 +415,12 @@ endif()
 set(USE_QT6 "AUTO" CACHE STRING "Select Qt major version (AUTO, ON=Qt6, OFF=Qt5)")
 set_property(CACHE USE_QT6 PROPERTY STRINGS AUTO ON OFF)
 
-set(_qt_components Core Gui Widgets)
+set(_qt_components Core Gui)
+
+# Widgets is needed only by the Qt player and by Frame::Display; a headless build has neither.
+if (ENABLE_PLAYER)
+  list(APPEND _qt_components Widgets)
+endif()
 
 # We also need QtSvg unless we have Resvg insetead.
 if(NOT HAVE_RESVG)
@@ -462,8 +473,13 @@ foreach(_qt_comp IN LISTS _qt_components)
   endif()
 endforeach()
 
+if (ENABLE_PLAYER)
+  target_compile_definitions(openshot PUBLIC USE_QT_PLAYER=1)
+endif()
+
 string(REPLACE ";" ", " _qt_comp_list "${_qt_components}")
 message(STATUS "Found Qt${QT_VERSION_MAJOR} ${Qt${QT_VERSION_MAJOR}Core_VERSION_STRING} (components: ${_qt_comp_list})")
+message(STATUS "Qt video player: ${ENABLE_PLAYER}")
 
 # Keep track of Qt version, to embed in our version header
 set(QT_VERSION_STR ${Qt${QT_VERSION_MAJOR}Core_VERSION_STRING} CACHE STRING "Qt version linked with" FORCE)

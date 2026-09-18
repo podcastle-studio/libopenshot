@@ -122,6 +122,7 @@ void registerTextScenarios();
 void registerSubtitleScenarios();
 void registerTimeScenarios();
 void registerExportScenarios();
+void registerUnitScenarios();
 
 struct Options {
     bool update = false;

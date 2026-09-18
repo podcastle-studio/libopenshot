@@ -137,7 +137,9 @@
 	#include "TextReader.h"
 #endif
 #include "KeyFrame.h"
+#ifdef USE_QT_PLAYER
 #include "PlayerBase.h"
+#endif
 #include "Point.h"
 #include "Profiles.h"
 #include "QtHtmlReader.h"

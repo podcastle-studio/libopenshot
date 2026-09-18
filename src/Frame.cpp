@@ -25,7 +25,6 @@
 #include <juce_audio_basics/juce_audio_basics.h>
 #include <juce_audio_devices/juce_audio_devices.h>
 
-#include <QApplication>
 #include <QImage>
 #include <QPixmap>
 #include <QBitmap>
@@ -33,11 +32,15 @@
 #include <QString>
 #include <QVector>
 #include <QPainter>
+#include <QPointF>
+
+// Qt Widgets is needed only by Display() and DisplayWaveform(), the debug preview windows.
+#ifdef USE_QT_PLAYER
+#include <QApplication>
 #include <QHBoxLayout>
 #include <QWidget>
 #include <QLabel>
-#include <QPointF>
-#include <QWidget>
+#endif
 
 using namespace std;
 using namespace openshot;
@@ -126,6 +129,7 @@ Frame::~Frame() {
 	#endif
 }
 
+#ifdef USE_QT_PLAYER
 // Display the frame image to the screen (primarily used for debugging reasons)
 void Frame::Display()
 {
@@ -164,6 +168,7 @@ void Frame::Display()
 	previewWindow.show();
 	previewApp->exec();
 }
+#endif   // USE_QT_PLAYER
 
 // Get an audio waveform image
 std::shared_ptr<QImage> Frame::GetWaveform(int width, int height, int Red, int Green, int Blue, int Alpha)
@@ -274,6 +279,7 @@ const unsigned char* Frame::GetWaveformPixels(int width, int height, int Red, in
 	return wave_image->constBits();
 }
 
+#ifdef USE_QT_PLAYER
 // Display the wave form
 void Frame::DisplayWaveform()
 {
@@ -306,6 +312,7 @@ void Frame::DisplayWaveform()
 	// Deallocate waveform image
 	ClearWaveform();
 }
+#endif   // USE_QT_PLAYER
 
 // Get magnitude of range of samples (if channel is -1, return average of all channels for that sample)
 float Frame::GetAudioSample(int channel, int sample, int magnitude_range)

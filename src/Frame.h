@@ -31,7 +31,9 @@
 #include <QColor>
 #include <QImage>
 
+#ifdef USE_QT_PLAYER
 class QApplication;
+#endif
 
 namespace juce {
 	template <typename Type> class AudioBuffer;
@@ -105,7 +107,9 @@ namespace openshot
 		/// only the Timeline does that, to a canvas it made itself.
 		std::shared_ptr<openshot::GpuFrame> gpu_frame;
 
+#ifdef USE_QT_PLAYER
 		std::shared_ptr<QApplication> previewApp;
+#endif
 		std::recursive_mutex addingImageMutex;
 		std::recursive_mutex addingAudioMutex;
 		openshot::Fraction pixel_ratio;
@@ -191,11 +195,14 @@ namespace openshot
 		/// Copy data and pointers from another Frame instance
 		void DeepCopy(const Frame& other);
 
-		/// Display the frame image to the screen (primarily used for debugging reasons)
+#ifdef USE_QT_PLAYER
+		/// Display the frame image to the screen (primarily used for debugging reasons).
+		/// Debug-only and Qt Widgets-based, so it is absent from an ENABLE_PLAYER=OFF build.
 		void Display();
 
 		/// Display the wave form
 		void DisplayWaveform();
+#endif
 
 		/// Get magnitude of range of samples (if channel is -1, return average of all channels for that sample)
 		float GetAudioSample(int channel, int sample, int magnitude_range);

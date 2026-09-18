@@ -1108,8 +1108,15 @@ std::shared_ptr<Frame> Timeline::GetFrame(int64_t requested_frame)
 													   kRGBA_8888_SkColorType)) {
 					SkColor clear_color = SK_ColorBLACK;
 					if (has_background_color) {
-						const QColor bg(QString::fromStdString(color.GetColorHex(requested_frame)));
-						clear_color = SkColorSetARGB(bg.alpha(), bg.red(), bg.green(), bg.blue());
+						// Components straight from the curves, with no hex round trip. Alpha is
+						// deliberately 255: the CPU path a few lines up goes through
+						// GetColorHex(), which is "#rrggbb" and carries no alpha, so reading the
+						// alpha curve here would make the two paths disagree.
+						const std::vector<int> bg = color.GetColorRGBA(requested_frame);
+						auto byte = [](int v) -> U8CPU {
+							return static_cast<U8CPU>(std::min(255, std::max(0, v)));
+						};
+						clear_color = SkColorSetARGB(255, byte(bg[0]), byte(bg[1]), byte(bg[2]));
 					}
 					gpu_canvas->canvas()->clear(clear_color);
 					new_frame->AttachGpuFrame(std::move(gpu_canvas));

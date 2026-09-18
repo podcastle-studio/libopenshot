@@ -72,6 +72,9 @@ option(APPIMAGE_BUILD "Build to install in an AppImage (Linux only)" OFF)
 option(USE_SYSTEM_JSONCPP "Use system installed JsonCpp, if found" ON)
 option(DISABLE_BUNDLED_JSONCPP "Don't fall back to bundled JsonCpp" OFF)
 option(ENABLE_MAGICK "Use ImageMagick, if available" ON)
+# Headless renderer: the Qt video player is a desktop feature and is the only thing that
+# needs Qt Widgets. Turning it off drops that component and the Qt/ playback threads.
+option(ENABLE_PLAYER "Build the Qt video player (QtPlayer, Qt/*) and Frame::Display" ON)
 option(ENABLE_OPENCV_EFFECTS "Build with advanced OpenCV effects: Tracker, Stabilizer, ObjectDetection, Outline (requires Protobuf 3)" OFF)
 # Headless renderer: screen capture is a desktop feature and pulls in PipeWire / xdg-desktop-portal.
 option(ENABLE_WAYLAND_CAPTURE "Build Wayland screen capture support with xdg-desktop-portal and PipeWire (Linux only)" OFF)
