@@ -172,19 +172,52 @@ not regress. On the dev box `openshot-bench --threads 4` within 10 % of `--threa
 `single_video`.
 **Size.** ~half a day.
 
-### W07 — `Frame::GetImageCV` memoisation · legacy `1.6`
+### W07 — `Frame::GetImageCV` memoisation · legacy `1.6` (done 2026-09-18; **gate unreachable, see below**)
 
 **Goal.** Stop two colour conversions per call in the effect chain.
-**Note.** W15 and W21 delete most callers. Worth doing anyway — it is cheap and the effect and
-transition scenarios are slow today.
+**Note.** W15 and W21 delete most callers. W15 is **void**, so those callers are staying.
 
-- [ ] Cache `imagecv` with a dirty flag set by `AddImage`.
-- [ ] `SetImageCV` reuses the buffer instead of allocating two conversions per call.
+> **2026-09-18 — measured before implementing. Half the item was right and the gate is not
+> reachable by it.** Instrumented `GetImageCV`/`SetImageCV` at 1080p over 150 frames. Note that
+> `openshot-bench` **forks a child per case and sends its stderr to /dev/null**, so instrumentation
+> only shows up through the in-process `--case` path — the first measurements read zero and looked
+> like the effects were never running.
+>
+> | scenario | wall | GetImageCV | SetImageCV | share of wall |
+> |---|---:|---:|---:|---:|
+> | `transitions_chain` | 5294 ms | 380 calls / 140 ms | 322 calls / **336 ms** | **9.0 %** |
+> | `heavy_effects` | 12814 ms | 300 calls / 130 ms | 300 calls / **313 ms** | 3.5 % |
+> | `everything` | 28536 ms | 0 | 0 | **0 %** — no OpenCV effect in it at all |
+>
+> **The gate cannot be met by this item.** `transitions_chain` needs 749 ms to reach 33 fps and
+> `heavy_effects` needs 1276 ms to reach 13; the *entire* conversion cost is 476 ms and 443 ms.
+> Deleting 100 % of it gives 30.8 and 12.1 fps. The gate numbers predate the compositor work that
+> already moved these scenarios, and nothing in W07's scope closes the rest.
+
+- [x] **`SetImageCV` no longer converts twice.** `Mat2Qimage` converted into a temporary `cv::Mat`,
+      wrapped that in a `QImage` and then `copy()`d it — two full-frame passes and two allocations
+      for the same pixels. It now allocates the `QImage` first and lets `cvtColor` write straight
+      into its buffer. The 3-channel path drops a `split`/`merge` as well: `COLOR_BGR2RGBA` adds the
+      opaque alpha itself. **336 → 102 ms** on `transitions_chain`, **313 → 97 ms** on
+      `heavy_effects`; per call 1.04 → 0.32 ms, which makes it cheaper than `GetImageCV`'s 0.37.
+- [x] ~~Cache `imagecv` with a dirty flag set by `AddImage`~~ — **rejected on measurement.** The
+      access pattern is strictly alternating: `heavy_effects` is 300 `Get` against 300 `Set`, and
+      `transitions_chain` 380 against 322. A dirty flag set by `SetImageCV` would therefore be
+      dirty on essentially every `Get`, so the cache would almost never hit — while carrying the
+      stale-frame risk the item itself warns about. Not worth it. Reusing `imagecv`'s buffer in
+      `Qimage2mat` was rejected too: `cv::Mat::create` reuses an existing allocation **regardless of
+      refcount**, so writing into the member would corrupt any `cv::Mat` a caller still held.
 
 **Gate.** `transitions_chain` 1080p render ≥ **33 fps** (27.4); `heavy_effects` ≥ **13 fps** (11.5);
 golden green **with no updates**.
-**Risk.** A stale cache shows as a frozen frame inside an effect chain — the `effects.*` and
-`transitions.*` scenarios cover it.
+**Gate status — golden met, fps gates not met and shown unreachable.** Golden **295/295 four ways
+with no re-baseline** (the conversion is bit-identical). Interleaved A/B, three pairs, in-process
+`--case` at 1080p/150 frames: `transitions_chain` **27.37 → 28.69 fps (+4.8 %)**, ranges
+non-overlapping; `heavy_effects` 11.27 → 11.33, **within noise** — its wall is 12.6 s and the saving
+is 215 ms, so the change is real but not resolvable as fps there.
+**Recommendation.** Restate the gate against what remains measurable — the conversion cost itself,
+now 222 ms of 5096 (4.4 %) and 227 of 12629 (1.8 %) — and carry the fps targets to whichever item
+actually owns the rest of those frames. This has not been done; it needs the project owner.
 **Size.** ~1 day.
 
 ### W08 — Reader: remove copies, thread swscale · legacy `1.5` (copy half)
