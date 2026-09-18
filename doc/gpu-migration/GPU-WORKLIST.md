@@ -25,7 +25,7 @@ Each item is written so a session that has read nothing else can execute it.
 Rules that apply to every item without being repeated in it:
 
 - The four-way golden sweep (CPU Skia; GPU Skia off; Vulkan; lavapipe) is the acceptance test, all
-  four at 292/292. Commands in `CLAUDE.md`.
+  four at 295/295. Commands in `CLAUDE.md`.
 - The CPU path ships. Never delete CPU code because the GPU makes it unnecessary — gate it on
   `GpuDevice::available()` and keep the branch.
 - Parity classes (`exact` / `close` / `redefine`) and what each permits: `GPU-RENDER-PLAN.md` §5.
@@ -33,73 +33,22 @@ Rules that apply to every item without being repeated in it:
   scenarios, commit the PNGs with the code.
 - Anything that fails its gate is reverted or flagged off. It does not stay merged "to fix later".
 
-**Status line:** W11–W14 done (2026-09-16), W15 and W16 **void** (2026-09-17) · W17 **done**
-(2026-09-17, its fps gate closed on mains power 2026-09-18) · W18 **done** (2026-09-18, scoped to
-the render path — its written gate was unsatisfiable, see the item) · **W19 is the next item** ·
-W01/W02 **deferred by the project owner** — no release, no image, no merge to `develop` until the
-GPU work is finished · W03/W04 open · W05–W10 open · everything before W01 is done (see
-`STATUS.md`).
+**Status line:** Stage 5 (the GPU compositor) is **finished** — W11–W14 done (2026-09-16), W15 and
+W16 **void** (2026-09-17), W17 **done** (2026-09-17, fps gate closed 2026-09-18), W18 **done**
+(2026-09-18, scoped to the render path because its written gate was unsatisfiable) · **Stage 2
+(W03, W04) is the current work**, then Stage 3 (W05–W10), then Stage 6 (W19–W21, effects) ·
+W01/W02 are now **Stage 10**, at the end · everything else before Stage 6 is done (see `STATUS.md`).
 
-> **2026-09-16, project owner.** Do not build or push the service image (W01) and do not run the
-> merge/release gate (W02) — those happen at the very end. Develop and test locally, and keep
-> moving the render path onto the GPU. W11 was taken out of order for that reason: W12 depends on
-> it and nothing else does.
+> **2026-09-18, project owner — finish Stages 2 and 3 before the effects work.** Stage 5 is done and
+> Stage 6 (effects and transitions as shaders) is the obvious next thing, but the safety net (Stage
+> 2) and the CPU wins (Stage 3) were skipped past and should be closed first, so everything up to
+> the effects work is complete. Stage 6 is also gated on the open transition-parity decision — see
+> `TRANSITION-PARITY.md`.
 
----
-
-## Stage 1 — Ship what is already built
-
-Phase 2 is code-complete and measured (glow text 4.3 → 52 fps on an A2000, a real 30 s payload 2.1×)
-but runs on a developer machine and nowhere else. These two items are what turn it into production.
-
-### W01 — Build and pin the real service image · legacy `2.0` remainder · **DEFERRED**
-
-> **Deferred 2026-09-16** by the project owner, to the very end of the migration. Nothing depends
-> on it; develop and test locally without a container.
-
-**Goal.** The actual image builds and is pinned, not just the stand-in.
-**Depends on.** Nothing. `../video-rendering-service` branch `feature/gpu-rendering` already has the
-Dockerfile, the `ENCODER` probe, `OPENSHOT_GPU` plumbing and `tools/gpu-preflight.sh`.
-**Why it is blocked today.** The build-stage base is in a private registry this machine is not
-authenticated to (`docker pull` → `error getting credentials`).
-
-- [ ] `gcloud auth login`, then `docker build .` in the service repo — the full two-stage build.
-- [ ] Resolve both base images to digests; set them as the `BUILD_BASE` / `RUNTIME_BASE` `ARG`
-      defaults.
-- [ ] Confirm the build stage really has Skia headers. The service includes them transitively
-      (`text/TextClipReader.h` → `TextGlowRenderer.h` → `<skia/...>`) and nothing in the repo
-      installs them, so the base must — if it does not, the `find_path` added to `CMakeLists.txt`
-      needs a corresponding install step in the Dockerfile.
-- [ ] Push to the dev registry and deploy to a CPU node with the defaults.
-- [ ] Deploy to a GPU node with `helm/values_gpu_example.yaml`.
-
-**Gate.** Container starts on a CPU node **and** a GPU node. `vulkaninfo --summary` shows the NVIDIA
-ICD on the GPU node. `ffmpeg -encoders` lists `h264_nvenc`. One export completes on each, and the
-CPU node's output is identical to today's.
-**Done when.** Both nodes have completed an export and `STATUS.md` records the image digest.
-**Size.** ~1 day, mostly waiting on infrastructure.
-
-### W02 — The full post-merge benchmark · merge gate · **DEFERRED**
-
-> **Deferred 2026-09-16** by the project owner. There is no release and no merge to `develop`
-> until the GPU work is finished, so the gate has nothing to gate yet. Re-run it then, on a quiet
-> machine.
-
-**Goal.** Clear the last thing standing between `feature/gpu-rendering` and `develop`.
-**Depends on.** Nothing. Needs a **quiet machine** — the A/B that stood in for this ran on a box
-throttled to 400 MHz and both builds landed ~40 % under baseline.
-
-- [ ] Full `openshot-bench --label r2` run (195 cases, ~90 min). Do not run anything else on the box.
-- [ ] `openshot-bench compare tests/bench/results/baseline-cpu.json r2.json --md`.
-- [ ] Commit the JSON and append the table to `doc/PERFORMANCE-BASELINE.md`.
-- [ ] Resolve the open question on `compositing.layer_order`: clip sort is now insertion-stable
-      rather than address-tie-broken. Confirm with the service owner that this is the wanted
-      behaviour, or fix the layer collision so it cannot arise.
-
-**Gate.** No scenario more than 5 % slower than `baseline-cpu.json`.
-**Done when.** The comparison is committed and the layer-order question is answered in
-`GPU-DECISIONS.md`.
-**Size.** ~half a day plus machine time.
+> **2026-09-16, project owner, still standing.** Do not build or push the service image (W01) and do
+> not run the merge/release gate (W02) — those happen at the very end, and as of 2026-09-18 they
+> live in **Stage 10** rather than at the front. Develop and test locally. W11 was taken out of
+> order for the same reason: W12 depends on it and nothing else does.
 
 ---
 
@@ -953,3 +902,62 @@ For reading old commits, `STATUS.md` and `GPU-DECISIONS.md`.
 | R4 | W19–W25 | `heavy_effects` 11.5 → ≥ 60; CPU < 2 cores |
 | R5 | W26–W28 | no pixel change; −300 MB |
 | R6 | W29–W31 | `everything` 1.8 → ≥ 30; GPU busy ≥ 70 % |
+
+
+## Stage 10 — Release (last, by owner decision)
+
+> **Moved here 2026-09-18 by the project owner.** These were Stage 1, at the front. Nothing ships
+> until the whole migration is done, so they now sit where they actually run: last. The item IDs
+> stay W01 and W02 — every cross-reference in these docs uses them.
+
+Phase 2 was code-complete and measured long before this point (glow text 4.3 → 52 fps on an A2000,
+a real 30 s payload 2.1x). These two items are what turn the finished migration into production.
+
+### W01 — Build and pin the real service image · legacy `2.0` remainder · **DEFERRED**
+
+> **Deferred 2026-09-16** by the project owner, to the very end of the migration. Nothing depends
+> on it; develop and test locally without a container.
+
+**Goal.** The actual image builds and is pinned, not just the stand-in.
+**Depends on.** Nothing. `../video-rendering-service` branch `feature/gpu-rendering` already has the
+Dockerfile, the `ENCODER` probe, `OPENSHOT_GPU` plumbing and `tools/gpu-preflight.sh`.
+**Why it is blocked today.** The build-stage base is in a private registry this machine is not
+authenticated to (`docker pull` → `error getting credentials`).
+
+- [ ] `gcloud auth login`, then `docker build .` in the service repo — the full two-stage build.
+- [ ] Resolve both base images to digests; set them as the `BUILD_BASE` / `RUNTIME_BASE` `ARG`
+      defaults.
+- [ ] Confirm the build stage really has Skia headers. The service includes them transitively
+      (`text/TextClipReader.h` → `TextGlowRenderer.h` → `<skia/...>`) and nothing in the repo
+      installs them, so the base must — if it does not, the `find_path` added to `CMakeLists.txt`
+      needs a corresponding install step in the Dockerfile.
+- [ ] Push to the dev registry and deploy to a CPU node with the defaults.
+- [ ] Deploy to a GPU node with `helm/values_gpu_example.yaml`.
+
+**Gate.** Container starts on a CPU node **and** a GPU node. `vulkaninfo --summary` shows the NVIDIA
+ICD on the GPU node. `ffmpeg -encoders` lists `h264_nvenc`. One export completes on each, and the
+CPU node's output is identical to today's.
+**Done when.** Both nodes have completed an export and `STATUS.md` records the image digest.
+**Size.** ~1 day, mostly waiting on infrastructure.
+
+### W02 — The full post-merge benchmark · merge gate · **DEFERRED**
+
+> **Deferred 2026-09-16** by the project owner. There is no release and no merge to `develop`
+> until the GPU work is finished, so the gate has nothing to gate yet. Re-run it then, on a quiet
+> machine.
+
+**Goal.** Clear the last thing standing between `feature/gpu-rendering` and `develop`.
+**Depends on.** Nothing. Needs a **quiet machine** — the A/B that stood in for this ran on a box
+throttled to 400 MHz and both builds landed ~40 % under baseline.
+
+- [ ] Full `openshot-bench --label r2` run (195 cases, ~90 min). Do not run anything else on the box.
+- [ ] `openshot-bench compare tests/bench/results/baseline-cpu.json r2.json --md`.
+- [ ] Commit the JSON and append the table to `doc/PERFORMANCE-BASELINE.md`.
+- [ ] Confirm the `compositing.layer_order` decision has been answered. It is tracked in
+      `GPU-DECISIONS.md`'s open list rather than here, because it is a behaviour question that
+      wants an answer long before the release benchmark runs.
+
+**Gate.** No scenario more than 5 % slower than `baseline-cpu.json`.
+**Done when.** The comparison is committed and the layer-order question is answered in
+`GPU-DECISIONS.md`.
+**Size.** ~half a day plus machine time.

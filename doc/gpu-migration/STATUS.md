@@ -39,9 +39,12 @@ with no code change, because everything they ask for is already done, unnecessar
 the standing constraint (see the worklist items, and the note below on why Stage 5 reads this way).
 **W17 is done** (2026-09-17; its fps gate closed on mains power 2026-09-18) and **W18 is done**
 (2026-09-18), the latter scoped to the render path because its written gate names a build flag that
-does not exist. **Stage 5 is finished; a resuming session starts W19 — effects as shaders.**
-W01 and W02 are **deferred to the end of the migration** by the project owner: no
-image build, no release, no merge to `develop` until the GPU work is finished. See "Next step".
+does not exist. **Stage 5 is finished.**
+**A resuming session starts Stage 2 — W03 and W04** (2026-09-18, project owner): Stage 6 (effects)
+is the obvious next thing, but Stage 2 (the safety net) and Stage 3 (the CPU wins) were skipped past
+and are to be closed first, so everything up to the effects work is complete.
+W01 and W02 have **moved to the end as Stage 10** — no image build, no release, no merge to
+`develop` until the GPU work is finished, so they now sit where they actually run. See "Next step".
 
 ## Where we are
 
@@ -427,20 +430,74 @@ ask it for you) and none reads the environment for itself — the new `control` 
 
 ## Next step
 
-**Phase 2 is finished.** The remaining work is `doc/gpu-migration/GPU-WORKLIST.md`. One item to a
-session; the worklist opens with the protocol.
+**Phase 2 and Stage 5 are both finished.** The remaining work is
+`doc/gpu-migration/GPU-WORKLIST.md`. One item to a session; the worklist opens with the protocol.
+**The order is now Stage 2 → Stage 3 → Stage 6**, by owner decision on 2026-09-18.
 
 > **2026-09-16, project owner — no release work until the GPU migration is done.** **W01** (build and
-> push the service image) and **W02** (the full post-merge benchmark, the `develop` merge gate) are
-> **deferred to the very end**. Develop and test locally, without container images, and keep moving
-> the render path onto the GPU. Both items stay in the worklist, marked DEFERRED; nothing depends on
-> either.
+> push the service image) and **W02** (the full post-merge benchmark, the `develop` merge gate)
+> happen at the very end. Develop and test locally, without container images. **2026-09-18: they are
+> no longer Stage 1 — both moved to Stage 10, at the end of the worklist**, so the file reads in
+> execution order. The item IDs are unchanged; every cross-reference still says W01 and W02.
 
 **W11, W12 and W13 are done** (2026-09-16). The four decisions the compositor bakes in are in
 `GPU-DECISIONS.md` — canvas `kRGBA_8888` (overriding the F16 recommendation that was on file),
 Graphite only, LUT matched to the front end at native cube size, nearest sampling kept.
 
-### Next: W19 — `GpuEffect` base and the per-pixel shaders · legacy `4.5`
+### Next: Stage 2 — W03 (CI) and W04 (production payload corpus)
+
+> **2026-09-18, project owner.** Stage 5 is finished and Stage 6 (effects as shaders) is the obvious
+> next thing, but **Stage 2 and Stage 3 were skipped past and are to be closed first**, so
+> everything up to the effects work is complete. Stage 1 has been **moved to the end as Stage 10** —
+> nothing ships until the whole migration is done, so the release items now sit where they run.
+
+**W04 is blocked, and the fix is small.** The corpus has **zero runnable payloads today**, not one:
+the capture's signed URLs expired 2026-09-17, and although the media *is* archived in
+`tmp/payloads/prod-2026-09-16/media/` with a `urls.txt` fileId→file map, the service's
+`HTTPFileTransfer::download` opens the destination `"wb"` — truncate — on every attempt, with no
+skip-if-exists. So pre-seeding the archive does not help and `render-payload` re-downloads into a
+403. A **local-media mode in the service** (~half a day) fixes it, and it is what makes any payload
+corpus durable rather than a 24-hour asset. It also unblocks **W05's gate**, which is measured
+through `render-payload`.
+
+**W03 is bigger than "add a golden step".** `.github/workflows/ci.yml` and `.gitlab-ci.yml` are
+**upstream OpenShot's, unmodified** — no podcastle references, and they build upstream libopenshot,
+not this fork (no Skia, no submodules, no pinned FFmpeg). The fork is on GitHub
+(`podcastle-studio/libopenshot`), so this is GitHub Actions, but it means standing CI up rather than
+extending it — and a runner that builds Skia from source per PR is not viable, so it needs a
+prebuilt image or a cache.
+
+**On generating scenarios from the payload.** Worth knowing before starting: W04 exists to catch
+**JSON→timeline** regressions, which `tests/golden` structurally cannot see because it drives the
+library directly through `Recipes.h` and never parses a payload. Decomposing the payload into golden
+scenarios adds rendering coverage but loses exactly that property — the two are complementary.
+Checked against the 98 existing scenarios, the payload's genuinely uncovered shapes are three: a
+clip rotated 90° at opacity 0.25 **split across a trim boundary**; an **overlapping** transition
+(`isOverlapping`); and a **`.mov` watermark with alpha** across the whole timeline. Everything else
+it exercises — crop + corner radius, LUT, stacked filters, layer order, background colour — is
+already covered.
+
+### After Stage 2: Stage 3 — W05–W10, the CPU wins
+
+Two are unblocked and worth taking first:
+
+- **W07** (`Frame::GetImageCV` memoisation) — pure library, bench-gated (`transitions_chain` ≥ 33,
+  `heavy_effects` ≥ 13). Its note says "W15 and W21 delete most callers"; **W15 is void**, so those
+  callers are staying and the item is worth *more* than when it was written.
+- **W08** (reader copies + threaded swscale) — pure library, bench-gated (`source_4k` ≥ 70,
+  `single_video` ≥ 125). Carries a real ASan requirement.
+
+W05's code is straightforward but its **gate** needs the payload fix above. W06 wants a
+cgroup-limited container to validate honestly. W09 needs VMAF tooling that has never been run.
+**W10 should be skipped** — it is explicitly optional and W25 replaces the code entirely.
+
+### Then: Stage 6 — W19–W21, effects and transitions as shaders
+
+**Read `TRANSITION-PARITY.md` first.** W20 is the item that ends editor/export
+identity-by-construction, and it carries an open product decision (parameter reference resolution)
+plus a measured bug that exists today. `GPU-DECISIONS.md` has both in its open list.
+
+### Recently finished — W17 and W18 (kept for the reasoning)
 
 **W17 and W18 are both done, and nothing is half-written.**
 
@@ -551,6 +608,21 @@ production corpus) remain open; W05–W10 are the CPU quick wins. W01/W02 stay d
   x264 loss, not a matrix bug.
 
 ## Log
+
+- 2026-09-18 — **Order changed by the project owner, and Stage 1 moved to the end.** Stage 5 is
+  finished, but Stages 2 and 3 were skipped past on the way to the compositor. They are to be closed
+  before Stage 6 (effects), so everything up to the effects work is complete. Stage 1's two release
+  items (W01, W02) are now **Stage 10**: nothing ships until the whole migration is done, so they
+  now sit where they actually run. IDs unchanged. Two things were lifted out of W02 and into
+  `GPU-DECISIONS.md`'s open list rather than being lost with the move: the **`compositing.layer_order`
+  question** (insertion-stable clip sort vs address-tie-broken — a behaviour change that wants an
+  answer long before a release benchmark), and, from the transition-parity work, the **reference
+  resolution for length-valued effect parameters**. Two blockers found while scoping Stage 2:
+  **W04 has zero runnable payloads**, because the capture's signed URLs expired and
+  `HTTPFileTransfer::download` truncates the destination on every attempt, so the archived media in
+  `tmp/payloads/` cannot be used — a local-media mode in the service fixes it and also unblocks
+  W05's gate; and **W03 has no CI to extend**, because `.github/workflows/ci.yml` and
+  `.gitlab-ci.yml` are upstream OpenShot's, unmodified, and build upstream rather than this fork.
 
 - 2026-09-18 — **W17's fps gate closed, and W18 done — scoped to the render path because its
   written gate is unsatisfiable.** W17: on AC, `subtitles_words` on Vulkan reads a median **118.8

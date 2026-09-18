@@ -655,5 +655,16 @@ The four that blocked the compositor were taken on 2026-09-16; see the W11 entry
   coarse one. Needed before the W19 `ColorMap` shader, not before W12.
 - **GPU SKU for the node pool.** L4 is the working assumption (24 GB, two NVENC engines, no session
   cap, AV1).
-- **Whether the front end adopts the same SkSL sources** through CanvasKit. Not required for the
-  server work, but it is the only way to make editor and export pixel-close for transitions.
+- **Whether the front end adopts the same SkSL sources.** Not required for the server work, but it
+  is the only way to make editor and export pixel-close for transitions. **The front end renders
+  with PixiJS**, not CanvasKit (CanvasKit is the text path), so this is a GLSL question rather than
+  a load-the-same-file one — see `TRANSITION-PARITY.md` for what adoption would cost and buy.
+- **`compositing.layer_order`: is insertion-stable clip sort the wanted behaviour?** Clip sort is
+  now insertion-stable rather than address-tie-broken, which is a behaviour change for two clips on
+  the same layer. Either the service owner confirms it, or the layer collision is fixed so the tie
+  cannot arise. *Lifted out of W02 on 2026-09-18* — it was buried in the release benchmark's
+  checklist, which is the last thing that runs, and it wants an answer well before that.
+- **The reference resolution for length-valued effect parameters.** The blur radii have no declared
+  reference frame, so the same authored value renders at different widths in the preview, in the
+  slow-effect proxy, and in the export — measured in `TRANSITION-PARITY.md`. Fixing it shifts
+  existing projects, so it needs a product decision on versioning, not just a patch.
