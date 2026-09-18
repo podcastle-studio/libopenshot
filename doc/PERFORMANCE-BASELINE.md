@@ -275,3 +275,37 @@ Reading this:
   `graphics` driver capability — and so silently gets llvmpipe instead of the NVIDIA ICD — degrades
   to something still well ahead of raster. It uses many cores to do it, so it is not a good choice
   under parallel exports.
+
+## 2026-09-18 — W17's `subtitles_words` gate, on mains power
+
+W17 (subtitles and text compositing on the Timeline's own GPU canvas) landed on 2026-09-17 with its
+correctness gate met but its fps number owed: the measurement window was on battery, which caps this
+laptop to roughly a third of its AC speed. Re-measured on AC, at HEAD, GPU Skia, 1080p `render`, the
+standard 150-frame window. Gate: `subtitles_words` ≥ 120 fps.
+
+| arm | runs (fps, 150 frames) | median |
+|---|---|---:|
+| `OPENSHOT_GPU=vulkan` | 98.2, 102.8, 112.5, 114.7, 115.1, 117.5, 120.1, 120.8, 120.9, 120.9, 122.5, 123.2 | **118.8** |
+| `OPENSHOT_GPU=off` | 77.9, 93.2, 96.5, 97.6, 98.6, 98.8, 99.5, 99.7 | 98.0 |
+
+Six of the Vulkan runs were interleaved pair-wise against the `off` arm, so drift is controlled for.
+**The gate is cleared in the better half of the runs and misses by ~1 % at the median.** The spread
+is the machine: the host was running a browser and two IDEs (load average 1.2–2.7), and the `off`
+arm — where nothing changed — is just as noisy. A clean single number wants an idle machine.
+
+**The 150-frame window charges a fixed warm-up, and it is not GPU-specific.** Repeating at 300
+frames gives 147.3–164.4 fps on Vulkan and 128.9–131.1 with the GPU off. Solving the two windows for
+a fixed cost plus a steady rate:
+
+| arm | fixed cost | steady-state rate |
+|---|---:|---:|
+| `vulkan` | ~0.60 s | **~227 fps** |
+| `off` | ~0.77 s | ~195 fps |
+
+That is first-frame decode, font loading and cache fill, present on both paths. A real export runs
+thousands of frames and sees the steady-state rate, so **the 150-frame fps understates every
+scenario in this document** — by about 90 % for `subtitles_words`. The steady-state GPU win is 16 %,
+against the 22 % the 150-frame window suggests.
+
+Worth remembering when reading any gate in `GPU-WORKLIST.md`: the numbers are a 150-frame window on
+a laptop, and they are conservative for throughput and noisy on a loaded host.

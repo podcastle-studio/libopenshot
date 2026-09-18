@@ -80,7 +80,16 @@ tests/bench/media/generate.sh && cmake-build-release/tests/bench/openshot-bench 
 ```
 Submodules `src/effects/image-processing-lib` and `external/godot-cpp` must be initialised
 (`git submodule update --init`). `ENABLE_TESTS` (Catch2) is off and Catch2 is not installed;
-the golden suite is the test suite.
+the golden suite is the test suite — including for things that render nothing, which go in
+`tests/golden/scenarios/Unit.cpp` as `unit.*` scenarios with checks and no captured frames.
+
+`ENABLE_PLAYER` (default ON) builds the Qt video player. **OFF is the headless configuration**: it
+drops `QtPlayer`, `src/Qt/*`, `Frame::Display`/`DisplayWaveform` and the Qt **Widgets** component,
+and the suite must stay green in that build too. Two things to know before touching it —
+`Qt/VideoCacheThread.cpp` is filed under `Qt/` but is Widgets-free and `AudioReaderSource` links
+against it, so it is always built; and `libQt5Svg` pulls Widgets back in transitively, so the option
+removes *our* dependency on Widgets, not the library from the image. `USE_QT_PLAYER` is the
+corresponding header guard, following `USE_IMAGEMAGICK`.
 
 ### Skia
 
@@ -139,7 +148,7 @@ and a no-GPU machine is a supported configuration, so no change may make the CPU
 looking, or dependent on a GPU. Never delete CPU code because the GPU makes it unnecessary — gate
 it on `GpuOffscreen::onGpu()` / `GpuDevice::available()` and keep the CPU branch. Every change is
 accepted on the four-way golden sweep below (CPU Skia; GPU Skia with the GPU off; GPU Skia on
-Vulkan; GPU Skia on lavapipe), all four at 292/292.
+Vulkan; GPU Skia on lavapipe), all four at 295/295.
 
 **One control.** `GpuDevice::SetBackend(Backend::Off|Vulkan|Lavapipe)` is the single switch and
 overrides `OPENSHOT_GPU` at runtime (it tears the device down, moving `Generation()`, so caches
@@ -156,7 +165,7 @@ raster, never treat it as an error.
 cmake -S . -B cmake-build-gpu -DCMAKE_BUILD_TYPE=Release -DSkia_ROOT=/usr/local/skia-gpu
 cmake --build cmake-build-gpu --target openshot openshot-gpu-checks
 OPENSHOT_GPU=vulkan cmake-build-gpu/tests/gpu/openshot-gpu-checks     # and =lavapipe
-BUILD_DIR=$PWD/cmake-build-gpu tools/golden.sh check                  # must stay 292/292
+BUILD_DIR=$PWD/cmake-build-gpu tools/golden.sh check                  # must stay 295/295
 ```
 
 Rules that are easy to get wrong and crash in the NVIDIA driver rather than anywhere useful:

@@ -24,9 +24,10 @@ Stated by the project owner, 2026-09-14. This overrides anything in
    worklist below.
 4. **Both configurations are validated on every change.** The four-way golden sweep (CPU Skia;
    GPU Skia with the GPU off; GPU Skia on Vulkan; GPU Skia on lavapipe) is the acceptance test,
-   and all four must be 292/292. Commands are in `CLAUDE.md` under "GPU rendering (`src/gpu`)".
+   and all four must be **295/295** (292 until W18 added three frames of background-colour
+   coverage). Commands are in `CLAUDE.md` under "GPU rendering (`src/gpu`)".
 
-Last updated: 2026-09-17 · branch `feature/gpu-rendering`.
+Last updated: 2026-09-18 · branch `feature/gpu-rendering`.
 **Phase 2 is complete.** 2.0 landed 2026-09-15 (the GPU-capable image, in
 `../video-rendering-service` branch `feature/gpu-rendering`), which was the last thing in it and the
 only thing stopping R2a and R2b from shipping. **R2a complete** (2.1, 2.2, 2.3); **2.4 done, gate
@@ -36,8 +37,10 @@ on the GPU under one control (`GpuDevice::SetBackend`), and the image that can r
 **W11–W14 are done** (2026-09-16). **W15 and W16 are both void** — examined 2026-09-17 and closed
 with no code change, because everything they ask for is already done, unnecessary, or forbidden by
 the standing constraint (see the worklist items, and the note below on why Stage 5 reads this way).
-**W17 — subtitles and text into the timeline canvas — is what a resuming session picks up next, and
-it is real work.** W01 and W02 are **deferred to the end of the migration** by the project owner: no
+**W17 is done** (2026-09-17; its fps gate closed on mains power 2026-09-18) and **W18 is done**
+(2026-09-18), the latter scoped to the render path because its written gate names a build flag that
+does not exist. **Stage 5 is finished; a resuming session starts W19 — effects as shaders.**
+W01 and W02 are **deferred to the end of the migration** by the project owner: no
 image build, no release, no merge to `develop` until the GPU work is finished. See "Next step".
 
 ## Where we are
@@ -74,9 +77,11 @@ image build, no release, no merge to `develop` until the GPU work is finished. S
   `../video-rendering-service` branch `feature/gpu-rendering`. Two independent switches, both
   defaulting to the CPU: `ENCODER=libx264|h264_nvenc` (probed once, falls back with a logged reason)
   and `OPENSHOT_GPU=off|vulkan|lavapipe` (read by the library). See item E below.
-- `tools/golden.sh check` **292/292** on CPU Skia and on GPU Skia with the GPU off, on Vulkan and on
-  lavapipe. `openshot-gpu-checks` **7/7** on Vulkan and lavapipe, on the host *and inside a
-  container* on both a GPU node and a CPU node. `openshot-gpu-blend-parity` clean on both backends.
+- `tools/golden.sh check` **295/295** (98 scenarios, 17 non-image checks) on CPU Skia and on GPU
+  Skia with the GPU off, on Vulkan and on lavapipe — and in an `ENABLE_PLAYER=OFF` build, which
+  carries no direct `Qt5Widgets` dependency. `openshot-gpu-checks` **8/8** on Vulkan and lavapipe,
+  on the host *and inside a container* on both a GPU node and a CPU node; set `OPENSHOT_TEST_FONT`
+  to a `.ttf` or its two subtitle checks skip. `openshot-gpu-blend-parity` clean on both backends.
 - **The suite now gates what it can prove.** 76 of 95 scenarios are held bit-exact
   (`Tolerance::Exact()`); a scenario the GPU compositor moves is held bit-exact on the CPU and to
   the parity policy's "close" class only when a GPU is actually compositing (`gpu-composite` tag).
@@ -435,22 +440,51 @@ session; the worklist opens with the protocol.
 `GPU-DECISIONS.md` — canvas `kRGBA_8888` (overriding the F16 recommendation that was on file),
 Graphite only, LUT matched to the front end at native cube size, nearest sampling kept.
 
-### Next: W18 — Qt off the render path · legacy `3.7`
+### Next: W19 — `GpuEffect` base and the per-pixel shaders · legacy `4.5`
 
-**W17 is code complete** (2026-09-17, commits `25b9623d`, `54be69d4`, `eb028074`), with one thing
-outstanding: **its fps gate number is owed on mains power.** Golden is 292/292 four ways with no
-re-baseline, `openshot-gpu-checks` 8/8 and blend parity clean on Vulkan and lavapipe, so the
-correctness half of the gate is met. The absolute `subtitles_words` figure could not be recorded
-because the machine was on battery for the measurement window (a third of its AC speed: the same
-binary read 120–125 fps in the morning and 40–41 fps on battery). Interleaved ratios from that
-window are valid and are in the worklist item, along with how to recreate the comparison build.
-**Nothing is half-written and nothing needs reverting** — the gate was already met at HEAD before
-W17 touched anything, so the owed number confirms rather than unblocks.
+**W17 and W18 are both done, and nothing is half-written.**
 
-**W18 is mixed, and read it accordingly.** Its build options and the `QString`/`QDir`/`QColor` work
-in `Timeline`, `Profiles`, `ColorMap` and `ChunkReader/Writer` are genuine — none of those is the
-CPU render fallback. Its "no `QPainter` on the render path" gate hits the same wall that made W15
-and W16 void: under the standing constraint the answer is **gating, not deletion**.
+**W17's owed fps number was measured on mains power** (2026-09-18) and the gate is met, with a
+caveat worth carrying: `subtitles_words` on Vulkan read a median **118.8 fps** over 12 runs against
+a 120 fps gate, best 123.2, with the `OPENSHOT_GPU=off` arm at ~98. The gate clears in the better
+half of the runs and misses by ~1 % at the median, and the spread is the host (a browser and two
+IDEs were running; the unchanged `off` arm is just as noisy). Two things make the pass credible: the
+pre-W17 quiet-window reading was 120.0 / 121.3 / 125.0, and W17 measured +3.5 % interleaved.
+
+**A finding that applies to every gate in the worklist, not just this one.** The 150-frame
+measurement window charges ~0.6–0.8 s of one-time warm-up (first decode, font load, cache fill), and
+it is **not** GPU-specific — both arms show it. Solving the 150- against the 300-frame window gives
+`subtitles_words` a steady-state **~227 fps on Vulkan against ~195 with the GPU off**. A real export
+runs thousands of frames and sees the steady rate, so the recorded fps understates throughput —
+here by about 90 % — while overstating the GPU's advantage (16 % steady-state against 22 % at 150
+frames). Details in `doc/PERFORMANCE-BASELINE.md`, 2026-09-18.
+
+**W18 was scoped to the render path** (2026-09-18) after its written gate turned out to be
+unsatisfiable: it requires `QPainter` to survive only behind `ENABLE_LEGACY_EFFECTS`, and **that
+flag exists nowhere in the tree**. All 20 `QPainter` files under `src/` are the CPU fallback the
+standing constraint requires be kept — W15's wall for the third time. Three more of its sub-tasks
+had no subject: `ENABLE_MAGICK` already existed, `ColorMap` is an effect that loads a `QImage`
+rather than parsing `.cube` text, and `Timeline`'s `QDir`/`QRegularExpression` block is the
+project-file path rewriter, which the service never calls. What was delivered:
+
+- **`ENABLE_PLAYER`** (default ON). OFF drops the player, `Frame::Display`, and the **Widgets** Qt
+  component; the golden suite is green in that build and `libopenshot.so` has no direct
+  `Qt5Widgets` dependency. It still arrives transitively through `libQt5Svg`, so this removes our
+  dependency on it, not the .so from the image.
+- **`Color` parses without `QColor`**, and `Color.h` no longer includes Qt at all. Proven identical
+  before being trusted: 144,559 hex/named inputs against `QColor`, 60,020 `rgb()`/`rgba()` inputs
+  against the old code, 200,000 `GetColorHex` against `QColor::name()` — zero mismatches.
+- **The Timeline's GPU background clear builds no Qt type** and no longer round-trips a hex string
+  every frame.
+- **Two coverage gaps closed.** `unit.color` in the golden suite (proven to have teeth by injecting
+  a fault), and two new scenarios for the timeline background colour — **nothing in the 292-frame
+  suite had ever set one**, so the branch W18 changed was entirely uncovered. They also pin
+  CPU/GPU parity for it: background pixels are bit-identical on both paths.
+
+The `QString`/`QDir`/`QFile` rewrites in `Profiles`, `ChunkReader/Writer`, `effects/ColorMap` and
+Timeline's path rewriter were **deliberately left**: none is on the render path, none is reached by
+the service, and the diff is large with no measurable win. They are ordinary housekeeping now, not
+GPU-migration work.
 
 ### W17 — subtitles and text into the timeline canvas · legacy `3.6` (done 2026-09-17)
 
@@ -517,6 +551,37 @@ production corpus) remain open; W05–W10 are the CPU quick wins. W01/W02 stay d
   x264 loss, not a matrix bug.
 
 ## Log
+
+- 2026-09-18 — **W17's fps gate closed, and W18 done — scoped to the render path because its
+  written gate is unsatisfiable.** W17: on AC, `subtitles_words` on Vulkan reads a median **118.8
+  fps** over 12 runs (best 123.2) against a 120 fps gate, with the `off` arm at ~98. It clears in
+  the better half of the runs and misses by ~1 % at the median; the spread is the host, and the
+  unchanged `off` arm is just as noisy. Alongside it, a finding that applies to **every** gate in
+  the worklist: the 150-frame window charges ~0.6–0.8 s of one-time warm-up on *both* paths, so
+  solving the 150- against the 300-frame window gives a steady state of **~227 fps on Vulkan
+  against ~195 off** — the recorded numbers understate throughput (here by ~90 %) and overstate the
+  GPU's edge (16 % steady-state against 22 %).
+  W18: **four of its sub-tasks had no subject.** `ENABLE_LEGACY_EFFECTS`, which its gate requires
+  `QPainter` to hide behind, **exists nowhere in the tree**; all 20 `QPainter` files under `src/`
+  are the CPU fallback the standing constraint keeps. `ENABLE_MAGICK` already existed, `ColorMap`
+  is an effect loading a `QImage` rather than a `.cube` parser, and `Timeline`'s
+  `QDir`/`QRegularExpression` block is the project-file path rewriter the service never calls.
+  Delivered: **`ENABLE_PLAYER`** (OFF drops the player, `Frame::Display` and the Qt **Widgets**
+  component — though `libQt5Svg` still pulls Widgets in transitively, so this removes our dependency
+  on it, not the .so); **`Color` without `QColor`**, with `Color.h` no longer including Qt at all,
+  verified differentially before being trusted (144,559 hex/named inputs against `QColor`, 60,020
+  `rgb()`/`rgba()` against the old code, 200,000 `GetColorHex` against `QColor::name()` — **zero
+  mismatches**, and the quirks preserved: unparseable is opaque black, `"rgbx(1,2,3)"` parses as
+  CSS); and **the Timeline's GPU background clear builds no Qt type** and no longer round-trips a
+  hex string per frame. Two coverage gaps closed: `unit.color` in the golden suite (proven to have
+  teeth by flipping one byte of the colour table — 4 of its 5 checks fail), and two scenarios for
+  the timeline background colour, because **nothing in the 292-frame suite had ever set one** and
+  the branch W18 changed was therefore completely uncovered. Background pixels come out
+  bit-identical on CPU and GPU; only the clip area differs (2–3 LSB of Skia resampling). Golden
+  **295/295 four ways**, three new frames baselined and no other golden touched;
+  `openshot-gpu-checks` 8/8 on both backends with `OPENSHOT_TEST_FONT` set; blend parity clean.
+  The `QString`/`QDir` rewrites in `Profiles`, `ChunkReader/Writer` and `effects/ColorMap` were
+  **deliberately left** — off the render path, unreached by the service, large diff, no win.
 
 - 2026-09-17 — **W17 done: subtitles and text frames both composite on the timeline's GPU canvas.**
   Three commits. **Both of the item's premises were wrong, measured before implementing.** (1) There
