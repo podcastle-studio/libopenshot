@@ -124,11 +124,18 @@ namespace openshot
 		bool ApplyRotationalBlurOnGpu(std::shared_ptr<openshot::Frame> frame, int64_t frame_number,
 									  double angle_degrees);
 
+		/// The zoom blur as three passes -- forward polar, a box blur along rho, inverse
+		/// polar -- with its own padded-size buffer in between. False means the caller
+		/// must run the C++; nothing is attached to the frame until the last pass lands,
+		/// so a failure half way through leaves the frame untouched.
+		bool ApplyZoomBlurOnGpu(std::shared_ptr<openshot::Frame> frame, int64_t frame_number,
+								int authored_strength, double center_x, double center_y);
+
 		/// Which fragment the next ApplyOnGpu call runs, and with what. Mutable because
 		/// SetGpuUniforms is const; written immediately before each call and read once.
 		/// Blur is four effects in one class, so this selects the source as well as the
 		/// uniforms — see GpuShaderSource().
-		enum class GpuPass { Box, Diagonal, Rotational };
+		enum class GpuPass { Box, Diagonal, Rotational, ZoomForward, ZoomInverse };
 		mutable GpuPass gpu_pass = GpuPass::Box;
 
 		/// Box: one half of one pass — which way it runs and how wide it is.
@@ -151,6 +158,19 @@ namespace openshot
 		mutable float gpu_rot_use_reflect = 0.0f;
 		mutable float gpu_rot_inv_row0[kMaxRotationalIterations * 4] = {};
 		mutable float gpu_rot_inv_row1[kMaxRotationalIterations * 4] = {};
+
+		/// Zoom: the polar geometry, shared by the forward and inverse passes. The
+		/// middle pass is blur.sksl with dir = (1, 0), because the polar buffer's x axis
+		/// IS rho and cv::blur(Size(taps, 1)) is exactly what that fragment does.
+		mutable float gpu_zoom_frame_w = 0.0f;
+		mutable float gpu_zoom_frame_h = 0.0f;
+		mutable float gpu_zoom_polar_w = 0.0f;
+		mutable float gpu_zoom_polar_h = 0.0f;
+		mutable float gpu_zoom_center_x = 0.0f;
+		mutable float gpu_zoom_center_y = 0.0f;
+		mutable float gpu_zoom_pad = 0.0f;
+		mutable float gpu_zoom_k_angle = 0.0f;
+		mutable float gpu_zoom_k_mag = 0.0f;
 	};
 
 }

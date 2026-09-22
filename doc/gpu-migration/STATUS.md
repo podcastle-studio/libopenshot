@@ -447,10 +447,9 @@ ask it for you) and none reads the environment for itself — the new `control` 
 > finish unaided**; everything still open there is waiting on the project owner or on a container,
 > and the list is under "Blocked on the project owner" below.
 >
-> **The next real work is W19** (`GpuEffect` base and the per-pixel shaders) — but read its
-> ColorMap note first: that one shader is blocked on an open decision about the front end's LUT
-> interpolation, so W19 can be done *minus* ColorMap. **W20 should not be started** until the
-> transition-parity decisions in `TRANSITION-PARITY.md` are taken.
+> **Superseded 2026-09-22: Stage 6 (W19, W20, W21) is done**, ColorMap and all ten transition
+> variants included. See the Stage 6 section below and the top of the log. The next work is
+> **W22–W25**, the per-clip PCIe crossing.
 >
 > **Shader language decided 2026-09-18: SkSL, one source, both sides.** The server runs it as
 > `SkRuntimeEffect`, the front end as `CanvasKit.RuntimeEffect` — CanvasKit is already shipped there
@@ -644,11 +643,18 @@ the effects were never running. And a bench window that is too short misses what
 
 **Also pending from Stage 2:** five more payload captures, and the two CI decisions. See above.
 
-### Then: Stage 6 — W19–W21, effects and transitions as shaders
+### Stage 6 — W19, W20 and W21: **done** (2026-09-22)
 
-**Read `TRANSITION-PARITY.md` first.** W20 is the item that ends editor/export
-identity-by-construction, and it carries an open product decision (parameter reference resolution)
-plus a measured bug that exists today. `GPU-DECISIONS.md` has both in its open list.
+All three items are complete and nothing in the stage is blocked. `STAGE6-EFFECTS.md` is the map:
+11 of 13 effects ported with 2 ruled out, all 10 transition variants ported, overlay clips as
+fragments. Both product decisions it was waiting on were taken on 2026-09-22 — the parameter
+reference resolution (1280 px, unversioned) and `cv::INTER_LINEAR` for the zoom blur's polar
+conversions — and the two questions for the front-end team were answered by reading the editor's
+own LUT shader, which turns out not to use the WASM at all.
+
+The next stage is **W22–W25**, the per-clip PCIe crossing: every clip's frame still arrives from
+the decoder on the CPU and is read back for Qt to composite, which is what stands between
+`transitions_chain`'s 25.1 fps and its gate, and between `chroma_key_green`'s 43.6 and its 70.
 
 ### Recently finished — W17 and W18 (kept for the reasoning)
 
@@ -779,6 +785,48 @@ production corpus) remain open; W05–W10 are the CPU quick wins. W01/W02 stay d
   x264 loss, not a matrix bug.
 
 ## Log
+
+- 2026-09-22 — **Stage 6 is complete: zoom blur and ColorMap are both in, and both were unblocked
+  by a decision rather than by work.** W19 is 11 of 13 (2 ruled out), W20 is 10 of 10, W21 was
+  already done. Four-way sweep **307/307 in all four arms**, 25 non-image checks,
+  `openshot-gpu-checks` clean on Vulkan and lavapipe.
+  **Zoom blur: `cv::INTER_LINEAR` is now passed to both `cv::linearPolar` calls** (owner decision).
+  Both conversions had been running nearest-neighbour because the effect passed no interpolation
+  flag and `linearPolar` reads it out of `flags & INTER_MAX` — which is what made the effect alias
+  into spokes, and what made the port impossible: under a nearest remap the inverse map's angle,
+  a float polynomial inside `cv::cartToPolar`, chose a whole different source pixel on 0.23 % of
+  positions. Under linear the same error is a thousandth of a column of weight.
+  **The port is three draws** — forward polar, `blur.sksl` along rho, inverse polar — not one
+  composed fragment: composing costs `taps` fetches per bilinear corner (1216 a pixel at 1080p,
+  strength 100) against 4 + taps + 4, and three draws put the 8-bit intermediates where the C++ has
+  them so each stage could be checked against its own `cv::` call. That is how the single real
+  error was found in minutes: **phi wraps and rho does not**, and treating the polar seam as an
+  edge cost 136 LSB on the rays near angle zero and nothing anywhere else. **56.3–82.4 dB, max 8
+  LSB, 24/24** against the 45 dB gate. It re-baselined `transitions.zoom_blur`, 4 frames, all of it
+  on the colour-bar edges where nearest and linear differ.
+  **ColorMap: the front end never calls the WASM for LUTs**, which answers both questions §2.6 was
+  waiting on and answers them differently from how the item assumed. There is no `apply_lut` call
+  to confirm an interpolation for — the editor grades in a PixiJS GLSL pass, trilinear by hand at
+  the cube's **native size**, which is exactly W11's choice — and it **honours
+  `DOMAIN_MIN`/`DOMAIN_MAX`**, which `parseCubeText` dropped. So the export was the wrong side of
+  that one. Three things followed: the **17³ resample is gone** (re-baselined
+  `effects.colormap_lut`, 2 frames, max 7 LSB; `effects.stack_crop_chroma_light_lut` did *not*
+  move, contrary to the prediction on file), the parser reads the domain in **both** of its loops
+  because a `.cube` may declare it either side of `LUT_3D_SIZE`, and the fragment uploads the cube
+  as the editor's 2-D atlas in **F16** — converted to half on the CPU first, because Graphite
+  declines to make a texture out of an F32 raster image and the upload just returns false.
+  Colour-match mode is deliberately not ported and declines. **60.2–65.4 dB, max 4 LSB, 9 of 24
+  bit-exact** against W19's 48 dB gate.
+  **`GpuEffect` grew the two halves a multi-size effect needs**: `GpuSourceFrame()` and
+  `RunGpuPass()`, the latter drawing one fragment into a frame of *its own* size. `ApplyOnGpu` is
+  now those two in sequence, so nothing about the single-pass effects changed.
+  **The parity harness still exits non-zero**, and the blur family makes the reason unavoidable
+  rather than untidy: a separable box blur is 206 fetches a pixel where every other fragment is
+  one, so it misses a 0.200 ms gate written for the others by two orders of magnitude while being
+  at or ahead of the CPU twin it replaces. That gate needs restating; it is the last thing in
+  Stage 6 that means less than it says.
+  **Everything on the submodule side is uncommitted by request** — the `INTER_LINEAR` change, the
+  domain parsing, `osFixedPoint`, and the three new `.sksl` sources.
 
 - 2026-09-22 — **W20: three of the four blurs are shaders, zoom blur is blocked on a product
   decision, and the parity harness is red on timing.** `Blur` is a `GpuEffect` now, with three

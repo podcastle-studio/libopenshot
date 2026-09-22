@@ -870,11 +870,11 @@ Depends on W12/W13 only — **not** on Stage 7. Can run in parallel with Stage 7
       per effect instance, uploads only when the frame is not already GPU-backed, and **leaves the
       result on the GPU** so a chain pays one crossing rather than one per effect. Declining is a
       normal answer and the CPU twin runs untouched.
-- [ ] One SkSL fragment each, with a parity test against the C++ twin. **Done: Brightness, Alpha,
-      Exposure, ColorShift, Bars, ChromaKey (YCbCr only), ColorAdjustment, LightAdjustment,
-      Enhancement (no grain), Mask** (2026-09-22) — 246 of 329 image/parameter combinations
-      bit-exact, nothing over 2 LSB outside Brightness and Exposure. **Left: ColorMap only**, and
-      it is blocked on the front end. **Crop and CameraMovement will not be ported — see below.**
+- [x] One SkSL fragment each, with a parity test against the C++ twin. **All eleven done:
+      Brightness, Alpha, Exposure, ColorShift, Bars, ChromaKey (YCbCr only), ColorAdjustment,
+      LightAdjustment, Enhancement (no grain), Mask, ColorMap** (2026-09-22) — 251 of 320
+      image/parameter combinations bit-exact, nothing over 5 LSB. **Crop and CameraMovement will
+      not be ported — see below.**
       - **Crop and CameraMovement are not per-pixel effects.** Both are `QPainter` with
         resampling — Crop an antialiased rounded-rect clip and a `drawImage` between fractional
         `QRectF`s, CameraMovement a `setWorldTransform` with `SmoothPixmapTransform` — so the
@@ -923,13 +923,18 @@ Depends on W12/W13 only — **not** on Stage 7. Can run in parallel with Stage 7
       a 45 dB band.) Also `unit.gpu_effect_path`, which asserts on `GpuEffect::GpuPasses()` that a
       shader actually ran — a pixel comparison cannot, because the CPU fallback produces the right
       frame. Adding the remaining fragments means extending these two, not inventing a pattern.
-- [ ] **ColorMap carries two W11 consequences.** (a) The shader matches the *front end* at the LUT's
-      native cube size, so `ColorMap.cpp` must **drop its 17³ resample too** — otherwise CPU and GPU
-      diverge by up to 17 LSB and the four-way sweep stops meaning anything. That re-baselines the
-      `effects.*lut*` goldens and costs CPU LUT throughput (the resample exists for L1 cache
-      friendliness); measure it rather than assuming it is free. (b) Confirm which interpolation the
-      front end passes to `apply_lut` before writing the shader — on a coarse LUT trilinear and
-      tetrahedral diverge by up to 98 LSB.
+- [x] **ColorMap — done 2026-09-22, and both of its questions were answered by reading the
+      editor's own shader** rather than by asking. (a) The **17³ resample is gone**; the cube is
+      applied at its native size, which re-baselined `effects.colormap_lut` (2 frames, max 7 LSB)
+      and, contrary to the prediction here, left `effects.stack_crop_chroma_light_lut` untouched.
+      (b) There is **no `apply_lut` call to confirm**: the front end never uses the WASM for LUTs.
+      It grades in a PixiJS GLSL pass, trilinear by hand at the native cube size — exactly W11's
+      choice — and it **honours `DOMAIN_MIN`/`DOMAIN_MAX`**, which `parseCubeText` dropped. The
+      parser now reads them, in both of its loops, because a `.cube` may declare them either side
+      of `LUT_3D_SIZE`. The fragment uploads the cube as the editor's 2-D atlas in **F16** —
+      Graphite will not make a texture from an F32 raster image, so it is converted to half on the
+      CPU first. Colour-match mode is not ported and declines: its cube is re-baked from the
+      frame's own statistics. 60.2–65.4 dB, max 4 LSB, 9 of 24 bit-exact.
 
 **Gate per effect.** PSNR ≥ 48 dB vs the CPU effect on eight test images including transparent
 and semi-transparent pixels, ≤ 0.2 ms at 1080p. Measured by `tests/gpu/gpu_effect_parity.cpp`
@@ -1021,17 +1026,23 @@ is that it is still **+14 %**, not a loss: a partly-ported chain is safe.
       spike's 57–61 dB for the same effect. All of the difference is `warpAffine`'s fixed-point
       map: it quantises the source position to 1/32 of a pixel, so OpenCV's INTER_LINEAR is a lerp
       on a 5-bit grid rather than an exact one. Declines above the reference width.
-- [ ] **Zoom blur — the one left, and it is blocked on a product decision, not on work.**
-      `cv::linearPolar` takes its interpolation from `flags & INTER_MAX`, and the effect passes
-      neither `INTER_LINEAR` nor `INTER_NEAREST`, so **both polar conversions are
-      nearest-neighbour** — which is what makes them alias, and almost certainly an omission. The
-      port is finished and measured in `spikes/zoom-blur-polar/`: forward map exact on 300,304 of
-      300,304 channels, but the inverse map's angle comes from OpenCV's `cartToPolar` polynomial
-      and is irreducibly wrong on ~0.23 % of positions — which under a nearest remap is a whole
-      different source pixel, so 30–41 dB on blocky and noisy content. Not precision: the same
-      algorithm in `double` gives the identical figure. **Passing `INTER_LINEAR` to both calls
-      unblocks it and improves the effect**, and moves existing output — the same shape as the
-      `cv::cvtColor` fix that took `Wipe` to bit-exact.
+- [x] **Zoom blur — done 2026-09-22, once the product decision was taken.** `cv::linearPolar`
+      reads its interpolation from `flags & INTER_MAX` and the effect passed neither flag, so both
+      polar conversions ran nearest-neighbour; under a nearest remap the inverse map's angle (from
+      `cv::cartToPolar`'s float polynomial) chose a whole different source pixel on ~0.23 % of
+      positions, which is 30–41 dB and unfixable inside a fragment. **The owner decided to pass
+      `cv::INTER_LINEAR` to both calls**: the aliasing this effect had is gone, the angle error
+      became a thousandth of a column of weight, and the port became ordinary. It moved
+      `transitions.zoom_blur`, 4 frames, all of it on resample edges.
+      The port is **three draws** — forward polar, `blur.sksl` along rho, inverse polar — because
+      composing them would be `taps` fetches per bilinear corner (1216 a pixel at 1080p, strength
+      100) against 4 + taps + 4, and because three draws put the 8-bit intermediates where the C++
+      has them and let each stage be checked against its own `cv::` call. **phi wraps and rho does
+      not**: treating the polar seam as an edge cost 136 LSB on the rays near angle zero and
+      nothing elsewhere. 56.3–82.4 dB, max 8 LSB, 24/24.
+      This is the first effect whose intermediate is a different size from the frame, so
+      `GpuEffect` grew `GpuSourceFrame()` and `RunGpuPass()` — the two halves `ApplyOnGpu` is now
+      made of, the latter drawing into a frame of its own size.
 - [x] `ColorShift` — **already done under W19**; `ColorShift` calls the submodule's
       `applyColorShiftEffect`, so there is no separate port here.
 - [x] **The sources live in `image-processing-lib/shaders/`** — one `.sksl` per effect plus

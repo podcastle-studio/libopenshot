@@ -157,11 +157,12 @@ std::shared_ptr<openshot::Frame> Blur::GetFrame(std::shared_ptr<openshot::Frame>
     // zoom blur (if any)
     if (zoom_blur_radius_value > 0) {
         const auto centerPoint = std::make_pair(zoomBlurCenterX.GetValue(frame_number), zoomBlurCenterY.GetValue(frame_number));
-        // Not a shader: see doc/gpu-migration/spikes/zoom-blur-polar/. The port is written and
-        // measured, and it is the inverse polar map's angle that stops it.
-        auto imageCv = frame->GetImageCV();
-        Podcastle::Effects::applyZoomBlurEffect(imageCv, zoom_blur_radius_value, centerPoint);
-        frame->SetImageCV(imageCv);
+        if (!ApplyZoomBlurOnGpu(frame, frame_number, zoom_blur_radius_value,
+                                centerPoint.first, centerPoint.second)) {
+            auto imageCv = frame->GetImageCV();
+            Podcastle::Effects::applyZoomBlurEffect(imageCv, zoom_blur_radius_value, centerPoint);
+            frame->SetImageCV(imageCv);
+        }
     }
 
     if (horizontal_radius_value > 0 || vertical_radius_value > 0) {
@@ -362,15 +363,114 @@ bool Blur::ApplyRotationalBlurOnGpu(std::shared_ptr<openshot::Frame> frame, int6
     return ApplyOnGpu(frame, frame_number);
 }
 
+// The zoom blur as three passes.
+//
+// applyZoomBlurEffect reflect-pads the frame, converts to polar, box-blurs along rho, converts
+// back and crops. Those are three draws here and not one composed fragment: composing them would
+// cost `taps` source fetches per bilinear corner of the inverse map -- 1216 a pixel at 1080p with
+// a strength-100 parameter -- where three passes cost 4 + taps + 4. It also puts the 8-bit
+// intermediates exactly where the C++ has them, which is what lets each stage be checked against
+// its own cv:: call rather than only the end of the chain.
+//
+// The middle pass is blur.sksl with dir = (1, 0): the polar buffer's x axis IS rho, so
+// cv::blur(Size(blurStrength, 1)) over it is precisely that fragment.
+//
+// The padding is never materialised. The forward fragment reads the frame and applies
+// copyMakeBorder's BORDER_REFLECT itself, so the only thing that ever crosses is the frame.
+bool Blur::ApplyZoomBlurOnGpu(std::shared_ptr<openshot::Frame> frame, int64_t frame_number,
+                              int authored_strength, double center_x, double center_y)
+{
+    if (!frame || !GpuDevice::Instance().available())
+        return false;
+
+    const int width = frame->GetWidth();
+    const int height = frame->GetHeight();
+    if (width <= 0 || height <= 0)
+        return false;
+
+    // The same parameter arithmetic the C++ runs, through the same function.
+    int blur_strength = std::max(1, Podcastle::Effects::scaledLength(width, authored_strength));
+    if (blur_strength % 2 == 0)
+        blur_strength += 1;
+    // The polar blur is blur.sksl, so it is bounded by that fragment's loop.
+    if (blur_strength > kMaxBlurTaps)
+        return false;
+
+    const int pad = blur_strength;
+    const int polar_width = width + 2 * pad;
+    const int polar_height = height + 2 * pad;
+
+    // cv::Point2f, not double: the C++ rounds the centre to float32 before adding the padding,
+    // and the map is built from what it rounded to.
+    const float center_px = static_cast<float>(center_x * width) + static_cast<float>(pad);
+    const float center_py = static_cast<float>(center_y * height) + static_cast<float>(pad);
+
+    double max_radius = 0.0;
+    const double corners[4][2] = {{0.0, 0.0},
+                                  {static_cast<double>(polar_width - 1), 0.0},
+                                  {0.0, static_cast<double>(polar_height - 1)},
+                                  {static_cast<double>(polar_width - 1),
+                                   static_cast<double>(polar_height - 1)}};
+    for (const auto& corner : corners) {
+        const double dx = corner[0] - center_px;
+        const double dy = corner[1] - center_py;
+        max_radius = std::max(max_radius, std::sqrt(dx * dx + dy * dy));
+    }
+    if (max_radius <= 0.0)
+        return false;
+
+    gpu_zoom_frame_w = static_cast<float>(width);
+    gpu_zoom_frame_h = static_cast<float>(height);
+    gpu_zoom_polar_w = static_cast<float>(polar_width);
+    gpu_zoom_polar_h = static_cast<float>(polar_height);
+    gpu_zoom_center_x = center_px;
+    gpu_zoom_center_y = center_py;
+    gpu_zoom_pad = static_cast<float>(pad);
+    gpu_zoom_k_angle = static_cast<float>(2.0 * CV_PI / polar_height);
+    gpu_zoom_k_mag = static_cast<float>(max_radius / polar_width);
+
+    // Nothing is attached until the last pass lands, so any decline here leaves the frame
+    // exactly as the C++ twin expects to find it.
+    std::shared_ptr<openshot::GpuFrame> source = GpuSourceFrame(frame);
+    if (!source)
+        return false;
+
+    gpu_pass = GpuPass::ZoomForward;
+    std::shared_ptr<openshot::GpuFrame> polar =
+        RunGpuPass(source, polar_width, polar_height, frame_number);
+    if (!polar)
+        return false;
+
+    gpu_pass = GpuPass::Box;
+    gpu_dir_x = 1.0f;
+    gpu_dir_y = 0.0f;
+    gpu_taps = static_cast<float>(blur_strength);
+    std::shared_ptr<openshot::GpuFrame> blurred =
+        RunGpuPass(polar, polar_width, polar_height, frame_number);
+    if (!blurred)
+        return false;
+
+    gpu_pass = GpuPass::ZoomInverse;
+    std::shared_ptr<openshot::GpuFrame> result =
+        RunGpuPass(blurred, width, height, frame_number);
+    if (!result)
+        return false;
+
+    frame->AttachGpuFrame(std::move(result));
+    return true;
+}
+
 // The shared SkSL sources live in image-processing-lib/shaders/ so the editor loads the same
 // bytes through CanvasKit; they are embedded here at build time. Read them there -- including
 // why each is written the way it is.
 const char* Blur::GpuShaderSource() const
 {
 	switch (gpu_pass) {
-	case GpuPass::Diagonal:   return openshot::shaders::kDiagonalBlur;
-	case GpuPass::Rotational: return openshot::shaders::kRotationalBlur;
-	case GpuPass::Box:        break;
+	case GpuPass::Diagonal:    return openshot::shaders::kDiagonalBlur;
+	case GpuPass::Rotational:  return openshot::shaders::kRotationalBlur;
+	case GpuPass::ZoomForward: return openshot::shaders::kZoomBlurForward;
+	case GpuPass::ZoomInverse: return openshot::shaders::kZoomBlurInverse;
+	case GpuPass::Box:         break;
 	}
 	return openshot::shaders::kBlur;
 }
@@ -388,6 +488,20 @@ bool Blur::SetGpuUniforms(SkRuntimeEffectBuilder& builder, int64_t frame_number,
 		builder.uniform("taps") = gpu_diag_taps;
 		builder.uniform("radius") = gpu_diag_radius;
 		builder.uniform("invTaps") = gpu_diag_inv_taps;
+		break;
+	case GpuPass::ZoomForward:
+		builder.uniform("frameSize") = SkV2{gpu_zoom_frame_w, gpu_zoom_frame_h};
+		builder.uniform("paddedCenter") = SkV2{gpu_zoom_center_x, gpu_zoom_center_y};
+		builder.uniform("pad") = gpu_zoom_pad;
+		builder.uniform("kAngle") = gpu_zoom_k_angle;
+		builder.uniform("kMag") = gpu_zoom_k_mag;
+		break;
+	case GpuPass::ZoomInverse:
+		builder.uniform("polarSize") = SkV2{gpu_zoom_polar_w, gpu_zoom_polar_h};
+		builder.uniform("paddedCenter") = SkV2{gpu_zoom_center_x, gpu_zoom_center_y};
+		builder.uniform("pad") = gpu_zoom_pad;
+		builder.uniform("kAngle") = gpu_zoom_k_angle;
+		builder.uniform("kMag") = gpu_zoom_k_mag;
 		break;
 	case GpuPass::Rotational:
 		builder.uniform("iters") = gpu_rot_iters;

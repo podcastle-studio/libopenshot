@@ -71,6 +71,11 @@ if(DEFINED PROJECT_NAME AND TARGET openshot AND SKIA_GPU_FOUND)
   # openshot links it PUBLIC, so only the include path is needed here.
   target_include_directories(openshot-gpu-effect-parity SYSTEM PRIVATE /usr/include/babl-0.1)
   target_link_libraries(openshot-gpu-effect-parity PRIVATE openshot)
+  # ColorMap reads a .cube from disk, and the golden suite's is the one production-shaped LUT
+  # this repo has (33 cubed, the size the export used to resample away).
+  file(TO_NATIVE_PATH "${PROJECT_SOURCE_DIR}/tests/golden/media/" PARITY_MEDIA_DIR)
+  target_compile_definitions(openshot-gpu-effect-parity PRIVATE
+    PARITY_MEDIA_DIR="${PARITY_MEDIA_DIR}")
 
   # Does SkBlendMode agree with BlendModes.cpp on identical pixels? (W13)
   add_executable(openshot-gpu-blend-parity gpu_blend_parity.cpp)

@@ -23,6 +23,7 @@
 #include "Timeline.h"
 #include "effects/Blur.h"
 #include "effects/Brightness.h"
+#include "effects/ColorMap.h"
 #include "gpu/GpuDevice.h"
 #include "gpu/GpuOverlay.h"
 
@@ -437,6 +438,48 @@ void golden::registerUnitScenarios() {
             report("box_blur_pass_count", box_passes, expected_box, gpu, checks);
             report("diagonal_blur_pass_count", diagonal_passes, 1, gpu, checks);
             report("rotational_blur_pass_count", rotational_passes, 1, gpu, checks);
+
+            // The zoom blur is three draws -- forward polar, the box blur along rho, inverse
+            // polar -- and the count is what proves the middle one is not being skipped.
+            openshot::Blur zoom{0, 0, 0, 0, openshot::Keyframe(40.0),
+                                openshot::Keyframe(0.5), openshot::Keyframe(0.5)};
+            report("zoom_blur_pass_count", count(zoom), 3, gpu, checks);
+        });
+
+    // ColorMap's fragment declines silently and a decline produces the golden frame, so
+    // effects.colormap_lut passing on Vulkan says nothing about which path drew it.
+    addCustom("unit.gpu_colormap_path", {"unit", "gpu"},
+        [](Scene& s) {
+            auto& tl = s.makeTimeline();
+            using namespace golden::recipes;
+            tl.AddClip(backgroundClip(s, s.media("background_960x540.png")));
+            tl.Open();
+        },
+        [](Scene& s, std::vector<Captured>&, std::vector<Check>& checks) {
+            const bool gpu = openshot::GpuDevice::Instance().available();
+            const std::shared_ptr<QImage> source = s.timeline->GetFrame(1)->GetImage();
+
+            auto count = [&](openshot::EffectBase& effect) {
+                auto frame = std::make_shared<openshot::Frame>();
+                frame->AddImage(std::make_shared<QImage>(source->copy()));
+                openshot::GpuEffect::ResetCounters();
+                effect.GetFrame(frame, 1);
+                return openshot::GpuEffect::GpuPasses();
+            };
+
+            openshot::ColorMap lut{s.media("lut_example.cube")};
+            const long long lut_passes = count(lut);
+            checks.push_back({"colormap_lut_path", lut_passes == (gpu ? 1 : 0),
+                              "gpu_passes=" + std::to_string(lut_passes)});
+
+            // Colour-match mode is deliberately not ported: its cube is re-baked from the
+            // frame's own statistics, which is the readback this pass exists to avoid. It must
+            // decline rather than silently produce something else.
+            openshot::ColorMap match{""};
+            match.SetRefImagePath(s.media("background_960x540.png"));
+            const long long match_passes = count(match);
+            checks.push_back({"colormap_match_declines", match_passes == 0,
+                              "gpu_passes=" + std::to_string(match_passes)});
         });
 
     addCustom("unit.color", {"unit"}, unitScene,

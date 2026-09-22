@@ -27,6 +27,7 @@
 #include "effects/ChromaKey.h"
 #include "effects/CircleMask.h"
 #include "effects/ColorAdjustment.h"
+#include "effects/ColorMap.h"
 #include "effects/ColorShift.h"
 #include "effects/Enhancement.h"
 #include "effects/Exposure.h"
@@ -395,6 +396,31 @@ std::vector<Case> cases() {
                                            Keyframe(0.0), Keyframe(0.0), Keyframe(0.0), Keyframe(25.0)); }, kTransitionGate},
         {"rotational_blur(45)",   [] { return std::make_shared<openshot::Blur>(
                                            Keyframe(0.0), Keyframe(0.0), Keyframe(0.0), Keyframe(45.0)); }, kTransitionGate},
+
+        // The zoom blur, three passes. Its centre matters more than its strength: a centred
+        // blur puts whole rays on the axes, where both polar maps are at their most ambiguous.
+        {"zoom_blur(40, centre)", [] { return std::make_shared<openshot::Blur>(
+                                           Keyframe(0.0), Keyframe(0.0), Keyframe(0.0), Keyframe(0.0),
+                                           Keyframe(40.0), Keyframe(0.5), Keyframe(0.5)); }, kTransitionGate},
+        {"zoom_blur(100, off)",   [] { return std::make_shared<openshot::Blur>(
+                                           Keyframe(0.0), Keyframe(0.0), Keyframe(0.0), Keyframe(0.0),
+                                           Keyframe(100.0), Keyframe(0.31), Keyframe(0.62)); }, kTransitionGate},
+        {"zoom_blur(20, corner)", [] { return std::make_shared<openshot::Blur>(
+                                           Keyframe(0.0), Keyframe(0.0), Keyframe(0.0), Keyframe(0.0),
+                                           Keyframe(20.0), Keyframe(0.0), Keyframe(0.0)); }, kTransitionGate},
+
+        // The 3-D LUT. The cube is the golden suite's 33 cubed example, which is the size the
+        // export used to resample down to 17 -- so this also measures the atlas, not only the
+        // interpolation. Partial intensity takes the other of the C++'s two branches.
+        {"colormap(lut)",         [] { return std::make_shared<openshot::ColorMap>(
+                                           std::string(PARITY_MEDIA_DIR) + "lut_example.cube"); }},
+        {"colormap(lut, 0.4)",    [] { return std::make_shared<openshot::ColorMap>(
+                                           std::string(PARITY_MEDIA_DIR) + "lut_example.cube",
+                                           Keyframe(0.4)); }},
+        {"colormap(lut, rgb)",    [] { return std::make_shared<openshot::ColorMap>(
+                                           std::string(PARITY_MEDIA_DIR) + "lut_example.cube",
+                                           Keyframe(1.0), Keyframe(0.8), Keyframe(0.5),
+                                           Keyframe(1.0)); }},
 
         {"mask(replace_image)",   [] {
                                        auto m = std::make_shared<openshot::Mask>(

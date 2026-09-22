@@ -29,6 +29,7 @@ class SkRuntimeEffectBuilder;
 namespace openshot
 {
 	class Frame;
+	class GpuFrame;
 
 	/**
 	 * @brief Base for an effect whose per-pixel work also exists as one SkSL fragment.
@@ -90,6 +91,26 @@ namespace openshot
 		/// stable address. Every one of them does: they are the `constexpr char[]`
 		/// constants the build embeds from image-processing-lib/shaders/.
 		virtual const char* GpuShaderSource() const = 0;
+
+		/// The frame's pixels on the GPU: its own backing when it has one, otherwise a
+		/// staging frame holding one upload of them. Null means the frame could not be
+		/// made available and the caller must run its C++ twin.
+		///
+		/// Split out of ApplyOnGpu for the effects that are more than one draw — zoom
+		/// blur reads the frame once and then works in a polar buffer of its own size.
+		std::shared_ptr<openshot::GpuFrame> GpuSourceFrame(std::shared_ptr<openshot::Frame> frame);
+
+		/// Draw GpuShaderSource() over a new @a width x @a height GPU frame, sampling a
+		/// snapshot of @a source. Returns null when anything declined, in which case
+		/// nothing has been attached to any frame and the C++ twin is still free to run.
+		///
+		/// SetGpuUniforms() is called with this pass's size rather than the frame's, so
+		/// an effect whose intermediate is a different shape gets the size it is
+		/// actually drawing into. An effect with more than one pass selects the fragment
+		/// and the uniforms from its own state before calling.
+		std::shared_ptr<openshot::GpuFrame> RunGpuPass(
+			const std::shared_ptr<openshot::GpuFrame>& source,
+			int width, int height, int64_t frame_number);
 
 		/// Bind this frame's uniform values. Returning false declines the GPU path
 		/// for this frame and the CPU implementation runs instead — an effect whose

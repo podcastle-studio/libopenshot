@@ -105,6 +105,112 @@ const char* GpuEffect::GpuShaderPrelude()
 	return openshot::shaders::kPrelude;
 }
 
+// The frame's pixels on the GPU. A frame that is already GPU-backed — the previous
+// effect in the chain, or a text clip — is handed back as it is; a CPU frame pays one
+// upload, which is the crossing W22-W25 exists to remove.
+std::shared_ptr<GpuFrame> GpuEffect::GpuSourceFrame(std::shared_ptr<openshot::Frame> frame)
+{
+	if (!frame || !GpuDevice::Instance().available())
+		return nullptr;
+
+	if (frame->IsGpuBacked())
+		return frame->GpuBacking();
+
+	std::shared_ptr<QImage> image = frame->GetImage();
+	if (!image || image->isNull())
+		return nullptr;
+	// Format_RGBA8888_Premultiplied is byte-for-byte kRGBA_8888 premultiplied, so this
+	// needs no conversion and no channel swap — the same reasoning as
+	// Frame::FlattenGpuFrame in the other direction.
+	if (image->format() != QImage::Format_RGBA8888_Premultiplied)
+		return nullptr;
+	const SkPixmap pixels(
+		SkImageInfo::Make(image->width(), image->height(), kRGBA_8888_SkColorType,
+						  kPremul_SkAlphaType),
+		image->constBits(), image->bytesPerLine());
+	std::shared_ptr<GpuFrame> staging =
+		GpuFrame::Create(image->width(), image->height(), kRGBA_8888_SkColorType);
+	if (!staging || !staging->upload(pixels))
+		return nullptr;
+	return staging;
+}
+
+std::shared_ptr<GpuFrame> GpuEffect::RunGpuPass(const std::shared_ptr<GpuFrame>& source,
+												int width, int height, int64_t frame_number)
+{
+	if (!source || width <= 0 || height <= 0)
+		return nullptr;
+	if (!GpuDevice::Instance().available())
+		return nullptr;
+
+	const char* fragment = GpuShaderSource();
+	if (!fragment)
+		return nullptr;
+	if (!programs)
+		programs = std::make_shared<ProgramCache>();
+	Program& program_ref = programs->for_source(fragment);
+	if (!program_ref.compiled) {
+		program_ref.compiled = true;
+		SkString code(GpuShaderPrelude());
+		code.append(fragment);
+		auto [effect, error] = SkRuntimeEffect::MakeForShader(code);
+		if (!effect) {
+			// A fragment that will not compile is a mistake in this repo, not a
+			// runtime condition — but it must cost quality, not the export. Log it
+			// once and leave the frame to the CPU twin forever after.
+			// AppendDebugMethod's arguments are floats, and the compiler error is the
+			// whole point of this message, so it goes through the string logger.
+			ZmqLogger::Instance()->AppendDebugMethod(
+				"GpuEffect::ApplyOnGpu (SkSL failed to compile, using the CPU path)");
+			ZmqLogger::Instance()->Log("GpuEffect: " + info.class_name + " SkSL: " +
+									   std::string(error.c_str()));
+		}
+		program_ref.effect = std::move(effect);
+	}
+	if (!program_ref.effect)
+		return nullptr;
+
+	// A genuine copy, so drawing into a different surface below cannot race it, and
+	// the tasks replay in the order they were recorded.
+	sk_sp<SkImage> image = source->snapshot();
+	if (!image)
+		return nullptr;
+
+	std::shared_ptr<GpuFrame> destination =
+		GpuFrame::Create(width, height, kRGBA_8888_SkColorType);
+	if (!destination)
+		return nullptr;
+
+	SkRuntimeEffectBuilder builder(program_ref.effect);
+
+	// Nearest sampling, no local matrix. main()'s coordinate is the destination
+	// pixel centre, so with an identity mapping every eval() lands on exactly one
+	// texel and osBytes() recovers the source byte exactly. Linear filtering would
+	// blend neighbours and no amount of care in the fragment would then match the
+	// C++ — this one line is load-bearing for the parity gate.
+	builder.child("osSrc") = image->makeShader(SkTileMode::kClamp, SkTileMode::kClamp,
+											   SkSamplingOptions());
+	if (!SetGpuUniforms(builder, frame_number, width, height))
+		return nullptr;
+
+	sk_sp<SkShader> shader = builder.makeShader();
+	if (!shader)
+		return nullptr;
+
+	SkPaint paint;
+	paint.setShader(std::move(shader));
+	// kSrc: this writes every pixel of a pooled surface that still holds whatever
+	// its last user drew, so there is nothing to blend with and nothing to clear.
+	paint.setBlendMode(SkBlendMode::kSrc);
+	SkCanvas* canvas = destination->canvas();
+	if (!canvas)
+		return nullptr;
+	canvas->drawRect(SkRect::MakeIWH(width, height), paint);
+
+	gpuPassCounter().fetch_add(1, std::memory_order_relaxed);
+	return destination;
+}
+
 bool GpuEffect::ApplyOnGpu(std::shared_ptr<openshot::Frame> frame, int64_t frame_number)
 {
 	// Counted on every path so a test can tell "the shader ran" from "the shader
@@ -123,104 +229,20 @@ bool GpuEffect::ApplyOnGpu(std::shared_ptr<openshot::Frame> frame, int64_t frame
 	if (!GpuDevice::Instance().available())
 		return declined();
 
-	const char* fragment = GpuShaderSource();
-	if (!fragment)
-		return declined();
-	if (!programs)
-		programs = std::make_shared<ProgramCache>();
-	Program& program_ref = programs->for_source(fragment);
-	if (!program_ref.compiled) {
-		program_ref.compiled = true;
-		SkString source(GpuShaderPrelude());
-		source.append(fragment);
-		auto [effect, error] = SkRuntimeEffect::MakeForShader(source);
-		if (!effect) {
-			// A fragment that will not compile is a mistake in this repo, not a
-			// runtime condition — but it must cost quality, not the export. Log it
-			// once and leave the frame to the CPU twin forever after.
-			// AppendDebugMethod's arguments are floats, and the compiler error is the
-			// whole point of this message, so it goes through the string logger.
-			ZmqLogger::Instance()->AppendDebugMethod(
-				"GpuEffect::ApplyOnGpu (SkSL failed to compile, using the CPU path)");
-			ZmqLogger::Instance()->Log("GpuEffect: " + info.class_name + " SkSL: " +
-									   std::string(error.c_str()));
-		}
-		program_ref.effect = std::move(effect);
-	}
-	if (!program_ref.effect)
-		return declined();
-
 	const int width = frame->GetWidth();
 	const int height = frame->GetHeight();
-	if (width <= 0 || height <= 0)
-		return declined();
 
-	// The source pixels as a texture. A frame that is already GPU-backed — the
-	// previous effect in the chain, or a text clip — costs nothing here beyond the
-	// snapshot's copy; a CPU frame pays one upload, which is the crossing W22-W25
-	// exists to remove. `staging` has to outlive the draw below: it owns the
-	// surface the snapshot was taken from.
-	std::shared_ptr<GpuFrame> staging;
-	sk_sp<SkImage> source;
-	if (frame->IsGpuBacked()) {
-		// A genuine copy, so drawing into a different surface below cannot race it,
-		// and the tasks replay in the order they were recorded.
-		source = frame->GpuBacking()->snapshot();
-	} else {
-		std::shared_ptr<QImage> image = frame->GetImage();
-		if (!image || image->isNull())
-			return declined();
-		// Format_RGBA8888_Premultiplied is byte-for-byte kRGBA_8888 premultiplied,
-		// so this needs no conversion and no channel swap — the same reasoning as
-		// Frame::FlattenGpuFrame in the other direction.
-		if (image->format() != QImage::Format_RGBA8888_Premultiplied)
-			return declined();
-		const SkPixmap pixels(
-			SkImageInfo::Make(image->width(), image->height(), kRGBA_8888_SkColorType,
-							  kPremul_SkAlphaType),
-			image->constBits(), image->bytesPerLine());
-		staging = GpuFrame::Create(image->width(), image->height(), kRGBA_8888_SkColorType);
-		if (!staging || !staging->upload(pixels))
-			return declined();
-		source = staging->snapshot();
-	}
+	// `source` has to outlive the draw: it owns the surface the snapshot came from.
+	std::shared_ptr<GpuFrame> source = GpuSourceFrame(frame);
 	if (!source)
 		return declined();
 
-	std::shared_ptr<GpuFrame> destination =
-		GpuFrame::Create(width, height, kRGBA_8888_SkColorType);
+	std::shared_ptr<GpuFrame> destination = RunGpuPass(source, width, height, frame_number);
 	if (!destination)
 		return declined();
-
-	SkRuntimeEffectBuilder builder(program_ref.effect);
-
-	// Nearest sampling, no local matrix. main()'s coordinate is the destination
-	// pixel centre, so with an identity mapping every eval() lands on exactly one
-	// texel and osBytes() recovers the source byte exactly. Linear filtering would
-	// blend neighbours and no amount of care in the fragment would then match the
-	// C++ — this one line is load-bearing for the parity gate.
-	builder.child("osSrc") = source->makeShader(SkTileMode::kClamp, SkTileMode::kClamp,
-												SkSamplingOptions());
-	if (!SetGpuUniforms(builder, frame_number, width, height))
-		return declined();
-
-	sk_sp<SkShader> shader = builder.makeShader();
-	if (!shader)
-		return declined();
-
-	SkPaint paint;
-	paint.setShader(std::move(shader));
-	// kSrc: this writes every pixel of a pooled surface that still holds whatever
-	// its last user drew, so there is nothing to blend with and nothing to clear.
-	paint.setBlendMode(SkBlendMode::kSrc);
-	SkCanvas* canvas = destination->canvas();
-	if (!canvas)
-		return declined();
-	canvas->drawRect(SkRect::MakeIWH(width, height), paint);
 
 	// The result becomes the frame's pixels without a readback: GetImage() will do
 	// that once, whenever the first unported path asks.
 	frame->AttachGpuFrame(std::move(destination));
-	gpuPassCounter().fetch_add(1, std::memory_order_relaxed);
 	return true;
 }

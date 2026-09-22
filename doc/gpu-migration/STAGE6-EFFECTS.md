@@ -14,9 +14,12 @@ Deleted with the rest of `doc/gpu-migration/` when the migration lands.
 
 | item | scope | state |
 |---|---|---|
-| **W19** | `GpuEffect` base + per-pixel effect fragments | **10 of 13 done**, 2 ruled out, 1 blocked |
-| **W20** | transition vocabulary from `image-processing-lib` as shared SkSL | **9 of 10 done**, 1 blocked on a product decision |
+| **W19** | `GpuEffect` base + per-pixel effect fragments | **11 of 13 done**, 2 ruled out (2026-09-22) |
+| **W20** | transition vocabulary from `image-processing-lib` as shared SkSL | **10 of 10 done** (2026-09-22) |
 | **W21** | overlay clips as textures (additive blend, displacement map) | **done** (2026-09-22) |
+
+**Stage 6 is complete.** Nothing in it is blocked and nothing is outstanding. The two effects that
+are not ported are ruled out with their reasons in §2.4 and §2.5, not waiting on anyone.
 
 `libopenshot` carries 47 effect classes. Only the ones
 `../video-rendering-service` actually constructs are in scope — that is the plan's rule (§2.4), and
@@ -53,7 +56,7 @@ they agree *exactly*, times both paths, and **refuses to compare a case that nev
 GPU** — `Frame::IsGpuBacked()` after the call is the proof. `unit.gpu_effect_path` in the golden
 suite asserts the same thing through the real timeline path.
 
-### 2.2 Ported — 10 effects
+### 2.2 Ported — 11 effects
 
 Parity measured on Vulkan (RTX A2000), 2026-09-22. "images" is parameter cases × 8 test images.
 
@@ -69,7 +72,8 @@ Parity measured on Vulkan (RTX A2000), 2026-09-22. "images" is parameter cases �
 | **ColorAdjustment** | 4 | 32 | 16 | 1 | per clip | `double` params → `float` uniforms |
 | **Brightness** | 4 | 32 | 24 | 3 | transitions | unpremultiplies |
 | **Exposure** | 3 | 24 | 16 | 5 | transitions | unpremultiplies |
-| **total** | 37 | **296** | **242** | 5 | | 82 % exact |
+| **ColorMap** | 3 | 24 | 9 | 4 | per clip | the cube as an F16 atlas; 60–65 dB — see 2.6 |
+| **total** | 40 | **320** | **251** | 5 | | 78 % exact |
 
 > Earlier commit messages quoted 214/297 and 246/329 for this table. Those counts accidentally
 > included the timing rows of the same report. **296 comparisons, 242 exact** is the correct figure
@@ -132,29 +136,53 @@ therefore portable exactly. Not built: the effect exists for zoom, the golden sc
 and a fragment that declines in the normal case earns little. **Revisit if a payload capture (W04)
 shows pan-only is common.**
 
-### 2.6 Blocked — 1 effect
+### 2.6 ColorMap — done, and the two questions were answered by reading the editor
 
-**ColorMap** (3-D LUT). Two questions for the front-end team, neither answerable from this repo:
+**Both questions this section waited on were settled on 2026-09-22**, by the project owner handing
+over the editor's own `lut.frag` and its write-up, and neither was answered the way the item
+assumed it would be.
 
-1. **Which interpolation does the front end pass to `apply_lut`?** `0 = Trilinear`, `1 =
-   Tetrahedral` (`image-processing-lib/wasm/wrappers/lutWrappers.cpp:84`); the value lives in their
-   JS. Worth ≤ 4.3 LSB on a fine LUT, up to **98 LSB** on a coarse one.
-2. **How do they set the LUT domain?** `parseCubeText` **drops `DOMAIN_MIN`/`DOMAIN_MAX`**
-   (`ColorGradingCore.cpp:378`) while the front end's `applyLut` normalises by `domainMin`/`invSpan`
-   set from JS. For any non-0…1 cube the two already disagree arbitrarily — a live bug today, not a
-   migration concern.
+**There is no `apply_lut` call to ask about: the front end never calls the WASM for LUTs.** The
+grade is a single PixiJS filter pass in GLSL. The cube is packed into an RGBA32F 2-D atlas sampled
+NEAREST, and the shader does **trilinear by hand** — 8 fetches, 7 mixes — at the LUT's **native
+cube size**. That is exactly what W11 decided for our side, so the two now agree by construction,
+and the tetrahedral option in `lutWrappers.cpp` is dead code on a dead path.
 
-Known work once those land, already decided in W11 and unchanged:
+**They do honour `DOMAIN_MIN`/`DOMAIN_MAX`** — `t = clamp((c - domainMin) / domainSpan, 0, 1)`,
+with the span collapsed to 1 when it is degenerate. So the export was the wrong side of that
+disagreement, not the editor. `parseCubeText` now reads both, in **either** loop, because a `.cube`
+may declare them before or after `LUT_3D_SIZE` and in practice usually does after — where the old
+parser's data loop fed them to `strtof` and dropped them on the floor.
 
-- Drop the **17³ resample** in `ColorMap.cpp:243` (the measured 17 LSB editor/export gap). It
-  re-baselines `effects.colormap_lut` and `effects.stack_crop_chroma_light_lut`, and costs CPU LUT
-  throughput — 33³ is 431 KB against 17³'s 59 KB, i.e. out of L2. **Measure it, do not assume.**
-- The export's own kernel is a copy of the front end's with optimisations; the one genuine
-  divergence is **alpha model** — `ColorMap.cpp` demultiplies (frames are
-  `Format_RGBA8888_Premultiplied`), the front end does not (canvas pixels are straight). Both are
-  correct for their input. The shared fragment must be defined on **straight RGB** with
-  unpremultiply/premultiply at the boundary, done once.
-- The cube goes in as a 3-D texture; `GpuFrame::ToTexture` discipline applies.
+**And they grade straight RGB**: un-premultiply (guarded at alpha > 1e-5), grade, blend by
+intensity, re-premultiply. `ColorMap.cpp` demultiplies too, so the alpha model already matched.
+
+What was done, in order:
+
+- **The 17³ resample is gone** (`ColorMap.cpp`). It was the largest measured divergence in the
+  colour path — max 9.95 LSB / mean 0.657 on the production 25³ LUT, against 6.32 / 0.269 for the
+  interpolation choice either side of it. It re-baselined `effects.colormap_lut` (2 frames, max 7
+  LSB, 62.9 dB); `effects.stack_crop_chroma_light_lut` did **not** move, which the earlier note
+  predicted it would. It costs CPU LUT throughput: 33³ is 431 KB against 17³'s 59 KB.
+- **The domain is honoured**, per channel, through three coordinate tables instead of one.
+- **The fragment** is `shaders/color_map.sksl`, with the cube uploaded as the editor's atlas —
+  width the R axis, row `b * size + g`, NEAREST, all three interpolations by hand. **F16 and not
+  8-bit**: a cube entry is a float, and quantising the *table* to a byte would put the error
+  upstream of everything. Graphite will not make a texture out of an F32 raster image — the upload
+  just returns false — so the atlas is converted to half on the CPU first.
+- **Colour-match mode is deliberately not ported.** Its cube is re-baked from the frame's own Lab
+  statistics every few frames, which is a readback of the frame the pass exists to keep on the GPU.
+  It declines in `SetGpuUniforms`, and `unit.gpu_colormap_path` asserts that it declines rather
+  than quietly producing something else.
+
+Parity on Vulkan, three intensity configurations over the same eight images: **60.2–65.4 dB, max
+4 LSB, 9 of 24 bit-exact**, against W19's 48 dB gate. What is left is the atlas's half precision,
+which is a tenth of an LSB on a 0..1 entry and shows up only where trilinear lands near a rounding
+boundary.
+
+**One divergence to record rather than fix**: the editor renders a clip **ungraded** when the cube
+is 1-D-only, when a 3-D cube carries a 1-D shaper, or when the renderer is not WebGL2. The export
+grades all of them. Same `.cube`, different picture, and no shader parity work touches it.
 
 ---
 
@@ -208,7 +236,7 @@ resample, which is why the item was written that way.
 | rotational blur | **done** | **74–102 dB, max 1 LSB on every image**, noise included |
 | box / horizontal-vertical blur | **done** | 57–78 dB, max 1 LSB; **bit-exact on a single axis** |
 | diagonal blur | **done** | **24/24 bit-exact** |
-| zoom blur | **blocked** | both polar conversions are nearest-neighbour — see below |
+| zoom blur | **done** | three passes, 56–82 dB, after `INTER_LINEAR` was passed — see below |
 
 **The `cv::cvtColor` problem is fixed.** `Wipe` thresholds a BGRA luminance, and OpenCV's 8-bit
 grey is not reproducible from any documented formula — the fixed-point expression differs on 703 of
@@ -231,8 +259,9 @@ Parity measured on Vulkan, 2026-09-22, same harness and same eight images as W19
 | **Zoom** | 2 | 16 | 4 | 1 | zoom-in only; 57–78 dB |
 | **total** | 15 | **120** | **104** | 4 | against W20's 45 dB gate, nothing fails |
 
-**Three of the four blur variants landed on 2026-09-22.** The fourth, zoom blur, turned out not to
-be blocked by the reference-resolution decision at all — see below.
+**All four blur variants landed on 2026-09-22.** Three of them followed the reference-resolution
+decision; the fourth, zoom blur, turned out not to be blocked by that decision at all, and is
+below.
 
 The box blur was done first because `Blur` sits in the middle of the `{Zoom, Blur, Alpha}`
 transition and was what split that chain. It is **six draws**, one separable half-pass each:
@@ -248,19 +277,42 @@ difference is that this one reproduces `warpAffine`'s **fixed-point map**: OpenC
 source position to 1/32 of a pixel, so its INTER_LINEAR is a lerp on a 5-bit grid and not an exact
 one.
 
-**Zoom blur is blocked, and on something nobody knew was there.** `cv::linearPolar` takes its
-interpolation from `flags & INTER_MAX`, and the effect passes neither `INTER_LINEAR` nor
-`INTER_NEAREST` — so **both of its polar conversions run nearest-neighbour**, which is what makes
-this effect alias into spokes. The port is finished and measured in
-`spikes/zoom-blur-polar/`: the forward map is exact on all 300,304 channels, but the inverse map's
-angle comes from `cv::cartToPolar`'s float polynomial and is irreducibly wrong on ~0.23 % of
-positions — and under a nearest remap that is a whole different source pixel, so 30–41 dB on blocky
-and noisy content against a 45 dB gate. It is not precision: the same algorithm in `double` gives
-the identical figure. **Passing `INTER_LINEAR` to both calls would unblock the port and fix the
-aliasing**, and it moves existing output — the same class of decision as the `cv::cvtColor` fix
-that took `Wipe` from 62–85 dB to bit-exact.
+**Zoom blur was blocked on something nobody knew was there, and the block was lifted by passing
+one flag.** `cv::linearPolar` takes its interpolation from `flags & INTER_MAX`, and the effect
+passed neither `INTER_LINEAR` nor `INTER_NEAREST` — so **both of its polar conversions ran
+nearest-neighbour**, which is what made this effect alias into spokes. Under a nearest remap the
+inverse map's angle, which comes from `cv::cartToPolar`'s float polynomial, selected a *whole
+different source pixel* on ~0.23 % of positions: 30–41 dB, and not fixable from inside a fragment
+(the same algorithm in `double` gives the identical figure).
 
-Parity for the three that landed, Vulkan, the same eight images:
+**The project owner took that decision on 2026-09-22**: `cv::INTER_LINEAR` is now passed to both
+calls. The angle's error became a thousandth of a column of weight instead of a whole pixel, the
+port became an ordinary resampling one, and the effect stopped aliasing. It moved
+`transitions.zoom_blur` — 4 frames, max 132 LSB, all of it on the colour-bar edges where nearest
+and linear differ, which is the change itself and not a side effect.
+
+**The port is three draws, not one composed fragment.** Forward polar, the box blur along rho,
+inverse polar — `shaders/zoom_blur_forward.sksl`, `blur.sksl` with `dir = (1, 0)`, and
+`shaders/zoom_blur_inverse.sksl`. Composing the three would cost `taps` source fetches per bilinear
+corner of the inverse map, 1216 a pixel at 1080p with a strength-100 parameter, where three passes
+cost 4 + taps + 4. It also puts the 8-bit intermediates exactly where the C++ has them, so each
+stage was checked against its own `cv::` call rather than only the end of the chain — which is how
+the one thing that was actually wrong got found in minutes.
+
+**That one thing: phi wraps and rho does not.** The polar buffer's last row and its first are
+neighbours on the circle, and the inverse map samples across that seam on every ray near angle
+zero. Treating the seam as an edge cost **136 LSB there and nothing anywhere else** — 40.8 dB on
+noise against 57.8 dB with the wrap, from four lines of difference.
+
+The padding is never materialised: the forward fragment reads the frame and applies
+`copyMakeBorder`'s BORDER_REFLECT itself, so the only thing that crosses is the frame. And
+`GpuEffect` grew the two halves this needed — `GpuSourceFrame()` and `RunGpuPass()`, the latter
+drawing one fragment into a frame of **its own** size, which is what an intermediate of a different
+shape requires. `ApplyOnGpu` is now those two called in sequence.
+
+Parity on Vulkan, three centre/strength configurations: **56.3–82.4 dB, max 8 LSB, 24/24 passing**.
+
+Parity for the three box-family blurs, Vulkan, the same eight images:Parity for the three that landed, Vulkan, the same eight images:
 
 | effect | cases | images | bit-exact | worst | note |
 |---|---:|---:|---:|---:|---|
@@ -400,42 +452,37 @@ worth re-measuring** before the clause is rewritten.
 
 ## 6. What is left, in order
 
-**Stage 6 has nothing left that this machine can finish unaided.** Everything outstanding is
-waiting on a person, and there are only three of them.
+**Nothing. Stage 6 is complete** — W19, W20 and W21 are all done as of 2026-09-22, and the two
+effects that are not ported (`Crop`, `CameraMovement`) are ruled out in §2.5 with their reasons
+rather than waiting on anyone.
 
-1. **Zoom blur wants one line changed, and it is not ours to change.** `applyZoomBlurEffect` passes
-   no interpolation flag to either `cv::linearPolar`, so **both polar conversions run
-   nearest-neighbour** — which is what makes the effect alias, and reads like an omission. Passing
-   `cv::INTER_LINEAR` fixes the aliasing and unblocks the port, whose only remaining error is an
-   angle from `cv::cartToPolar`'s float polynomial that a nearest remap turns into a whole wrong
-   pixel. It moves existing output and the front end compiles the same source, so it is the same
-   class of decision as the `cv::cvtColor` fix. Everything measured is in
-   `spikes/zoom-blur-polar/`.
-   ~~The reference-resolution decision~~ — **taken 2026-09-22**, and it unblocked the other three,
-   which are now done.
-2. **Two answers from the front-end team**, which block **ColorMap** and nothing else (§2.6): which
-   `interpolation` they pass to `apply_lut`, and how they set the LUT domain. The second is a live
-   bug today, not a migration concern.
-3. **Owner decisions that are not blocking anything**, but should be settled before the numbers are
+Four things are recorded here because they outlive the stage, none of them blocking:
+
+1. **Owner decisions that are not blocking anything**, but should be settled before the numbers are
    quoted anywhere:
    - **Crop and CameraMovement** (§2.5) — porting either is a redefine-class change to the pixels.
    - **The gates** (§5) — both fps gates and the per-effect ≤ 0.2 ms clause measure something other
-     than what they say.
-   - **Push the submodule.** `image-processing-lib` commit `f8873e0` (the explicit BGRA luminance)
-     is committed locally and **unpushed**; the front end compiles the same source to WASM and
-     picks it up when it updates the submodule.
-
-Add to (3): **diagonal blur still carries the downscale threshold the reference-resolution
-decision retired.** That entry names "half size above 1 megapixel" as one of the two thresholds
-replaced; rotational blur's was, diagonal blur's was not, so the same authored radius still renders
-at full scale from 720p and at half from 1080p. Left as found — and note that replacing it would
-make the fragment *harder*, since a 0.5 `INTER_AREA` is a 2x2 average and a 1280/1920 one is a
-weighted area kernel.
+     than what they say. The blur family makes this unavoidable rather than untidy: a separable box
+     blur is 206 fetches a pixel where every other fragment is one, so it fails a gate written for
+     the others by two orders of magnitude while still being at or ahead of the CPU twin it
+     replaces. `openshot-gpu-effect-parity` exits non-zero because of it.
+2. **Diagonal blur still carries the downscale threshold the reference-resolution decision
+   retired.** That entry names "half size above 1 megapixel" as one of the two thresholds replaced;
+   rotational blur's was, diagonal blur's was not, so the same authored radius still renders at full
+   scale from 720p and at half from 1080p. Left as found — and replacing it would make the fragment
+   *harder*, since a 0.5 `INTER_AREA` is a 2x2 average and a 1280/1920 one is a weighted area
+   kernel.
+3. **The editor renders some cubes ungraded and the export grades all of them** (§2.6): 1-D-only
+   cubes, 3-D cubes carrying a 1-D shaper, and any non-WebGL2 renderer. A parity gap that no shader
+   work touches.
+4. **Push the submodule.** `image-processing-lib` carries the shared `shaders/`, the explicit BGRA
+   luminance, the blur normalisation, the `INTER_LINEAR` fix and the domain parsing — all local.
+   The front end compiles the same source and picks them up when it updates the submodule.
 
 **Earlier entries here, now answered and recorded so they are not re-asked:**
-~~"W20 is the only item left not blocked on someone else"~~ and ~~"Should `Blur` be pulled
-forward?"~~ — both overtaken: the reference-resolution decision landed, `Blur`'s three portable
-modes are fragments, and what is left of W20 is one line in the zoom blur.
+~~"W20 is the only item left not blocked on someone else"~~, ~~"Should `Blur` be pulled
+forward?"~~, ~~"the reference-resolution decision"~~, ~~"two answers from the front-end team about
+`apply_lut`"~~ — every one of them is settled above or in §2.6.
 
 ## 7. Cross-references
 

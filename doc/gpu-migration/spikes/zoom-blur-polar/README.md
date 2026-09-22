@@ -1,5 +1,12 @@
 # Zoom blur — a port that is exact everywhere except one `atan2`
 
+> **Resolved 2026-09-22.** Option 1 below was taken: `cv::INTER_LINEAR` is now passed to both
+> `cv::linearPolar` calls, and the effect is ported — three draws, 56.3–82.4 dB on the GPU against
+> a 45 dB gate. `linear_probe.cpp` is the probe that settled the INTER_LINEAR composition; the rest
+> of this file describes the nearest-neighbour world it replaced, and is kept because the
+> measurements are what made the decision. `zoom_blur.sksl` here is the *nearest* port and is not
+> the one that shipped — the shipped pair is `image-processing-lib/shaders/zoom_blur_{forward,inverse}.sksl`.
+
 **2026-09-22, W20.** `zoom_blur.sksl` here is a complete SkSL twin of
 `Podcastle::Effects::applyZoomBlurEffect`. It is not in
 `src/effects/image-processing-lib/shaders/` because it does not clear W20's 45 dB gate on
@@ -84,7 +91,8 @@ double-float arithmetic exercise inside the fragment would buy nothing.
 
 | file | what |
 |---|---|
-| `zoom_blur.sksl` | the port. Complete, and correct apart from the angle |
+| `zoom_blur.sksl` | the NEAREST port. Complete, and correct apart from the angle. Superseded |
+| `linear_probe.cpp` | the INTER_LINEAR chain composed in scalar C++, stage by stage, against the real effect. 57.6–82.4 dB; it is what found the phi seam |
 | `stage_bisect.cpp` | forward / blur / inverse against `cv::linearPolar`, stage by stage |
 | `angle_variants.cpp` | the table above |
 
