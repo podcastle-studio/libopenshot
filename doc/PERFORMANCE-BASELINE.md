@@ -309,3 +309,78 @@ against the 22 % the 150-frame window suggests.
 
 Worth remembering when reading any gate in `GPU-WORKLIST.md`: the numbers are a 150-frame window on
 a laptop, and they are conservative for throughput and noisy on a loaded host.
+
+## 2026-09-18 — W09: the NVENC rate-control comparison, on mains power
+
+The VMAF comparison W09 asks for, and which had never been run. Machine on AC, RTX A2000, local
+FFmpeg 6.1 with `libvmaf` (default model, luma only).
+
+**Method.** `openshot-bench` gained a `lossless` mode: the same scenario written through
+`FFmpegWriter` with `preset ultrafast` and `x264-params qp=0`, which is mathematically lossless in
+the 4:2:0 YUV the writer converts to. Every encode is scored against that one reference, so x264 and
+NVENC are measured against the same pixels rather than against each other. 1080p, 300 frames.
+
+```bash
+cmake-build-release/tests/bench/openshot-bench --case podcast_pip:1920x1080:lossless --frames 300 --out REF
+cmake-build-release/tests/bench/openshot-bench --case podcast_pip:1920x1080:x264     --frames 300 --out X
+cmake-build-release/tests/bench/openshot-bench --case podcast_pip:1920x1080:nvenc    --frames 300 --out N
+ffmpeg -i N/....mp4 -i REF/....mp4 -lavfi "[0:v]setpts=PTS-STARTPTS,setparams=range=tv:color_primaries=bt709:color_trc=bt709:colorspace=bt709[m];[1:v]setpts=PTS-STARTPTS,setparams=range=tv:color_primaries=bt709:color_trc=bt709:colorspace=bt709[r];[m][r]libvmaf=n_threads=8" -f null -
+```
+
+Both inputs need the `setparams` normalisation or libvmaf warns about mismatched colour range and
+compares two differently-scaled signals.
+
+### The gate, on `podcast_pip`
+
+| configuration | file size | vs x264 | VMAF | vs x264 |
+|---|---:|---:|---:|---:|
+| `libx264 crf 18 preset medium` (the software path) | 2 829 858 | — | 98.230 | — |
+| `h264_nvenc` **before W09** (`rc vbr, cq 19, p5, hq`) | 6 009 275 | **+112 %** | 98.391 | +0.16 |
+| `h264_nvenc` **after W09** (`crf 18` → `cq 28`) | 2 877 320 | **+1.7 %** | 98.018 | **−0.21** |
+
+Gate: VMAF ≥ x264 − 2 points, size within ±20 %, `single_video` nvenc fps not regressed. **Met**
+(−0.21 points, +1.7 %, 122.4 → 122.3 fps — the same number twice, within noise).
+
+The starting `cq 19` was not a small miss. It was spending **2.1× the bits for 0.16 VMAF points**,
+which is off the useful end of the rate-distortion curve entirely.
+
+### The crf → cq calibration, and why +10
+
+Size-matched sweeps against the lossless reference, `preset p5, tune hq, spatial-aq 1`, no B-frames
+(which is what the writer produces unless a caller asks for `allow_b_frames`):
+
+| x264 `crf` | x264 size / VMAF | NVENC `cq` at the same size | NVENC size / VMAF | offset |
+|---:|---|---:|---|---:|
+| 18 | 2 821 479 / 98.227 | 27 | 3 091 732 / 98.169 | +9 |
+| 23 | 1 887 640 / 97.607 | 33 | 1 824 575 / 97.269 | +10 |
+| 28 | 1 203 742 / 96.163 | 37 | 1 266 903 / 95.732 | +9 |
+
+The offset is +9 to +10 over a ten-point crf range, so it is a real property of the two encoders and
+not a fit to one scenario. **+10 is the better-centred choice**, checked on three scenarios at
+`crf 18`:
+
+| scenario | `cq = crf + 9` | `cq = crf + 10` |
+|---|---|---|
+| `podcast_pip` | +9.6 % size, −0.06 VMAF | **+0.9 % size, −0.09 VMAF** |
+| `transitions_chain` | +21.5 % size, +0.19 VMAF | **+10.3 % size, +0.11 VMAF** |
+| `subtitles_words` | −6.3 % size, −0.21 VMAF | **−14.1 % size, −0.46 VMAF** |
+
+`+9` puts `transitions_chain` outside the ±20 % size band; `+10` keeps all three inside it and
+inside half a VMAF point.
+
+### What else the measurement settled
+
+- **Spatial AQ is free quality.** `podcast_pip` at `cq 27`: 3 091 732 bytes at VMAF 98.169 with it,
+  3 493 501 at 97.686 without. Smaller *and* better, so it is now a writer default for NVENC.
+- **`b_ref_mode middle` changed nothing measurable** — byte-identical output on the CLI at these
+  settings, because the `p5`/`hq` preset already picks it. It is set anyway, guarded, since it is
+  free and the preset is not a contract.
+- **The bitrate NVENC was given never mattered.** `-b:v 10M` and `-b:v 0` produce byte-identical
+  files once `rc vbr` and `cq` are set. Zeroing `bit_rate` in the writer is correctness, not a
+  measured win — the size change above is entirely the `cq` value.
+- **B-frames are not the lever they look like.** With `allow_b_frames 1` (230 B-frames of 300),
+  `podcast_pip` is 2 809 947 bytes at VMAF 97.941 — 2.3 % smaller than without, for 0.08 VMAF less.
+  A wash at matched `cq`, so they stay off by default.
+- **`allow_b_frames` was unusable on NVENC**, which is how the B-frame numbers came to be measured
+  at all: `add_video_stream` sets `max_b_frames = 10`, NVENC's H.264 limit is 4, and `avcodec_open2`
+  failed with `Max B-frames 10 exceed 4` → `InvalidCodec`. The writer now clamps.

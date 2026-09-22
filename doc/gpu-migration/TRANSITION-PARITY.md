@@ -80,23 +80,27 @@ fine. `BorderReflectedMove` (dx/dy as fractions), `Zoom` (percent), `SplitShift`
 definition: *the radius has no declared reference resolution*. It should be fixed on its own terms,
 and the fix is a cross-repo behaviour change, so it needs a decision — see "Open questions".
 
-## PROPOSED — one algorithm, expressed once
+## DECIDED (2026-09-18) — one algorithm, one language
 
-Put the effect bodies in `image-processing-lib/shaders/`, one file per effect, written in a
-deliberately restricted common subset (vec4 maths, one `sample()` helper, uniforms declared once).
-Two thin emitters wrap each body in the right prologue:
+**SkSL on both sides.** Put the effect bodies in `image-processing-lib/shaders/`, one `.sksl` file
+per effect, and run them through Skia on both stacks: `SkRuntimeEffect` on the server (W19–W21),
+`CanvasKit.RuntimeEffect` in the browser. The front end already ships CanvasKit — our Skia is pinned
+to m147 to match it — so this is not a new dependency there, and the same source through the same
+compiler makes parity a property of the build rather than something a test has to keep catching.
 
-- **SkSL** → the server's `SkRuntimeEffect` (W19–W21)
-- **GLSL ES** → a PixiJS filter
+The C++ stays as the CPU oracle and the server's no-GPU fallback, unchanged.
 
-These effects are small and mostly per-pixel, so this is a small generator, not a compiler. The C++
-stays as the CPU oracle and the server's no-GPU fallback, unchanged.
+> **Superseded.** This section previously proposed a restricted common subset with *two* emitters,
+> SkSL for the server and GLSL ES for a PixiJS filter. That design is dropped; the reasoning and the
+> one dependency it rests on are in `GPU-DECISIONS.md`, "SkSL is the one shader language". **The
+> dependency: the front end must be able to put video frames through CanvasKit, not only text.**
+> Confirm that before W19 writes its first shader — if it cannot, the two-emitter design comes back.
 
 Two side benefits. The front end currently reads pixels out, mutates them in the OpenCV WASM on the
-CPU, and re-uploads (`HEAPU8.set` → mutate → `subarray` → upload); as a Pixi filter the work happens
-on a texture already on the GPU, so the round trip disappears — likely a larger preview win than the
-parity work itself. And if the front end is on, or moves to, Pixi v8 with WebGPU, **WGSL becomes a
-third emitter target rather than a third hand-port**, which is where drift would otherwise come from.
+CPU, and re-uploads (`HEAPU8.set` → mutate → `subarray` → upload); run as a runtime effect the work
+happens on a texture already on the GPU, so the round trip disappears — likely a larger preview win
+than the parity work itself. And a backend change underneath CanvasKit (WebGPU) is Skia's problem,
+not a third hand-port: the SkSL source does not move.
 
 ### The risk is concentrated, which makes this tractable
 
@@ -194,16 +198,18 @@ Everything else trades some parity for speed, and it is better to choose that kn
 
 ## UNKNOWN — open questions
 
-- **Pixi version and renderer.** v7 vs v8, WebGL vs WebGPU. Only changes the emitter prologue, so it
-  does not block starting, but it decides whether WGSL is a target.
+- **Pixi version and renderer.** Now only matters for how a CanvasKit-rendered result is composited
+  into the existing preview, not for the shader language.
 - **The reference resolution decision.** Fixing the blur parameters is a behaviour change visible to
   existing projects: old payloads carry radii authored against the old, undefined behaviour. Either
   the fix is versioned in the payload, or existing projects shift. This needs a product decision,
   not a technical one.
 - **Which resolution the front end's slow-effect proxy uses**, and whether it varies. If it varies,
   no fixed compensation factor exists — normalisation is the only fix.
-- **Whether the front end adopts the shared shaders at all.** Already on file as open in
-  `GPU-DECISIONS.md`. This note does not resolve it; it sets out what adoption would cost and buy.
+- ~~**Whether the front end adopts the shared shaders at all.**~~ **Decided 2026-09-18: yes, as
+  SkSL through CanvasKit.** What replaces it is narrower and is a question for the front-end team,
+  not a decision: **can they route video frames through CanvasKit, or only text?** Everything above
+  assumes they can.
 
 ## Reproducing the measurement
 

@@ -1,0 +1,115 @@
+// Rotational blur — the shared source of truth.
+//
+// A faithful port of Podcastle::Effects::applyRotationalBlur (image-processing-lib,
+// src/Effects/effects.cpp) reduced to its single-pass per-pixel core. See README.md for the
+// parameter window in which this is the *whole* effect, and for the conventions the host must
+// satisfy.
+//
+// Conventions baked in here, all of them deliberate:
+//   * Pixel-index space, OpenCV convention: pixel (x, y) has its CENTRE at integer (x, y).
+//     A fragment centre is integer + 0.5, so the shader subtracts 0.5 before doing any geometry.
+//   * Bilinear filtering is computed explicitly, never by the sampler. Neither GL nor Vulkan
+//     pins interpolation weights to bit precision. The host must bind the image with NEAREST
+//     filtering and no mipmaps.
+//   * Border handling is computed explicitly, never by a wrap mode. REPLICATE below 10 degrees
+//     and REFLECT (edge included: fedcba|abcdefgh|hgfedcb) at or above it, matching the C++.
+//   * The tap count and every tap angle are derived from uBlurAmount inside the shader, so the
+//     two hosts cannot disagree about them.
+//   * Accumulation is float (never half): up to 30 taps summed in fp16 loses ~1e-3.
+
+uniform shader uImage;      // NEAREST, no mipmaps, pixel-unit coordinates
+uniform float2 uSize;       // image size in pixels
+uniform float  uBlurAmount; // degrees, signed
+
+const float kPi = 3.14159265358979323846;
+const int   kMaxIterations = 30;   // the C++ clamps to 30; the loop bound must be constant
+
+// BORDER_REFLECT: fedcba|abcdefgh|hgfedcb — the edge texel is repeated.
+float reflectIndex(float i, float n) {
+    float period = 2.0 * n;
+    float t = mod(i, period);
+    if (t < 0.0) {
+        t += period;
+    }
+    return t < n ? t : period - 1.0 - t;
+}
+
+float borderIndex(float i, float n, float useReflect) {
+    return useReflect > 0.5 ? reflectIndex(i, n) : clamp(i, 0.0, n - 1.0);
+}
+
+// STRAIGHT (unpremultiplied) alpha, because that is what the C++ oracle does: it blurs a
+// cv::Mat of RGBA bytes channel by channel, with no alpha weighting anywhere. A Skia shader is
+// handed premultiplied colour and must return premultiplied colour, so the unpremultiply here
+// and the re-premultiply in main() are what make the two agree. Getting this wrong is not a
+// rounding difference: measured on a 256x256 test image with a hard alpha edge it is the gap
+// between 41.4 dB and 58.4 dB.
+float4 texelAt(float x, float y, float useReflect) {
+    float px = borderIndex(x, uSize.x, useReflect);
+    float py = borderIndex(y, uSize.y, useReflect);
+    float4 c = float4(uImage.eval(float2(px, py) + 0.5));
+    return c.a > 0.0 ? float4(c.rgb / c.a, c.a) : float4(0.0);
+}
+
+float4 bilinear(float2 p, float useReflect) {
+    float x0 = floor(p.x);
+    float y0 = floor(p.y);
+    float ax = p.x - x0;
+    float ay = p.y - y0;
+
+    float4 c00 = texelAt(x0,       y0,       useReflect);
+    float4 c10 = texelAt(x0 + 1.0, y0,       useReflect);
+    float4 c01 = texelAt(x0,       y0 + 1.0, useReflect);
+    float4 c11 = texelAt(x0 + 1.0, y0 + 1.0, useReflect);
+
+    return mix(mix(c00, c10, ax), mix(c01, c11, ax), ay);
+}
+
+half4 main(float2 fragCoord) {
+    float absBlur = abs(uBlurAmount);
+    if (absBlur < 0.1) {            // C++: negligible, returns the source untouched
+        return uImage.eval(fragCoord);
+    }
+
+
+    // C++: max(8, min(25, int(absBlur * 1.2))) / max(3, min(30, int(absBlur * 0.6))).
+    // absBlur is positive, so truncation toward zero is floor().
+    float iters = absBlur < 15.0 ? clamp(floor(absBlur * 1.2),  8.0, 25.0)
+                                 : clamp(floor(absBlur * 0.6),  3.0, 30.0);
+
+    float useReflect = absBlur < 10.0 ? 0.0 : 1.0;   // REPLICATE below 10 degrees, else REFLECT
+    float maxAngle   = uBlurAmount * kPi / 180.0;    // signed
+    float2 center    = uSize * 0.5;                  // C++: (cols/2.0, rows/2.0)
+    float2 d         = (fragCoord - 0.5) - center;   // fragment centre -> pixel index
+
+    float4 acc = float4(0.0);
+    for (int i = 0; i < kMaxIterations; ++i) {
+        float fi = float(i);
+        if (fi >= iters) {
+            break;
+        }
+
+        // C++ angle schedule, both regimes. The 0.01 offset in the low branch is the C++'s
+        // "avoid exact centre / spokes" nudge and must be reproduced exactly.
+        float a;
+        if (absBlur < 15.0) {
+            a = (((fi + 0.01) / iters) - 0.5) * maxAngle;
+        } else if (iters == 1.0) {
+            a = -maxAngle * 0.5;
+        } else {
+            a = ((fi / (iters - 1.0)) - 0.5) * maxAngle;
+        }
+
+        // cv::warpAffine without WARP_INVERSE_MAP maps destination -> source through M^-1,
+        // and M = getRotationMatrix2D(center, degrees(a), 1). M^-1 is the same rotation by -a,
+        // which reduces to rotating the destination offset by +a about the centre.
+        float s = sin(a);
+        float c = cos(a);
+        float2 src = float2(c * d.x - s * d.y, s * d.x + c * d.y) + center;
+
+        acc += bilinear(src, useReflect);
+    }
+
+    float4 outColor = acc / iters;
+    return half4(float4(outColor.rgb * outColor.a, outColor.a));   // back to premultiplied
+}

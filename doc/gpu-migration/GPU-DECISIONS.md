@@ -411,6 +411,77 @@ produce profile 100. VAAPI, DXVA2 and VideoToolbox are untouched.
 
 Rate-control tuning proper is still plan step 1.4; the service's NVENC settings (`rc=vbr`, `cq=19`,
 `preset=p5`, `tune=hq`) are a conservative starting point, not a tuned one.
+**Superseded by the entry below — W09 tuned it.**
+
+### W09 — one quality knob for both encoders, calibrated at `cq = crf + 10` (2026-09-18)
+
+**Decision.** `SetOption(VIDEO_STREAM, "crf", N)` is the quality control for the hardware path as
+well as the software one. On NVENC the writer maps it to `rc=vbr`, `cq = N + 10` (clamped 0–51) and
+`bit_rate = 0`; every other hardware encoder keeps the legacy bitrate estimate untouched. Callers
+stop carrying a second, encoder-specific number: the service and `tests/golden/Recipes.cpp` both now
+say `crf 18` for x264 and NVENC alike.
+
+**Why a mapping and not a passthrough.** `crf` and `cq` are different scales. Measured against a
+lossless reference on `podcast_pip` at 1080p, the offset that puts NVENC on x264's rate-distortion
+point is +9 to +10 at `crf` 18, 23 and 28 — stable enough to be a property of the two encoders. +10
+is the better-centred end of that range across `podcast_pip`, `transitions_chain` and
+`subtitles_words`. The full tables are in `doc/PERFORMANCE-BASELINE.md`.
+
+**Why this was worth doing at all.** Before it, `SetOption("crf")` on a hardware encoder *discarded
+the value* and set a bitrate from `info.video_bit_rate` through an undocumented exponential — so the
+only usable knob was `cq`, and the `cq 19` that shipped as a placeholder was spending **2.1× the
+bits of libx264 crf 18 for 0.16 VMAF points**. At `cq 28` the two encoders land within 1.7 % on file
+size and 0.21 VMAF.
+
+**What the writer now sets for NVENC on its own,** both overridable by a later `SetOption`:
+`spatial-aq 1` (measured smaller *and* better: 3.09 MB at VMAF 98.17 against 3.49 MB at 97.69) and
+`b_ref_mode middle` when B-frames are actually in use. It also clamps `max_b_frames` to NVENC's
+limit of 4 — `add_video_stream` sets 10, and `allow_b_frames 1` therefore threw `InvalidCodec` out
+of `avcodec_open2` rather than doing anything.
+
+**Revisit if** the service changes `preset` away from `p5`, moves off H.264, or starts encoding
+10-bit: the offset was calibrated at `p5`/`tune hq`/8-bit 4:2:0 and is not claimed beyond that.
+
+**Not taken: B-frames by default.** Now that `allow_b_frames` works on NVENC it measures as a wash
+at matched `cq` (−2.3 % size for −0.08 VMAF), which does not justify changing the bitstream every
+consumer receives. Left to the caller.
+
+### SkSL is the one shader language, on both sides (2026-09-18, project owner)
+
+**Decision.** Effect and transition shaders are written **once in SkSL** and run through Skia on
+both stacks: `SkRuntimeEffect` on the server (Graphite/Vulkan), `CanvasKit.RuntimeEffect` in the
+browser. No second dialect, no generator, no hand-port.
+
+**Why this and not the two-emitter design** that `TRANSITION-PARITY.md` proposed (one restricted
+GLSL subset, emitters for SkSL and for a PixiJS GLSL ES filter): the front end **already ships
+CanvasKit** — our Skia is pinned to `SKIA_MILESTONE=m147` precisely to match it, for the text and
+glow work. So Skia is not a new dependency there, and once both sides compile the *same source with
+the same compiler*, parity is by construction rather than by test. The two-emitter design buys the
+same result only if a conformance suite keeps catching drift forever.
+
+**What this replaces.** It supersedes the "two thin emitters" section of `TRANSITION-PARITY.md` and
+closes that note's last open question ("whether the front end adopts the shared shaders at all").
+The C++ in `image-processing-lib` **stays** as the CPU oracle and the server's no-GPU fallback —
+that is unchanged, and the standing constraint requires it.
+
+**What it does not change.** Same source is not same pixels. These still hold exactly as written:
+
+- **Explicit `texelFetch` + manual lerp, explicit mirror arithmetic.** CanvasKit on WebGL and
+  Graphite on Vulkan are still different drivers on different hardware, and neither API pins
+  bilinear weights or border behaviour to bit precision. The 9 resampling effects are still where
+  all the risk is.
+- **The six conventions** in `TRANSITION-PARITY.md` — alpha, coordinate origin and pixel centres,
+  colour space, edge rule, precision, and a declared reference resolution for every radius.
+- **The reference-resolution fix is still a product decision**, still open, and still gates W20.
+
+**The one dependency this rests on, and it is not ours to answer.** The front end must be able to
+put *video frames* through CanvasKit for effects, not only text. Today it runs PixiJS for video and
+mutates pixels in the OpenCV WASM on the CPU. If that pipeline cannot move, this decision has to be
+revisited and the two-emitter design comes back. **Confirm with the front-end team before W19
+writes its first shader.**
+
+**Revisit if** the front end cannot route video frames through CanvasKit, or if CanvasKit's WebGL
+backend measures materially slower than the Pixi path it would replace.
 
 ### W11 — the four decisions the compositor bakes in (2026-09-16)
 

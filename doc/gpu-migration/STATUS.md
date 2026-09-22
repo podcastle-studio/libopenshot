@@ -27,7 +27,7 @@ Stated by the project owner, 2026-09-14. This overrides anything in
    and all four must be **295/295** (292 until W18 added three frames of background-colour
    coverage). Commands are in `CLAUDE.md` under "GPU rendering (`src/gpu`)".
 
-Last updated: 2026-09-18 (end of session) · branch `feature/gpu-rendering`.
+Last updated: 2026-09-18 (end of session, W09) · branch `feature/gpu-rendering`.
 **Phase 2 is complete.** 2.0 landed 2026-09-15 (the GPU-capable image, in
 `../video-rendering-service` branch `feature/gpu-rendering`), which was the last thing in it and the
 only thing stopping R2a and R2b from shipping. **R2a complete** (2.1, 2.2, 2.3); **2.4 done, gate
@@ -40,11 +40,12 @@ the standing constraint (see the worklist items, and the note below on why Stage
 **W17 is done** (2026-09-17; its fps gate closed on mains power 2026-09-18) and **W18 is done**
 (2026-09-18), the latter scoped to the render path because its written gate names a build flag that
 does not exist. **Stage 5 is finished.**
-**A resuming session starts W09** (nvenc rate control). Stage 2 and Stage 3 were reopened on
-2026-09-18 by owner decision — Stage 6 (effects) is the obvious next thing, but the safety net and
-the CPU wins had been skipped past. Of those, **W04's mechanism, W05, W07 and W08 are done and W09
-is the only item left that this machine can finish unaided**; everything else is waiting on the
-project owner or on a container. See "Start here" under "Next step".
+**A resuming session starts W19** (`GpuEffect` and the per-pixel shaders), minus its ColorMap
+shader. Stage 2 and Stage 3 were reopened on 2026-09-18 by owner decision — Stage 6 (effects) is the
+obvious next thing, but the safety net and the CPU wins had been skipped past. Of those, **W04's
+mechanism, W05, W07, W08 and now W09 are done**, and **nothing is left in Stages 2 or 3 that this
+machine can finish unaided**: the remainder is waiting on the project owner or on a container. See
+"Start here" under "Next step".
 W01 and W02 have **moved to the end as Stage 10** — no image build, no release, no merge to
 `develop` until the GPU work is finished, so they now sit where they actually run. See "Next step".
 
@@ -438,14 +439,28 @@ ask it for you) and none reads the environment for itself — the new `control` 
 
 > ## Start here (2026-09-18, end of session)
 >
-> **W09 — nvenc rate control — is the one item that is fully actionable on this machine.** Take it
-> first. Everything else still open in Stages 2 and 3 is waiting on the project owner or on a
-> container this box cannot provide; the list is under "Blocked on the project owner" below.
+> **W09 is done** — see Stage 3 below. With it, **Stages 2 and 3 hold nothing else this machine can
+> finish unaided**; everything still open there is waiting on the project owner or on a container,
+> and the list is under "Blocked on the project owner" below.
 >
-> After W09, the next real work is **W19** (`GpuEffect` base and the per-pixel shaders) — but read
-> its ColorMap note first: that one shader is blocked on an open decision about the front end's
-> LUT interpolation, so W19 can be done *minus* ColorMap. **W20 should not be started** until the
+> **The next real work is W19** (`GpuEffect` base and the per-pixel shaders) — but read its
+> ColorMap note first: that one shader is blocked on an open decision about the front end's LUT
+> interpolation, so W19 can be done *minus* ColorMap. **W20 should not be started** until the
 > transition-parity decisions in `TRANSITION-PARITY.md` are taken.
+>
+> **Shader language decided 2026-09-18: SkSL, one source, both sides.** The server runs it as
+> `SkRuntimeEffect`, the front end as `CanvasKit.RuntimeEffect` — CanvasKit is already shipped there
+> for text and glow, and our Skia is pinned to m147 to match it. This supersedes the two-emitter
+> (SkSL + PixiJS GLSL) design in `TRANSITION-PARITY.md` and shapes W19 as well as W20. **It rests on
+> one thing the front-end team has to confirm before the first shader is written: that they can put
+> video frames through CanvasKit, not only text.** See `GPU-DECISIONS.md`.
+>
+> **One thing W09 left on the owner's desk, and it is small but real.** The matching change in
+> `../video-rendering-service` (`VideoRenderingImpl.cpp`: the NVENC branch now asks for `crf 18`
+> instead of `rc vbr` + `cq 19`) is **edited in the working tree and not committed**, next to the
+> vendored-libopenshot commit that was already local and unpushed. It changes what a hardware
+> export looks like — same quality, less than half the bytes — so it is a product-visible change,
+> not a refactor. It also needs the rebuilt library vendored before it does anything.
 
 > **2026-09-16, project owner — no release work until the GPU migration is done.** **W01** (build and
 > push the service image) and **W02** (the full post-merge benchmark, the `develop` merge gate)
@@ -457,17 +472,39 @@ ask it for you) and none reads the environment for itself — the new `control` 
 `GPU-DECISIONS.md` — canvas `kRGBA_8888` (overriding the F16 recommendation that was on file),
 Graphite only, LUT matched to the front end at native cube size, nearest sampling kept.
 
-### Next on this machine: W09 — Writer: finish nvenc rate control · legacy `1.4` remainder
+### W09 — Writer: nvenc rate control · legacy `1.4` remainder (done 2026-09-18)
 
-The only item left before Stage 6 that needs nothing from anyone else. The A2000 provides nvenc
-locally, so the VMAF comparison the item asks for — and which has never been run — can be done here.
-Its remaining sub-tasks are `b_ref_mode middle` and `spatial-aq 1`, stopping `SetOption("crf")`
-hijacking the bitrate when hardware encode is on, and guarding the `hw_en_on`-only branches with
-`hw_en_supported`. Gate: VMAF of the nvenc output ≥ VMAF of the x264 output − 2 points on
-`podcast_pip`, file size within ±20 %, `single_video` nvenc fps not regressed.
+**Gate met on all three clauses:** VMAF **−0.21** against x264 (98.018 vs 98.230, allowance −2),
+file size **+1.7 %** (allowance ±20 %), `single_video` nvenc **122.4 → 122.3 fps**. Four-way golden
+sweep 295/295. The method, the sweeps and the tables are in `doc/PERFORMANCE-BASELINE.md`; the
+decision is in `GPU-DECISIONS.md`.
 
-**Do W09 before W19**, not because anything depends on it, but because it closes Stage 3's last
-actionable item and the effects work is long.
+**The item's own sub-tasks were not where the problem was.** Before anything was touched the size
+half of the gate failed at **+112 %**: `cq 19` — which shipped as "a conservative starting point"
+and which no sub-task named — was spending **2.1× the bits of libx264 crf 18 for 0.16 VMAF points**.
+Neither `b_ref_mode` nor `spatial-aq` could have closed a gap that size.
+
+- **`crf` now means something on NVENC.** It was discarding the caller's value and inventing a
+  bitrate from `info.video_bit_rate`; it now maps to `rc=vbr`, `cq = crf + 10` (clamped 0–51) and
+  `bit_rate = 0`. The offset was calibrated at crf 18 / 23 / 28 (the answer is +9 to +10 across the
+  whole range) and checked on three scenarios. One quality knob for both encoders, and one place
+  that owns the calibration.
+- **`spatial-aq 1` is the sub-task that paid**: 3.09 MB at VMAF 98.17 with it against 3.49 MB at
+  97.69 without — smaller *and* better, so it is a writer default now.
+- **`b_ref_mode middle` is a no-op at these settings** (byte-identical output; `p5`/`hq` already
+  picks it) *and* was unreachable. Chasing it found a live bug: `add_video_stream` asks for
+  `max_b_frames = 10`, NVENC's H.264 limit is 4, so `allow_b_frames 1` threw `InvalidCodec` out of
+  `avcodec_open2`. Clamped; the option works now.
+- **Zeroing the bitrate is correctness, not a win.** `-b:v 10M` and `-b:v 0` give byte-identical
+  files once `rc vbr` and `cq` are set.
+- **B-frames stay off by default** — a wash at matched `cq` (−2.3 % size for −0.08 VMAF).
+- `openshot-bench` gained a **`lossless` mode**, because the gate needs a common reference and there
+  was no way to write one. It is not a timing case.
+
+**`tests/golden/Recipes.cpp` had drifted from the service** and was measuring a configuration
+production never runs (`preset p4` alone, against the service's `rc vbr, cq 19, p5, hq`). Both now
+say `preset p5`, `tune hq`, `crf 18` and the BT.709 tagging. The service-side edit is **uncommitted**
+— see "Start here".
 
 ### Blocked on the project owner (nothing here can proceed without an answer)
 
@@ -493,6 +530,10 @@ actionable item and the effects work is long.
 7. **The vendored libopenshot refresh** in `../video-rendering-service/cpp-third-party` was
    committed **locally and unpushed** (the service would not build without it). Push it, or revert
    both it and the W05 commit.
+8. **W09's service-side edit** — `VideoRenderingImpl.cpp`'s NVENC branch now asks for `crf 18`
+   instead of `rc vbr` + `cq 19`. **Edited in the working tree, not committed.** It halves the size
+   of every hardware export at the same measured quality, which is product-visible; it also needs
+   the rebuilt library vendored (item 7) before it changes anything.
 
 ### Needs a container, not a decision
 
@@ -546,17 +587,19 @@ suite, the report as an artifact) but **has never run**, and two things need a d
 Enabling the workflow and opening the deliberate-regression PR that W03's gate asks for are actions
 on the GitHub repo, so they are the project owner's to take.
 
-### Stage 3 — W05, W07, W08 done (2026-09-18); W06, W09 left, W10 skipped
+### Stage 3 — W05, W07, W08, W09 done (2026-09-18); W06 left, W10 skipped
 
-**All three measured their premise before implementing, and in every one of them part of the
+**All four measured their premise before implementing, and in every one of them part of the
 item's plan did not survive the measurement.** That is now the expected outcome often enough to
-treat "measure first" as the protocol rather than the exception.
+treat "measure first" as the protocol rather than the exception. W09 is the sharpest case: all four
+of its sub-tasks were real, and none of them was the thing that made its gate fail.
 
 | item | result | gate |
 |---|---|---|
 | **W07** `GetImageCV` memoisation | `SetImageCV` converted twice; now once. 336 → 102 ms on `transitions_chain`, 1.04 → 0.32 ms a call. `transitions_chain` **27.4 → 28.7 fps (+4.8 %)**, `heavy_effects` within noise. | fps gates **unreachable by this item** — see below |
 | **W08** reader copies | `memset` dropped; `av_image_copy` → `av_frame_ref`. `source_4k` **61.3 → 70.1 (+14.4 %)**, `single_video` **116.6 → 124.9 (+7.1 %)**. ASan clean. | `source_4k` ≥ 70 **met**; `single_video` ≥ 125 **0.1 % short** |
 | **W05** one `WriteFrame` | Built and working, **flag defaults OFF**. ≈ −6 % against a ≥ 15 % gate. | **not met** — flagged off, not reverted |
+| **W09** nvenc rate control | `cq 19` was 2.1x libx264's bytes for +0.16 VMAF. `crf` now maps to `cq = crf + 10`; `spatial-aq` on; `allow_b_frames` no longer throws on NVENC. **+112 % → +1.7 %** size at **−0.21** VMAF. | VMAF, size and fps all **met** |
 
 **What was rejected on measurement rather than skipped**, all recorded in the worklist items:
 the `imagecv` dirty-flag cache (access is strictly alternating — 300 Get against 300 Set — so the
@@ -586,9 +629,9 @@ the effects were never running. And a bench window that is too short misses what
 - **W06 thread budgets** — needs a cgroup-limited container to validate honestly, which is the one
   thing this machine cannot provide. The item also warns that the upstream merge brought overlapping
   settings; check what landed before writing anything.
-- **W09 nvenc rate control** — needs the VMAF comparison that has never been run. The A2000 gives
-  nvenc locally, so this is doable here; it just was not reached.
 - **W10 nvenc RGBA — skip.** Explicitly optional and W25 replaces the code entirely.
+
+**W09 is done** (2026-09-18) — its own section is above.
 
 **Also pending from Stage 2:** five more payload captures, and the two CI decisions. See above.
 
@@ -709,6 +752,22 @@ production corpus) remain open; W05–W10 are the CPU quick wins. W01/W02 stay d
   x264 loss, not a matrix bug.
 
 ## Log
+
+- 2026-09-18 — **W09 done: NVENC rate control, and the VMAF comparison that had never been run.**
+  The gate is met on all three clauses (VMAF −0.21, size +1.7 %, `single_video` nvenc 122.4 → 122.3
+  fps) and the four-way golden sweep is 295/295. **The item's four sub-tasks were all real and none
+  of them was why the gate failed**: before any of them, size was **+112 %**, because the `cq 19`
+  that shipped as a placeholder spent **2.1× libx264's bytes for 0.16 VMAF points**. The fix was to
+  give `crf` a meaning on hardware encode — it had been discarding the caller's value and inventing
+  a bitrate — mapping it to `rc=vbr`, `cq = crf + 10`, `bit_rate = 0`, with the +10 calibrated at
+  crf 18/23/28 and checked on three scenarios. Of the named sub-tasks, **`spatial-aq 1` paid**
+  (smaller *and* better), **`b_ref_mode middle` measured as a no-op** at `p5`/`hq` and was in fact
+  unreachable — which turned up a live bug, `allow_b_frames 1` throwing `InvalidCodec` on NVENC
+  because `add_video_stream` asks for 10 B-frames against a hardware limit of 4 — and **zeroing the
+  bitrate changed no bytes at all**. Also: `tests/golden/Recipes.cpp` had drifted from the service
+  and was benchmarking a configuration production never runs; `openshot-bench` gained a `lossless`
+  mode, without which the gate has no reference to score against. The matching service edit is in
+  the working tree, **uncommitted** — it is product-visible.
 
 - 2026-09-18 — **Stage 3: W07, W08 and W05 done; every one of them had a sub-task that did not
   survive measurement.** W07: `SetImageCV` was converting twice (temp `cv::Mat`, then

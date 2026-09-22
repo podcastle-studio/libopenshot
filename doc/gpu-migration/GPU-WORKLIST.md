@@ -309,13 +309,45 @@ browser and two IDEs. Not claimed as passed.
 constrained-baseline profile on NVENC; it sets `profile=high` and keeps caller settings. The service
 asks for `rc vbr`, `cq 19`, `preset p5`, `tune hq`. Both encoders emit profile 100.
 
-- [ ] Add `b_ref_mode middle` and `spatial-aq 1`.
-- [ ] Stop `SetOption("crf")` hijacking the bitrate when hardware encode is on.
-- [ ] Guard the `hw_en_on`-only branches with `hw_en_supported`.
-- [ ] Run the VMAF comparison that has never been run.
+- [x] Add `b_ref_mode middle` and `spatial-aq 1`.
+- [x] Stop `SetOption("crf")` hijacking the bitrate when hardware encode is on.
+- [x] Guard the `hw_en_on`-only branches with `hw_en_supported`.
+- [x] Run the VMAF comparison that has never been run.
 
 **Gate.** VMAF of the nvenc output ≥ VMAF of the x264 output − 2 points on `podcast_pip`; file size
 within ±20 %; `single_video` nvenc fps does not regress.
+
+> **Done 2026-09-18. Gate met on all three clauses:** VMAF −0.21 (98.018 against x264's 98.230),
+> size **+1.7 %**, `single_video` nvenc **122.4 → 122.3 fps** (the same number twice). Four-way
+> golden sweep 295/295. Numbers, method and the sweeps behind them:
+> `doc/PERFORMANCE-BASELINE.md`, "W09: the NVENC rate-control comparison"; the decision is in
+> `GPU-DECISIONS.md`.
+>
+> **What the measurement changed about the plan.** The item's own two sub-tasks were the small part.
+>
+> 1. **The real defect was `cq 19` itself**, which no sub-task named. It was spending **2.1× the
+>    bits of libx264 crf 18 for 0.16 VMAF points** — the size half of the gate failed at **+112 %**
+>    before anything else was touched, and neither `b_ref_mode` nor `spatial-aq` could have closed
+>    that. Fixing it meant giving `crf` a meaning on NVENC (`cq = crf + 10`, calibrated at three
+>    quality points on three scenarios) so there is one quality knob and one place that owns the
+>    calibration. `tests/golden/Recipes.cpp` and the service's `VideoRenderingImpl.cpp` now both
+>    say `crf 18` for either encoder.
+> 2. **`b_ref_mode middle` is a no-op at these settings** — byte-identical output, because `p5`/`hq`
+>    already picks it — *and* it was unreachable: the writer forces `max_b_frames = 0`, and the one
+>    public way round that, `allow_b_frames 1`, threw `InvalidCodec` on NVENC because
+>    `add_video_stream` asks for 10 B-frames against a hardware limit of 4. Both fixed; the option
+>    is set anyway, guarded, since a preset is not a contract.
+> 3. **Zeroing the bitrate is correctness, not the win it looks like.** `-b:v 10M` and `-b:v 0`
+>    produce byte-identical files once `rc vbr` and `cq` are set.
+> 4. **`spatial-aq 1` is the one sub-task that paid**: smaller *and* better (3.09 MB at VMAF 98.17
+>    against 3.49 MB at 97.69), so it is now a writer default rather than something a caller has to
+>    know to ask for.
+>
+> **`openshot-bench` gained a `lossless` mode** so this is reproducible: the gate needs a common
+> reference, and there was no way to write one. It is not a timing case.
+>
+> **Not taken: B-frames on by default.** Now that `allow_b_frames` works, it measures as a wash at
+> matched `cq` (−2.3 % size for −0.08 VMAF). Left to the caller — see `GPU-DECISIONS.md`.
 
 > **2026-09-18 — the tooling is present, checked so the next session does not have to.** The local
 > FFmpeg has the `libvmaf` filter and scores with its default model out of the box
