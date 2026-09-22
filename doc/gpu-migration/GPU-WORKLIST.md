@@ -986,12 +986,31 @@ is that it is still **+14 %**, not a loss: a partly-ported chain is safe.
 
 **Depends on.** W19.
 
-- [ ] Overlay renders to a pooled surface; additive blend becomes `kPlus` on RGB via a runtime
-      blender; displacement map becomes a two-texture shader.
-- [ ] Deletes the last `GetImageCV` round trips.
+- [x] Both composites are two-texture fragments in `src/gpu/GpuOverlay.{h,cpp}`, called from
+      `Clip::GetFrame` **before** the OpenCV path. Additive blend is a fragment rather than the
+      runtime blender this item proposed — the C++ adds only channels 0..2 and leaves alpha alone,
+      which `kPlus` does not do, and a fragment reads both images anyway for the displacement map.
+      Both golden overlay scenarios are **bit-identical on Vulkan** under `Tolerance::Exact()`,
+      and `unit.gpu_overlay_path` proves the shader is what produced them.
+- [x] ~~Deletes the last `GetImageCV` round trips.~~ **Gated, not deleted** — the standing
+      constraint rewrites this the same way it rewrote plan step 2.5. The OpenCV path stays and
+      runs whenever `GpuDevice::available()` is false or the overlay is a different size from the
+      frame (the C++ resizes with `cv::resize`, and OpenCV's `INTER_LINEAR` is a rasteriser
+      difference Skia will not reproduce).
+- [ ] **Left: the timing clause of the gate, and it needs restating.** See below.
 
 **Gate.** `tools/golden.sh check --filter overlay`; a transition frame costs no more than a plain
 two-clip frame ±10 %.
+
+**2026-09-22 — the golden clause is met, bit-exactly; the timing clause measures the wrong thing.**
+There is no "plain two-clip frame" scenario to compare against, so the closest honest measurement is
+the overlay path against itself. Interleaved on a settled machine, both libraries built up front and
+swapped in place: `transitions_chain` **17.0 fps without W21 against 16.8 with** — no wall-clock
+difference — with CPU occupancy 2.2 → 1.9 cores and peak RSS 1.13 → 1.05 GB, which is the two
+full-frame `cv::Mat` conversions going away.
+**The wall clock does not move because the transition effects around the overlay are still on the
+CPU** and each calls `Frame::GetImage()`, so the overlay's result is read back immediately. **W21
+pays when W20 lands**, and the two should be measured together.
 **Size.** ~3 days.
 
 ---

@@ -950,6 +950,64 @@ whatever W19 does. The chain therefore crosses PCIe repeatedly, and +14 % is wha
 still a win, which is the useful part of the measurement: a mixed chain does **not** come out slower
 than pure CPU, so partial porting is safe.
 
+### W21 — overlay clips as shaders, and a benchmark that lied by 3x (2026-09-22)
+
+Both overlay composites now run as fragments: `src/gpu/GpuOverlay.{h,cpp}`, called from
+`Clip::GetFrame` before the OpenCV path rather than instead of it. Both golden scenarios,
+`transitions.overlay_additive_blend` and `transitions.overlay_displacement_map`, are **bit-identical
+on Vulkan** under `Tolerance::Exact()` with no GPU band, and `unit.gpu_overlay_path` proves the
+shader is what produced them (`gpu_passes=1 cpu_fallbacks=0` on Vulkan, the reverse with the GPU
+off).
+
+**The displacement map's luminance is fixed-point, and guessing would have been wrong.** It comes
+from `cv::cvtColor(..., COLOR_BGRA2GRAY)`, which for 8-bit is not a float dot product but
+`(B*1868 + G*9617 + R*4899 + 8192) >> 14`. The fragment computes exactly that, and the gather stays
+nearest with the C++'s explicit `int(v + 0.5)` and a clamp to the last pixel — CLAUDE.md already
+flags that the same code runs in the front end's WASM, so a bilinear "improvement" here would open
+the editor/export gap the whole migration exists to close.
+
+**A size mismatch declines.** The C++ resizes the overlay with `cv::resize`, and OpenCV's
+`INTER_LINEAR` is a fixed-point filter Skia's sampling does not reproduce — that is a rasteriser
+difference, the same class as Crop. Same-size overlays, which is what the golden suite and the
+service's transition overlays use, run on the GPU.
+
+**The item says "deletes the last `GetImageCV` round trips"; it does not, and must not.** The
+standing constraint rewrites that the same way it rewrote plan step 2.5: the OpenCV path stays and
+is gated on `GpuDevice::available()`.
+
+### The benchmark said +55 % and the truth was 0 % (2026-09-22, W21)
+
+Worth its own entry because the number was plausible, the direction was right, and it was entirely
+an artefact of *when* the measurement was taken.
+
+First A/B, three runs of each arm, "without" then "with": **4.2 → 6.7 fps on `transitions_chain`, a
+55 % gain.** Re-visiting the "without" arm afterwards measured **10.3 and 13.8 fps** — three times
+its own earlier figure. The machine had drifted that far in a few minutes, because **every
+measurement was taken immediately after a compile**, which loads all cores and heats the laptop. The
+A/B was sequential, so the drift went straight into the result.
+
+Redone properly — both libraries built first, saved, and then swapped in place so the arms
+interleave with **no build between measurements**, after a settling pause:
+
+| arm | runs | median | cores | peak RSS |
+|---|---|---:|---:|---:|
+| without W21 | 17.1, 15.6, 17.0 | **17.0 fps** | 2.2 | 1.13 GB |
+| with W21 | 14.8, 16.8, 18.3 | **16.8 fps** | 1.9 | 1.05 GB |
+
+**No wall-clock difference on `transitions_chain`**, and that is the honest result. What does move is
+CPU occupancy (2.2 → 1.9 cores) and peak memory (1.13 → 1.05 GB), which is the two full-frame
+`cv::Mat` conversions going away.
+
+The reason the wall clock does not move is structural and worth carrying into W20: **the transition
+effects around the overlay — zoom, blur, circle mask, alpha — are still on the CPU, and each of them
+calls `Frame::GetImage()`, which reads the frame back immediately.** The overlay's result never gets
+to stay on the GPU. W21 pays when W20 lands, not before.
+
+Two rules follow, and they apply to every measurement in this project:
+1. **Never measure straight after a build.** Let the machine settle.
+2. **Interleave the arms**, and if that means building both artefacts up front and swapping them,
+   do that. A sequential A/B on this laptop is not evidence.
+
 ### The 0.2 ms per-effect gate is the cost of a pass, not of an effect (2026-09-22, W19)
 
 **Needs restating by the project owner**, in the same way W07's fps gates did.

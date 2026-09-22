@@ -49,6 +49,7 @@ set(OPENSHOT_SOURCES
   gpu/GpuDevice.cpp
   gpu/GpuFrame.cpp
   gpu/GpuOffscreen.cpp
+  gpu/GpuOverlay.cpp
   gpu/GpuSurfacePool.cpp
   subtitle/Helpers.cpp
   subtitle/SkiaRenderer.cpp

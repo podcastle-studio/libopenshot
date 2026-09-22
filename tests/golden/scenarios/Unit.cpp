@@ -23,6 +23,7 @@
 #include "Timeline.h"
 #include "effects/Brightness.h"
 #include "gpu/GpuDevice.h"
+#include "gpu/GpuOverlay.h"
 
 #include <string>
 #include <vector>
@@ -294,6 +295,48 @@ void golden::registerUnitScenarios() {
     //
     // GpuEffect's counters are the only way to tell the two apart, so this asserts on them: with
     // a GPU up, at least one frame must have gone through a shader; with the GPU off, none may.
+    // Does an overlay composite actually run as a shader? Same reasoning as unit.gpu_effect_path
+    // below: GpuOverlay declines silently and OpenCV then produces the correct frame, so comparing
+    // pixels cannot tell the two apart. The overlay scenarios in Transitions.cpp are bit-exact on
+    // Vulkan, which is only meaningful if the shader is what produced them.
+    addCustom("unit.gpu_overlay_path", {"unit", "gpu"},
+        [](Scene& s) {
+            using namespace golden::recipes;
+            auto& tl = s.makeTimeline();
+            tl.AddClip(backgroundClip(s, s.media("background_960x540.png")));
+            MediaSpec a; a.path = s.media("clip_a_640x360_30.mp4"); a.start = 0.0; a.end = 2.0;
+            a.track = 1; a.transform = Transform{BBox{0.5f, 0.5f, 0.9f, 0.9f}};
+            MediaSpec b; b.path = s.media("clip_b_854x480_24.mp4"); b.start = 1.5; b.end = 3.5;
+            b.track = 1; b.priority = 1; b.transform = Transform{BBox{0.5f, 0.5f, 0.9f, 0.9f}};
+            auto* out_clip = mediaClip(s, a);
+            auto* in_clip = mediaClip(s, b);
+            applyOverlappingTransition(*out_clip, *in_clip, 1.0, s.fps.ToDouble(), {});
+            addOverlayClip(s, s.media("overlay_gradients_640x360_30.mp4"), 1.0,
+                           openshot::Clip::ADDITIVE_BLEND, out_clip, in_clip);
+            tl.AddClip(out_clip);
+            tl.AddClip(in_clip);
+            tl.Open();
+        },
+        [](Scene& s, std::vector<Captured>&, std::vector<Check>& checks) {
+            const bool gpu = openshot::GpuDevice::Instance().available();
+            openshot::GpuOverlay::ResetCounters();
+            s.timeline->GetFrame(42);   // inside the transition's ramp, where the overlay applies
+            const long long passes = openshot::GpuOverlay::GpuPasses();
+            const long long fallbacks = openshot::GpuOverlay::CpuFallbacks();
+            const std::string counts = "gpu_passes=" + std::to_string(passes) +
+                                       " cpu_fallbacks=" + std::to_string(fallbacks);
+            if (gpu)
+                checks.push_back({"overlay_ran_as_shader", passes > 0,
+                                  passes > 0 ? counts
+                                             : "a GPU is available but no overlay composite ran as "
+                                               "a shader: " + counts});
+            else
+                checks.push_back({"overlay_ran_on_cpu", passes == 0,
+                                  passes == 0 ? counts
+                                              : "no GPU, so nothing should have run as a shader: "
+                                                + counts});
+        });
+
     addCustom("unit.gpu_effect_path", {"unit", "gpu"},
         [](Scene& s) {
             auto& tl = s.makeTimeline();

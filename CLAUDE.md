@@ -241,6 +241,11 @@ GPU to take over. Earlier, lower figures in the docs were measured on an Intel i
 - Animation preset `tx`/`ty`/`tz` tracks are in **fontSize units**, passed through unscaled by the
   service. Production values are fractions (`ty` ∈ [−0.27, 0.5], `tx` ∈ [−2, 0]); a value of 40 is
   40 font sizes, which silently sizes the text frame buffer in the hundreds of MB.
+- **Benchmarking this laptop: never measure straight after a build, and interleave the arms.** A
+  compile loads every core and the machine stays drifting for minutes afterwards — a sequential A/B
+  once read +55 % where the truth was 0 %, and re-running the *unchanged* arm gave 3x its own
+  earlier figure. Build both artefacts up front and swap them in place if that is what interleaving
+  takes. Check AC power too: on battery this machine runs at ~1/3 speed.
 - The glow is ~99 % of an animated glow frame on the raster path, and the ray-march is ~91 % of
   that (sweep `OPENSHOT_GLOW_STEPS` to measure — it changes only the step count). Optimise the
   march or skip it; nothing else in the text engine is worth measuring against it.

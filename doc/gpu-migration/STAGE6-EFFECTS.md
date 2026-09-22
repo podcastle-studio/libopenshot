@@ -16,7 +16,7 @@ Deleted with the rest of `doc/gpu-migration/` when the migration lands.
 |---|---|---|
 | **W19** | `GpuEffect` base + per-pixel effect fragments | **10 of 13 done**, 2 ruled out, 1 blocked |
 | **W20** | transition vocabulary from `image-processing-lib` as shared SkSL | **not started** |
-| **W21** | overlay clips as textures (additive blend, displacement map) | **not started** |
+| **W21** | overlay clips as textures (additive blend, displacement map) | **done** (2026-09-22) |
 
 `libopenshot` carries 47 effect classes. Only the ones
 `../video-rendering-service` actually constructs are in scope — that is the plan's rule (§2.4), and
@@ -196,8 +196,24 @@ Two things carry over from W19 that W20 should not rediscover:
 
 ## 4. W21 — overlay clips
 
-**Not started.** Additive blend and displacement map, currently `GetImageCV` round trips in
-`Clip::GetFrame`. Depends on W19, which is now effectively complete, so **W21 is unblocked.**
+**Done, 2026-09-22.** Both composites are two-texture fragments in `src/gpu/GpuOverlay.{h,cpp}`,
+called from `Clip::GetFrame` before the OpenCV path — which stays, gated on
+`GpuDevice::available()`, per the standing constraint.
+
+| composite | state | note |
+|---|---|---|
+| additive blend | **done, bit-exact** | a fragment, not the `kPlus` blender the item proposed: the C++ adds only channels 0..2 and leaves alpha alone, which `kPlus` does not |
+| displacement map | **done, bit-exact** | luminance is OpenCV's fixed-point `(B·1868 + G·9617 + R·4899 + 8192) >> 14`, not a float dot product; gather stays nearest with the C++'s `int(v + 0.5)` |
+| overlay of a different size | **declines** | the C++ resizes with `cv::resize`; OpenCV's `INTER_LINEAR` is a rasteriser difference Skia will not reproduce |
+
+Both golden overlay scenarios are bit-identical on Vulkan under `Tolerance::Exact()` with no GPU
+band, and `unit.gpu_overlay_path` asserts the shader is what produced them.
+
+**It buys no wall-clock time yet, and that is expected.** Interleaved properly, `transitions_chain`
+is 17.0 fps without W21 and 16.8 with — but CPU occupancy drops 2.2 → 1.9 cores and peak RSS
+1.13 → 1.05 GB. The transition effects around the overlay are still on the CPU and each calls
+`Frame::GetImage()`, so the overlay's result is read back immediately. **W21 pays when W20 lands**,
+and the two should be measured together.
 
 ---
 
@@ -240,10 +256,11 @@ composing a chain into one draw. **Its own item, not a fragment's problem.**
 
 1. **Nothing in W19 that this machine can finish unaided.** ColorMap needs two answers from the
    front-end team (§2.6). Crop and CameraMovement need a product decision, not code (§2.5).
-2. **W21 — overlay clips.** Unblocked, ~3 days, self-contained.
+2. ~~**W21 — overlay clips.**~~ **Done 2026-09-22** (§4).
 3. **W20 — transitions.** 7 classes / 10 variants (§3). Gated on the `TRANSITION-PARITY.md`
-   reference-resolution decision first.
-4. **Restate the gates** (§5) — owner decision, same shape as W07's.
+   reference-resolution decision first. **This is the only item left in Stage 6 that is not
+   blocked on someone else**, and it is what makes W21 pay.
+4. **Restate the gates** (§5, and W21's timing clause) — owner decision, same shape as W07's.
 5. **Open question worth an answer before W20:** should `Blur` be pulled forward? It is in
    `heavy_effects`, it is the only unported effect in that chain that is neither blocked nor ruled
    out, and it is four transition variants at once.

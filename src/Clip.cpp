@@ -12,6 +12,8 @@
 
 #include "Clip.h"
 
+#include "gpu/GpuOverlay.h"
+
 #include "AudioResampler.h"
 #include "Exceptions.h"
 #include "FFmpegReader.h"
@@ -656,6 +658,28 @@ std::shared_ptr<Frame> Clip::GetFrame(std::shared_ptr<openshot::Frame> backgroun
 					if (requested_clip_frame_number > transitionClipStartFrame && requested_clip_frame_number < transitionClipEndFrame) {
 						const int64_t overlayClipFrameNum = (overlayedClip->start + (requested_clip_frame_number - transitionClipStartFrame) / currentClipFps) * overlayedClipFps;
 						const auto overlayedFrame = overlayedClip->GetFrame(overlayClipFrameNum);
+
+						// The shader when there is a GPU to run it on, OpenCV otherwise. This has
+						// to come before GetImageCV() below: that call flattens a GPU-backed frame
+						// AND converts it to a BGRA cv::Mat, so asking for it first costs a
+						// readback and two full-frame conversions before the composite even starts.
+						// GpuOverlay declines whenever it cannot match the C++ exactly -- see
+						// GpuOverlay.h -- and then the path below runs unchanged.
+						bool overlay_on_gpu = false;
+						switch (overlayType) {
+						case OverlayType::ADDITIVE_BLEND:
+							overlay_on_gpu = GpuOverlay::AdditiveBlend(*frame, *overlayedFrame);
+							break;
+						case OverlayType::DISPLACEMENT_MAP:
+							overlay_on_gpu = GpuOverlay::DisplacementMap(*frame, *overlayedFrame,
+								overlayedClip->horizontal_displacement.GetValue(overlayClipFrameNum),
+								overlayedClip->vertical_displacement.GetValue(overlayClipFrameNum));
+							break;
+						default: break;
+						}
+						if (overlay_on_gpu)
+							continue;
+
 						auto mainImageCv = frame->GetImageCV();
 
 						switch (overlayType) {

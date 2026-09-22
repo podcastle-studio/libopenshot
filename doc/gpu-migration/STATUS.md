@@ -776,6 +776,31 @@ production corpus) remain open; W05–W10 are the CPU quick wins. W01/W02 stay d
 
 ## Log
 
+- 2026-09-22 — **W21 done: overlay clips as shaders — and a benchmark that lied by 3x.** Both
+  composites are two-texture fragments in `src/gpu/GpuOverlay.{h,cpp}`, called from `Clip::GetFrame`
+  before the OpenCV path, which stays and is gated on `GpuDevice::available()` (the item said
+  "deletes the last `GetImageCV` round trips"; the standing constraint rewrites that the same way it
+  rewrote plan step 2.5). Both golden overlay scenarios are **bit-identical on Vulkan** under
+  `Tolerance::Exact()` with no GPU band, and `unit.gpu_overlay_path` proves the shader is what
+  produced them. Sweep **307/307** in all four arms, `openshot-gpu-checks` 8/8.
+  **The displacement map's luminance is fixed-point and guessing would have been wrong**:
+  `cv::cvtColor(COLOR_BGRA2GRAY)` is `(B*1868 + G*9617 + R*4899 + 8192) >> 14`, not a float dot
+  product. A differently-sized overlay declines, because the C++ resizes it with `cv::resize` and
+  OpenCV's `INTER_LINEAR` is a rasteriser difference Skia will not reproduce.
+  **The performance claim I first made was wrong and the reason matters.** A sequential A/B read
+  `transitions_chain` 4.2 → 6.7 fps, a 55 % gain; re-visiting the *unchanged* arm afterwards
+  measured 10.3 and 13.8 fps — three times its own earlier figure. Every measurement had been taken
+  immediately after a compile. Redone with both libraries built up front and swapped in place so the
+  arms interleave with no build between them, after a settling pause: **17.0 fps without W21 against
+  16.8 with — no wall-clock difference**, with CPU occupancy 2.2 → 1.9 cores and peak RSS
+  1.13 → 1.05 GB, which is the two full-frame `cv::Mat` conversions going away.
+  **That is the expected result, not a disappointment**: the transition effects around the overlay
+  are still on the CPU and each calls `Frame::GetImage()`, so the overlay's output is read back
+  immediately. **W21 pays when W20 lands**, and the two want measuring together.
+  Two rules now apply to every measurement here: **never measure straight after a build**, and
+  **interleave the arms** — building both artefacts up front and swapping them if that is what it
+  takes. A sequential A/B on this laptop is not evidence.
+
 - 2026-09-22 — **W19: Mask in, CameraMovement ruled out, and both item gates measured.** Ten
   effects are fragments; **246 of 329 image/parameter combinations bit-exact**, Mask never over
   1 LSB with three of its four cases 8/8. Four-way sweep 307/307. **Only ColorMap is left**, and it
