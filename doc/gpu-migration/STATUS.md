@@ -27,7 +27,7 @@ Stated by the project owner, 2026-09-14. This overrides anything in
    and all four must be **295/295** (292 until W18 added three frames of background-colour
    coverage). Commands are in `CLAUDE.md` under "GPU rendering (`src/gpu`)".
 
-Last updated: 2026-09-22 (W19 in progress) · branch `feature/gpu-rendering`.
+Last updated: 2026-09-22 (Stage 6: W19 and W21 done, W20 six of ten; the four blur shaders are the next work) · branch `feature/gpu-rendering`.
 **Phase 2 is complete.** 2.0 landed 2026-09-15 (the GPU-capable image, in
 `../video-rendering-service` branch `feature/gpu-rendering`), which was the last thing in it and the
 only thing stopping R2a and R2b from shipping. **R2a complete** (2.1, 2.2, 2.3); **2.4 done, gate
@@ -775,6 +775,40 @@ production corpus) remain open; W05–W10 are the CPU quick wins. W01/W02 stay d
   x264 loss, not a matrix bug.
 
 ## Log
+
+- 2026-09-22 — **The blur is normalised and is no longer a box; the four blur shaders are now
+  unblocked.** Three owner decisions landed and are implemented.
+  **Reference resolution = 1280 px wide, unversioned.** The front end's proxy no longer varies (720p
+  on the GPU), so the reference is fixed; a radius means that many pixels at 1280 and each effect
+  scales by `image.cols / 1280`. Unversioned because people author against the 720p preview — an
+  export's blur changing to match it is the correction, not the break. It lives **inside the effect
+  functions in the submodule**, not in either caller, because both hosts pass the payload value
+  straight down and that is the only place neither can forget.
+  **The per-effect downscale thresholds went with it** — "half above 1 megapixel", "half above
+  400 px of minimum dimension" — because they made the *result* depend on the source's resolution,
+  the same bug wearing a different hat, and the reason rotational blur was affected at all. Replaced
+  by working at the reference width when the source is wider: resolution-independent by
+  construction, and faster at 4K than the thresholds were.
+  **The blur is three box passes, not one.** Against a true Gaussian of the same variance, one
+  `cv::blur` deviates **42.5 %** at the peak; three passes give **5.6 %** (two give 7.6 %, but two
+  boxes convolve to a triangle with a visible apex). A real Gaussian is unaffordable on the CPU — at
+  4K a radius-40 blur is sigma ~34, a 200-tap kernel per axis. The parameter keeps its meaning: a
+  box of *w* taps has variance `(w²−1)/12`, so sigma is derived from it and the blur gets better
+  rather than different.
+  **It costs CPU, and it is the one deliberate exception to the standing constraint**:
+  `transitions_chain` on the CPU path measures **31.5 → 27.9 fps (−11 %)**, the most blur-heavy
+  scenario in the suite. Two passes instead of three would roughly halve that for 2 points of
+  deviation.
+  **ColorMap is decided too: trilinear at the LUT's native cube size.** On the production 25³ LUT
+  the 17³ resample costs max 9.95 LSB / mean 0.657 while tetrahedral-vs-trilinear costs max 6.32 /
+  mean 0.269 — the resample is the divergence that matters, and trilinear is the option where
+  neither side changes its interpolation.
+  Goldens re-baselined: `transitions.{blur,diagonal_blur,zoom_blur,stack_zoom_blur_alpha}`, 20
+  frames. `transitions.rotational_blur` did **not** move, which is the check that the change is
+  surgical. Four-way sweep 307/307.
+  **Three submodule commits are local and unpushed**: `f8873e0` (explicit BGRA luminance),
+  `d6c4e67` (the shared `shaders/` directory), `9fd188c` (this blur change). The front end compiles
+  the same source to WASM and picks all three up when it updates the submodule.
 
 - 2026-09-22 — **The shared shaders are shared for real; and a partly-ported chain is not free.**
   Two things, one good and one that corrects an earlier conclusion.

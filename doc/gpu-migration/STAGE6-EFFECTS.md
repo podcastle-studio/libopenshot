@@ -15,7 +15,7 @@ Deleted with the rest of `doc/gpu-migration/` when the migration lands.
 | item | scope | state |
 |---|---|---|
 | **W19** | `GpuEffect` base + per-pixel effect fragments | **10 of 13 done**, 2 ruled out, 1 blocked |
-| **W20** | transition vocabulary from `image-processing-lib` as shared SkSL | **6 of 10 done**, 0 open, **4 blocked** |
+| **W20** | transition vocabulary from `image-processing-lib` as shared SkSL | **6 of 10 done**, **4 unblocked and next** |
 | **W21** | overlay clips as textures (additive blend, displacement map) | **done** (2026-09-22) |
 
 `libopenshot` carries 47 effect classes. Only the ones
@@ -205,10 +205,10 @@ resample, which is why the item was written that way.
 | `Zoom` | **done** (zoom-in only) | max 1 LSB, 57–78 dB; zoom-out declines — it can change the frame's size |
 | `BorderReflectedMove` | **done** | exact on smooth content, 46.5–47.5 dB on noise — clears W20's 45 dB gate |
 | `CircleMask` | **done** | **24/24 bit-exact**, by not drawing the circle — see below |
-| rotational blur | **blocked** | resolution-dependent via its downscale threshold — see below |
-| box / horizontal-vertical blur | **blocked** | reference-resolution decision |
-| diagonal blur | **blocked** | reference-resolution decision |
-| zoom blur | **blocked** | reference-resolution decision |
+| rotational blur | **next** | unblocked 2026-09-22; its downscale is now reference-based |
+| box / horizontal-vertical blur | **next** | unblocked 2026-09-22 |
+| diagonal blur | **next** | unblocked 2026-09-22 |
+| zoom blur | **next** | unblocked 2026-09-22 |
 
 **The `cv::cvtColor` problem is fixed.** `Wipe` thresholds a BGRA luminance, and OpenCV's 8-bit
 grey is not reproducible from any documented formula — the fixed-point expression differs on 703 of
@@ -231,12 +231,14 @@ Parity measured on Vulkan, 2026-09-22, same harness and same eight images as W19
 | **Zoom** | 2 | 16 | 4 | 1 | zoom-in only; 57–78 dB |
 | **total** | 15 | **120** | **104** | 4 | against W20's 45 dB gate, nothing fails |
 
-**Nothing in W20 is open any more: it is six done and four blocked**, all four on the same
-reference-resolution decision. Rotational blur joined the three blur modes there — its parameter is
-in degrees, but `applyRotationalBlur` downscales before it works and the threshold keys on the
-*image* (`absBlur > 15 && minDim > 400` halves it), so a 20° blur renders at full resolution on a
-640x360 source and at half resolution on a 1080p one. `TRANSITION-PARITY.md` said it "takes degrees
-and is fine"; that has been corrected.
+**The four blur variants were unblocked on 2026-09-22** and are the only Stage 6 work left. The
+reference-resolution decision landed (1280 px, unversioned), the C++ was rewritten accordingly —
+normalised lengths, reference-based downscales, and three box passes instead of one — and the
+goldens were re-baselined. What remains is writing their four SkSL fragments.
+
+They are also the highest-value fragments left, because `Blur` sits in the middle of the
+`{Zoom, Blur, Alpha}` transition and is currently what splits that chain and costs 30 % on the GPU
+path.
 
 **A rule that has now been right three times: whatever a rasteriser or a transcendental decides
 stays on the CPU and arrives as a texture; the fragment does arithmetic.** LightAdjustment's tone

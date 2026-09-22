@@ -1007,14 +1007,14 @@ is that it is still **+14 %**, not a loss: a partly-ported chain is safe.
       fills a polygon approximation with OpenCV's own scanline coverage; an analytic disc would be
       a better circle and a worse port. The mask is built by the same OpenCV call, cached on
       (radius, frame size, `Generation()`), and uploaded as a texture.
-- [ ] **Rotational blur is blocked, not open** — see the correction in `TRANSITION-PARITY.md`. Its
-      parameter is in degrees, but `applyRotationalBlur` downscales before it works and the
-      threshold keys on the *image*: `absBlur > 15 && minDim > 400` halves it. A 20° blur runs at
-      full resolution on 640x360 and at half resolution on 1080p. Same bug as the radii, different
-      mechanism. It also carries an optional `cv::GaussianBlur` above 6°, so the exactly
-      reproducible window at 1080p is a blur of at most 6° where transitions use 25.
-- [ ] **Blocked on the reference-resolution decision:** box/horizontal-vertical blur, diagonal blur,
-      zoom blur.
+- [ ] **The four blur fragments — unblocked 2026-09-22 and the only Stage 6 work left.** The
+      reference-resolution decision landed (1280 px wide, unversioned) and the C++ was rewritten to
+      match: lengths normalised inside the effect functions, the per-effect downscale thresholds
+      replaced by working at the reference width, and `applyBlurEffect` changed from one box pass
+      to three. Goldens re-baselined, four-way sweep 307/307. What is left is the SkSL:
+      horizontal/vertical blur, diagonal blur, zoom blur, rotational blur.
+      **Do `Blur` (h/v) first**: it sits in the middle of the `{Zoom, Blur, Alpha}` transition and
+      is what currently splits that chain and costs 30 % on the GPU path.
 - [x] `ColorShift` — **already done under W19**; `ColorShift` calls the submodule's
       `applyColorShiftEffect`, so there is no separate port here.
 - [x] **The sources live in `image-processing-lib/shaders/`** — one `.sksl` per effect plus
