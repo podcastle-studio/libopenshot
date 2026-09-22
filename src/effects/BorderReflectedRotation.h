@@ -1,7 +1,7 @@
 #ifndef OPENSHOT_BORDER_REFLECTED_ROTATION_EFFECT_H
 #define OPENSHOT_BORDER_REFLECTED_ROTATION_EFFECT_H
 
-#include "../EffectBase.h"
+#include "../GpuEffect.h"
 
 #include "../Frame.h"
 #include "../Json.h"
@@ -20,11 +20,19 @@
 
 namespace openshot
 {
-	class BorderReflectedRotation : public EffectBase
+	class BorderReflectedRotation : public GpuEffect
 	{
 	private:
 		/// Init effect settings
 		void init_effect_details();
+
+	protected:
+		/// The SkSL twin of the submodule's warpAffine + BORDER_REFLECT.
+		const char* GpuShaderSource() const override;
+
+		/// The frame size and the inverse rotation matrix.
+		bool SetGpuUniforms(SkRuntimeEffectBuilder& builder, int64_t frame_number,
+							int width, int height) const override;
 
 	public:
 		Keyframe angle;

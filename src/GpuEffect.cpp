@@ -129,6 +129,36 @@ float osIDiv(float n, float d) {
 	return q;
 }
 
+// OpenCV's BORDER_REFLECT, which is NOT Skia's kMirror.
+//
+// BORDER_REFLECT repeats the edge pixel -- fedcba|abcdefgh|hgfedcb -- while Skia's kMirror and
+// OpenCV's BORDER_REFLECT_101 do not: gfedcb|abcdefgh|gfedcba. One pixel of difference at every
+// boundary, every frame, on effects whose whole visible content near the edge IS the reflection.
+// So the tile mode cannot do this and the fragment has to.
+float osReflect(float p, float n) {
+	float period = 2.0 * n;
+	float m = mod(p, period);
+	if (m < 0.0) m += period;
+	return m < n ? m : period - 1.0 - m;
+}
+
+float2 osReflect2(float2 p, float2 n) {
+	return float2(osReflect(p.x, n.x), osReflect(p.y, n.y));
+}
+
+// Bilinear from the source, on reflected coordinates, at a continuous position. OpenCV's
+// INTER_LINEAR uses 5-bit fixed-point weights and this uses float, so the two agree to about an
+// LSB rather than exactly -- which is why W20's gate is 45 dB and not bit-exactness.
+float4 osSampleReflectedLinear(float2 p, float2 size) {
+	float2 base = floor(p - 0.5);
+	float2 f = p - 0.5 - base;
+	float4 c00 = osBytes(osReflect2(base + float2(0.0, 0.0), size) + 0.5);
+	float4 c10 = osBytes(osReflect2(base + float2(1.0, 0.0), size) + 0.5);
+	float4 c01 = osBytes(osReflect2(base + float2(0.0, 1.0), size) + 0.5);
+	float4 c11 = osBytes(osReflect2(base + float2(1.0, 1.0), size) + 0.5);
+	return mix(mix(c00, c10, f.x), mix(c01, c11, f.x), f.y);
+}
+
 // The constrain() every CPU effect defines for itself. Named per arity because
 // SkSL is not GLSL and does not promise user-function overloading.
 float3 osConstrain3(float3 v) { return clamp(v, 0.0, 255.0); }

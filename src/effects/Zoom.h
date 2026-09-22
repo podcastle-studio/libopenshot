@@ -1,7 +1,7 @@
 #ifndef OPENSHOT_ZOOM_EFFECT_H
 #define OPENSHOT_ZOOM_EFFECT_H
 
-#include "../EffectBase.h"
+#include "../GpuEffect.h"
 
 #include "../Color.h"
 #include "../Frame.h"
@@ -21,11 +21,20 @@ namespace openshot
 	 * Adding bars around your video can be done for cinematic reasons, and creates a fun way to frame
 	 * in the focal point of a scene. The bars can be any color, and each side can be animated independently.
 	 */
-	class Zoom : public EffectBase
+	class Zoom : public GpuEffect
 	{
 	private:
 		/// Init effect settings
 		void init_effect_details();
+
+	protected:
+		/// The SkSL twin of applyZoomEffect's zoom-IN path. See the .cpp for why zoom-out
+		/// is not here.
+		const char* GpuShaderSource() const override;
+
+		/// The crop rectangle, or false for zoom-out and for no zoom at all.
+		bool SetGpuUniforms(SkRuntimeEffectBuilder& builder, int64_t frame_number,
+							int width, int height) const override;
 
 
 	public:

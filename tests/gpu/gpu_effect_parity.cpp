@@ -20,6 +20,8 @@
 #include "KeyFrame.h"
 #include "effects/Alpha.h"
 #include "effects/Bars.h"
+#include "effects/BorderReflectedMove.h"
+#include "effects/BorderReflectedRotation.h"
 #include "effects/Brightness.h"
 #include "effects/ChromaKey.h"
 #include "effects/ColorAdjustment.h"
@@ -30,6 +32,7 @@
 #include "effects/Mask.h"
 #include "effects/SplitShift.h"
 #include "effects/Wipe.h"
+#include "effects/Zoom.h"
 #include "gpu/GpuDevice.h"
 
 #include <QImage>
@@ -191,7 +194,13 @@ Delta compare(const QImage& a, const QImage& b) {
 }
 
 using Factory = std::function<std::shared_ptr<openshot::EffectBase>()>;
-struct Case { std::string name; Factory make; };
+
+// Each case carries the gate its own worklist item declares, because the two items differ:
+// W19's per-effect clause is PSNR >= 48 dB, W20's is >= 45 dB. W20 is looser on purpose -- its
+// effects resample, and OpenCV's fixed-point interpolation weights are not reproducible in float
+// -- so holding a transition to W19's number would be testing against a gate nobody set.
+struct Case { std::string name; Factory make; double psnrGate = 48.0; };
+constexpr double kTransitionGate = 45.0;   // W20
 
 std::vector<Case> cases() {
     using openshot::Keyframe;
@@ -305,6 +314,25 @@ std::vector<Case> cases() {
                                        m->invert = true;
                                        return m;
                                    }},
+        // Zoom-in at two magnifications and an off-centre anchor. Zoom-out declines, so there is
+        // nothing to compare for it.
+        {"zoom(220, centre)",     [] { return std::make_shared<openshot::Zoom>(
+                                           Keyframe(220.0), Keyframe(0.5), Keyframe(0.5)); }, kTransitionGate},
+        {"zoom(135, off-centre)", [] { return std::make_shared<openshot::Zoom>(
+                                           Keyframe(135.0), Keyframe(0.3), Keyframe(0.7)); }, kTransitionGate},
+
+        // Border-reflected move and rotation. Both warp with BORDER_REFLECT, which is not Skia's
+        // kMirror: OpenCV repeats the edge pixel and Skia does not. Fractional shifts on purpose,
+        // since a whole-pixel one would hide the interpolation entirely.
+        {"reflmove(0.3, 0)",      [] { return std::make_shared<openshot::BorderReflectedMove>(
+                                           Keyframe(0.3), Keyframe(0.0)); }, kTransitionGate},
+        {"reflmove(-0.13, 0.07)", [] { return std::make_shared<openshot::BorderReflectedMove>(
+                                           Keyframe(-0.13), Keyframe(0.07)); }, kTransitionGate},
+        {"reflrot(45)",           [] { return std::make_shared<openshot::BorderReflectedRotation>(
+                                           Keyframe(45.0)); }},
+        {"reflrot(-12.5)",        [] { return std::make_shared<openshot::BorderReflectedRotation>(
+                                           Keyframe(-12.5)); }},
+
         // W20 begins here: the two transition effects whose C++ is exactly reproducible.
         // Wipe's thresholds are chosen so all three branches of its mask are exercised -- below
         // low, between the two, and above high.
@@ -820,11 +848,12 @@ int main(int argc, char** argv) {
             const Delta d = compare(cpu, gpu_results[c][i]);
 
             const bool exact = d.max_delta == 0;
-            const bool pass = exact || d.psnr >= 48.0;
+            const bool pass = exact || d.psnr >= all[c].psnrGate;
             if (!pass) failures++;
-            std::printf("  %-6s %-12s psnr=%8.3f max=%3d differing=%6ld/%ld\n",
+            std::printf("  %-6s %-12s psnr=%8.3f max=%3d differing=%6ld/%ld%s\n",
                         exact ? "EXACT" : (pass ? "PASS" : "FAIL"),
-                        images[i].name.c_str(), d.psnr, d.max_delta, d.differing, d.total);
+                        images[i].name.c_str(), d.psnr, d.max_delta, d.differing, d.total,
+                        all[c].psnrGate != 48.0 ? "  (45 dB gate, W20)" : "");
         }
     }
 

@@ -1,4 +1,7 @@
 #include "BorderReflectedMove.h"
+
+#include "skia/include/core/SkM44.h"
+#include "skia/include/effects/SkRuntimeEffect.h"
 #include "Exceptions.h"
 #include "./image-processing-lib/src/Effects/effects.h"
 
@@ -41,12 +44,51 @@ std::shared_ptr<openshot::Frame> BorderReflectedMove::GetFrame(std::shared_ptr<o
         return frame;
     }
 
+    // The shader when there is a GPU to run it on, OpenCV otherwise. Before GetImageCV(), which
+    // on a GPU-backed frame is a readback and two full-frame cv::Mat conversions.
+    if (ApplyOnGpu(frame, frame_number))
+        return frame;
+
     auto imageCv = frame->GetImageCV();
     Podcastle::Effects::applyBorderReflectedMoveEffect(imageCv, dx_value, dy_value);
     frame->SetImageCV(imageCv);
 
 	// return the modified frame
 	return frame;
+}
+
+// The SkSL twin of applyBorderReflectedMoveEffect.
+//
+// The C++ builds a reflected border, warps the bordered image by the shift, then crops back to the
+// original size. Composed, all of that is one thing: **dst(x, y) = src_reflected(x - shiftX,
+// y - shiftY)**, sampled bilinearly. The border exists only so warpAffine has valid pixels to read;
+// it is not visible in the result, so the fragment reproduces the function and not the machinery.
+//
+// The sampling is OpenCV's INTER_LINEAR, which uses 5-bit fixed-point weights where this uses
+// float, so the two agree to about an LSB rather than exactly -- W20's gate is 45 dB for exactly
+// this reason.
+const char* BorderReflectedMove::GpuShaderSource() const
+{
+	return R"SKSL(
+uniform float2 size;
+uniform float2 shift;   // in pixels; positive moves the content in +x / +y
+
+float4 main(float2 p) {
+	return osSampleReflectedLinear(p - shift, size) / 255.0;
+}
+)SKSL";
+}
+
+bool BorderReflectedMove::SetGpuUniforms(SkRuntimeEffectBuilder& builder, int64_t frame_number,
+										 int width, int height) const
+{
+	// dx/dy are fractions of the frame, which is why this effect is resolution-independent and
+	// not caught by the blur radii's missing reference resolution.
+	builder.uniform("size") = SkV2{static_cast<float>(width), static_cast<float>(height)};
+	builder.uniform("shift") =
+		SkV2{static_cast<float>(dx.GetValue(frame_number) * width),
+			 static_cast<float>(dy.GetValue(frame_number) * height)};
+	return true;
 }
 
 // Generate JSON string of this object

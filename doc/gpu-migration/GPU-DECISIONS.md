@@ -1067,6 +1067,55 @@ differing pairs across several runs earlier in the day and **763** after these c
 same standalone shader. The magnitude (1 LSB, ~2 % of pairs) is stable; the exact count is not, so
 it should be quoted as a rate and not as a fixed number.
 
+### W20 — five effects in, and OpenCV's fixed-point paths turn out to be reproducible (2026-09-22)
+
+**`Zoom`, `BorderReflectedMove` and `BorderReflectedRotation` are ported**, joining `Wipe` and
+`SplitShift`. Parity across the whole suite is now **322 of 392 comparisons bit-exact**, with no
+failures against either item's gate. Four-way sweep 307/307.
+
+**The `cv::cvtColor` finding was acted on, and it closed the gap completely.** The submodule now
+computes its BGRA luminance with an explicit expression
+(`image-processing-lib` commit `f8873e0`) instead of calling `cv::cvtColor`, whose 8-bit result is
+not reproducible from any documented formula. `Wipe` went from "62–85 dB with a full threshold step
+on 144 pixels" to **24 of 24 bit-exact**. It also moves this library's own output by ≤ 1 LSB of
+luminance on ~0.27 % of colours, which re-baselined `transitions.threshold_wipe_mask` — about 100
+pixels a frame, scattered along the mask edge, exactly as predicted.
+**This is a cross-repo change: the front end compiles the same source to WASM and picks it up when
+it updates the submodule.** The submodule commit is local and unpushed.
+
+**The real lesson of this session: OpenCV's resampling is reproducible if you reproduce its
+arithmetic, not its intent.** `BorderReflectedRotation` went through three versions:
+
+| version | result |
+|---|---|
+| sample at the pixel *centre*, floor the source | 11–28 dB on high-frequency images, max 255 |
+| sample at the *integer* coordinate, round the source | exact at 45°, ~0.1 % of pixels wrong at −12.5° |
+| reproduce `warpAffine`'s 10-bit fixed-point map | **16 of 16 bit-exact** |
+
+`warpAffine` does not evaluate its map in floating point. It precomputes per-column and per-row
+terms at `AB_BITS = 10` and adds them as integers — `srcX = (round(M0·x·1024) + round((M1·y + M2)·1024) + 512) >> 10`.
+Doing it in float is right to a fraction of a pixel, which is invisible on a gradient and
+*completely wrong* on noise, because the sample lands on a different texel. The middle row above is
+the dangerous one: it looks fine on every realistic test image and fails on content with detail.
+
+Two consequences worth carrying:
+- **Test resampling effects on high-frequency content.** A ramp cannot tell these three versions
+  apart; the noise image separated them immediately.
+- The same treatment would probably make `BorderReflectedMove` exact too (INTER_LINEAR uses 5-bit
+  coordinates and 15-bit weights from a normalised table). It measures **46.5–47.5 dB on noise and
+  exact on everything smooth**, which clears W20's 45 dB gate, so it is left as is — but the route
+  is known if exactness is wanted later.
+
+**`Zoom` is zoom-in only.** The zoom-out branch downscales with `cv::resize` and pads back out with
+`copyMakeBorder`, and the resized size and four paddings are computed with independent roundings and
+then clamped to ≥ 0 — so the result is not reliably the frame's size, and the C++ assigns it back
+with `image = result`, changing the frame's dimensions. `ApplyOnGpu` draws into a surface of fixed
+size and cannot express that. Zoom-in measures **max 1 LSB, 57–78 dB**.
+
+**The parity test now applies each item's own gate.** W19's per-effect clause is PSNR ≥ 48 dB and
+W20's is ≥ 45 dB; the test had been holding everything to 48, which is a gate nobody set for the
+transitions. Cases carry their own threshold and the report says which one applied.
+
 ### The 0.2 ms per-effect gate is the cost of a pass, not of an effect (2026-09-22, W19)
 
 **Needs restating by the project owner**, in the same way W07's fps gates did.

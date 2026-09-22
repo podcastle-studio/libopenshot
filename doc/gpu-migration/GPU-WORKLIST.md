@@ -984,16 +984,27 @@ is that it is still **+14 %**, not a loss: a partly-ported chain is safe.
 - [x] `SplitShift` — **8/8 bit-exact.** Two integer rectangle blits. One trap, reproduced rather
       than fixed: for a *positive* shift the C++ builds its rectangles from the **double**, so the
       copied span is `int(extent - shift)` and not `extent - int(shift)`, a whole missing row.
-- [x] `Wipe` (threshold wipe mask) — **62–85 dB, not bit-exact**, and the cause is `cv::cvtColor`:
-      OpenCV's 8-bit `COLOR_BGRA2GRAY` is not reproducible from its own documented formula
-      (703 of 262,144 colours differ by 1). The wipe *thresholds* that grey, so the 1 LSB becomes a
-      full step on a few pixels. Inside W20's gate, green on the golden suite, but content-dependent.
-      **The fix is on the CPU side**: have the submodule compute the luminance explicitly instead of
-      calling `cv::cvtColor`. Cross-repo, so it is a decision. See `GPU-DECISIONS.md`.
-- [ ] Not blocked, and left: `Zoom`, `BorderReflectedMove`, `BorderReflectedRotation`, `CircleMask`,
-      rotational blur. All four resample (`warpAffine`, `cv::resize`, `cv::circle` with `LINE_AA`),
-      so all four are 45 dB-class ports, not exact ones. The spike in `spikes/sksl-glsl/` already
-      measured rotational blur at 57–61 dB.
+- [x] `Wipe` (threshold wipe mask) — **24/24 bit-exact**, after fixing the cause rather than
+      tolerating it. OpenCV's 8-bit `COLOR_BGRA2GRAY` is not reproducible from any documented
+      formula (703 of 262,144 colours differ by 1 from the fixed-point one, 278 from the float
+      one), and the wipe *thresholds* that grey, turning 1 LSB into a full step. The submodule now
+      computes the luminance explicitly (`image-processing-lib` `f8873e0`), which re-baselined
+      `transitions.threshold_wipe_mask` and moves that library's output by ≤ 1 LSB on ~0.27 % of
+      colours. **Cross-repo — the front end picks it up when it updates the submodule, and the
+      submodule commit is local and unpushed.**
+- [x] `BorderReflectedRotation` — **16/16 bit-exact.** `warpAffine` evaluates its map in 10-bit
+      fixed point, not floating point; reproducing that is what made it exact. A float version is
+      right to a fraction of a pixel, looks perfect on every smooth image, and is *completely*
+      wrong on high-frequency content — 11 dB on noise. **Test resampling effects on noise.**
+- [x] `BorderReflectedMove` — exact on smooth content, **46.5–47.5 dB on noise**, clears the 45 dB
+      gate. Its INTER_LINEAR weights are a normalised 15-bit table; the same fixed-point treatment
+      would probably make it exact, and the route is recorded if that is ever wanted.
+- [x] `Zoom` — **zoom-in only**, max 1 LSB / 57–78 dB. Zoom-out declines: it downscales and pads
+      with independently-rounded, clamped paddings, so its result is not reliably the frame's size
+      and the C++ assigns it back, changing the frame's dimensions. `ApplyOnGpu` cannot express
+      that.
+- [ ] Not blocked, and left: **`CircleMask`** — 45 dB class, `cv::circle` with `LINE_AA` coverage —
+      and **rotational blur**, which the spike in `spikes/sksl-glsl/` already measured at 57–61 dB.
 - [ ] **Blocked on the reference-resolution decision:** box/horizontal-vertical blur, diagonal blur,
       zoom blur.
 - [ ] `ColorShift` — **already done under W19**; `ColorShift` calls the submodule's

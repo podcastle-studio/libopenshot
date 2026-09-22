@@ -15,7 +15,7 @@ Deleted with the rest of `doc/gpu-migration/` when the migration lands.
 | item | scope | state |
 |---|---|---|
 | **W19** | `GpuEffect` base + per-pixel effect fragments | **10 of 13 done**, 2 ruled out, 1 blocked |
-| **W20** | transition vocabulary from `image-processing-lib` as shared SkSL | **2 of 10 done**, 4 open, 3 blocked |
+| **W20** | transition vocabulary from `image-processing-lib` as shared SkSL | **5 of 10 done**, 2 open, 3 blocked |
 | **W21** | overlay clips as textures (additive blend, displacement map) | **done** (2026-09-22) |
 
 `libopenshot` carries 47 effect classes. Only the ones
@@ -194,25 +194,30 @@ resample, which is why the item was written that way.
 | variant | state | parity |
 |---|---|---|
 | `SplitShift` | **done** | **8/8 bit-exact** |
-| `Wipe` (threshold wipe mask) | **done** | 62–85 dB, **not** bit-exact — see below |
-| `Zoom` | open | 45 dB class (`cv::resize`) |
-| `BorderReflectedMove` | open | 45 dB class (`warpAffine`, INTER_LINEAR) |
-| `BorderReflectedRotation` | open | 45 dB class (`warpAffine`) |
+| `Wipe` (threshold wipe mask) | **done** | **24/24 bit-exact**, after the `cv::cvtColor` fix below |
+| `BorderReflectedRotation` | **done** | **16/16 bit-exact**, after reproducing `warpAffine`'s fixed-point map |
+| `Zoom` | **done** (zoom-in only) | max 1 LSB, 57–78 dB; zoom-out declines — it can change the frame's size |
+| `BorderReflectedMove` | **done** | exact on smooth content, 46.5–47.5 dB on noise — clears W20's 45 dB gate |
 | `CircleMask` | open | 45 dB class (`cv::circle`, `LINE_AA` coverage) |
 | rotational blur | open | 45 dB class; the spike already measured **57–61 dB** |
 | box / horizontal-vertical blur | **blocked** | reference-resolution decision |
 | diagonal blur | **blocked** | reference-resolution decision |
 | zoom blur | **blocked** | reference-resolution decision |
 
-**`Wipe` is the one that needs a decision.** It thresholds a `cv::cvtColor(COLOR_BGRA2GRAY)`
-luminance, and OpenCV's 8-bit grey is **not reproducible from its own documented formula** — the
-fixed-point expression differs on 703 of 262,144 colours by 1, the float one on 278. Normally
-invisible; but a threshold turns 1 LSB into a full step, measured at **max 76 on 144 pixels** of a
-synthetic ramp. It is inside W20's 45 dB gate and the golden suite is green on real content, but
-that is content-dependent.
-**The fix is on the CPU side and is small**: have the submodule compute the luminance explicitly
-rather than calling `cv::cvtColor`, so both stacks are reproducible from one source — which is the
-point of the shared-shader design. Cross-repo, so it is a decision, not a patch.
+**The `cv::cvtColor` problem is fixed.** `Wipe` thresholds a BGRA luminance, and OpenCV's 8-bit
+grey is not reproducible from any documented formula — the fixed-point expression differs on 703 of
+262,144 colours by 1, the float one on 278. A threshold turns that 1 LSB into a full step. The
+submodule now computes the luminance explicitly (`image-processing-lib` commit `f8873e0`), and
+`Wipe` went from 62–85 dB to **24/24 bit-exact**. It moves the library's own output by ≤ 1 LSB of
+luminance on ~0.27 % of colours, which re-baselined `transitions.threshold_wipe_mask`.
+**Cross-repo: the front end compiles the same source to WASM and picks it up when it updates the
+submodule. The submodule commit is local and unpushed.**
+
+**And OpenCV's resampling turns out to be reproducible** if you reproduce its arithmetic rather
+than its intent. `warpAffine` evaluates its map in 10-bit fixed point, not in floating point;
+matching that took `BorderReflectedRotation` from 11 dB on high-frequency content to bit-exact.
+The intermediate version — right to a fraction of a pixel — looked perfect on every smooth test
+image and was completely wrong on noise. **Test resampling effects on high-frequency content.**
 
 Two things carry over from W19 that W20 should not rediscover:
 

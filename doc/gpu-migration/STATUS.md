@@ -776,6 +776,28 @@ production corpus) remain open; W05–W10 are the CPU quick wins. W01/W02 stay d
 
 ## Log
 
+- 2026-09-22 — **W20: five of ten transition variants done, and OpenCV's fixed-point paths turn out
+  to be reproducible.** `Zoom`, `BorderReflectedMove` and `BorderReflectedRotation` join `Wipe` and
+  `SplitShift`. Parity across the whole suite is **322 of 392 comparisons bit-exact**, no failures
+  against either item's gate, four-way sweep **307/307**.
+  **The `cv::cvtColor` problem was fixed rather than tolerated.** The submodule now computes its
+  BGRA luminance explicitly (`image-processing-lib` `f8873e0`), and `Wipe` went from 62–85 dB with a
+  full threshold step on 144 pixels to **24/24 bit-exact**. It re-baselined
+  `transitions.threshold_wipe_mask` — ~100 pixels a frame along the mask edge, exactly as predicted.
+  **Cross-repo: the front end compiles the same source to WASM and picks it up when it updates the
+  submodule. The submodule commit is local and unpushed.**
+  **The session's real lesson: reproduce OpenCV's arithmetic, not its intent.**
+  `BorderReflectedRotation` went through three versions — sampling at the pixel centre (11–28 dB on
+  high-frequency images, max 255), sampling at the integer coordinate and rounding (exact at 45°,
+  0.1 % of pixels wrong at −12.5°), and finally reproducing `warpAffine`'s 10-bit fixed-point map
+  (**16/16 bit-exact**). The middle version is the dangerous one: it looks perfect on every smooth
+  test image and is completely wrong on detail. **Test resampling effects on high-frequency
+  content** — the noise image separated all three immediately where a ramp could not.
+  `Zoom` is **zoom-in only**: the zoom-out branch can change the frame's size, which `ApplyOnGpu`
+  cannot express.
+  The parity test now applies **each item's own gate** — 48 dB for W19, 45 dB for W20 — rather than
+  holding the transitions to a number nobody set for them.
+
 - 2026-09-22 — **W21 done: overlay clips as shaders — and a benchmark that lied by 3x.** Both
   composites are two-texture fragments in `src/gpu/GpuOverlay.{h,cpp}`, called from `Clip::GetFrame`
   before the OpenCV path, which stays and is gated on `GpuDevice::available()` (the item said

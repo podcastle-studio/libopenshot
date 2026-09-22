@@ -1,7 +1,7 @@
 #ifndef OPENSHOT_BORDER_REFLECTED_MOVE_EFFECT_H
 #define OPENSHOT_BORDER_REFLECTED_MOVE_EFFECT_H
 
-#include "../EffectBase.h"
+#include "../GpuEffect.h"
 
 #include "../Frame.h"
 #include "../Json.h"
@@ -20,11 +20,19 @@
 
 namespace openshot
 {
-	class BorderReflectedMove : public EffectBase
+	class BorderReflectedMove : public GpuEffect
 	{
 	private:
 		/// Init effect settings
 		void init_effect_details();
+
+	protected:
+		/// The SkSL twin of the submodule's warpAffine + BORDER_REFLECT.
+		const char* GpuShaderSource() const override;
+
+		/// The frame size and the dx/dy shift in pixels.
+		bool SetGpuUniforms(SkRuntimeEffectBuilder& builder, int64_t frame_number,
+							int width, int height) const override;
 
 	public:
 		Keyframe dx;
