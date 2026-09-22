@@ -10,6 +10,16 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
 #include "LightAdjustment.h"
+
+#include "../gpu/GpuDevice.h"
+#include "../gpu/GpuFrame.h"
+
+#include "skia/include/core/SkImageInfo.h"
+#include "skia/include/core/SkPixmap.h"
+#include "skia/include/core/SkSamplingOptions.h"
+#include "skia/include/core/SkShader.h"
+#include "skia/include/core/SkTileMode.h"
+#include "skia/include/effects/SkRuntimeEffect.h"
 #include "Exceptions.h"
 #include <QImage>
 #include <QRgb>
@@ -210,9 +220,6 @@ std::array<uint8_t, 256> LightAdjustment::createContrastLUT(double contrast) con
 // modified openshot::Frame object
 std::shared_ptr<openshot::Frame> LightAdjustment::GetFrame(std::shared_ptr<openshot::Frame> frame, int64_t frame_number)
 {
-    // Get the frame's image
-    std::shared_ptr<QImage> frame_image = frame->GetImage();
-
     // Assume incoming frame is already RGBA (e.g. QImage::Format_RGBA8888)
     // and do not convert formats.
 
@@ -229,6 +236,15 @@ std::shared_ptr<openshot::Frame> LightAdjustment::GetFrame(std::shared_ptr<opens
         shadows_value == 0 && whites_value == 0 && blacks_value == 0) {
         return frame;
     }
+
+    // The shader when there is a GPU to run it on, the C++ otherwise. After the
+    // all-defaults early-out so both paths share it, and before GetImage(), which on
+    // a GPU-backed frame is the one readback.
+    if (ApplyOnGpu(frame, frame_number))
+        return frame;
+
+    // Get the frame's image
+    std::shared_ptr<QImage> frame_image = frame->GetImage();
 
     const int width = frame_image->width();
     const int height = frame_image->height();
@@ -306,6 +322,166 @@ std::shared_ptr<openshot::Frame> LightAdjustment::GetFrame(std::shared_ptr<opens
 
     // return the modified frame
     return frame;
+}
+
+// The contrast tone curve, as a 256x1 texture.
+//
+// The CPU memoises toneCurve() into a byte LUT and indexes it with clamp(int(r)). The shader could
+// evaluate toneCurve() per pixel instead, but it is built from pow() and sin(), and neither is
+// exactly specified on the GPU -- the round() back to a byte would then flip wherever the curve
+// lands near .5. Uploading the CPU's own LUT makes that stage exact by construction, and a texture
+// fetch is cheaper than a pow() as well.
+struct LightAdjustment::ContrastLutCache
+{
+	sk_sp<SkImage> texture;
+	double contrast = 0.0;
+	unsigned long long generation = 0;
+	std::shared_ptr<GpuFrame> owner;   // keeps the pooled surface alive with its snapshot
+};
+
+// The SkSL twin of the brightness / contrast / blacks / whites / shadows / highlights chain.
+//
+// The stages run in the C++'s order and each is skipped on the same condition, because every one
+// of them reads what the previous left behind -- shadows and highlights in particular compute a
+// luminance from the current values, so reordering them changes the result.
+//
+// Nothing here unpremultiplies: the C++ scales the premultiplied bytes in place, and the fragment
+// matches it. Expect ColorAdjustment's sub-LSB drift, though, for the same reason -- the C++
+// carries these as double and an SkSL uniform is float.
+const char* LightAdjustment::GpuShaderSource() const
+{
+	return R"SKSL(
+uniform shader contrastLut;   // 256x1, the CPU's own createContrastLUT() output
+uniform float  brightFactor;  // pow(2, brightness) or 1 + brightness * 0.7, resolved on the host
+uniform float  useContrast;   // 1 when the LUT applies, 0 when contrast is 0
+uniform float  blacks;
+uniform float  whites;
+uniform float  shadows;
+uniform float  highlights;
+
+float3 osLum3(float3 c) { return float3(c.r * 0.299 + c.g * 0.587 + c.b * 0.114); }
+
+float4 main(float2 p) {
+	float4 bytes = osBytes(p);
+	float3 c = bytes.rgb;
+
+	// 1. Brightness. The C++ picks pow(2, v) or 1 + v * 0.7 by sign once per frame, so the
+	//    fragment is handed the factor rather than the keyframe.
+	c = c * brightFactor;
+
+	// 2. Contrast, through the LUT, indexed exactly as the C++ indexes it: clamp(int(r)).
+	if (useContrast > 0.0) {
+		float3 idx = clamp(osToInt3(c), 0.0, 255.0);
+		c = float3(floor(contrastLut.eval(float2(idx.r + 0.5, 0.5)).r * 255.0 + 0.5),
+				   floor(contrastLut.eval(float2(idx.g + 0.5, 0.5)).r * 255.0 + 0.5),
+				   floor(contrastLut.eval(float2(idx.b + 0.5, 0.5)).r * 255.0 + 0.5));
+	}
+
+	// 3. Blacks: raise the black point, or subtract and rescale.
+	if (blacks != 0.0) {
+		float blackPoint = blacks * 0.1;
+		if (blacks > 0.0)
+			c = blackPoint * 255.0 + c * (1.0 - blackPoint);
+		else
+			c = max(float3(0.0), (c - abs(blackPoint) * 255.0) * (1.0 / (1.0 + blackPoint)));
+	}
+
+	// 4. Whites: scale toward or away from the white point.
+	if (whites != 0.0) {
+		float whitePoint = 1.0 - abs(whites) * 0.1;
+		if (whites > 0.0)
+			c = min(float3(255.0), c * (1.0 / whitePoint));
+		else
+			c = c * whitePoint;
+	}
+
+	// 5. Shadows, masked to the dark end with a quadratic roll-off between 0.15 and 0.35.
+	if (shadows != 0.0) {
+		float lum = osLum3(c).r / 255.0;
+		float mask = 0.0;
+		if (lum < 0.15) {
+			mask = 1.0;
+		} else if (lum < 0.35) {
+			float t = (lum - 0.15) / 0.2;
+			mask = 1.0 - t * t;
+		}
+		if (mask > 0.0) {
+			float factor = shadows > 0.0
+				? 1.0 + (shadows * mask * 0.5) * (1.0 - lum * 2.0)
+				: 1.0 - (abs(shadows) * mask) * 0.9;
+			c = c * factor;
+		}
+	}
+
+	// 6. Highlights, masked to the bright end above 0.6. Note the asymmetry, which is the C++'s:
+	//    a reduction scales, a boost moves toward white.
+	if (highlights != 0.0) {
+		float lum = osLum3(c).r / 255.0;
+		if (lum > 0.6) {
+			float mask = (lum - 0.6) / 0.4;
+			if (highlights < 0.0)
+				c = c * (1.0 - abs(highlights) * mask * 0.5);
+			else
+				c = c + (255.0 - c) * (highlights * mask * 0.3);
+		}
+	}
+
+	return float4(osConstrain3(osToInt3(c)), bytes.a) / 255.0;
+}
+)SKSL";
+}
+
+bool LightAdjustment::SetGpuUniforms(SkRuntimeEffectBuilder& builder, int64_t frame_number,
+									 int width, int height) const
+{
+	const double brightness_value = brightness.GetValue(frame_number);
+	const double contrast_value = contrast.GetValue(frame_number);
+
+	// Same two-branch factor the CPU precomputes once per frame.
+	const double bright_factor =
+		brightness_value == 0.0 ? 1.0
+		: brightness_value > 0.0 ? std::pow(2.0, brightness_value)
+								 : 1.0 + brightness_value * 0.7;
+
+	// The LUT texture, rebuilt only when the contrast value changes or the device has been torn
+	// down since it was made -- a Graphite texture does not survive that, hence the generation.
+	const unsigned long long generation = GpuDevice::Generation();
+	if (!contrast_lut || contrast_lut->contrast != contrast_value ||
+		contrast_lut->generation != generation || !contrast_lut->texture) {
+		auto cache = std::make_shared<ContrastLutCache>();
+		cache->contrast = contrast_value;
+		cache->generation = generation;
+
+		const std::array<uint8_t, 256> lut =
+			contrast_value != 0.0 ? createContrastLUT(contrast_value) : std::array<uint8_t, 256>{};
+		std::array<uint8_t, 256 * 4> rgba{};
+		for (int i = 0; i < 256; ++i) {
+			rgba[i * 4 + 0] = lut[i];
+			rgba[i * 4 + 3] = 255;
+		}
+		const SkPixmap pixels(
+			SkImageInfo::Make(256, 1, kRGBA_8888_SkColorType, kPremul_SkAlphaType),
+			rgba.data(), 256 * 4);
+
+		cache->owner = GpuFrame::Create(256, 1, kRGBA_8888_SkColorType);
+		if (!cache->owner || !cache->owner->upload(pixels))
+			return false;
+		cache->texture = cache->owner->snapshot();
+		if (!cache->texture)
+			return false;
+		contrast_lut = std::move(cache);
+	}
+
+	// Nearest and no local matrix, so eval(i + 0.5) reads texel i exactly.
+	builder.child("contrastLut") = contrast_lut->texture->makeShader(
+		SkTileMode::kClamp, SkTileMode::kClamp, SkSamplingOptions());
+	builder.uniform("brightFactor") = static_cast<float>(bright_factor);
+	builder.uniform("useContrast") = contrast_value != 0.0 ? 1.0f : 0.0f;
+	builder.uniform("blacks") = static_cast<float>(blacks.GetValue(frame_number));
+	builder.uniform("whites") = static_cast<float>(whites.GetValue(frame_number));
+	builder.uniform("shadows") = static_cast<float>(shadows.GetValue(frame_number));
+	builder.uniform("highlights") = static_cast<float>(highlights.GetValue(frame_number));
+	return true;
 }
 
 // Generate JSON string of this object

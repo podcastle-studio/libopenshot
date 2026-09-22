@@ -866,10 +866,26 @@ Depends on W12/W13 only — **not** on Stage 7. Can run in parallel with Stage 7
       result on the GPU** so a chain pays one crossing rather than one per effect. Declining is a
       normal answer and the CPU twin runs untouched.
 - [ ] One SkSL fragment each, with a parity test against the C++ twin. **Done: Brightness, Alpha,
-      Exposure, ColorShift, Bars, ChromaKey (YCbCr only), ColorAdjustment** (2026-09-22) — 126 of
-      160 image/parameter combinations bit-exact, nothing over 2 LSB outside Brightness and
-      Exposure. **Left:** LightAdjustment, Enhancement, ColorMap (3-D LUT texture), Mask, Crop,
-      CameraMovement.
+      Exposure, ColorShift, Bars, ChromaKey (YCbCr only), ColorAdjustment, LightAdjustment,
+      Enhancement (no grain)** (2026-09-22) — 214 of 297 image/parameter combinations bit-exact,
+      nothing over 2 LSB outside Brightness and Exposure. **Left:** ColorMap (3-D LUT texture),
+      Mask, CameraMovement. **Crop will not be ported — see below.**
+      - **Crop is not a per-pixel effect.** It is `QPainter` with antialiasing: a rounded-rect clip
+        and a `drawImage` between fractional `QRectF`s, so the corners and the edges are a
+        *rasteriser* difference, not an arithmetic one, and `resize` changes the image size, which
+        `ApplyOnGpu` cannot express. The service always sets `resize = false` and passes a radius
+        curve, so rounded corners are the normal case and there is no exact subset to port. Doing
+        it anyway is a **redefine**-class product decision; it belongs with the compositor's parity
+        work. `GPU-DECISIONS.md` has the reasoning.
+      - **Enhancement's grain pass stays on the CPU.** `fract(sin(...) * 43758.5453)` evaluated in
+        `double` and in `float` do not agree to an LSB, they agree to nothing — up to ~140 LSB of
+        grain. A frame that asks for grain runs entirely on the CPU.
+      - **A tone curve belongs in a texture.** LightAdjustment's contrast LUT is uploaded as a
+        256x1 texture rather than recomputed per pixel, because `pow()` and `sin()` are not exactly
+        specified on the GPU. That makes the stage exact and is faster too.
+      - **Enhancement is the first two-pass fragment** and the mechanism is just calling
+        `ApplyOnGpu` twice: each call leaves its result on the GPU, so the second pass reads the
+        first's output as a texture and only the last is read back.
       - **ChromaKey is YCbCr-only on the GPU.** The other methods key on HSV, HSL or CIE LCh
         coordinates babl produces; `SetGpuUniforms` declines them and the C++ runs. The service
         only ever constructs `CHROMAKEY_YCBCR`, and that configuration is **8/8 bit-exact**.

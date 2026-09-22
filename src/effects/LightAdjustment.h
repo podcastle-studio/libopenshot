@@ -13,7 +13,7 @@
 #ifndef OPENSHOT_LIGHT_ADJUSTMENT_H
 #define OPENSHOT_LIGHT_ADJUSTMENT_H
 
-#include "../EffectBase.h"
+#include "../GpuEffect.h"
 #include "../Frame.h"
 #include "../Json.h"
 #include "../KeyFrame.h"
@@ -32,7 +32,7 @@ namespace openshot
      * separate controls for brightness, contrast, highlights, shadows, whites, and blacks.
      * All parameters can be animated with keyframes.
      */
-    class LightAdjustment : public EffectBase
+    class LightAdjustment : public GpuEffect
     {
     private:
         /// Init effect settings
@@ -52,6 +52,25 @@ namespace openshot
 
         /// Tone curve for contrast adjustment
         double toneCurve(double value, double contrast) const;
+
+    protected:
+        /// The SkSL twin of the brightness / contrast / blacks / whites / shadows /
+        /// highlights chain.
+        const char* GpuShaderSource() const override;
+
+        /// The six keyframe values plus the contrast tone curve, which is bound as a
+        /// 256x1 texture rather than recomputed per pixel -- see the .cpp.
+        bool SetGpuUniforms(SkRuntimeEffectBuilder& builder, int64_t frame_number,
+                            int width, int height) const override;
+
+    private:
+        /// The contrast LUT as a GPU texture, cached across frames because building
+        /// and uploading it per frame would cost more than the effect itself. Defined
+        /// in the .cpp: this header is installed and ../video-rendering-service
+        /// compiles it with no Skia on the include path, so no Skia type may appear
+        /// here -- the same reason GpuEffect.h forward-declares its builder.
+        struct ContrastLutCache;
+        mutable std::shared_ptr<ContrastLutCache> contrast_lut;
 
     public:
         // Light adjustment keyframes

@@ -13,7 +13,7 @@
 #ifndef OPENSHOT_ENHANCEMENT_H
 #define OPENSHOT_ENHANCEMENT_H
 
-#include "../EffectBase.h"
+#include "../GpuEffect.h"
 #include "../Frame.h"
 #include "../Json.h"
 #include "../KeyFrame.h"
@@ -31,11 +31,29 @@ namespace openshot
      * controls for noise reduction, clarity, and sharpness.
      * All parameters can be animated with keyframes.
      */
-    class Enhancement : public EffectBase
+    class Enhancement : public GpuEffect
     {
     private:
         /// Init effect settings
         void init_effect_details();
+
+    protected:
+        /// The SkSL twin of the clarity and sharpness passes. See the .cpp for why the
+        /// grain pass is not here.
+        const char* GpuShaderSource() const override;
+
+        /// The pass selector and its strength. Which pass is being run is set by
+        /// GetFrame immediately before each ApplyOnGpu call, because the effect is up
+        /// to two sequential passes and one fragment invocation is one pass.
+        bool SetGpuUniforms(SkRuntimeEffectBuilder& builder, int64_t frame_number,
+                            int width, int height) const override;
+
+    private:
+        /// Which pass the next ApplyOnGpu call should run, and with what strength.
+        /// Mutable because SetGpuUniforms is const; set by GetFrame, read once.
+        enum class GpuPass { Clarity, Sharpen, BlurMix };
+        mutable GpuPass gpu_pass = GpuPass::Clarity;
+        mutable double gpu_pass_strength = 0.0;
 
         /// Helper functions for enhancement
         static int clamp(int value, int min = 0, int max = 255) {

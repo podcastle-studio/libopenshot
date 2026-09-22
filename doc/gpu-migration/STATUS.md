@@ -771,6 +771,30 @@ production corpus) remain open; W05–W10 are the CPU quick wins. W01/W02 stay d
 
 ## Log
 
+- 2026-09-22 — **W19: LightAdjustment and Enhancement in, Crop ruled out.** Nine effects are
+  fragments; **214 of 297 image/parameter combinations bit-exact**, and neither new effect ever
+  exceeds **1 LSB**. Four-way sweep 307/307.
+  **A tone curve belongs in a texture.** LightAdjustment's contrast stage is a 256-entry LUT the
+  CPU memoises from a `pow()`/`sin()` curve. Evaluating that per pixel in SkSL would be the obvious
+  port and the wrong one — neither intrinsic is exactly specified on the GPU and the round back to
+  a byte would flip. Uploading the CPU's own LUT as a 256x1 texture makes the stage exact by
+  construction (both contrast cases 8/8) and is cheaper than a `pow()`.
+  **Enhancement is the first two-pass fragment**, and the mechanism is simply calling `ApplyOnGpu`
+  twice: each call leaves its result on the GPU, so the second pass reads the first's output as a
+  texture and only the last is read back. Clarity alone is 8/8 exact.
+  **Two things are staying on the CPU, both for measured reasons.** Enhancement's grain pass uses
+  `fract(sin(x * 12.9898 + y * 78.233) * 43758.5453)`, whose argument reaches ~85,000 at 1080p —
+  `double` and `float` do not agree to an LSB there, they agree to nothing, up to ~140 LSB of
+  grain. And **Crop is not a per-pixel effect at all**: it is `QPainter` with antialiasing, a
+  rounded-rect clip and a `drawImage` between fractional rects, so its corners and edges are a
+  rasteriser difference of the kind already on file for the compositor. The service always sets
+  `resize = false` and passes a radius curve, so there is no exact subset to port. No fragment was
+  written for it; porting it is a redefine-class product decision.
+  **The machine came back onto mains during this session**, so the Exposure round-trip figure is
+  re-measured and the battery one withdrawn: **6.3–7.1 ms against 7.3–10.1 ms, roughly 20 %**.
+  The passthrough baseline on mains is 0.19–0.21 ms, so the 0.2 ms per-effect gate still sits at
+  the floor of one full-frame pass and still wants restating.
+
 - 2026-09-22 — **W19: Bars, ChromaKey and ColorAdjustment.** Seven effects are now fragments;
   **126 of 160 image/parameter combinations bit-exact**, nothing over 2 LSB outside Brightness and
   Exposure. Four-way sweep 307/307, `openshot-gpu-checks` 8/8 on both backends.

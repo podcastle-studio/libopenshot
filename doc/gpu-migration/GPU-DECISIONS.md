@@ -807,8 +807,9 @@ Exposure's one genuinely separate cause is plain: the C++ multiplies by the keyf
 and an SkSL uniform is `float`, so at `exposure(4.2)` even fully opaque pixels move by 1 LSB.
 
 The round trip was still removed, on the honest grounds rather than the assumed ones: it is dead
-work. Two full-image conversions and an allocation per frame, **7.0–7.8 ms down to 5.9–6.6 ms at
-1080p, about 15 %**, with provably identical output.
+work. Two full-image conversions and an allocation per frame, with provably identical output.
+**Re-measured on mains power** (the first figures were taken on battery at ~840 MHz and are
+withdrawn): **6.3–7.1 ms with it removed against 7.3–10.1 ms with it in place**, roughly 20 %.
 
 **And an ordering rule that costs 20x if you get it wrong.** `ApplyOnGpu` must come *before* any
 `frame->GetImage()` in a `GetFrame`. On a GPU-backed frame `GetImage()` **is** the one readback, so
@@ -860,6 +861,48 @@ before calling `ApplyOnGpu`, and both measured ~4.2–4.4 ms a pass instead of ~
 four of seven fragments written the wrong way round on the first attempt, so it is not a slip —
 it is the shape of these `GetFrame` functions, every one of which opens by fetching the image.
 **Move the fetch below `ApplyOnGpu` as the first step of porting an effect, before anything else.**
+
+### W19 — LightAdjustment and Enhancement in; **Crop is not portable as a fragment** (2026-09-22)
+
+Nine effects are now fragments: **214 of 297 image/parameter combinations bit-exact**, and neither
+new effect ever exceeds **1 LSB**.
+
+**A tone curve belongs in a texture, not in the fragment.** LightAdjustment's contrast stage is a
+256-entry byte LUT that the CPU memoises from `toneCurve()`, which is built from `pow()` and
+`sin()`. Evaluating it per pixel in SkSL would be the obvious port and the wrong one: neither
+intrinsic is exactly specified on the GPU, and the `round()` back to a byte would flip wherever the
+curve lands near .5. Uploading the CPU's own LUT as a 256x1 texture and sampling it with nearest
+makes the stage **exact by construction** — both contrast cases come out 8/8 — and a texture fetch
+is cheaper than a `pow()` anyway. The texture is cached on the effect, keyed on the contrast value
+**and** `GpuDevice::Generation()`, because a device teardown invalidates it.
+
+**Enhancement is the first effect that is more than one pass**, and it works: clarity and sharpness
+each read the *neighbours* of what the previous pass wrote, so they cannot be folded together.
+`ApplyOnGpu` is simply called twice, and because each call leaves its result as the frame's GPU
+backing, the second pass reads the first's output as a texture and only the last is read back.
+`enhance(clarity+sharp)` is 7 of 8 images exact. A subclass selects the pass through a mutable
+member set immediately before each call — `SetGpuUniforms` is `const`, so there is no other route.
+
+**Enhancement's grain pass is deliberately not ported.** `applyNoisePass` is built on the classic
+GLSL hash `fract(sin(x * 12.9898 + y * 78.233) * 43758.5453)`. At 1080p the argument to `sin()`
+reaches ~85,000, where the answer depends entirely on how many bits the implementation carries: the
+C++ evaluates it in `double`, a fragment in `float`. They would not differ by an LSB — they would
+differ by an arbitrary amount in [0, 1), which the pass scales to as much as **~140 LSB** of grain.
+A frame that asks for grain therefore runs entirely on the CPU. Fixing it means changing the CPU's
+hash to something reproducible in `float`, which moves production output.
+
+**Crop is not a per-pixel effect and should not be ported as one.** It is `QPainter` with
+antialiasing: a rounded-rect clip path and a `drawImage` between `QRectF`s. Two things follow.
+The corner coverage is a *rasteriser* difference — Qt's and Skia's antialiasing do not agree, the
+same class already on file for the compositor ("Skia's bilinear is not QPainter's smooth
+transform") — and the rects are fractional for any keyframe that is not a whole pixel, so even
+`radius == 0` antialiases its edges rather than blitting. `resize == true` also changes the image
+size, which `ApplyOnGpu` has no way to express.
+The production path does not avoid any of this: `../video-rendering-service` sets `resize = false`
+and passes a radius *curve*, so rounded corners are the normal case. Porting Crop means accepting a
+**redefine**-class change to the corner pixels, which is a product decision rather than a port, and
+it belongs with the compositor's parity work rather than with the per-pixel fragments. **Left on
+the CPU, with no fragment written.**
 
 ### The 0.2 ms per-effect gate is the cost of a pass, not of an effect (2026-09-22, W19)
 

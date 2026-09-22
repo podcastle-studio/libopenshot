@@ -24,7 +24,9 @@
 #include "effects/ChromaKey.h"
 #include "effects/ColorAdjustment.h"
 #include "effects/ColorShift.h"
+#include "effects/Enhancement.h"
 #include "effects/Exposure.h"
+#include "effects/LightAdjustment.h"
 #include "gpu/GpuDevice.h"
 
 #include <QImage>
@@ -246,6 +248,41 @@ std::vector<Case> cases() {
         {"chromakey(no halo)",    [] { return std::make_shared<openshot::ChromaKey>(
                                            openshot::Color(20, 200, 60, 0), 90, 0,
                                            openshot::CHROMAKEY_YCBCR); }},
+
+        // Each LightAdjustment stage alone, both signs where the sign picks a different
+        // branch, then everything at once. Order matters -- shadows and highlights read a
+        // luminance computed from whatever the earlier stages left.
+        {"light(brightness+)",    [] { return std::make_shared<openshot::LightAdjustment>(
+                                           Keyframe(0.4), 0, 0, 0, 0, 0); }},
+        {"light(brightness-)",    [] { return std::make_shared<openshot::LightAdjustment>(
+                                           Keyframe(-0.5), 0, 0, 0, 0, 0); }},
+        {"light(contrast+)",      [] { return std::make_shared<openshot::LightAdjustment>(
+                                           0, Keyframe(0.8), 0, 0, 0, 0); }},
+        {"light(contrast-)",      [] { return std::make_shared<openshot::LightAdjustment>(
+                                           0, Keyframe(-0.6), 0, 0, 0, 0); }},
+        {"light(highlights)",     [] { return std::make_shared<openshot::LightAdjustment>(
+                                           0, 0, Keyframe(0.7), 0, 0, 0); }},
+        {"light(shadows)",        [] { return std::make_shared<openshot::LightAdjustment>(
+                                           0, 0, 0, Keyframe(-0.65), 0, 0); }},
+        {"light(whites)",         [] { return std::make_shared<openshot::LightAdjustment>(
+                                           0, 0, 0, 0, Keyframe(0.55), 0); }},
+        {"light(blacks)",         [] { return std::make_shared<openshot::LightAdjustment>(
+                                           0, 0, 0, 0, 0, Keyframe(-0.45)); }},
+        {"light(all)",            [] { return std::make_shared<openshot::LightAdjustment>(
+                                           Keyframe(0.2), Keyframe(0.5), Keyframe(-0.3),
+                                           Keyframe(0.4), Keyframe(0.25), Keyframe(0.35)); }},
+
+        // Enhancement is noise, clarity, sharpness. Grain is never on the GPU, so the cases
+        // that matter are clarity alone, each sign of sharpness, and the two together -- the
+        // only effect so far that runs as two sequential passes.
+        {"enhance(clarity)",      [] { return std::make_shared<openshot::Enhancement>(
+                                           Keyframe(0.0), Keyframe(0.6), Keyframe(0.0)); }},
+        {"enhance(sharpen)",      [] { return std::make_shared<openshot::Enhancement>(
+                                           Keyframe(0.0), Keyframe(0.0), Keyframe(0.5)); }},
+        {"enhance(blur)",         [] { return std::make_shared<openshot::Enhancement>(
+                                           Keyframe(0.0), Keyframe(0.0), Keyframe(-0.7)); }},
+        {"enhance(clarity+sharp)",[] { return std::make_shared<openshot::Enhancement>(
+                                           Keyframe(0.0), Keyframe(0.4), Keyframe(0.35)); }},
     };
 }
 

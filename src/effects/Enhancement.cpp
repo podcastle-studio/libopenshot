@@ -10,6 +10,9 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
 #include "Enhancement.h"
+
+#include "skia/include/core/SkM44.h"
+#include "skia/include/effects/SkRuntimeEffect.h"
 #include "Exceptions.h"
 
 #include <QImage>
@@ -299,8 +302,6 @@ Enhancement::Enhancement(Keyframe n, Keyframe c, Keyframe s)
 std::shared_ptr<openshot::Frame>
 Enhancement::GetFrame(std::shared_ptr<openshot::Frame> frame, int64_t frame_number)
 {
-    std::shared_ptr<QImage> img = frame->GetImage();
-
     // Assume frames are already RGBA; do not convert format.
 
     const double noise_v     = std::clamp(noise    .GetValue(frame_number), 0.0, 1.0);
@@ -310,12 +311,136 @@ Enhancement::GetFrame(std::shared_ptr<openshot::Frame> frame, int64_t frame_numb
     if (noise_v == 0.0 && clarity_v == 0.0 && std::abs(sharpness_v) < 1e-6)
         return frame;                                // nothing to do
 
+    // The shader when there is a GPU to run it on AND no grain is asked for. The grain pass is
+    // deliberately not ported -- see GpuShaderSource() -- so a frame that wants it runs entirely
+    // on the CPU rather than half on each, which would be two crossings for no gain.
+    //
+    // This is the first effect that is more than one pass: clarity and sharpness each read the
+    // NEIGHBOURS of what the previous pass wrote, so they cannot be folded into one fragment.
+    // Each ApplyOnGpu leaves its result as the frame's GPU backing, so the second pass reads the
+    // first's output as a texture and only the last one is ever read back.
+    const bool done_on_gpu = noise_v == 0.0 && [&] {
+        bool ran = false;
+        if (clarity_v > 0.0) {
+            gpu_pass = GpuPass::Clarity;
+            gpu_pass_strength = clarity_v;
+            if (!ApplyOnGpu(frame, frame_number))
+                return false;
+            ran = true;
+        }
+        if (sharpness_v != 0.0) {
+            gpu_pass = sharpness_v > 0.0 ? GpuPass::Sharpen : GpuPass::BlurMix;
+            gpu_pass_strength = sharpness_v;
+            if (!ApplyOnGpu(frame, frame_number))
+                return false;
+            ran = true;
+        }
+        return ran;
+    }();
+    if (done_on_gpu)
+        return frame;
+
+    // Falling back after a pass has already run on the GPU is still correct: that pass left its
+    // result as the frame's pixels, so GetImage() reads it back and the remaining passes carry on
+    // from there. It costs a crossing, which is why declining happens up front where it can.
+    std::shared_ptr<QImage> img = frame->GetImage();
+
     /* order: clarity ? sharpen/blur ? grain */
     if (clarity_v   > 0.0) applyClarityPass (*img, clarity_v);
     if (sharpness_v != 0.0) applySharpnessPass(*img, sharpness_v);
     if (noise_v     > 0.0) applyNoisePass    (*img, noise_v);
 
     return frame;
+}
+
+/* ---------- GPU ---------- */
+
+// The SkSL twin of the clarity and sharpness passes.
+//
+// **The grain pass is deliberately absent.** applyNoisePass is built on the classic GLSL hash
+// fract(sin(x * 12.9898 + y * 78.233) * 43758.5453). At 1080p the argument to sin() reaches ~85,000,
+// where the result depends entirely on how many bits the implementation carries: the C++ evaluates
+// it in double, an SkSL fragment in float. The two do not differ by an LSB, they differ by an
+// arbitrary amount in [0, 1), which the pass then scales to as much as ~140 LSB of grain. There is
+// no way to make them agree short of changing the CPU's hash, so a frame that asks for grain runs
+// entirely on the CPU -- SetGpuUniforms never sees it, because GetFrame checks first.
+//
+// Two details of the C++ that are easy to miss and are reproduced here: both passes SKIP the
+// one-pixel border (their loops run 1..h-2 and 1..w-2), leaving it exactly as it was; and both
+// work in 0..1 from the premultiplied bytes without unpremultiplying, then round rather than
+// truncate on the way back out (clamp255 uses std::round).
+const char* Enhancement::GpuShaderSource() const
+{
+	return R"SKSL(
+uniform float2 size;   // frame size in pixels
+uniform float  mode;   // 0 clarity, 1 sharpen, 2 blur-mix
+uniform float  k;      // strength * 3 for clarity and sharpen; the mix amount for blur
+
+// The C++ accumulates each neighbour already divided by 255, so the division happens nine times
+// and not once at the end. That is not the same sum in floating point, and this is a parity
+// fragment, so it accumulates the same way.
+float3 osBlur3x3(float2 p) {
+	float3 sum = float3(0.0);
+	for (int dy = -1; dy <= 1; ++dy)
+		for (int dx = -1; dx <= 1; ++dx)
+			sum += osBytes(p + float2(float(dx), float(dy))).rgb / 255.0;
+	return sum / 9.0;
+}
+
+float4 main(float2 p) {
+	float4 bytes = osBytes(p);
+	float2 q = floor(p);
+	// The border the C++ never writes.
+	if (q.x < 1.0 || q.y < 1.0 || q.x >= size.x - 1.0 || q.y >= size.y - 1.0)
+		return bytes / 255.0;
+
+	float3 base = bytes.rgb / 255.0;
+	float3 c;
+
+	if (mode < 0.5) {
+		// Clarity: unsharp mask against a 3x3 box blur.
+		c = base + (base - osBlur3x3(p)) * k;
+	} else if (mode < 1.5) {
+		// Sharpen: a 4-neighbour Laplacian at half scale, as highPass4 computes it.
+		float3 l = osBytes(p + float2(-1.0,  0.0)).rgb / 255.0;
+		float3 r = osBytes(p + float2( 1.0,  0.0)).rgb / 255.0;
+		float3 t = osBytes(p + float2( 0.0, -1.0)).rgb / 255.0;
+		float3 b = osBytes(p + float2( 0.0,  1.0)).rgb / 255.0;
+		float3 edge = (base * 4.0 - (l + r + t + b)) * 0.5;
+		c = base + edge * k;
+	} else {
+		// Negative sharpness: mix toward the blur. No clamp here, matching the C++, which
+		// clamps only in the two branches above -- the mix cannot leave 0..1 anyway.
+		c = base * (1.0 - k) + osBlur3x3(p) * k;
+		return float4(clamp(floor(c * 255.0 + 0.5), 0.0, 255.0), bytes.a) / 255.0;
+	}
+
+	c = clamp(c, 0.0, 1.0);
+	// clamp255 rounds; it does not truncate like the other effects' constrain().
+	return float4(clamp(floor(c * 255.0 + 0.5), 0.0, 255.0), bytes.a) / 255.0;
+}
+)SKSL";
+}
+
+bool Enhancement::SetGpuUniforms(SkRuntimeEffectBuilder& builder, int64_t frame_number,
+								 int width, int height) const
+{
+	builder.uniform("size") = SkV2{static_cast<float>(width), static_cast<float>(height)};
+	switch (gpu_pass) {
+	case GpuPass::Clarity:
+		builder.uniform("mode") = 0.0f;
+		builder.uniform("k") = static_cast<float>(gpu_pass_strength * 3.0);
+		break;
+	case GpuPass::Sharpen:
+		builder.uniform("mode") = 1.0f;
+		builder.uniform("k") = static_cast<float>(gpu_pass_strength * 3.0);
+		break;
+	case GpuPass::BlurMix:
+		builder.uniform("mode") = 2.0f;
+		builder.uniform("k") = static_cast<float>(-gpu_pass_strength);
+		break;
+	}
+	return true;
 }
 
 /* ---------- serialisation ---------- */
