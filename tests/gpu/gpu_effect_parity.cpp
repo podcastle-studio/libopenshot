@@ -24,6 +24,7 @@
 #include "effects/BorderReflectedRotation.h"
 #include "effects/Brightness.h"
 #include "effects/ChromaKey.h"
+#include "effects/CircleMask.h"
 #include "effects/ColorAdjustment.h"
 #include "effects/ColorShift.h"
 #include "effects/Enhancement.h"
@@ -314,6 +315,12 @@ std::vector<Case> cases() {
                                        m->invert = true;
                                        return m;
                                    }},
+        // CircleMask at three radii. The edge ring is the whole effect, so a radius that puts the
+        // circle well inside the frame matters more than one that clips.
+        {"circlemask(0.8)",       [] { return std::make_shared<openshot::CircleMask>(Keyframe(0.8)); }},
+        {"circlemask(0.45)",      [] { return std::make_shared<openshot::CircleMask>(Keyframe(0.45)); }},
+        {"circlemask(0.12)",      [] { return std::make_shared<openshot::CircleMask>(Keyframe(0.12)); }},
+
         // Zoom-in at two magnifications and an off-centre anchor. Zoom-out declines, so there is
         // nothing to compare for it.
         {"zoom(220, centre)",     [] { return std::make_shared<openshot::Zoom>(

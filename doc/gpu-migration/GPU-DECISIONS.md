@@ -1116,6 +1116,55 @@ size and cannot express that. Zoom-in measures **max 1 LSB, 57–78 dB**.
 W20's is ≥ 45 dB; the test had been holding everything to 48, which is a gate nobody set for the
 transitions. Cases carry their own threshold and the report says which one applied.
 
+### W20 — CircleMask in; rotational blur is not what the design note says it is (2026-09-22)
+
+**`CircleMask` is 24 of 24 bit-exact**, and it got there by not drawing the circle. Parity across the
+suite is now **346 of 416 comparisons bit-exact**, four-way sweep 307/307.
+
+**`cv::circle` with `LINE_AA` does not draw a circle.** It fills a polygon approximation using
+OpenCV's own scanline coverage at 1/8-pixel precision. An analytic disc in SkSL would be a *better*
+circle and a worse port: the edge ring is where the whole effect lives, so a different rasteriser
+there is a visible difference on every frame, not a rounding one. So the mask is built by the same
+OpenCV call as before, cached on (radius, frame size, `Generation()`), and uploaded as a texture,
+with the fragment doing only the arithmetic.
+
+That is the **third** time this pattern has been the right answer — `LightAdjustment`'s tone curve,
+`Mask`'s matte, and now this. It is worth stating as a rule: **whatever a rasteriser or a
+transcendental decides stays on the CPU and arrives as a texture; the fragment does arithmetic.**
+Everything ported that way has come out bit-exact; everything that tried to re-derive a rasteriser
+has not.
+
+### Rotational blur is resolution-dependent, and `TRANSITION-PARITY.md` said it was not
+
+`TRANSITION-PARITY.md` lists the reference-resolution bug as affecting "horizontal/vertical blur,
+diagonal blur, zoom blur" and adds that "rotational blur takes degrees and is fine". **The parameter
+is fine; the effect is not.**
+
+`applyRotationalBlur` downscales before it works, and the threshold keys on the image, not on the
+parameter:
+
+    absBlur > 45 && minDim > 800  ->  scaleFactor 0.25
+    absBlur > 15 && minDim > 400  ->  scaleFactor 0.5
+
+So a 20° rotational blur runs at full resolution on a 640x360 source and at **half** resolution,
+upscaled, on a 1080p one. Same authored angle, visibly different result, varying per clip in the
+same timeline — which is precisely the bug that note documents for the radii. The correction is now
+in it.
+
+**It is therefore not ported, and the reason is not effort.** Two further things make it a pipeline
+rather than a per-pixel effect: an optional `cv::GaussianBlur` whenever `0.1 < absBlur/60`, i.e.
+`absBlur > 6`, and the `cv::resize` either side of the downscale. The exactly-reproducible window is
+`0.1 ≤ absBlur ≤ 6`, or `absBlur ≥ 15` on a source with `minDim ≤ 400` — at 1080p that is a blur of
+at most 6°, where transitions use up to 25. A fragment that declines in the normal case earns
+nothing.
+
+The spike in `spikes/sksl-glsl/` remains useful and its 57–61 dB stands, but note what it measured:
+its README says it covers "the parameter window in which this is the *whole* effect" — i.e. exactly
+the single-pass window above. It is not a port of the effect as production calls it.
+
+**Rotational blur therefore joins the three blur modes as blocked on the reference-resolution
+decision**, and W20's remaining surface is those four and nothing else.
+
 ### The 0.2 ms per-effect gate is the cost of a pass, not of an effect (2026-09-22, W19)
 
 **Needs restating by the project owner**, in the same way W07's fps gates did.

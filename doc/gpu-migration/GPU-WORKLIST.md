@@ -1003,8 +1003,16 @@ is that it is still **+14 %**, not a loss: a partly-ported chain is safe.
       with independently-rounded, clamped paddings, so its result is not reliably the frame's size
       and the C++ assigns it back, changing the frame's dimensions. `ApplyOnGpu` cannot express
       that.
-- [ ] Not blocked, and left: **`CircleMask`** — 45 dB class, `cv::circle` with `LINE_AA` coverage —
-      and **rotational blur**, which the spike in `spikes/sksl-glsl/` already measured at 57–61 dB.
+- [x] `CircleMask` — **24/24 bit-exact**, by *not* drawing the circle. `cv::circle` with `LINE_AA`
+      fills a polygon approximation with OpenCV's own scanline coverage; an analytic disc would be
+      a better circle and a worse port. The mask is built by the same OpenCV call, cached on
+      (radius, frame size, `Generation()`), and uploaded as a texture.
+- [ ] **Rotational blur is blocked, not open** — see the correction in `TRANSITION-PARITY.md`. Its
+      parameter is in degrees, but `applyRotationalBlur` downscales before it works and the
+      threshold keys on the *image*: `absBlur > 15 && minDim > 400` halves it. A 20° blur runs at
+      full resolution on 640x360 and at half resolution on 1080p. Same bug as the radii, different
+      mechanism. It also carries an optional `cv::GaussianBlur` above 6°, so the exactly
+      reproducible window at 1080p is a blur of at most 6° where transitions use 25.
 - [ ] **Blocked on the reference-resolution decision:** box/horizontal-vertical blur, diagonal blur,
       zoom blur.
 - [ ] `ColorShift` — **already done under W19**; `ColorShift` calls the submodule's

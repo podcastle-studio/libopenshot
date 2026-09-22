@@ -1,7 +1,7 @@
 #ifndef OPENSHOT_CIRCLE_MASK_EFFECT_H
 #define OPENSHOT_CIRCLE_MASK_EFFECT_H
 
-#include "../EffectBase.h"
+#include "../GpuEffect.h"
 
 #include "../Json.h"
 #include "../KeyFrame.h"
@@ -14,10 +14,26 @@ namespace openshot
 	// Forward declaration
 	class ReaderBase;
 
-	class CircleMask : public EffectBase
+	class CircleMask : public GpuEffect
 	{
 		/// Init effect settings
 		void init_effect_details();
+
+	protected:
+		/// The SkSL twin of applyCircleMaskEffect's per-pixel half. The circle itself is
+		/// rasterised by OpenCV on the CPU and uploaded -- see the .cpp.
+		const char* GpuShaderSource() const override;
+
+		/// The coverage mask as a texture, or false when there is nothing to apply.
+		bool SetGpuUniforms(SkRuntimeEffectBuilder& builder, int64_t frame_number,
+							int width, int height) const override;
+
+	private:
+		/// The rasterised circle, cached across frames and keyed on the radius, the frame
+		/// size and GpuDevice::Generation(). Defined in the .cpp because this header is
+		/// installed and compiled without Skia on the include path.
+		struct CoverageCache;
+		mutable std::shared_ptr<CoverageCache> coverage;
 
 	public:
 

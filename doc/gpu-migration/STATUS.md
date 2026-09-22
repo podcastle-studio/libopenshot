@@ -776,6 +776,29 @@ production corpus) remain open; W05–W10 are the CPU quick wins. W01/W02 stay d
 
 ## Log
 
+- 2026-09-22 — **W20: CircleMask in; rotational blur turns out to be blocked, not open.** Six of ten
+  transition variants are done and **nothing is open any more** — the remaining four are all blocked
+  on the same reference-resolution decision. Parity **346 of 416 comparisons bit-exact**, four-way
+  sweep 307/307.
+  **`CircleMask` is 24/24 bit-exact, and it got there by not drawing the circle.** `cv::circle` with
+  `LINE_AA` fills a polygon approximation using OpenCV's own scanline coverage; an analytic disc in
+  SkSL would be a *better* circle and a worse port, because the edge ring is where the whole effect
+  lives. The mask is built by the same OpenCV call, cached, and uploaded as a texture.
+  **That is the third time this has been the right answer** — LightAdjustment's tone curve, Mask's
+  matte, now this — so it is worth stating as a rule: **whatever a rasteriser or a transcendental
+  decides stays on the CPU and arrives as a texture; the fragment does arithmetic.** Everything
+  ported that way is bit-exact; everything that tried to re-derive a rasteriser is not.
+  **`TRANSITION-PARITY.md` was wrong about rotational blur and is now corrected.** It listed the
+  reference-resolution bug as affecting only the three linear blurs and said rotational blur "takes
+  degrees and is fine". The parameter is fine; the effect is not. `applyRotationalBlur` downscales
+  before it works and the threshold keys on the *image* — `absBlur > 15 && minDim > 400` halves it,
+  `> 45 && > 800` quarters it — so a 20° blur runs at full resolution on a 640x360 source and at
+  half resolution on a 1080p one. Same authored angle, visibly different result, per clip. It also
+  carries an optional `cv::GaussianBlur` above 6°, so even setting that aside the exactly
+  reproducible window at 1080p is a blur of at most 6° where transitions use 25.
+  The spike's 57–61 dB still stands but measured only that single-pass window, which its own README
+  says — it is not a port of the effect as production calls it.
+
 - 2026-09-22 — **W20: five of ten transition variants done, and OpenCV's fixed-point paths turn out
   to be reproducible.** `Zoom`, `BorderReflectedMove` and `BorderReflectedRotation` join `Wipe` and
   `SplitShift`. Parity across the whole suite is **322 of 392 comparisons bit-exact**, no failures

@@ -15,7 +15,7 @@ Deleted with the rest of `doc/gpu-migration/` when the migration lands.
 | item | scope | state |
 |---|---|---|
 | **W19** | `GpuEffect` base + per-pixel effect fragments | **10 of 13 done**, 2 ruled out, 1 blocked |
-| **W20** | transition vocabulary from `image-processing-lib` as shared SkSL | **5 of 10 done**, 2 open, 3 blocked |
+| **W20** | transition vocabulary from `image-processing-lib` as shared SkSL | **6 of 10 done**, 0 open, **4 blocked** |
 | **W21** | overlay clips as textures (additive blend, displacement map) | **done** (2026-09-22) |
 
 `libopenshot` carries 47 effect classes. Only the ones
@@ -198,8 +198,8 @@ resample, which is why the item was written that way.
 | `BorderReflectedRotation` | **done** | **16/16 bit-exact**, after reproducing `warpAffine`'s fixed-point map |
 | `Zoom` | **done** (zoom-in only) | max 1 LSB, 57–78 dB; zoom-out declines — it can change the frame's size |
 | `BorderReflectedMove` | **done** | exact on smooth content, 46.5–47.5 dB on noise — clears W20's 45 dB gate |
-| `CircleMask` | open | 45 dB class (`cv::circle`, `LINE_AA` coverage) |
-| rotational blur | open | 45 dB class; the spike already measured **57–61 dB** |
+| `CircleMask` | **done** | **24/24 bit-exact**, by not drawing the circle — see below |
+| rotational blur | **blocked** | resolution-dependent via its downscale threshold — see below |
 | box / horizontal-vertical blur | **blocked** | reference-resolution decision |
 | diagonal blur | **blocked** | reference-resolution decision |
 | zoom blur | **blocked** | reference-resolution decision |
@@ -212,6 +212,18 @@ submodule now computes the luminance explicitly (`image-processing-lib` commit `
 luminance on ~0.27 % of colours, which re-baselined `transitions.threshold_wipe_mask`.
 **Cross-repo: the front end compiles the same source to WASM and picks it up when it updates the
 submodule. The submodule commit is local and unpushed.**
+
+**Nothing in W20 is open any more: it is six done and four blocked**, all four on the same
+reference-resolution decision. Rotational blur joined the three blur modes there — its parameter is
+in degrees, but `applyRotationalBlur` downscales before it works and the threshold keys on the
+*image* (`absBlur > 15 && minDim > 400` halves it), so a 20° blur renders at full resolution on a
+640x360 source and at half resolution on a 1080p one. `TRANSITION-PARITY.md` said it "takes degrees
+and is fine"; that has been corrected.
+
+**A rule that has now been right three times: whatever a rasteriser or a transcendental decides
+stays on the CPU and arrives as a texture; the fragment does arithmetic.** LightAdjustment's tone
+curve, Mask's matte and CircleMask's coverage all came out bit-exact that way. Everything that tried
+to re-derive a rasteriser did not.
 
 **And OpenCV's resampling turns out to be reproducible** if you reproduce its arithmetic rather
 than its intent. `warpAffine` evaluates its map in 10-bit fixed point, not in floating point;

@@ -72,8 +72,16 @@ Two separate problems, both visible:
 2. **The preview is not self-consistent with itself.** The same blur is 1.33× wider when it takes
    the proxy path than when it does not.
 
-Affected: horizontal/vertical blur, diagonal blur, zoom blur. Rotational blur takes degrees and is
-fine. `BorderReflectedMove` (dx/dy as fractions), `Zoom` (percent), `SplitShift` (ratios),
+Affected: horizontal/vertical blur, diagonal blur, zoom blur.
+
+> **Correction, 2026-09-22: rotational blur is affected too, by a different mechanism, and this
+> note previously said it was fine.** Its *parameter* is in degrees and is indeed
+> resolution-independent — but `applyRotationalBlur` downscales before it works, and the threshold
+> keys on the image: `absBlur > 15 && minDim > 400` halves it, `absBlur > 45 && minDim > 800`
+> quarters it. So a 20° rotational blur runs at full resolution on a 640x360 source and at half
+> resolution, upscaled, on a 1080p one. Same authored angle, visibly different result, varying per
+> clip in the same timeline — which is exactly the problem described here for the radii. It belongs
+> with them in the decision, and it is **not** portable until that decision is taken. `BorderReflectedMove` (dx/dy as fractions), `Zoom` (percent), `SplitShift` (ratios),
 `ColorShift` (fractions) and `DisplacementMap` ([0,1]) are all already resolution-independent.
 
 **This is not caused by the GPU work and is not fixed by sharing shader source.** It is a missing
