@@ -789,6 +789,25 @@ production corpus) remain open; W05–W10 are the CPU quick wins. W01/W02 stay d
 
 ## Log
 
+- 2026-09-22 — **W23's premise measured before any code, and it corrects three things.** Nothing is
+  implemented; this is the protocol's first half. Numbers and detail in the W23 item.
+  **The fps half of W23's gate is already met in software** — the fork's reader does **126–135 fps**
+  decode-only at 4K, not the 59 fps in plan §0.3 (W08 removed the per-frame copy since). It costs
+  **3.1 cores**, and ffmpeg's NVDEC does the same work at **0.34**, so the operative half of that
+  gate is "**< 1 core**" and it needs the SkSL YUV→RGBA pass as much as it needs NVDEC.
+  **Hardware decode is broken, but not where §1.5 says.** `get_hw_dec_format` already filters to the
+  selected decoder and the download already auto-selects its format — two of the three causes on
+  file are fixed. What is left is that `ProcessVideoPacket` builds swscale from
+  `pCodecCtx->pix_fmt` (`AV_PIX_FMT_CUDA` with hardware decode on) rather than from the frame it
+  converts: "cuda is not supported as input pixel format", then
+  `OutOfMemory: Failed to initialize sws context`.
+  **And it aborts the process**, because `Close()` drains the decoder through the same
+  `ProcessVideoPacket` and `~FFmpegReader` lets the throw escape a destructor. That one is not
+  specific to hardware decode.
+  **`DE_LIMIT_*` (1950x1100) is what hid it**: a 4K file falls back to software and looks fine, a
+  1080p file with `HARDWARE_DECODER=2` dies. Production is unaffected either way — the service
+  never touches `openshot::Settings` and `HARDWARE_DECODER` is 0.
+
 - 2026-09-22 — **W22 done: CUDA frames reach a Vulkan image with no host copy, and the gate is met
   at 0.166 ms against 0.300 for a 4K frame.** `src/gpu/CudaInterop.{h,cpp}`, plus the two device
   extensions and the Vulkan handles in `GpuDevice`. Exact: **0 of 8 294 400 pixels differ** at

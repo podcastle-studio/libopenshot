@@ -1167,6 +1167,42 @@ and it is this item's first problem.
 **Note for this deployment.** H.264 only means NVDEC coverage is not a risk — the "extend to HEVC,
 VP9, AV1, MPEG-4" sub-task is optional here.
 
+> **Premise measured 2026-09-22, before any code, and it corrects three things in this item and in
+> plan §0.3 / §1.5.** All at 3840x2160 H.264 (`tests/bench/media/v2160_a.mp4`), mains power,
+> interleaved arms, on the A2000.
+>
+> | arm | fps | cores |
+> |---|---|---|
+> | this fork's reader, software | **126–135** | **3.1** |
+> | ffmpeg CLI, software | ~400 | 11.7 |
+> | ffmpeg CLI, NVDEC (`-hwaccel cuda`) | **~380** | **0.34** |
+> | ffmpeg CLI, `h264_cuvid` | 135 | 0.32 |
+>
+> 1. **The fps half of the gate is already met in software.** 126–135 fps, not the 59 fps in plan
+>    §0.3 — W08 took the per-frame copy out since that was measured. What NVDEC buys is the
+>    **core count**: 3.1 → ~0.4. So the operative half of the gate is "**< 1 core**", and reaching
+>    it needs the SkSL YUV→RGBA pass as much as it needs NVDEC, because swscale is most of those
+>    three cores. (Measure NVDEC over ≥ 700 frames: over 150 the CUDA context init dominates and
+>    makes it look like 93 fps.)
+> 2. **Hardware decode fails, but not for the reason on file, and two of §1.5's three causes are
+>    already fixed.** `get_hw_dec_format` already filters to the selected decoder, so there is no
+>    VDPAU-before-CUDA problem, and the download already auto-selects its format. What is left is
+>    one line: `ProcessVideoPacket` builds swscale from `pCodecCtx->pix_fmt`, which is
+>    `AV_PIX_FMT_CUDA` once hardware decode is on, while the frame it actually converts is the
+>    *downloaded* one. swscale says "cuda is not supported as input pixel format" and the reader
+>    throws `OutOfMemory: Failed to initialize sws context` — not the "Failed to allocate image
+>    buffer" §0.3 records.
+> 3. **And it takes the process with it.** `Close()` drains the decoder by calling
+>    `ProcessVideoPacket`, so the same throw comes back out of `~FFmpegReader`, where an escaping
+>    exception is `terminate()`. Any reader whose drain throws aborts the process rather than
+>    failing the job; that is independent of hardware decode.
+> 4. **`DE_LIMIT_*` is what has been hiding all of this.** The defaults (1950x1100) mean a 4K file
+>    silently decodes in software and looks fine (82 fps); a 1080p file with `HARDWARE_DECODER=2`
+>    aborts on the spot.
+> 5. **The re-baseline below is bigger than "the affected `readers.*` scenarios".** BT.601 → BT.709
+>    moves every scenario that decodes an `.mp4` — ~32 references across 11 scenario files, not the
+>    3 `readers.*` video ones.
+
 - [ ] Decoder output stays `AV_PIX_FMT_CUDA`.
 - [ ] YUV→RGBA becomes an SkSL pass (matrix and range from the stream, default BT.709 at ≥ 720p)
       that also applies the pre-scale.
