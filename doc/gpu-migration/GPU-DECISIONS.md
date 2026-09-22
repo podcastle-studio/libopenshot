@@ -1296,6 +1296,51 @@ domain. `parseCubeText` drops `DOMAIN_MIN`/`DOMAIN_MAX` while their `applyLut` n
 domain set from JS, so for any non-0…1 cube the two already disagree — a live bug today,
 independent of the GPU work.
 
+### The blur is normalised and is no longer a box (2026-09-22, project owner)
+
+Two changes to the blur family, both in the submodule so the editor's WASM build gets them too, and
+both **unversioned** — the owner's call, on the grounds that people author against the 720p preview,
+so an export changing to match it is the correction and not the break.
+
+**1. Every length is now in reference pixels.** A radius means "this many pixels at 1280 wide", and
+the effect scales it by `image.cols / 1280`. It lives inside the effect functions, not in either
+caller, because the export reaches them through libopenshot and the editor through the WASM
+wrappers and both pass the payload value straight down — normalising there is the only arrangement
+where neither host can forget.
+
+**The per-effect downscale thresholds went with it.** "Half size above 1 megapixel" (diagonal) and
+"half above 400 px of minimum dimension" (rotational) made the *result* depend on the source's
+resolution, which is the same bug wearing a different hat — it is why rotational blur, whose
+parameter is in degrees, was affected at all. They are replaced by working at the reference width
+whenever the source is wider, which is resolution-independent by construction **and faster at 4K
+than the thresholds were**.
+
+**2. The blur is three box passes, not one.** `cv::blur` is a single moving average: square bokeh,
+banding, and a falloff nothing like a lens. Measured against a true Gaussian of the same variance,
+its peak deviation is **42.5 %**. Three passes bring that to **5.6 %**.
+
+Why not an actual Gaussian: at 4K a radius-40 blur is sigma ≈ 34, a 200-tap kernel per axis.
+`cv::blur` is O(1) per pixel whatever its width, so three of them cost three passes rather than two
+hundred taps. The CPU path ships, and a real Gaussian would have made it unusable.
+
+Why three and not two: two passes already reach 7.6 %, so most of the win is in the first extra
+pass. Three is kept because peak deviation is not the whole story — two boxes convolve to a
+triangle, which has a visible apex, while three give a smooth piecewise quadratic.
+
+**The existing parameter keeps its meaning.** A box of *w* taps has variance `(w² − 1)/12`, so
+sigma is derived as `sqrt((w² − 1)/12)`. The blur gets better, not different.
+
+**Cost, and it is a real cost.** `transitions_chain` on the CPU path measures **31.5 → 27.9 fps,
+about −11 %**, on the most blur-heavy scenario there is. The standing constraint says the CPU path
+must not get slower, and this is the one deliberate exception to it: it buys a 7x better kernel and
+was asked for. Two box passes instead of three would roughly halve the cost for 2 points of
+deviation, if that trade ever looks better.
+
+**Goldens re-baselined:** `transitions.blur`, `transitions.diagonal_blur`, `transitions.zoom_blur`,
+`transitions.stack_zoom_blur_alpha`. `transitions.rotational_blur` did **not** move, which is the
+sign the change is surgical — the suite renders at 640x360, where both the old thresholds and the
+new reference rule resolve to full scale.
+
 ## Open — decide before plan phase 4
 
 The four that blocked the compositor were taken on 2026-09-16; see the W11 entry above.

@@ -208,10 +208,15 @@ Everything else trades some parity for speed, and it is better to choose that kn
 
 - **Pixi version and renderer.** Now only matters for how a CanvasKit-rendered result is composited
   into the existing preview, not for the shader language.
-- **The reference resolution decision.** Fixing the blur parameters is a behaviour change visible to
-  existing projects: old payloads carry radii authored against the old, undefined behaviour. Either
-  the fix is versioned in the payload, or existing projects shift. This needs a product decision,
-  not a technical one.
+- ~~**The reference resolution decision.**~~ **Answered 2026-09-22 by the project owner:
+  unversioned — exports should match previews.** The reference is 1280 px wide and every
+  length-valued parameter scales by `frame_width / 1280`. Old payloads are not versioned, because
+  the shift is a correction rather than a break: people author against the 720p preview, so an
+  export's blur changing to match it is what they meant in the first place. The only projects that
+  move are ones tuned by eye against a high-resolution export.
+  **Implemented in the submodule**, inside the effect functions rather than in either caller, so
+  neither host can forget it. The same decision retired the per-effect downscale thresholds, which
+  keyed on the image's own size and were the same bug wearing a different hat.
 - ~~**Which resolution the front end's slow-effect proxy uses**, and whether it varies.~~
   **Answered 2026-09-22: it does not vary — the front end runs a 720p proxy on the GPU.** So the
   reference resolution is fixed at **1280 px wide**, and a host scales a length-valued parameter by
