@@ -4,7 +4,7 @@
 // --case) so CPU time and peak RSS are measured per case with wait4(). Results are written as JSON
 // (one file per run) and optionally as a Markdown table; `compare` prints the delta between two runs.
 //
-//   openshot-bench [--label L] [--frames N] [--res 540,720,1080,1440,2160] [--modes render,x264,nvenc]
+//   openshot-bench [--label L] [--frames N] [--res 540,720,1080,1440,2160] [--modes render,x264,nvenc,lossless]
 //                  [--scenario substr] [--threads N] [--quick] [--json out.json] [--md out.md]
 //   openshot-bench compare old.json new.json [--md out.md]
 //   openshot-bench --list
@@ -132,6 +132,15 @@ int runCase(const Opts& o) {
         const std::string codec = mode == "nvenc" ? "h264_nvenc" : "libx264";
         openshot::FFmpegWriter w(scene.workDir + scenarioName + "_" + parts[1] + "_" + mode + ".mp4");
         golden::recipes::configureWriter(w, W, H, scene.fps, W >= 3840 ? 20000000 : (W >= 1920 ? 10000000 : 5000000), codec);
+        if (mode == "lossless") {
+            // Not a performance case: this is the common reference a VMAF comparison needs, so
+            // that x264 and nvenc are both scored against the same pixels. qp=0 through
+            // x264-params is mathematically lossless in the 4:2:0 YUV the writer converts to,
+            // which is the space both real encodes start from, and VMAF's default model reads
+            // luma only — so the subsampling the reference shares with them costs nothing.
+            w.SetOption(openshot::VIDEO_STREAM, "preset", "ultrafast");
+            w.SetOption(openshot::VIDEO_STREAM, "x264-params", "qp=0");
+        }
         w.Open();
         w.WriteFrame(scene.timeline.get(), 1, o.frames);
         w.Close();
@@ -279,7 +288,9 @@ std::string markdown(const Json::Value& run) {
     };
     for (const auto& mode : modes) {
         const std::string title = mode == "render" ? "Render only (Timeline::GetFrame, no encoder)"
-                                : mode == "x264" ? "Export with libx264 (service configuration)" : "Export with h264_nvenc";
+                                : mode == "x264" ? "Export with libx264 (service configuration)"
+                                : mode == "lossless" ? "Lossless reference encode (VMAF reference, not a timing case)"
+                                : "Export with h264_nvenc";
         md << "### " << title << "\n\n";
         md << "fps, with the p95 per-frame time in ms for render mode. CPU = average cores busy; RSS = peak resident memory of the process.\n\n";
         md << "| scenario |"; for (const auto& r : res) md << " " << r << " |"; md << "\n|---|"; for (size_t i = 0; i < res.size(); ++i) md << "---:|"; md << "\n";
@@ -335,7 +346,7 @@ Json::Value loadJson(const std::string& path) {
 }
 
 void usage() {
-    std::cout << "openshot-bench [--label L] [--frames N] [--res 540p,720p,1080p,1440p,2160p] [--modes render,x264,nvenc]\n"
+    std::cout << "openshot-bench [--label L] [--frames N] [--res 540p,720p,1080p,1440p,2160p] [--modes render,x264,nvenc,lossless]\n"
                  "               [--scenario substr] [--threads N] [--parallel N] [--quick] [--json out.json] [--md out.md] [--out dir]\n"
                  "               [--resume interrupted.json]   (results are written after every case; resume skips finished cases)\n"
                  "openshot-bench compare old.json new.json [--md out.md]\n"

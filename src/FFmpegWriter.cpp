@@ -509,7 +509,11 @@ void FFmpegWriter::SetOption(StreamType stream, std::string name, std::string va
 		else if (name == "cqp") {
 			// encode quality and special settings like lossless
 #if USE_HW_ACCEL
-			if (hw_en_on) {
+			// hw_en_on alone is not the question: it defaults to 1 and is only cleared when
+			// SetVideoOptions() was given a codec name, so a caller that never named one would
+			// take the hardware branch for a software encoder. hw_en_supported is the flag that
+			// actually says a hardware encoder was found.
+			if (hw_en_on && hw_en_supported) {
 				av_opt_set_int(c->priv_data, "qp", std::min(std::stoi(value),63), 0); // 0-63
 			} else
 #endif // USE_HW_ACCEL
@@ -557,17 +561,44 @@ void FFmpegWriter::SetOption(StreamType stream, std::string name, std::string va
 		} else if (name == "crf") {
 			// encode quality and special settings like lossless
 #if USE_HW_ACCEL
-			if (hw_en_on) {
-				double mbs = 15000000.0;
-				if (info.video_bit_rate > 0) {
-					if (info.video_bit_rate > 42) {
-						mbs = 380000.0;
+			if (hw_en_on && hw_en_supported) {
+				if (hw_en_av_device_type == AV_HWDEVICE_TYPE_CUDA) {
+					// NVENC has a constant-quality control of its own, so map onto it rather
+					// than discarding the value and inventing a bitrate from info.video_bit_rate
+					// — which is what the branch below does, and which left "crf" meaning
+					// "ignore the quality I asked for" on every hardware export.
+					//
+					// cq = crf + 10, clamped to NVENC's 0-51. Measured on podcast_pip,
+					// transitions_chain and subtitles_words at 1080p against a lossless
+					// reference (see doc/PERFORMANCE-BASELINE.md): the offset that puts NVENC
+					// on x264's rate-distortion point is +9 to +10 across crf 18, 23 and 28,
+					// and +10 is the better-centred one — file size lands within +1 % / +10 % /
+					// -14 % of libx264 at the same crf, for VMAF within 0.5 points.
+					//
+					// bit_rate must go to zero or NVENC treats cq as a cap on a bitrate target
+					// instead of the target itself. rc is only forced when the caller left it
+					// alone: "cq" is defined for VBR, but someone who explicitly asked for
+					// constqp meant it.
+					const int cq = std::max(0, std::min(std::stoi(value) + 10, 51));
+					int64_t rc = -1;
+					if (av_opt_get_int(c->priv_data, "rc", 0, &rc) < 0 || rc < 0)
+						av_opt_set(c->priv_data, "rc", "vbr", 0);
+					av_opt_set_double(c->priv_data, "cq", (double) cq, 0);
+					c->bit_rate = 0;
+				} else {
+					// Every other hardware encoder keeps the legacy bitrate estimate: none of
+					// them is testable here, and VAAPI in particular reads c->bit_rate below.
+					double mbs = 15000000.0;
+					if (info.video_bit_rate > 0) {
+						if (info.video_bit_rate > 42) {
+							mbs = 380000.0;
+						}
+						else {
+							mbs *= std::pow(0.912,info.video_bit_rate);
+						}
 					}
-					else {
-						mbs *= std::pow(0.912,info.video_bit_rate);
-					}
+					c->bit_rate = (int)(mbs);
 				}
-				c->bit_rate = (int)(mbs);
 			} else
 #endif // USE_HW_ACCEL
 			{
@@ -1560,6 +1591,18 @@ AVStream *FFmpegWriter::add_video_stream() {
 		 This does not happen with normal video, it just happens here as
 		 the motion of the chroma plane does not match the luma plane. */
 		c->mb_decision = 2;
+
+#if USE_HW_ACCEL
+	// NVENC defaults that belong with the other encoder defaults above, set here rather than in
+	// open_video() so that a SetOption() call — which happens after PrepareStreams() — still wins.
+	//
+	// Spatial AQ is off in FFmpeg by default and is close to free on NVENC. Measured on
+	// podcast_pip 1080p at cq 27: 3.09 MB at VMAF 98.17 with it, 3.49 MB at VMAF 97.69 without —
+	// smaller *and* better, so there is no trade to weigh.
+	if (hw_en_supported && hw_en_av_device_type == AV_HWDEVICE_TYPE_CUDA)
+		av_opt_set_int(c->priv_data, "spatial-aq", 1, 0);
+#endif // USE_HW_ACCEL
+
 	// some formats want stream headers to be separate
 	if (oc->oformat->flags & AVFMT_GLOBALHEADER)
 #if (LIBAVCODEC_VERSION_MAJOR >= 57)
@@ -1797,6 +1840,30 @@ void FFmpegWriter::open_video(AVFormatContext *oc, AVStream *st) {
 					// AVCodecContext field, which NVENC ignores in favour of its private
 					// "profile" option, so there is no way to ask for High from outside.
 					av_opt_set(video_codec_ctx->priv_data, "profile", "high", 0);
+
+					// Use B-frames as references when there are B-frames to use. This has to
+					// sit here rather than with the other NVENC defaults in add_video_stream():
+					// the legacy max_b_frames reset above runs in between, and b_ref_mode is
+					// meaningless without B-frames. It is left alone if the caller set it.
+					//
+					// Note that max_b_frames is zero on this path unless the caller asked for
+					// SetOption("allow_b_frames", "1"), so today this is reached only then.
+					// Turning them on by default is a separate change and not an obvious one:
+					// measured on podcast_pip 1080p at matched cq it is a wash, -2.3 % file size
+					// for -0.08 VMAF.
+					//
+					// The clamp is not cosmetic. add_video_stream() sets max_b_frames = 10 and
+					// NVENC's H.264 limit is 4, so before this an "allow_b_frames" caller got
+					// "Max B-frames 10 exceed 4" out of avcodec_open2 and an InvalidCodec throw
+					// — the option was unusable on hardware encode rather than merely ignored.
+					if (video_codec_ctx->max_b_frames > 4)
+						video_codec_ctx->max_b_frames = 4;
+
+					if (video_codec_ctx->max_b_frames > 0) {
+						int64_t b_ref = -1;
+						if (av_opt_get_int(video_codec_ctx->priv_data, "b_ref_mode", 0, &b_ref) >= 0 && b_ref < 0)
+							av_opt_set(video_codec_ctx->priv_data, "b_ref_mode", "middle", 0);
+					}
 					break;
 				}
 				video_codec_ctx->max_b_frames = 0;  // At least this GPU doesn't support b-frames

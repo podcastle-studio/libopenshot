@@ -607,8 +607,18 @@ void configureWriter(FFmpegWriter& w, int width, int height, Fraction fps, int b
     w.SetVideoOptions(codec, width, height, fps, bitrate);
     w.PrepareStreams();
     if (codec.find("nvenc") != std::string::npos) {
-        // Hardware encoder: x264-only options throw InvalidOptions. p4 is the balanced NVENC preset.
-        w.SetOption(VIDEO_STREAM, "preset", "p4");
+        // Hardware encoder: the x264-only options (x264-params) do not exist here, but "crf"
+        // does now -- FFmpegWriter maps it onto NVENC's constant-quality control, so both
+        // encoders are driven by the same quality number. These are exactly what
+        // VideoRenderingImpl.cpp asks for when RenderBackend::usingHardwareEncoder() is true,
+        // including the BT.709 tagging that x264 carries inside x264-params. Measuring anything
+        // else here measures a configuration production never runs.
+        w.SetOption(VIDEO_STREAM, "preset", "p5");   // NVENC's equivalent of x264 preset=medium
+        w.SetOption(VIDEO_STREAM, "tune", "hq");
+        w.SetOption(VIDEO_STREAM, "crf", "18");      // same knob as x264; the writer maps it to cq
+        w.SetOption(VIDEO_STREAM, "color_primaries", "bt709");
+        w.SetOption(VIDEO_STREAM, "color_trc", "bt709");
+        w.SetOption(VIDEO_STREAM, "colorspace", "bt709");
     } else {
         w.SetOption(VIDEO_STREAM, "crf", "18");
         w.SetOption(VIDEO_STREAM, "preset", "medium");
