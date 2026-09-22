@@ -67,6 +67,9 @@ if(DEFINED PROJECT_NAME AND TARGET openshot AND SKIA_GPU_FOUND)
   target_compile_features(openshot-gpu-effect-parity PRIVATE cxx_std_20)
   target_include_directories(openshot-gpu-effect-parity BEFORE PRIVATE
     ${SKIA_VULKAN_INCLUDE_DIR} ${SKIA_INCLUDE_DIRS} ${PROJECT_SOURCE_DIR}/src)
+  # babl, for the probe that asks what ChromaKey's YCbCr conversion actually computes.
+  # openshot links it PUBLIC, so only the include path is needed here.
+  target_include_directories(openshot-gpu-effect-parity SYSTEM PRIVATE /usr/include/babl-0.1)
   target_link_libraries(openshot-gpu-effect-parity PRIVATE openshot)
 
   # Does SkBlendMode agree with BlendModes.cpp on identical pixels? (W13)

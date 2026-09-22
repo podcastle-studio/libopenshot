@@ -13,7 +13,7 @@
 #ifndef OPENSHOT_BARS_EFFECT_H
 #define OPENSHOT_BARS_EFFECT_H
 
-#include "../EffectBase.h"
+#include "../GpuEffect.h"
 
 #include "../Color.h"
 #include "../Frame.h"
@@ -33,11 +33,19 @@ namespace openshot
 	 * Adding bars around your video can be done for cinematic reasons, and creates a fun way to frame
 	 * in the focal point of a scene. The bars can be any color, and each side can be animated independently.
 	 */
-	class Bars : public EffectBase
+	class Bars : public GpuEffect
 	{
 	private:
 		/// Init effect settings
 		void init_effect_details();
+
+	protected:
+		/// The SkSL twin of applyBarsEffect.
+		const char* GpuShaderSource() const override;
+
+		/// The four bar extents, already resolved to whole pixels.
+		bool SetGpuUniforms(SkRuntimeEffectBuilder& builder, int64_t frame_number,
+							int width, int height) const override;
 
 
 	public:

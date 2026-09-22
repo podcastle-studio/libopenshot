@@ -12,6 +12,9 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
 #include "ChromaKey.h"
+
+#include "skia/include/core/SkM44.h"
+#include "skia/include/effects/SkRuntimeEffect.h"
 #include "Exceptions.h"
 #if USE_BABL
 #include <babl/babl.h>
@@ -106,6 +109,12 @@ std::shared_ptr<openshot::Frame> ChromaKey::GetFrame(std::shared_ptr<openshot::F
 	long mask_R = color.red.GetInt(frame_number);
 	long mask_G = color.green.GetInt(frame_number);
 	long mask_B = color.blue.GetInt(frame_number);
+
+	// The shader when there is a GPU to run it on and the method is one it implements
+	// (YCbCr only), the C++ otherwise. Before GetImage(), which on a GPU-backed frame
+	// is the one readback.
+	if (ApplyOnGpu(frame, frame_number))
+		return frame;
 
 	// Get source image
 	std::shared_ptr<QImage> image = frame->GetImage();
@@ -629,6 +638,103 @@ std::shared_ptr<openshot::Frame> ChromaKey::GetFrame(std::shared_ptr<openshot::F
 
 	// return the modified frame
 	return frame;
+}
+
+// The SkSL twin of the CHROMAKEY_YCBCR method.
+//
+// Only that method. The others key on HSV, HSL or CIE LCh coordinates produced by babl, and
+// reproducing babl's colour science in SkSL bit-for-bit is a different and much larger job;
+// SetGpuUniforms declines them and the C++ runs. ../video-rendering-service only ever constructs
+// CHROMAKEY_YCBCR, hardcoded, so this covers production.
+//
+// Two things about the conversion, both measured rather than assumed (the probe lives in
+// openshot-gpu-effect-parity):
+//
+//   - babl's "Y'CbCr u8" is BT.601 **studio** range -- Y in 16..235, Cb/Cr in 16..240 -- not the
+//     full-range "JPEG" mapping. Against the full-range formula 99.6 % of samples disagree by up
+//     to 16; against these coefficients, 193 of 262,144 disagree by 1, and that residual is not a
+//     rounding mode: double, float, round-half-away and trunc(x+0.5) all give the same 193.
+//   - The C++ hands babl the frame's **premultiplied** bytes while telling it the format is
+//     "R'G'B'A u8", which is straight. So the key is computed from premultiplied colour, and the
+//     fragment does the same -- deliberately, because matching the effect matters more than
+//     matching colour theory. It also means nothing here divides by alpha.
+const char* ChromaKey::GpuShaderSource() const
+{
+	return R"SKSL(
+uniform float2 key;          // the key colour's Cb, Cr, straight from babl on the host
+uniform float  threshold;    // fuzz
+uniform float  thresholdSq;
+uniform float  haloUpperSq;  // (fuzz + halo)^2
+uniform float  invHalo;      // 1/halo, or 0 when halo is 0 -- a reciprocal, as the C++ uses
+
+float4 main(float2 p) {
+	float4 b = osBytes(p);
+	// BT.601 studio-range Cb/Cr. clamp() because babl's output is u8 and saturates.
+	float cb = clamp(floor(128.0 + (-37.797 * b.r - 74.203 * b.g + 112.0 * b.b) / 255.0 + 0.5),
+					 0.0, 255.0);
+	float cr = clamp(floor(128.0 + (112.0 * b.r - 93.786 * b.g - 18.214 * b.b) / 255.0 + 0.5),
+					 0.0, 255.0);
+
+	float db = cb - key.x;
+	float dr = cr - key.y;
+	float distSq = db * db + dr * dr;
+
+	if (distSq <= thresholdSq)
+		return float4(0.0);
+
+	if (invHalo > 0.0 && distSq <= haloUpperSq) {
+		// The C++ reads sqrt from a table of std::sqrt(float(i)) over exact integers, so this is
+		// the same value up to the GPU's sqrt tolerance. Every channel including alpha is scaled,
+		// with the truncation of `unsigned char *= float`.
+		float mult = (sqrt(distSq) - threshold) * invHalo;
+		return floor(b * mult) / 255.0;
+	}
+
+	return b / 255.0;
+}
+)SKSL";
+}
+
+bool ChromaKey::SetGpuUniforms(SkRuntimeEffectBuilder& builder, int64_t frame_number,
+							   int width, int height) const
+{
+#if USE_BABL
+	if (method != CHROMAKEY_YCBCR)
+		return false;
+
+	const int threshold = fuzz.GetInt(frame_number);
+	const int halothreshold = halo.GetInt(frame_number);
+
+	// The key's Cb/Cr come from babl itself, exactly as GetFrame computes them, so only the
+	// per-pixel conversion above is an approximation of babl and the key is not.
+	babl_init();   // idempotent; GetFrame may not have run yet on this process
+	Babl const* rgb = babl_format("R'G'B'A u8");
+	Babl const* ycbcr = babl_format("Y'CbCr u8");
+	Babl const* fish = (rgb && ycbcr) ? babl_fish(rgb, ycbcr) : nullptr;
+	if (!fish)
+		return false;
+
+	unsigned char mask_in[4] = {
+		static_cast<unsigned char>(color.red.GetInt(frame_number)),
+		static_cast<unsigned char>(color.green.GetInt(frame_number)),
+		static_cast<unsigned char>(color.blue.GetInt(frame_number)),
+		255,
+	};
+	unsigned char mask_out[4] = {0, 0, 0, 0};
+	babl_process(const_cast<Babl*>(fish), mask_in, mask_out, 1);
+
+	builder.uniform("key") = SkV2{static_cast<float>(mask_out[1]), static_cast<float>(mask_out[2])};
+	builder.uniform("threshold") = static_cast<float>(threshold);
+	builder.uniform("thresholdSq") = static_cast<float>(threshold * threshold);
+	const int halo_upper = threshold + halothreshold;
+	builder.uniform("haloUpperSq") = static_cast<float>(halo_upper * halo_upper);
+	builder.uniform("invHalo") = halothreshold > 0 ? 1.0f / static_cast<float>(halothreshold) : 0.0f;
+	return true;
+#else
+	// Without babl there is no reference for the conversion, and GetFrame's YCbCr branch does not
+	// exist either, so there is nothing to be parity with.
+	return false;
+#endif
 }
 
 // Generate JSON string of this object

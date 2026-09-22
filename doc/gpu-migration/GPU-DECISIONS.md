@@ -817,6 +817,50 @@ frame. Exposure and ColorShift were both written that way at first and measured 
 pass; with the order corrected they are **0.15–0.22 ms**. Nothing about the output changes, which
 is why only the timing caught it.
 
+### W19 — Bars, ChromaKey and ColorAdjustment, and what babl's Y'CbCr actually is (2026-09-22)
+
+Seven effects are now fragments. **126 of 160 image/parameter combinations are bit-exact**, and
+nothing exceeds 2 LSB outside Brightness and Exposure's 5.
+
+**The "exact iff it does not unpremultiply" rule needed refining, and ColorAdjustment is why.**
+It never unpremultiplies — it scales the premultiplied bytes in place, which is what its C++ does —
+and it is still not exact, because it carries `double` parameters through per-pixel arithmetic that
+an SkSL uniform can only hold as `float`. It never exceeds **1 LSB** (69–102 dB). The rule is
+therefore: a fragment is exact when its per-pixel arithmetic is exact in `float` **and** it never
+divides by alpha. Bars (no arithmetic at all) and ChromaKey's hard-cut path are exact; anything
+scaling by a double-precision parameter drifts by 1 LSB.
+
+**babl's `Y'CbCr u8` is BT.601 studio range, and this was worth measuring rather than assuming.**
+ChromaKey's YCbCr method — the only method `../video-rendering-service` ever constructs, hardcoded
+with fuzz 70 and halo 20 — keys on Cb/Cr that babl produces, and a fragment cannot call babl. The
+textbook full-range "JPEG" mapping is **wrong**: 99.6 % of a 64³ sample grid disagrees, by up to
+**16**. Asking babl directly for its response to black, the three primaries and white gives Y in
+16..235 and Cb/Cr in 16..240 — studio range:
+
+    Cb = 128 + (-37.797 R - 74.203 G + 112.000 B) / 255
+    Cr = 128 + (112.000 R -  93.786 G -  18.214 B) / 255
+
+Against that, **193 of 262,144 samples differ, by 1**. That residual is *not* a rounding mode:
+double, float, round-half-away and `trunc(x + 0.5)` all give the same 193, so it is babl's own
+constants or intermediate representation. It is left there, because the end-to-end result is what
+matters and it is very good: **the service's exact configuration is 8/8 bit-exact**, as is a
+zero-halo key; only a deliberately wide halo moves, on 4 and 11 pixels of two images, by 2 LSB.
+
+**ChromaKey feeds babl premultiplied bytes while telling it they are straight** (`R'G'B'A u8`), so
+the key is computed from premultiplied colour. The fragment does the same. That is a quirk of the
+effect, not of the port, and matching the effect is the job.
+
+**Only the YCbCr method is ported.** The others key on HSV, HSL or CIE LCh coordinates that babl
+computes, and reproducing babl's colour science in SkSL bit-for-bit is a different and much larger
+undertaking. `SetGpuUniforms` returns false for them and the C++ runs — which is exactly what that
+hook is for.
+
+**The ordering rule caught two more.** Bars and ColorAdjustment both fetched `frame->GetImage()`
+before calling `ApplyOnGpu`, and both measured ~4.2–4.4 ms a pass instead of ~0.1 ms. That is now
+four of seven fragments written the wrong way round on the first attempt, so it is not a slip —
+it is the shape of these `GetFrame` functions, every one of which opens by fetching the image.
+**Move the fetch below `ApplyOnGpu` as the first step of porting an effect, before anything else.**
+
 ### The 0.2 ms per-effect gate is the cost of a pass, not of an effect (2026-09-22, W19)
 
 **Needs restating by the project owner**, in the same way W07's fps gates did.

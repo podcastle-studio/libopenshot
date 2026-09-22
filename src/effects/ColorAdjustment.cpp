@@ -10,6 +10,8 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
 #include "ColorAdjustment.h"
+
+#include "skia/include/effects/SkRuntimeEffect.h"
 #include "Exceptions.h"
 #include <QImage>
 #include <QRgb>
@@ -106,9 +108,6 @@ void ColorAdjustment::init_effect_details()
 // modified openshot::Frame object
 std::shared_ptr<openshot::Frame> ColorAdjustment::GetFrame(std::shared_ptr<openshot::Frame> frame, int64_t frame_number)
 {
-    // Get the frame's image
-    std::shared_ptr<QImage> frame_image = frame->GetImage();
-
     // Assume incoming frame is already RGBA (e.g. QImage::Format_RGBA8888)
     // and do not convert formats.
 
@@ -123,6 +122,16 @@ std::shared_ptr<openshot::Frame> ColorAdjustment::GetFrame(std::shared_ptr<opens
         vibrance_value == 0 && saturation_value == 0) {
         return frame;
     }
+
+    // The shader when there is a GPU to run it on, the C++ otherwise. After the
+    // all-defaults early-out above so both paths share it, and before GetImage(),
+    // which on a GPU-backed frame is the one readback -- with the fetch left above
+    // this, the shader measured 4.4 ms a pass instead of 0.1 ms.
+    if (ApplyOnGpu(frame, frame_number))
+        return frame;
+
+    // Get the frame's image
+    std::shared_ptr<QImage> frame_image = frame->GetImage();
 
     const int width = frame_image->width();
     const int height = frame_image->height();
@@ -174,6 +183,76 @@ std::shared_ptr<openshot::Frame> ColorAdjustment::GetFrame(std::shared_ptr<opens
 
     // return the modified frame
     return frame;
+}
+
+// The SkSL twin of the temperature/tint, saturation and vibrance chain.
+//
+// Note what this effect does NOT do: it never unpremultiplies. It reads the
+// premultiplied bytes, scales them, and writes them back, so on a semi-transparent
+// pixel it is adjusting premultiplied colour. That is what the C++ does and the
+// fragment matches it -- the alternative would be a different effect, not a better
+// port of this one. It also means this fragment never divides by alpha, which is
+// the one operation that costs bit-exactness (GPU-DECISIONS.md, W19).
+//
+// The three stages run in the C++'s order and each is skipped on the same
+// condition, because vibrance's boost depends on the saturation of what saturation
+// left behind -- reordering them changes the result.
+const char* ColorAdjustment::GpuShaderSource() const
+{
+	return R"SKSL(
+uniform float temperature;
+uniform float tint;
+uniform float saturation;
+uniform float vibrance;
+
+float4 main(float2 p) {
+	float4 bytes = osBytes(p);
+	float3 c = bytes.rgb;
+
+	// Temperature on the blue-yellow axis, tint on green-magenta. Written as the
+	// C++ writes it, one channel at a time, because r is scaled twice.
+	if (temperature != 0.0 || tint != 0.0) {
+		c.r = c.r * (1.0 + temperature * 0.1);
+		c.b = c.b * (1.0 - temperature * 0.1);
+		c.g = c.g * (1.0 - tint * 0.1);
+		c.r = c.r * (1.0 + tint * 0.05);
+		c.b = c.b * (1.0 + tint * 0.05);
+	}
+
+	if (saturation != 0.0) {
+		float grey = c.r * 0.299 + c.g * 0.587 + c.b * 0.114;
+		c = grey + (c - grey) * (1.0 + saturation);
+	}
+
+	if (vibrance != 0.0) {
+		float grey = (c.r + c.g + c.b) / 3.0;
+		float hi = max(c.r, max(c.g, c.b));
+		float lo = min(c.r, min(c.g, c.b));
+		// Guarded exactly as the C++ guards it: a black pixel has no saturation to
+		// measure, and dividing by hi would be a division by zero.
+		float sat = hi == 0.0 ? 0.0 : (hi - lo) / hi;
+		float boost = vibrance * (1.0 - sat * sat);
+		c = grey + (c - grey) * (1.0 + boost);
+	}
+
+	// clamp(double) in the header takes an int parameter, so the double is
+	// truncated toward zero first and only then clamped -- osToInt3 then osConstrain3,
+	// in that order.
+	return float4(osConstrain3(osToInt3(c)), bytes.a) / 255.0;
+}
+)SKSL";
+}
+
+bool ColorAdjustment::SetGpuUniforms(SkRuntimeEffectBuilder& builder, int64_t frame_number,
+									 int width, int height) const
+{
+	// The C++ carries these as double through the whole chain and an SkSL uniform is
+	// float, so expect the same sub-LSB drift the other scaling fragments show.
+	builder.uniform("temperature") = static_cast<float>(temperature.GetValue(frame_number));
+	builder.uniform("tint") = static_cast<float>(tint.GetValue(frame_number));
+	builder.uniform("saturation") = static_cast<float>(saturation.GetValue(frame_number));
+	builder.uniform("vibrance") = static_cast<float>(vibrance.GetValue(frame_number));
+	return true;
 }
 
 // Generate JSON string of this object

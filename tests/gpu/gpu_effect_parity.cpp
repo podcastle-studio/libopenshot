@@ -19,12 +19,17 @@
 #include "gpu/GpuFrame.h"
 #include "KeyFrame.h"
 #include "effects/Alpha.h"
+#include "effects/Bars.h"
 #include "effects/Brightness.h"
+#include "effects/ChromaKey.h"
+#include "effects/ColorAdjustment.h"
 #include "effects/ColorShift.h"
 #include "effects/Exposure.h"
 #include "gpu/GpuDevice.h"
 
 #include <QImage>
+
+#include <babl/babl.h>
 
 #include "skia/include/core/SkBlendMode.h"
 #include "skia/include/core/SkCanvas.h"
@@ -208,6 +213,39 @@ std::vector<Case> cases() {
         {"colorshift(rgb+alpha)", [] { return std::make_shared<openshot::ColorShift>(
                                            Keyframe(0.05), Keyframe(0.02), Keyframe(-0.03), Keyframe(0.04),
                                            Keyframe(0.01), Keyframe(-0.06), Keyframe(0.02), Keyframe(0.03)); }},
+
+        // Bar extents are truncated, so fractions that do and do not land on a whole
+        // pixel of a 256-wide image are both represented.
+        {"bars(edges)",           [] { return std::make_shared<openshot::Bars>(
+                                           openshot::Color("#000000"), Keyframe(0.125), Keyframe(0.07),
+                                           Keyframe(0.0), Keyframe(0.3)); }},
+        {"bars(all four)",        [] { return std::make_shared<openshot::Bars>(
+                                           openshot::Color("#000000"), Keyframe(0.2), Keyframe(0.2),
+                                           Keyframe(0.2), Keyframe(0.2)); }},
+
+        // One of each stage on its own, then all three together, because vibrance
+        // reads the saturation that saturation left behind.
+        {"coloradj(temp+tint)",   [] { return std::make_shared<openshot::ColorAdjustment>(
+                                           Keyframe(0.6), Keyframe(-0.4), Keyframe(0.0), Keyframe(0.0)); }},
+        {"coloradj(saturation)",  [] { return std::make_shared<openshot::ColorAdjustment>(
+                                           Keyframe(0.0), Keyframe(0.0), Keyframe(0.0), Keyframe(0.7)); }},
+        {"coloradj(vibrance)",    [] { return std::make_shared<openshot::ColorAdjustment>(
+                                           Keyframe(0.0), Keyframe(0.0), Keyframe(0.8), Keyframe(0.0)); }},
+        {"coloradj(all)",         [] { return std::make_shared<openshot::ColorAdjustment>(
+                                           Keyframe(0.3), Keyframe(0.25), Keyframe(-0.5), Keyframe(0.45)); }},
+
+        // The service's configuration exactly: green key, fuzz 70, halo 20, YCbCr. Then a wide
+        // halo, because the halo branch is the only part with any arithmetic in it, and a zero
+        // halo, which takes the hard-cut path.
+        {"chromakey(service)",    [] { return std::make_shared<openshot::ChromaKey>(
+                                           openshot::Color(0, 255, 0, 0), 70, 20,
+                                           openshot::CHROMAKEY_YCBCR); }},
+        {"chromakey(wide halo)",  [] { return std::make_shared<openshot::ChromaKey>(
+                                           openshot::Color(0, 255, 0, 0), 40, 90,
+                                           openshot::CHROMAKEY_YCBCR); }},
+        {"chromakey(no halo)",    [] { return std::make_shared<openshot::ChromaKey>(
+                                           openshot::Color(20, 200, 60, 0), 90, 0,
+                                           openshot::CHROMAKEY_YCBCR); }},
     };
 }
 
@@ -494,6 +532,89 @@ int checkExposureChain() {
     return 0;
 }
 
+// What exactly does babl's "R'G'B'A u8" -> "Y'CbCr u8" conversion compute?
+//
+// ChromaKey's YCbCr method -- the only method ../video-rendering-service ever asks for -- keys on
+// Cb and Cr produced by babl. A fragment cannot call babl, so it has to reproduce the mapping, and
+// "it is probably BT.601" is not something to find out from a failing parity run. This asks babl
+// over the whole 6-bit-per-channel grid and reports how far the textbook formula is from it.
+int checkYCbCr() {
+    // ChromaKey::GetFrame calls babl_init() behind a static flag the first time it needs it; this
+    // probe may run first, and babl aborts the process rather than returning an error if it has
+    // not been initialised. It is idempotent, so calling it here is safe either way.
+    babl_init();
+    Babl const* rgb = babl_format("R'G'B'A u8");
+    Babl const* ycbcr = babl_format("Y'CbCr u8");
+    Babl const* fish = (rgb && ycbcr) ? babl_fish(rgb, ycbcr) : nullptr;
+    if (!fish) { std::printf("  ycbcr: babl_fish failed\n"); return 1; }
+
+    constexpr int kStep = 4;                 // 64^3 = 262,144 samples
+    std::vector<unsigned char> in, out;
+    for (int r = 0; r < 256; r += kStep)
+        for (int g = 0; g < 256; g += kStep)
+            for (int b = 0; b < 256; b += kStep) {
+                in.push_back((unsigned char) r); in.push_back((unsigned char) g);
+                in.push_back((unsigned char) b); in.push_back(255);
+            }
+    const long samples = (long) in.size() / 4;
+    out.resize(samples * 3);
+    babl_process(const_cast<Babl*>(fish), in.data(), out.data(), samples);
+
+    // Which arithmetic reproduces babl exactly? The coefficients are settled by the probes below
+    // (BT.601 studio range); what is not settled is the precision and the rounding babl uses to
+    // get back to u8, and that is worth pinning down because the fragment has to match it or
+    // ChromaKey keys slightly different pixels on the GPU.
+    struct Variant { const char* name; bool use_float; bool trunc_half; bool short_coeffs; };
+    const Variant variants[] = {
+        {"double, exact coeffs, round-half-away", false, false, false},
+        {"double, exact coeffs, trunc(x+0.5)",    false, true,  false},
+        {"float,  exact coeffs, round-half-away", true,  false, false},
+        {"float,  exact coeffs, trunc(x+0.5)",    true,  true,  false},
+        {"double, 3-dp coeffs,  round-half-away", false, false, true },
+        {"float,  3-dp coeffs,  trunc(x+0.5)",    true,  true,  true },
+    };
+
+    for (const Variant& v : variants) {
+        int worst_cb = 0, worst_cr = 0;
+        long differ = 0;
+        for (long i = 0; i < samples; ++i) {
+            const double r = in[i * 4 + 0], g = in[i * 4 + 1], b = in[i * 4 + 2];
+            double cbf, crf;
+            if (v.short_coeffs) {
+                cbf = 128.0 + (-0.148 * r - 0.291 * g + 0.439 * b);
+                crf = 128.0 + (0.439 * r - 0.368 * g - 0.071 * b);
+            } else {
+                cbf = 128.0 + (-37.797 * r - 74.203 * g + 112.0 * b) / 255.0;
+                crf = 128.0 + (112.0 * r - 93.786 * g - 18.214 * b) / 255.0;
+            }
+            if (v.use_float) { cbf = (float) cbf; crf = (float) crf; }
+            const int cb = v.trunc_half ? (int) (cbf + 0.5) : (int) std::lround(cbf);
+            const int cr = v.trunc_half ? (int) (crf + 0.5) : (int) std::lround(crf);
+            const int dcb = std::abs(std::min(255, std::max(0, cb)) - (int) out[i * 3 + 1]);
+            const int dcr = std::abs(std::min(255, std::max(0, cr)) - (int) out[i * 3 + 2]);
+            if (dcb > worst_cb) worst_cb = dcb;
+            if (dcr > worst_cr) worst_cr = dcr;
+            if (dcb || dcr) differ++;
+        }
+        std::printf("  %-40s %6ld of %ld differ, worst Cb %d Cr %d\n",
+                    v.name, differ, samples, worst_cb, worst_cr);
+    }
+
+    // Read the mapping off babl directly instead of guessing at it: the response to black, to
+    // each primary at full intensity, and to white gives the offset and the three coefficients
+    // of each of Cb and Cr.
+    const unsigned char probes[5][4] = {
+        {0, 0, 0, 255}, {255, 0, 0, 255}, {0, 255, 0, 255}, {0, 0, 255, 255}, {255, 255, 255, 255},
+    };
+    unsigned char probe_out[5 * 3];
+    babl_process(const_cast<Babl*>(fish), (void*) probes, probe_out, 5);
+    const char* names[5] = {"black", "red", "green", "blue", "white"};
+    for (int i = 0; i < 5; ++i)
+        std::printf("    %-6s -> Y=%3d Cb=%3d Cr=%3d\n", names[i],
+                    probe_out[i * 3], probe_out[i * 3 + 1], probe_out[i * 3 + 2]);
+    return 0;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -579,6 +700,7 @@ int main(int argc, char** argv) {
         std::printf("\nthe shared unpremultiply step, over every legal pair\n");
         checkUnpremul();
         checkExposureChain();
+        checkYCbCr();
         std::printf("\n1080p breakdown of one pass\n");
         probe(1920, 1080);
         // The 0.2 ms gate is about a GPU. Lavapipe is Mesa's software rasteriser and exists here

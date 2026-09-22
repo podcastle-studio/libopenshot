@@ -771,6 +771,30 @@ production corpus) remain open; W05–W10 are the CPU quick wins. W01/W02 stay d
 
 ## Log
 
+- 2026-09-22 — **W19: Bars, ChromaKey and ColorAdjustment.** Seven effects are now fragments;
+  **126 of 160 image/parameter combinations bit-exact**, nothing over 2 LSB outside Brightness and
+  Exposure. Four-way sweep 307/307, `openshot-gpu-checks` 8/8 on both backends.
+  **babl's `Y'CbCr u8` is BT.601 studio range** (Y 16–235, Cb/Cr 16–240), not the full-range
+  "JPEG" mapping — that one is wrong by up to **16** on 99.6 % of a 64³ grid. Measured by asking
+  babl for its response to black, the primaries and white. With the studio coefficients, 193 of
+  262,144 samples still differ by 1, and that is babl's own constants rather than a rounding mode
+  (double, float, round-half-away and `trunc(x+0.5)` all give the same 193). End to end it does not
+  matter: **the service's exact ChromaKey configuration is 8/8 bit-exact**, and only a deliberately
+  wide halo moves, on 4 and 11 pixels, by 2 LSB.
+  **Only ChromaKey's YCbCr method is on the GPU** — the rest key on HSV/HSL/CIE coordinates babl
+  computes, and `SetGpuUniforms` declines them. The service only ever constructs YCbCr.
+  **The parity rule needed refining.** ColorAdjustment never unpremultiplies and is still not
+  exact: it carries `double` parameters through per-pixel arithmetic that an SkSL uniform holds as
+  `float`. It never exceeds 1 LSB. So: exact when the arithmetic is exact in `float` *and* nothing
+  divides by alpha.
+  **And the ordering rule caught two more** — Bars and ColorAdjustment both fetched `GetImage()`
+  before `ApplyOnGpu` and measured ~4.2–4.4 ms a pass instead of ~0.1 ms. Four of the first seven
+  were written that way round, so it is the shape of these functions, not a slip.
+  **Timings this session are not trustworthy in absolute terms: the machine was on battery**
+  (AC offline, 838 MHz average). The parity numbers are unaffected — they are deterministic — but
+  every millisecond figure from 2026-09-22, including the Exposure round-trip A/B, wants a re-run
+  on mains power before it is quoted. The *ratios* held across interleaved runs.
+
 - 2026-09-22 — **Exposure: the ARGB32 round trip removed, and a diagnosis corrected.** The previous
   entry recorded that `Exposure.cpp`'s conversion to `Format_ARGB32` — which `AddImage` converts
   straight back in place, so it is a round trip and not a conversion — was quantising pixels before

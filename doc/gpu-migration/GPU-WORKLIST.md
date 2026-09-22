@@ -866,15 +866,25 @@ Depends on W12/W13 only — **not** on Stage 7. Can run in parallel with Stage 7
       result on the GPU** so a chain pays one crossing rather than one per effect. Declining is a
       normal answer and the CPU twin runs untouched.
 - [ ] One SkSL fragment each, with a parity test against the C++ twin. **Done: Brightness, Alpha,
-      Exposure, ColorShift** (2026-09-22) — 72 of 88 image/parameter combinations bit-exact, the
-      rest 55–75 dB with a 5 LSB worst case. **Left:** Bars, ChromaKey, ColorAdjustment,
-      LightAdjustment, Enhancement, ColorMap (3-D LUT texture), Mask, Crop, CameraMovement.
-      - A fragment is exact **exactly when it does not unpremultiply**: Alpha and ColorShift are
-        16/16, Brightness and Exposure are not. Do not expect better from one that divides.
-      - **`ApplyOnGpu` goes before any `frame->GetImage()`.** On a GPU-backed frame that call is
-        the one readback, so the wrong order makes the shader pay an upload and a readback every
-        frame: measured 3.2–3.5 ms a pass against 0.15–0.22 ms. Output is identical either way,
-        so only the timing catches it.
+      Exposure, ColorShift, Bars, ChromaKey (YCbCr only), ColorAdjustment** (2026-09-22) — 126 of
+      160 image/parameter combinations bit-exact, nothing over 2 LSB outside Brightness and
+      Exposure. **Left:** LightAdjustment, Enhancement, ColorMap (3-D LUT texture), Mask, Crop,
+      CameraMovement.
+      - **ChromaKey is YCbCr-only on the GPU.** The other methods key on HSV, HSL or CIE LCh
+        coordinates babl produces; `SetGpuUniforms` declines them and the C++ runs. The service
+        only ever constructs `CHROMAKEY_YCBCR`, and that configuration is **8/8 bit-exact**.
+      - babl's `Y'CbCr u8` is BT.601 **studio** range, not the full-range "JPEG" mapping — the
+        latter is wrong by up to 16. Coefficients and the measurement are in `GPU-DECISIONS.md`.
+      - A fragment is exact when its per-pixel arithmetic is exact in `float` **and** it never
+        divides by alpha. Alpha, ColorShift, Bars and ChromaKey's hard cut are exact; Brightness
+        and Exposure divide, and ColorAdjustment carries `double` parameters an SkSL uniform can
+        only hold as `float` (1 LSB). Do not expect better from either shape.
+      - **`ApplyOnGpu` goes before any `frame->GetImage()`, and move the fetch as step one of
+        porting an effect.** On a GPU-backed frame that call is the one readback, so the wrong
+        order makes the shader pay an upload and a readback every frame: measured 3.2–4.4 ms a
+        pass against 0.05–0.22 ms. Four of the first seven fragments were written the wrong way
+        round, because every one of these `GetFrame` functions opens by fetching the image.
+        Output is identical either way, so only the timing catches it.
       - **Measure before blaming the CPU path.** Exposure's remaining gap was put down to its
         `Format_ARGB32` round trip; removing that changed *no* pixel of any golden and not one
         parity digit, because Qt's round trip is lossless. The cause is the same division every

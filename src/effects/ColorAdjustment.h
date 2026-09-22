@@ -12,7 +12,7 @@
 #ifndef OPENSHOT_COLOR_ADJUSTMENT_H
 #define OPENSHOT_COLOR_ADJUSTMENT_H
 
-#include "../EffectBase.h"
+#include "../GpuEffect.h"
 #include "../Frame.h"
 #include "../Json.h"
 #include "../KeyFrame.h"
@@ -30,11 +30,19 @@ namespace openshot
      * controls for temperature, tint, vibrance, and saturation.
      * All parameters can be animated with keyframes.
      */
-    class ColorAdjustment : public EffectBase
+    class ColorAdjustment : public GpuEffect
     {
     private:
         /// Init effect settings
         void init_effect_details();
+
+    protected:
+        /// The SkSL twin of the temperature/tint, saturation and vibrance chain.
+        const char* GpuShaderSource() const override;
+
+        /// The four keyframe values, or false when all of them are at their defaults.
+        bool SetGpuUniforms(SkRuntimeEffectBuilder& builder, int64_t frame_number,
+                            int width, int height) const override;
 
         /// Helper functions for color adjustments
         static int clamp(int value, int min = 0, int max = 255) {

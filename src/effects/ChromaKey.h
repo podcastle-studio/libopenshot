@@ -13,7 +13,7 @@
 #ifndef OPENSHOT_CHROMAKEY_EFFECT_H
 #define OPENSHOT_CHROMAKEY_EFFECT_H
 
-#include "../EffectBase.h"
+#include "../GpuEffect.h"
 
 #include "../Color.h"
 #include "../Frame.h"
@@ -33,7 +33,7 @@ namespace openshot
 	 * The greenscreen / bluescreen effect replaces matching colors in the video image with
 	 * transparent pixels, revealing lower layers in the timeline.
 	 */
-	class ChromaKey : public EffectBase
+	class ChromaKey : public GpuEffect
 	{
 	private:
 		Color color;
@@ -43,6 +43,17 @@ namespace openshot
 
 		/// Init effect settings
 		void init_effect_details();
+
+	protected:
+		/// The SkSL twin of the CHROMAKEY_YCBCR method only. See SetGpuUniforms.
+		const char* GpuShaderSource() const override;
+
+		/// The key's Cb/Cr and the two thresholds, or **false for every method other
+		/// than CHROMAKEY_YCBCR** -- the rest key on HSV, HSL or CIE coordinates that
+		/// babl computes, and reproducing babl's colour science in SkSL is a much
+		/// larger undertaking than this item. YCbCr is the one the service asks for.
+		bool SetGpuUniforms(SkRuntimeEffectBuilder& builder, int64_t frame_number,
+							int width, int height) const override;
 
 	public:
 
