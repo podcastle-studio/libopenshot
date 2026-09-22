@@ -117,6 +117,54 @@ namespace openshot
 		/// until it has finished. Returns false when unavailable or on failure.
 		bool submit(bool syncToCpu);
 
+		/// As submit(), with the GPU first waiting on @a wait_semaphores — raw
+		/// @c VkSemaphore handles, passed as integers so this installed header
+		/// needs no Vulkan headers of its own. Each wait consumes one signal, the
+		/// way a Vulkan binary semaphore does, so a semaphore handed here must
+		/// have been signalled exactly once: this is how CudaInterop's copy is
+		/// ordered before the drawing that samples it, with no CPU sync.
+		bool submit(bool syncToCpu, const unsigned long long* wait_semaphores,
+					unsigned int wait_count);
+
+		/// The raw Vulkan handles behind the Graphite context, or null when the
+		/// device is unavailable or this build has no GPU Skia.
+		///
+		/// For interop code *inside* the library (src/gpu/CudaInterop) that has to
+		/// allocate its own images: Graphite cannot export its own allocations, so
+		/// anything CUDA imports must be allocated against this device. The
+		/// handles are @c void* because every installed header must compile for a
+		/// consumer with no Vulkan headers; they are the dispatchable handles
+		/// @c VkInstance, @c VkPhysicalDevice, @c VkDevice and @c VkQueue.
+		struct VulkanHandles
+		{
+			void* instance = nullptr;
+			void* physical_device = nullptr;
+			void* device = nullptr;
+			void* queue = nullptr;
+			unsigned int queue_family = 0;
+			unsigned int api_version = 0;
+			/// VK_KHR_external_memory_fd was offered and is enabled
+			bool external_memory_fd = false;
+			/// VK_KHR_external_semaphore_fd was offered and is enabled. lavapipe
+			/// has no such thing, which is why the interop declines there.
+			bool external_semaphore_fd = false;
+		};
+		const VulkanHandles* vulkanHandles();
+
+		/// Holds the process-wide queue for its lifetime.
+		///
+		/// There is one @c VkQueue and submitting to it needs external
+		/// synchronisation; submit() takes this lock internally. Raw Vulkan work
+		/// on the same queue — an image-layout barrier, say — must hold it too.
+		class QueueGuard
+		{
+		public:
+			QueueGuard();
+			~QueueGuard();
+			QueueGuard(const QueueGuard&) = delete;
+			QueueGuard& operator=(const QueueGuard&) = delete;
+		};
+
 		GpuDevice(const GpuDevice&) = delete;
 		GpuDevice& operator=(const GpuDevice&) = delete;
 
@@ -126,6 +174,9 @@ namespace openshot
 
 	private:
 		GpuDevice();
+
+		void lockQueue();
+		void unlockQueue();
 
 		class Impl;
 		std::unique_ptr<Impl> impl;

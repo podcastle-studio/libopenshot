@@ -27,7 +27,7 @@ Stated by the project owner, 2026-09-14. This overrides anything in
    and all four must be **295/295** (292 until W18 added three frames of background-colour
    coverage). Commands are in `CLAUDE.md` under "GPU rendering (`src/gpu`)".
 
-Last updated: 2026-09-22 (Stage 6: W19 and W21 done, W20 six of ten; the four blur shaders are the next work) · branch `feature/gpu-rendering`.
+Last updated: 2026-09-22 (Stage 6 complete; **Stage 7: W22 done**, gate met at 0.166 ms per 4K frame — W23 is next) · branch `feature/gpu-rendering`.
 **Phase 2 is complete.** 2.0 landed 2026-09-15 (the GPU-capable image, in
 `../video-rendering-service` branch `feature/gpu-rendering`), which was the last thing in it and the
 only thing stopping R2a and R2b from shipping. **R2a complete** (2.1, 2.2, 2.3); **2.4 done, gate
@@ -449,7 +449,10 @@ ask it for you) and none reads the environment for itself — the new `control` 
 >
 > **Superseded 2026-09-22: Stage 6 (W19, W20, W21) is done**, ColorMap and all ten transition
 > variants included. See the Stage 6 section below and the top of the log. The next work is
-> **W22–W25**, the per-clip PCIe crossing.
+> **W22–W25**, the per-clip PCIe crossing — of which **W22 is now done too** (2026-09-22, gate met
+> at 0.166 ms per 4K frame). **A resuming session starts W23**, and its first problem is the one
+> already on file: hardware decode throws on the first frame in this fork, and plan step 1.5 is
+> the fix.
 >
 > **Shader language decided 2026-09-18: SkSL, one source, both sides.** The server runs it as
 > `SkRuntimeEffect`, the front end as `CanvasKit.RuntimeEffect` — CanvasKit is already shipped there
@@ -785,6 +788,29 @@ production corpus) remain open; W05–W10 are the CPU quick wins. W01/W02 stay d
   x264 loss, not a matrix bug.
 
 ## Log
+
+- 2026-09-22 — **W22 done: CUDA frames reach a Vulkan image with no host copy, and the gate is met
+  at 0.166 ms against 0.300 for a 4K frame.** `src/gpu/CudaInterop.{h,cpp}`, plus the two device
+  extensions and the Vulkan handles in `GpuDevice`. Exact: **0 of 8 294 400 pixels differ** at
+  3840x2160 (and at 640x360) after an NV12 pattern goes CUDA -> exportable Vulkan image -> SkSL ->
+  readback. Clean under `compute-sanitizer --tool memcheck --leak-check=full`: **0 errors, 0 bytes
+  leaked**. Four-way sweep **307/307** in all four arms, `openshot-gpu-checks` 8/8 on Vulkan and
+  lavapipe. The interop SKIPs on lavapipe, with the GPU off, and with no CUDA driver — all normal.
+  **The one thing a later session must not undo: `prepareForCopy`.** CUDA needs the images in
+  `VK_IMAGE_LAYOUT_GENERAL` and Skia leaves them in `SHADER_READ_ONLY_OPTIMAL`, so every copy needs
+  a layout barrier first. Doing it inside `copyNV12` puts a full cross-API round trip on the
+  critical path — **0.224 ms of latency, and 0.401 ms a frame, over the gate**. Issued instead
+  right after the draw that read the images, the semaphore is already up when the next copy starts:
+  fixed cost 0.011 ms, and the 12.4 MB itself is 0.155 ms. The barrier still runs; it just overlaps
+  with the drawing.
+  **The premise below held**, and the two things it forced are in the code: the images are ours
+  (own `vkAllocateMemory`, dedicated, exportable — `GpuSurfacePool` stays VMA-backed and is never
+  the imported one), and the `SkImage` wrapper is rebuilt per frame declaring GENERAL, because a
+  wrapper kept across frames would barrier from a layout the image has left. The CUDA device is
+  matched to the Vulkan one **by UUID** and it is the **primary** context, which is what FFmpeg's
+  CUDA hwdevice uses — so W23 can hand it straight to `AVCUDADeviceContext`. The driver is
+  dlopen'd, never linked: only cuda.h is a build dependency, and a machine with no NVIDIA driver is
+  unaffected. Full reasoning in `GPU-DECISIONS.md`.
 
 - 2026-09-22 — **Stage 7 opened: W22's premise measured before any code, and it changes the item's
   shape.** Nothing is implemented; this is the measurement the protocol asks for first.

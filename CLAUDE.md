@@ -44,7 +44,7 @@ Other project commands: `/check` (golden suite + visual diff), `/bench` (perform
 | path | what |
 |---|---|
 | `src/` | the library. Upstream OpenShot plus this fork's additions |
-| `src/gpu/` | **fork**: Vulkan device + Skia Graphite context, surface pool, GPU frame (off unless `OPENSHOT_GPU` is set) |
+| `src/gpu/` | **fork**: Vulkan device + Skia Graphite context, surface pool, GPU frame, CUDA interop (off unless `OPENSHOT_GPU` is set) |
 | `src/text/` | **fork**: Skia text engine (layout, animation, glow, 3D tilt, curved text) |
 | `src/subtitle/` | **fork**: Skia subtitle renderer driven by JSON |
 | `src/effects/` | effect classes; the ones the service uses are listed in plan section 2.4 |
@@ -204,6 +204,17 @@ Rules that are easy to get wrong and crash in the NVIDIA driver rather than anyw
   crossing onto a GPU surface through `GpuFrame::ToTexture` first.
 - Pooled surfaces default to a **null** colour space, matching the `SkImageInfo::MakeN32Premul`
   raster surfaces they replace. Attaching sRGB makes every blend gamma-correct and changes output.
+- **`CudaInterop` (W22) allocates its own images and nothing else may.** Graphite cannot export its
+  own allocations, so the images CUDA writes are ours (`vkAllocateMemory`, dedicated, exportable);
+  `GpuSurfacePool` stays VMA-backed and is never one of them. CUDA needs them in
+  `VK_IMAGE_LAYOUT_GENERAL` and Skia leaves them in `SHADER_READ_ONLY_OPTIMAL`, so two things hold:
+  `GpuImage::image()` hands back a **fresh** wrapper every call (one kept across frames would
+  barrier from a layout the image has left), and the layout barrier goes through
+  `prepareForCopy(y, uv)` **right after the submit of the draw that read them** — inside
+  `copyNV12` it is a cross-API round trip on the critical path and costs 0.25 ms a frame for
+  nothing. The driver is dlopen'd: only `cuda.h` is a build dependency, `available()` is false
+  without it, and lavapipe declines (no `external_semaphore_fd`). Gate:
+  `openshot-gpu-cuda-interop`.
 - `GpuFrame` is `kRGBA_8888` and raster N32 is BGRA on x86, but do **not** "fix" the R/B swap in
   `SkiaRenderer::parseColorString` for the GPU path. It is a logical `SkColor` convention, not a
   byte order; Skia converts correctly in both directions on readback, so it survives the round trip.

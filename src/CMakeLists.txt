@@ -46,6 +46,7 @@ add_feature_info("IWYU (include-what-you-use)" ENABLE_IWYU "Scan all source file
 
 # Main library sources
 set(OPENSHOT_SOURCES
+  gpu/CudaInterop.cpp
   gpu/GpuDevice.cpp
   gpu/GpuFrame.cpp
   gpu/GpuOffscreen.cpp
@@ -731,6 +732,23 @@ if(SKIA_GPU_FOUND)
   find_package(Vulkan REQUIRED)
   target_link_libraries(openshot PUBLIC ${Vulkan_LIBRARY})
   message(STATUS "libopenshot: GPU support ON (Graphite/Vulkan)")
+
+  # src/gpu/CudaInterop needs the CUDA driver headers at build time and nothing
+  # at link time: the driver API is dlopen'd, so the library still loads on a
+  # machine with no NVIDIA driver. Without the headers the file compiles to the
+  # same stub it uses in a CPU-Skia build, and CudaInterop::available() is false.
+  find_path(CUDA_DRIVER_INCLUDE_DIR cuda.h
+    HINTS ENV CUDA_HOME ENV CUDA_PATH
+    PATHS /usr/local/cuda /usr/local/cuda-12 /opt/cuda /usr
+    PATH_SUFFIXES include)
+  if(CUDA_DRIVER_INCLUDE_DIR)
+    target_compile_definitions(openshot PRIVATE OPENSHOT_HAVE_CUDA=1)
+    target_include_directories(openshot SYSTEM PRIVATE ${CUDA_DRIVER_INCLUDE_DIR})
+    message(STATUS "libopenshot: CUDA interop ON (headers at ${CUDA_DRIVER_INCLUDE_DIR}, driver dlopen'd)")
+  else()
+    message(STATUS "libopenshot: CUDA interop OFF (no cuda.h); CudaInterop::available() is always false")
+  endif()
+  add_feature_info("CUDA interop" CUDA_DRIVER_INCLUDE_DIR "src/gpu/CudaInterop: NVDEC frames into Vulkan images")
 else()
   message(STATUS "libopenshot: GPU support OFF (CPU Skia); GpuDevice::available() is always false")
 endif()

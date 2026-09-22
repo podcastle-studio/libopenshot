@@ -6,6 +6,7 @@
 
 #include "GpuDevice.h"
 
+#include "CudaInterop.h"
 #include "GpuSurfacePool.h"
 
 #include <atomic>
@@ -22,8 +23,10 @@
 #include "skia/include/gpu/graphite/ContextOptions.h"
 #include "skia/include/gpu/graphite/GraphiteTypes.h"
 #include "skia/include/gpu/graphite/Recorder.h"
+#include "skia/include/gpu/graphite/BackendSemaphore.h"
 #include "skia/include/gpu/graphite/Recording.h"
 #include "skia/include/gpu/graphite/vk/VulkanGraphiteContext.h"
+#include "skia/include/gpu/graphite/vk/VulkanGraphiteTypes.h"
 #include "skia/include/gpu/vk/VulkanBackendContext.h"
 #include "skia/include/gpu/vk/VulkanExtensions.h"
 #include "skia/include/gpu/vk/VulkanPreferredFeatures.h"
@@ -142,6 +145,9 @@ public:
 	// Skia keeps pointers into these for as long as the context lives
 	std::vector<const char*> instance_extensions;
 	std::vector<const char*> device_extensions;
+
+	// Handed to interop code inside the library; see GpuDevice::vulkanHandles().
+	GpuDevice::VulkanHandles handles;
 	VkPhysicalDeviceFeatures2 features{};
 	skgpu::VulkanPreferredFeatures skia_features;
 	skgpu::VulkanExtensions extensions;
@@ -314,6 +320,32 @@ private:
 		vkGetPhysicalDeviceFeatures2(physical_device, &features);
 		skia_features.addFeaturesToEnable(device_extensions, features);
 
+		// Skia names the external-memory extensions only under SK_BUILD_FOR_ANDROID,
+		// so VulkanPreferredFeatures has just asked for neither. CudaInterop needs
+		// both to hand an image to CUDA without a trip through host memory, and the
+		// only place they can be enabled is here, at device creation. Their absence
+		// is recorded rather than treated as an error: lavapipe has no
+		// external_semaphore_fd, and the interop declining is the normal answer.
+		const auto enableIfOffered = [&](const char* name) {
+			bool offered = false;
+			for (const VkExtensionProperties& e : device_available)
+				if (std::strcmp(e.extensionName, name) == 0) {
+					offered = true;
+					break;
+				}
+			if (!offered)
+				return false;
+			for (const char* already : device_extensions)
+				if (std::strcmp(already, name) == 0)
+					return true;
+			device_extensions.push_back(name);   // a string literal: outlives the device
+			return true;
+		};
+		handles.external_memory_fd =
+			enableIfOffered(VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME);
+		handles.external_semaphore_fd =
+			enableIfOffered(VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME);
+
 		const float priority = 1.0f;
 		VkDeviceQueueCreateInfo queue_info{};
 		queue_info.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
@@ -334,6 +366,13 @@ private:
 			return false;
 		}
 		vkGetDeviceQueue(device, queue_index, 0, &queue);
+
+		handles.instance = instance;
+		handles.physical_device = physical_device;
+		handles.device = device;
+		handles.queue = queue;
+		handles.queue_family = queue_index;
+		handles.api_version = api_version;
 
 		extensions.init(gpuGetProc, instance, physical_device,
 						static_cast<uint32_t>(instance_extensions.size()),
@@ -443,6 +482,9 @@ void GpuDevice::DestroyInstance()
 	// while it is still alive — freeing them afterwards writes through a dangling
 	// context. This must happen before the slot is reset, not after.
 	GpuSurfacePool::DiscardAllPools();
+	// Same for the interop's images, semaphores and command pool: they are
+	// allocated against this VkDevice and have to go before it does.
+	CudaInterop::Shutdown();
 
 	std::lock_guard<std::mutex> lock(deviceSlotMutex());
 	deviceSlot().reset();
@@ -512,6 +554,12 @@ skgpu::graphite::Recorder* GpuDevice::recorder()
 
 bool GpuDevice::submit(bool syncToCpu)
 {
+	return submit(syncToCpu, nullptr, 0);
+}
+
+bool GpuDevice::submit(bool syncToCpu, const unsigned long long* wait_semaphores,
+					   unsigned int wait_count)
+{
 	skgpu::graphite::Recorder* rec = recorder();
 	if (!rec)
 		return false;
@@ -520,15 +568,49 @@ bool GpuDevice::submit(bool syncToCpu)
 	if (!recording)
 		return false;
 
+	// The handles arrive as integers because GpuDevice.h is installed and must
+	// compile with no Vulkan headers; VkSemaphore is the same eight bytes either
+	// way it is defined, so copy rather than cast.
+	std::vector<skgpu::graphite::BackendSemaphore> waits;
+	waits.reserve(wait_count);
+	for (unsigned int i = 0; i < wait_count; ++i) {
+		VkSemaphore semaphore = VK_NULL_HANDLE;
+		static_assert(sizeof(semaphore) <= sizeof(unsigned long long),
+					  "a VkSemaphore does not fit in the handle type");
+		std::memcpy(&semaphore, &wait_semaphores[i], sizeof(semaphore));
+		waits.push_back(skgpu::graphite::BackendSemaphores::MakeVulkan(semaphore));
+	}
+
 	// insertRecording and submit both touch the single Context, which recorders
 	// on other threads share.
 	std::lock_guard<std::mutex> lock(impl->context_mutex);
 	skgpu::graphite::InsertRecordingInfo info;
 	info.fRecording = recording.get();
+	info.fNumWaitSemaphores = waits.size();
+	info.fWaitSemaphores = waits.empty() ? nullptr : waits.data();
 	if (impl->context->insertRecording(info) != skgpu::graphite::InsertStatus::kSuccess)
 		return false;
 	return impl->context->submit(syncToCpu ? skgpu::graphite::SyncToCpu::kYes
 										   : skgpu::graphite::SyncToCpu::kNo);
+}
+
+const GpuDevice::VulkanHandles* GpuDevice::vulkanHandles()
+{
+	if (!available())
+		return nullptr;
+	return &impl->handles;
+}
+
+void GpuDevice::lockQueue()
+{
+	if (available())
+		impl->context_mutex.lock();
+}
+
+void GpuDevice::unlockQueue()
+{
+	if (impl->usable)
+		impl->context_mutex.unlock();
 }
 
 #else
@@ -550,4 +632,29 @@ bool GpuDevice::submit(bool)
 	return false;
 }
 
+bool GpuDevice::submit(bool, const unsigned long long*, unsigned int)
+{
+	return false;
+}
+
+const GpuDevice::VulkanHandles* GpuDevice::vulkanHandles()
+{
+	available();
+	return nullptr;
+}
+
+void GpuDevice::lockQueue() {}
+
+void GpuDevice::unlockQueue() {}
+
 #endif
+
+GpuDevice::QueueGuard::QueueGuard()
+{
+	GpuDevice::Instance().lockQueue();
+}
+
+GpuDevice::QueueGuard::~QueueGuard()
+{
+	GpuDevice::Instance().unlockQueue();
+}

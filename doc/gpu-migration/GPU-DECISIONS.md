@@ -1558,6 +1558,58 @@ diagonal fragment declines above a megapixel — and note that **replacing the t
 `referenceWorkingScale` would make the fragment harder, not easier**: a 0.5 `INTER_AREA` is a 2x2
 average, and a 1280/1920 one is a weighted area kernel.
 
+### W22 — the interop owns its images, and the layout handshake comes off the critical path (2026-09-22)
+
+**The shape of `src/gpu/CudaInterop` is forced, not chosen.** Two facts, both measured before any
+code was written:
+
+- **Skia enables no external-memory extensions off Android.** `VulkanPreferredFeatures` names them
+  only under `SK_BUILD_FOR_ANDROID`, so `GpuDevice::createVulkanDevice` adds
+  `VK_KHR_external_memory_fd` and `VK_KHR_external_semaphore_fd` itself when the physical device
+  offers them, and reports both through `GpuDevice::vulkanHandles()`. **lavapipe has neither**, so
+  the interop declines there — which is what that arm of the sweep is for, not a failure.
+- **Graphite cannot export its own allocations.** The only door in is
+  `BackendTextures::MakeVulkan(..., VkImage, VulkanAlloc)`, which takes an image the *caller* owns,
+  and CUDA imports an image only from a **dedicated** allocation, which Skia's VMA (which
+  suballocates) cannot give. So the exportable images are created with our own `vkCreateImage` +
+  `vkAllocateMemory` beside `GpuSurfacePool`, which stays VMA-backed and is never the imported one.
+
+**CUDA requires `VK_IMAGE_LAYOUT_GENERAL`; Skia leaves the image in `SHADER_READ_ONLY_OPTIMAL`.**
+That single sentence decides two things:
+
+1. **The `SkImage` wrapper is rebuilt every frame**, declaring GENERAL. Skia transitions a wrapped
+   texture when it samples it and remembers having done so, so a wrapper kept across frames would
+   barrier from a layout the image is no longer in. `GpuImage::image()` therefore hands back a
+   fresh wrapper each call, on purpose.
+2. **One barrier command buffer per image**, recorded once with `SIMULTANEOUS_USE` and resubmitted,
+   `UNDEFINED -> GENERAL`. `UNDEFINED` rather than the real old layout because CUDA overwrites every
+   pixel, so discarding the contents is exactly right — and it means nothing has to track a layout
+   across the Skia boundary. `ALL_COMMANDS` on the source side, so everything already submitted to
+   the queue (the drawing that read the image) is inside the barrier's first scope.
+
+**And the measurement that decides where that barrier goes.** Putting it in front of the copy,
+inside `copyNV12`, costs a full cross-API round trip — CPU submit, GPU barrier, semaphore signal,
+CUDA stream wakes — and that is **0.224 ms** of pure latency, which on its own misses the 0.3 ms
+gate: 4K measured **0.401 ms**. Issuing it right after the drawing that read the images instead
+(`CudaInterop::prepareForCopy`) leaves the semaphore already up when the next frame's copy starts:
+fixed cost **0.011 ms**, 4K **0.166 ms**, of which 0.155 ms is the 12.4 MB itself. Nothing was
+removed — the barrier still runs on the same queue, it just overlaps with the draw instead of
+blocking the copy. *Revisit if:* Graphite ever lets a caller hand a wrapped texture's layout back
+(the way `fTargetTextureState` does for a target surface), which would fold the barrier into Skia's
+own submit and remove the second semaphore.
+
+**The CUDA device is matched by UUID, and it is the primary context.**
+`VkPhysicalDeviceIDProperties::deviceUUID` against `cuDeviceGetUuid`, because on a laptop with an
+iGPU beside the NVIDIA card "device 0" is not a safe guess. `cuDevicePrimaryCtxRetain` rather than
+a context of our own, because that is what FFmpeg's CUDA hwdevice uses by default — so a decoder
+set up against `CudaInterop::cudaContext()` in W23 produces frames these copies can read.
+
+**The driver is dlopen'd, never linked.** `libcuda.so.1`, resolved through `decltype(&cuFoo)` so a
+wrong signature is a compile error, and through cuda.h's own versioning macros so `cuMemcpy2DAsync`
+asks the loader for `cuMemcpy2DAsync_v2`. Only the *headers* are a build dependency, and without
+them the file compiles to the same stub a CPU-Skia build gets. A machine with no NVIDIA driver
+loads the library unchanged and `available()` is false.
+
 ## Open — decide before plan phase 4
 
 The four that blocked the compositor were taken on 2026-09-16; see the W11 entry above.

@@ -42,6 +42,8 @@ one left before Stage 6 that needs nothing from anyone else — with **W06 needi
 container** and W10 skipped · **Stage 2 is part done** — W04's mechanism works and its first
 payload is green, but the corpus needs five more captures and W03's workflow has never run ·
 then Stage 6 (W19–W21, effects) · W01/W02 are now **Stage 10**, at the end.
+**Stage 6 is finished (2026-09-22)** and **Stage 7 has started: W22 is done (2026-09-22), gate met
+at 0.166 ms against 0.300 for a 4K frame, exact and clean under `compute-sanitizer`. W23 is next.**
 
 > **2026-09-18, project owner — finish Stages 2 and 3 before the effects work.** Stage 5 is done and
 > Stage 6 (effects and transitions as shaders) is the obvious next thing, but the safety net (Stage
@@ -1122,22 +1124,46 @@ converted either way. **W25 only pays once W12 has put the frame on the GPU.** S
 > device extensions, add an *exportable* allocation path beside the pool, and import those.
 > Nothing here blocks the item — it is ~100 lines larger than "~300" and the pool stays untouched.
 
-- [ ] Add `VK_KHR_external_memory_fd` and `VK_KHR_external_semaphore_fd` to `GpuDevice`'s device
+- [x] Add `VK_KHR_external_memory_fd` and `VK_KHR_external_semaphore_fd` to `GpuDevice`'s device
       extensions when the physical device offers them, and record their absence as a decline.
-- [ ] An exportable image allocation (`VkExportMemoryAllocateInfo`), wrapped for Graphite with
+      Reported through `GpuDevice::vulkanHandles()`; lavapipe has neither and the interop declines.
+- [x] An exportable image allocation (`VkExportMemoryAllocateInfo`), wrapped for Graphite with
       `BackendTextures::MakeVulkan`. Separate from `GpuSurfacePool`, which stays VMA-backed.
-- [ ] Import that memory and a semaphore into CUDA (`vkGetMemoryFdKHR` →
-      `cuImportExternalMemory`, `cuImportExternalSemaphore`).
-- [ ] `copyNV12(AVFrame* cudaFrame, GpuImage& y, GpuImage& uv, stream)` as two device-to-device
+- [x] Import that memory and a semaphore into CUDA (`vkGetMemoryFdKHR` →
+      `cuImportExternalMemory`, `cuImportExternalSemaphore`). Two semaphores, one each way; the
+      CUDA device is matched to the Vulkan one **by UUID**, and it is the *primary* context, which
+      is what FFmpeg's CUDA hwdevice uses (so W23's frames land in it).
+- [x] `copyNV12(AVFrame* cudaFrame, GpuImage& y, GpuImage& uv, stream)` as two device-to-device
       `cuMemcpy2DAsync`.
+- [x] **Added, and the gate depends on it: `prepareForCopy(y, uv)`.** CUDA needs the images in
+      `VK_IMAGE_LAYOUT_GENERAL` and Skia leaves them in `SHADER_READ_ONLY_OPTIMAL`, so each copy
+      needs a layout barrier first — and doing it *inside* `copyNV12` puts a full cross-API
+      handshake on the critical path: **0.401 ms**, over the gate, of which 0.224 ms is pure
+      round-trip latency. Issued instead right after the draw that read the images, it is free.
 
 **Gate.** Fill a CUDA NV12 buffer with a known pattern, copy, sample both planes in a trivial SkSL
 shader, read back, compare **exactly**; clean under `compute-sanitizer`; ≤ **0.3 ms** per 4K frame.
-**Size.** ~1 week. ~300 lines.
+**Met 2026-09-22** — `tests/gpu/gpu_cuda_interop.cpp`, `openshot-gpu-cuda-interop`:
+
+| | measured | gate |
+|---|---|---|
+| exactness, 640x360 and 3840x2160 | **0 of 8 294 400 pixels differ** | exact |
+| `compute-sanitizer --tool memcheck --leak-check=full` | **0 errors, 0 bytes leaked** | clean |
+| 3840x2160 per frame | **0.166 ms** (fixed 0.011, copy 0.155) | ≤ 0.300 |
+| 3840x2160 without `prepareForCopy` | 0.415 ms | — |
+
+Four-way sweep **307/307** in all four arms; `openshot-gpu-checks` 8/8 on Vulkan and lavapipe. The
+interop SKIPs on lavapipe ("does not export memory and semaphores as fds"), with the GPU off, and
+where there is no CUDA driver — all three are the normal answer.
+**Size.** ~1 week. ~300 lines. **Actual: ~870 lines** (450 interop, 90 `GpuDevice`, 330 gate).
 
 ### W23 — Reader keeps frames on the GPU · legacy `4.2`
 
-**Depends on.** W22.
+**Depends on.** W22 — **done 2026-09-22**. `CudaInterop::Instance()` gives the reader the CUDA
+context to hand FFmpeg (`AVCUDADeviceContext::cuda_ctx`), the stream, and the two images per frame;
+remember `prepareForCopy` after the compositor's submit or every frame pays 0.25 ms for nothing.
+Note also that hardware decode throws on the first frame in this fork — plan step 1.5 is its fix,
+and it is this item's first problem.
 **Note for this deployment.** H.264 only means NVDEC coverage is not a risk — the "extend to HEVC,
 VP9, AV1, MPEG-4" sub-task is optional here.
 

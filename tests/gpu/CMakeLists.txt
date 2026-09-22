@@ -77,6 +77,28 @@ if(DEFINED PROJECT_NAME AND TARGET openshot AND SKIA_GPU_FOUND)
   target_compile_definitions(openshot-gpu-effect-parity PRIVATE
     PARITY_MEDIA_DIR="${PARITY_MEDIA_DIR}")
 
+  # The W22 gate: an NV12 pattern from CUDA, sampled through SkSL, compared exactly.
+  # Needs the CUDA driver headers and the driver itself; skipped when either is
+  # missing, exactly as the interop declines at runtime.
+  find_path(CUDA_DRIVER_INCLUDE_DIR cuda.h
+    HINTS ENV CUDA_HOME ENV CUDA_PATH
+    PATHS /usr/local/cuda /usr/local/cuda-12 /opt/cuda /usr
+    PATH_SUFFIXES include)
+  find_library(CUDA_DRIVER_LIBRARY cuda
+    PATHS /usr/local/cuda/lib64 /usr/lib/x86_64-linux-gnu
+    PATH_SUFFIXES stubs)
+  if(CUDA_DRIVER_INCLUDE_DIR AND CUDA_DRIVER_LIBRARY)
+    add_executable(openshot-gpu-cuda-interop gpu_cuda_interop.cpp)
+    target_compile_features(openshot-gpu-cuda-interop PRIVATE cxx_std_20)
+    target_include_directories(openshot-gpu-cuda-interop BEFORE PRIVATE
+      ${SKIA_VULKAN_INCLUDE_DIR} ${SKIA_INCLUDE_DIRS} ${PROJECT_SOURCE_DIR}/src)
+    target_include_directories(openshot-gpu-cuda-interop SYSTEM PRIVATE
+      ${CUDA_DRIVER_INCLUDE_DIR})
+    target_link_libraries(openshot-gpu-cuda-interop PRIVATE openshot ${CUDA_DRIVER_LIBRARY})
+  else()
+    message(STATUS "openshot-gpu-cuda-interop: skipped (no CUDA driver headers or library)")
+  endif()
+
   # Does SkBlendMode agree with BlendModes.cpp on identical pixels? (W13)
   add_executable(openshot-gpu-blend-parity gpu_blend_parity.cpp)
   target_compile_features(openshot-gpu-blend-parity PRIVATE cxx_std_20)
