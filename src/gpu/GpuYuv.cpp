@@ -254,12 +254,30 @@ std::shared_ptr<GpuFrame> GpuYuv::Convert(Layout layout, Matrix matrix, bool ful
 	if (!luma || !chroma_a || !chroma_b)
 		return nullptr;
 
-	// Convert at the source's own resolution, and scale afterwards if the reader asked for a
-	// smaller frame. One pass cannot do both: a single bilinear tap is not a downscale filter, and
-	// folding the pre-scale into the sample measured 29 dB against the CPU on a 2x reduction --
-	// aliasing, not a colour difference. Two passes cost one more pooled surface and a full-screen
-	// draw, which is nothing beside the swscale this replaces.
-	const bool scaling = out_width != luma_plane.width || out_height != luma_plane.height;
+	// Convert at the source's own resolution, and pre-filter afterwards if the reader asked for a
+	// much smaller frame. One pass cannot do both: a single bilinear tap is not a downscale
+	// filter, and folding the pre-scale into the sample measured 29 dB against the CPU on a 2x
+	// reduction -- aliasing, not a colour difference.
+	//
+	// The reduction is done as box HALVINGS first and then, only if anything is left over, one
+	// fractional step to the exact size the reader asked for.
+	//
+	// Halving is what a downscale actually needs: bilinear at exactly one half averages a 2x2
+	// block, which is an exact box prefilter, and it is phase-exact so it cannot shift the
+	// picture the way a fractional resample can. Doing the whole reduction in one fractional draw
+	// instead measured 7 % slower end to end at 4K -> 1080p (88-90 fps against 94-97).
+	//
+	// The exact step is not optional, and that was measured too: **the frame's pixel size is part
+	// of the contract downstream.** A SCALE_NONE clip is drawn at its own size, so a frame that
+	// is merely "close enough and the compositor will scale it" changes the picture -- stopping
+	// at the halving cost 4.5 dB on readers.video_b_24fps_prescale. At a power-of-two ratio the
+	// halvings land exactly on the target and this step disappears, which is the common case.
+	int scale_steps = 0;
+	for (int w = luma_plane.width, h = luma_plane.height;
+		 w / 2 >= out_width && h / 2 >= out_height && scale_steps < 4; w /= 2, h /= 2)
+		++scale_steps;
+	const bool scaling = scale_steps > 0 || out_width != luma_plane.width ||
+						 out_height != luma_plane.height;
 	std::shared_ptr<GpuFrame> frame =
 		GpuFrame::Create(luma_plane.width, luma_plane.height);
 	if (!frame)
@@ -304,27 +322,49 @@ std::shared_ptr<GpuFrame> GpuYuv::Convert(Layout layout, Matrix matrix, bool ful
 	paint.setBlendMode(SkBlendMode::kSrc);
 	frame->canvas()->drawPaint(paint);
 
-	if (scaling) {
-		sk_sp<SkImage> converted = frame->snapshot();
-		std::shared_ptr<GpuFrame> scaled = GpuFrame::Create(out_width, out_height);
-		if (!converted || !scaled)
+	int width = luma_plane.width;
+	int height = luma_plane.height;
+	for (int step = 0; step < scale_steps; ++step) {
+		sk_sp<SkImage> source = frame->snapshot();
+		const int half_width = width / 2;
+		const int half_height = height / 2;
+		std::shared_ptr<GpuFrame> halved = GpuFrame::Create(half_width, half_height);
+		if (!source || !halved)
 			return nullptr;
 		SkPaint blit;
 		blit.setBlendMode(SkBlendMode::kSrc);
-		// Mitchell, not bilinear: the reader's pre-scale is usually a reduction of 2x or more,
-		// where one bilinear tap drops most of the source. This is the resampler Skia uses for
-		// its own high-quality path, and it is a better downscale than swscale's default -- which
-		// is why a scaled scenario cannot be held to the CPU goldens bit-for-bit.
-		scaled->canvas()->drawImageRect(
-			converted,
-			SkRect::MakeWH(static_cast<float>(luma_plane.width),
-						   static_cast<float>(luma_plane.height)),
-			SkRect::MakeWH(static_cast<float>(out_width), static_cast<float>(out_height)),
-			SkSamplingOptions(SkCubicResampler::Mitchell()), &blit,
+		// Bilinear at exactly one half lands each destination sample in the middle of a 2x2
+		// source block and weights all four equally: an exact box average, and the cheapest
+		// correct downscale there is. Mitchell would be wasted work here.
+		halved->canvas()->drawImageRect(
+			source, SkRect::MakeWH(static_cast<float>(width), static_cast<float>(height)),
+			SkRect::MakeWH(static_cast<float>(half_width), static_cast<float>(half_height)),
+			SkSamplingOptions(SkFilterMode::kLinear, SkMipmapMode::kNone), &blit,
 			SkCanvas::kFast_SrcRectConstraint);
-		frame = std::move(scaled);
-		scaledCount()++;
+		frame = std::move(halved);
+		width = half_width;
+		height = half_height;
 	}
+
+	if (width != out_width || height != out_height) {
+		sk_sp<SkImage> source = frame->snapshot();
+		std::shared_ptr<GpuFrame> exact = GpuFrame::Create(out_width, out_height);
+		if (!source || !exact)
+			return nullptr;
+		SkPaint blit;
+		blit.setBlendMode(SkBlendMode::kSrc);
+		// Linear is enough here: the halvings above have already brought the source to within a
+		// factor of two of the target, which is exactly the range one bilinear tap covers.
+		exact->canvas()->drawImageRect(
+			source, SkRect::MakeWH(static_cast<float>(width), static_cast<float>(height)),
+			SkRect::MakeWH(static_cast<float>(out_width), static_cast<float>(out_height)),
+			SkSamplingOptions(SkFilterMode::kLinear, SkMipmapMode::kNone), &blit,
+			SkCanvas::kFast_SrcRectConstraint);
+		frame = std::move(exact);
+	}
+
+	if (scaling)
+		scaledCount()++;
 
 	conversionCount()++;
 	return frame;

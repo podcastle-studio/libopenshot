@@ -400,6 +400,13 @@ int64_t Frame::GetBytes()
 	if (image) {
 		total_bytes += static_cast<int64_t>(
 			width * height * sizeof(char) * 4);
+	} else if (gpu_frame) {
+		// A GPU-backed frame has no QImage, and reporting zero here would hide it from every
+		// cache that budgets in bytes -- CacheMemory would never evict one, and a reader handing
+		// out GPU frames would retain surfaces without bound. The surface costs the same four
+		// bytes a pixel as the image it stands in for, just in VRAM.
+		total_bytes += static_cast<int64_t>(
+			width * height * sizeof(char) * 4);
 	}
 	if (audio) {
 		// approximate audio size (sample rate / 24 fps)

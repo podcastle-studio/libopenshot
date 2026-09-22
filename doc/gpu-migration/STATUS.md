@@ -789,6 +789,32 @@ production corpus) remain open; W05–W10 are the CPU quick wins. W01/W02 stay d
 
 ## Log
 
+- 2026-09-22 — **The pre-scale question is settled by measurement, and both obvious answers were
+  wrong.** Asked: should the reader pre-scale at all once the frame stays on the GPU, given the
+  compositor resamples it again anyway? Measured end to end at 4K → 1080p on Vulkan with
+  `GPU_DECODE` on, interleaved, four passes:
+
+  | pre-scale | fps | peak RSS |
+  |---|---|---|
+  | none — let the compositor do it | 54.0–55.3 | 1046 MB |
+  | **halvings, then one exact step** | **93.6–98.9** | **982 MB** |
+  | one Mitchell draw to the exact size | 79.7–90.8 | 981 MB |
+
+  **Dropping it is the big loser** — the compositor then samples a 4K texture every frame.
+  **Halving first wins** because bilinear at exactly one half is an exact box prefilter and is
+  phase-exact, so the leftover fractional step starts from within 2x and one tap covers it.
+  **And the exact step cannot be skipped**: a frame's pixel size is part of the contract
+  downstream — a `SCALE_NONE` clip is drawn at its own size — so stopping at the halving cost
+  **4.5 dB** on `readers.video_b_24fps_prescale`. At a power-of-two ratio the halvings land on the
+  target and the step disappears, which is the common case.
+  **First, though, `Frame::GetBytes()` had to learn about GPU frames.** It counted `image` only,
+  so a GPU-backed frame reported **zero bytes** and every cache that budgets in bytes was blind to
+  it: `CacheMemory` would never evict one. Until that was fixed, "drop the pre-scale" meant
+  unbounded VRAM and no memory number meant anything.
+  The suite can now exercise the flagged-off path: `OPENSHOT_GOLDEN_GPU_DECODE=1` on the harness
+  (test side only — the library still never reads the environment for it). With it on, the same
+  19 of 307 frames diverge as before. Default four-way sweep **307/307, 27 checks**, all four arms.
+
 - 2026-09-22 — **Decoded frames are born on the GPU now: `src/gpu/GpuYuv` converts YUV to RGBA as
   an SkSL pass and the reader attaches it with `Frame::AttachGpuFrame`. Built, tested, and
   flagged off behind `Settings::GPU_DECODE`.**

@@ -110,6 +110,15 @@ RunSummary runAll(const Options& opts) {
 
     auto* settings = openshot::Settings::Instance();
     settings->OMP_THREADS = opts.threads;
+    // The reader's GPU YUV->RGBA pass is off by default (Settings::GPU_DECODE) because it changes
+    // pixels; this is how the suite exercises it anyway. Test-side only -- the library never reads
+    // the environment for it, which is the rule GpuDevice's "one control" check enforces.
+    if (const char* on = std::getenv("OPENSHOT_GOLDEN_GPU_DECODE")) {
+        if (std::string(on) == "1" || std::string(on) == "true") {
+            settings->GPU_DECODE = true;
+            std::printf("GPU decode ON — the reader converts YUV on the GPU\n");
+        }
+    }
     settings->FF_THREADS = opts.threads;
     settings->DISABLE_CACHING = true;
     settings->HIGH_QUALITY_SCALING = true;

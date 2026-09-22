@@ -1252,16 +1252,29 @@ VP9, AV1, MPEG-4" sub-task is optional here.
       compositor. **Flagged off** behind `Settings::GPU_DECODE` — see the parity note below.
       - Faithful: **47.4 dB, max 3 LSB** against swscale on an unscaled clip, gated by
         `unit.gpu_decode`, which also asserts the pass actually ran.
-      - The **pre-scale** is a second draw (Mitchell), not folded into the conversion sample: one
-        bilinear tap is not a downscale filter and measured 29 dB. Even done properly it is
-        28.9–30.7 dB against the CPU, because swscale's `SWS_FAST_BILINEAR` carries a half-pixel
-        phase — a whole column of wrong pixels at every colour-bar edge. **Open question: should
-        the reader pre-scale at all once the frame stays on the GPU?** The compositor already
-        scales, with the same sampler, in its own transformed draw.
+      - The **pre-scale** is box halvings and then one exact step — **settled by measurement
+        2026-09-22, and both of the obvious answers were wrong.** It is not folded into the
+        conversion sample (one bilinear tap is not a downscale filter: 29 dB), and it is not
+        dropped in favour of letting the compositor scale (**54 fps against 95** at 4K → 1080p —
+        the compositor then resamples a 4K texture every frame, and RSS rises 982 → 1046 MB).
+        Halving first and finishing with one fractional draw beats a single Mitchell draw by
+        **~8 %** (94–99 fps against 80–91) at the same memory, because halving is an exact box
+        prefilter and phase-exact. **The exact step is not optional**: a frame's pixel size is
+        part of the contract downstream — a `SCALE_NONE` clip is drawn at its own size — and
+        stopping at the halving cost 4.5 dB on `readers.video_b_24fps_prescale`. At a
+        power-of-two ratio the halvings land on the target and the step disappears.
+      - Against the CPU the scaled path is still 28.9–30.7 dB, because swscale's
+        `SWS_FAST_BILINEAR` carries a half-pixel phase — a whole column of wrong pixels at every
+        colour-bar edge. That is a tolerance question, not a defect.
       - End to end, 4K → 1080p, `OPENSHOT_GPU=vulkan`, interleaved: **87–91 fps with swscale
         against 87–89 with the shader** — a wash on wall clock, but **CPU falls from ~2.0 to ~1.8
         cores** and RSS rises 916 → 990 MB. It does not pay yet because both ends still copy:
         NVDEC is not feeding it (the sub-task above) and the writer still reads back (W25).
+- [x] **`Frame::GetBytes()` counts a GPU-backed frame** (2026-09-22). It counted `image` only, so
+      a GPU frame reported **zero** and every cache that budgets in bytes was blind to it:
+      `CacheMemory` would never evict one, and a reader handing out GPU frames would retain
+      surfaces without bound. This had to land before the pre-scale question could even be
+      measured.
 - [ ] Remove `DE_LIMIT_*`. Software decode + `upload()` stays the fallback.
 - [ ] *(optional)* extend `IsHardwareDecodeSupported` to HEVC, VP9, AV1, MPEG-4.
 
