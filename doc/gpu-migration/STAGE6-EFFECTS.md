@@ -15,7 +15,7 @@ Deleted with the rest of `doc/gpu-migration/` when the migration lands.
 | item | scope | state |
 |---|---|---|
 | **W19** | `GpuEffect` base + per-pixel effect fragments | **10 of 13 done**, 2 ruled out, 1 blocked |
-| **W20** | transition vocabulary from `image-processing-lib` as shared SkSL | **not started** |
+| **W20** | transition vocabulary from `image-processing-lib` as shared SkSL | **2 of 10 done**, 4 open, 3 blocked |
 | **W21** | overlay clips as textures (additive blend, displacement map) | **done** (2026-09-22) |
 
 `libopenshot` carries 47 effect classes. Only the ones
@@ -180,6 +180,39 @@ The 15 transition effects the service and the golden suite exercise map onto 12 
 | circle_mask | `CircleMask` | **W20** |
 
 So W20's real remaining surface is **7 classes / 10 transition variants**, not the whole vocabulary.
+
+### W20 progress, 2026-09-22
+
+**The blocker is narrower than the item reads.** `TRANSITION-PARITY.md`'s reference-resolution bug
+affects **only box, diagonal and zoom blur** — the note says so itself. The rest are already
+resolution-independent.
+
+**And W20's declared gate is PSNR ≥ 45 dB, not bit-exact** — a looser parity class than every W19
+fragment was held to. Only two of these effects have C++ that is exactly reproducible; the rest
+resample, which is why the item was written that way.
+
+| variant | state | parity |
+|---|---|---|
+| `SplitShift` | **done** | **8/8 bit-exact** |
+| `Wipe` (threshold wipe mask) | **done** | 62–85 dB, **not** bit-exact — see below |
+| `Zoom` | open | 45 dB class (`cv::resize`) |
+| `BorderReflectedMove` | open | 45 dB class (`warpAffine`, INTER_LINEAR) |
+| `BorderReflectedRotation` | open | 45 dB class (`warpAffine`) |
+| `CircleMask` | open | 45 dB class (`cv::circle`, `LINE_AA` coverage) |
+| rotational blur | open | 45 dB class; the spike already measured **57–61 dB** |
+| box / horizontal-vertical blur | **blocked** | reference-resolution decision |
+| diagonal blur | **blocked** | reference-resolution decision |
+| zoom blur | **blocked** | reference-resolution decision |
+
+**`Wipe` is the one that needs a decision.** It thresholds a `cv::cvtColor(COLOR_BGRA2GRAY)`
+luminance, and OpenCV's 8-bit grey is **not reproducible from its own documented formula** — the
+fixed-point expression differs on 703 of 262,144 colours by 1, the float one on 278. Normally
+invisible; but a threshold turns 1 LSB into a full step, measured at **max 76 on 144 pixels** of a
+synthetic ramp. It is inside W20's 45 dB gate and the golden suite is green on real content, but
+that is content-dependent.
+**The fix is on the CPU side and is small**: have the submodule compute the luminance explicitly
+rather than calling `cv::cvtColor`, so both stacks are reproducible from one source — which is the
+point of the shared-shader design. Cross-repo, so it is a decision, not a patch.
 
 Two things carry over from W19 that W20 should not rediscover:
 

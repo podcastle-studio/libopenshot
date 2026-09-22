@@ -28,11 +28,15 @@
 #include "effects/Exposure.h"
 #include "effects/LightAdjustment.h"
 #include "effects/Mask.h"
+#include "effects/SplitShift.h"
+#include "effects/Wipe.h"
 #include "gpu/GpuDevice.h"
 
 #include <QImage>
 
 #include <babl/babl.h>
+
+#include <opencv2/imgproc.hpp>
 
 #include "skia/include/core/SkBlendMode.h"
 #include "skia/include/core/SkCanvas.h"
@@ -301,6 +305,25 @@ std::vector<Case> cases() {
                                        m->invert = true;
                                        return m;
                                    }},
+        // W20 begins here: the two transition effects whose C++ is exactly reproducible.
+        // Wipe's thresholds are chosen so all three branches of its mask are exercised -- below
+        // low, between the two, and above high.
+        {"wipe(30-70)",           [] { return std::make_shared<openshot::Wipe>(
+                                           Keyframe(30.0), Keyframe(70.0)); }},
+        {"wipe(0-100)",           [] { return std::make_shared<openshot::Wipe>(
+                                           Keyframe(0.0), Keyframe(100.0)); }},
+        {"wipe(swapped)",         [] { return std::make_shared<openshot::Wipe>(
+                                           Keyframe(80.0), Keyframe(20.0)); }},
+
+        // SplitShift both ways round, and a negative shift, because the sign picks a different
+        // pair of rectangles in the C++.
+        {"splitshift(vert)",      [] { return std::make_shared<openshot::SplitShift>(
+                                           Keyframe(0.35), false, Keyframe(0.5)); }},
+        {"splitshift(vert -)",    [] { return std::make_shared<openshot::SplitShift>(
+                                           Keyframe(-0.2), false, Keyframe(0.3)); }},
+        {"splitshift(horiz)",     [] { return std::make_shared<openshot::SplitShift>(
+                                           Keyframe(0.15), true, Keyframe(0.62)); }},
+
         {"mask(replace_image)",   [] {
                                        auto m = std::make_shared<openshot::Mask>(
                                            openshot::Mask::ROUNDED_CORNERS, Keyframe(0.1),
@@ -677,6 +700,63 @@ int checkYCbCr() {
     return 0;
 }
 
+// What does cv::cvtColor(COLOR_BGRA2GRAY) actually compute?
+//
+// The wipe and the displacement map both key on it, and the candidate fixed-point formula
+// (B*1868 + G*9617 + R*4899 + 8192) >> 14 leaves the wipe differing by a whole threshold step on
+// 144 pixels. Asking OpenCV over the whole 6-bit-per-channel grid is the same move that settled
+// babl's Y'CbCr, and for the same reason: a coefficient guess that is nearly right is worse than
+// no guess, because it looks like it works.
+int checkBgraGray() {
+    constexpr int kStep = 4;                 // 64^3 = 262,144 samples
+    cv::Mat bgra(1, 64 * 64 * 64, CV_8UC4);
+    int i = 0;
+    for (int b = 0; b < 256; b += kStep)
+        for (int g = 0; g < 256; g += kStep)
+            for (int r = 0; r < 256; r += kStep)
+                bgra.at<cv::Vec4b>(0, i++) = cv::Vec4b((uchar) b, (uchar) g, (uchar) r, 255);
+
+    cv::Mat grey;
+    cv::cvtColor(bgra, grey, cv::COLOR_BGRA2GRAY);
+
+    struct Variant { const char* name; int cb, cg, cr; int round; };
+    const Variant variants[] = {
+        {"(B*1868 + G*9617 + R*4899 + 8192) >> 14", 1868, 9617, 4899, 8192},
+        {"(B*1868 + G*9617 + R*4899) >> 14, trunc",  1868, 9617, 4899, 0},
+        {"(B*1squared...) placeholder",              1868, 9617, 4899, 8192},
+    };
+    for (int v = 0; v < 2; ++v) {
+        long differ = 0; int worst = 0; int wb = 0, wg = 0, wr = 0;
+        for (int j = 0; j < i; ++j) {
+            const cv::Vec4b& px = bgra.at<cv::Vec4b>(0, j);
+            const int mine = (px[0] * variants[v].cb + px[1] * variants[v].cg +
+                              px[2] * variants[v].cr + variants[v].round) >> 14;
+            const int cv_value = grey.at<uchar>(0, j);
+            if (mine != cv_value) {
+                differ++;
+                if (std::abs(mine - cv_value) > worst) {
+                    worst = std::abs(mine - cv_value); wb = px[0]; wg = px[1]; wr = px[2];
+                }
+            }
+        }
+        std::printf("  %-42s %6ld of %d differ, worst %d (B=%d G=%d R=%d)\n",
+                    variants[v].name, differ, i, worst, wb, wg, wr);
+    }
+    // And the float formula, for comparison.
+    {
+        long differ = 0; int worst = 0;
+        for (int j = 0; j < i; ++j) {
+            const cv::Vec4b& px = bgra.at<cv::Vec4b>(0, j);
+            const int mine = (int) std::lround(px[0] * 0.114 + px[1] * 0.587 + px[2] * 0.299);
+            const int cv_value = grey.at<uchar>(0, j);
+            if (mine != cv_value) { differ++; worst = std::max(worst, std::abs(mine - cv_value)); }
+        }
+        std::printf("  %-42s %6ld of %d differ, worst %d\n",
+                    "round(0.114B + 0.587G + 0.299R)", differ, i, worst);
+    }
+    return 0;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -763,6 +843,7 @@ int main(int argc, char** argv) {
         checkUnpremul();
         checkExposureChain();
         checkYCbCr();
+        checkBgraGray();
         std::printf("\n1080p breakdown of one pass\n");
         probe(1920, 1080);
         // The 0.2 ms gate is about a GPU. Lavapipe is Mesa's software rasteriser and exists here

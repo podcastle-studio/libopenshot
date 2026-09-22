@@ -111,6 +111,24 @@ float3 osUnpremul(float3 premul_bytes, float alpha_percent) {
 	return floor(premul_bytes / alpha_percent);
 }
 
+// floor(n / d) for non-negative n and an integer-valued d, immune to the GPU's division
+// rounding. Vulkan allows 2.5 ULP on a division, which is enough to drop an exactly
+// integral quotient to the value below -- and floor() then turns that into a whole
+// unit of error, not a fraction. The correction below costs two multiplies and makes
+// the result exact whatever the divide returned.
+//
+// Use this wherever the C++ twin does INTEGER division, which it does more often than
+// it looks: `>> 14` in OpenCV's fixed-point luminance, `(c * inv + 127) / 255` in the
+// wipe. Do NOT use it where the C++ divides in floating point -- there the C++'s own
+// rounding is what has to be reproduced, and being more accurate than it is still a
+// difference. That distinction is the whole of this port's parity story.
+float osIDiv(float n, float d) {
+	float q = floor(n / d);
+	if ((q + 1.0) * d <= n) q += 1.0;
+	if (q * d > n) q -= 1.0;
+	return q;
+}
+
 // The constrain() every CPU effect defines for itself. Named per arity because
 // SkSL is not GLSL and does not promise user-function overloading.
 float3 osConstrain3(float3 v) { return clamp(v, 0.0, 255.0); }

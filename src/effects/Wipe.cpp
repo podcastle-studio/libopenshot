@@ -1,5 +1,9 @@
 #include "Wipe.h"
 
+#include "skia/include/effects/SkRuntimeEffect.h"
+
+#include <algorithm>
+
 #include "Exceptions.h"
 #include "FFmpegReader.h"
 #include "./image-processing-lib/src/Effects/effects.h"
@@ -43,6 +47,11 @@ std::shared_ptr<openshot::Frame> Wipe::GetFrame(std::shared_ptr<openshot::Frame>
 	const auto lowPercentage = mLevelsLowPercentage.GetValue(frame_number);
     const auto highPercentage = mLevelsHighPercentage.GetValue(frame_number);
 
+    // The shader when there is a GPU to run it on, OpenCV otherwise. Before GetImageCV(), which
+    // on a GPU-backed frame is a readback AND two full-frame cv::Mat conversions.
+    if (ApplyOnGpu(frame, frame_number))
+        return frame;
+
     auto imageCv = frame->GetImageCV();
     // openshot::Frame images are premultiplied (see Frame::Mat2Qimage), so the wipe has to scale
     // every channel by its coverage -- scaling alpha alone leaves a bright fringe on the edge.
@@ -52,6 +61,54 @@ std::shared_ptr<openshot::Frame> Wipe::GetFrame(std::shared_ptr<openshot::Frame>
     // return the modified frame
     frame->SetImageCV(imageCv);
 	return frame;
+}
+
+// The SkSL twin of applyThresholdWipeMaskEffect.
+//
+// The luminance is OpenCV's, and OpenCV's is fixed-point: cv::cvtColor(COLOR_BGRA2GRAY) on 8-bit
+// is (B*1868 + G*9617 + R*4899 + 8192) >> 14, not a float dot product. Same formula W21's
+// displacement map needed, and it is exact.
+//
+// Note what the threshold does NOT do: a value between the two thresholds keeps its grey, it is
+// not remapped. Only below-low becomes 0 and above-high becomes 255, so the mask is a soft ramp
+// with two hard ends.
+const char* Wipe::GpuShaderSource() const
+{
+	return R"SKSL(
+uniform float lowThreshold;
+uniform float highThreshold;
+
+float4 main(float2 p) {
+	float4 bytes = osBytes(p);
+	// >> 14, and the C++'s shift is exact, so the shader's divide has to be too -- without
+	// osIDiv this lands one below on the quotients that are exact integers, and a grey that
+	// crosses a threshold by one turns into a visible step. Measured: max 76 on opaque_ramp.
+	float grey = osIDiv(bytes.b * 1868.0 + bytes.g * 9617.0 + bytes.r * 4899.0 + 8192.0, 16384.0);
+
+	if (grey < lowThreshold)       grey = 0.0;
+	else if (grey > highThreshold) grey = 255.0;
+
+	// Every channel scales by the coverage, because the frame is premultiplied -- scaling alpha
+	// alone would leave a bright fringe on the edge. (c * inv + 127) / 255 is integer division.
+	float inv = 255.0 - grey;
+	float4 n = bytes * inv + 127.0;
+	return float4(osIDiv(n.r, 255.0), osIDiv(n.g, 255.0),
+				  osIDiv(n.b, 255.0), osIDiv(n.a, 255.0)) / 255.0;
+}
+)SKSL";
+}
+
+bool Wipe::SetGpuUniforms(SkRuntimeEffectBuilder& builder, int64_t frame_number,
+						  int width, int height) const
+{
+	// static_cast<int>, so truncation, and the same swap the C++ applies as a safety net.
+	int low = static_cast<int>(mLevelsLowPercentage.GetValue(frame_number) * 255.0 / 100.0);
+	int high = static_cast<int>(mLevelsHighPercentage.GetValue(frame_number) * 255.0 / 100.0);
+	if (low > high)
+		std::swap(low, high);
+	builder.uniform("lowThreshold") = static_cast<float>(low);
+	builder.uniform("highThreshold") = static_cast<float>(high);
+	return true;
 }
 
 // Generate JSON string of this object

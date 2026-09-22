@@ -1008,6 +1008,65 @@ Two rules follow, and they apply to every measurement in this project:
 2. **Interleave the arms**, and if that means building both artefacts up front and swapping them,
    do that. A sequential A/B on this laptop is not evidence.
 
+### W20 started — two effects in, and `cv::cvtColor` is not reproducible from its formula (2026-09-22)
+
+W20's blocker is narrower than it reads. `TRANSITION-PARITY.md`'s reference-resolution bug affects
+**only horizontal/vertical blur, diagonal blur and zoom blur** — the note says so itself. Rotational
+blur (degrees), `Zoom` (percent), `BorderReflectedMove` (fractions), `SplitShift` (ratios), `Wipe`
+(thresholds) and `CircleMask` are already resolution-independent, so seven of the ten remaining
+variants are not blocked by it.
+
+Of those, two have C++ that is exactly reproducible — **`Wipe` and `SplitShift`, both now ported**.
+The rest resample (`warpAffine`, `cv::resize`, `cv::circle` with `LINE_AA`) and belong to W20's
+*declared* parity class, which is **PSNR ≥ 45 dB, not bit-exact** — a different and looser standard
+than every W19 fragment was held to, and worth noticing before anyone assumes otherwise.
+
+**`SplitShift` is 8/8 bit-exact**, after one bug worth recording because it is invisible in the
+arithmetic. The C++ builds its rectangles from the **double** shift, so for a positive shift the
+copied height is `int(extent - shift)` — 256 − 89.6 truncates to **166**, where
+`extent - int(shift)` would be 167. That missing row is a full-strength seam, 1,023 differing
+channel values at max 255 in the parity test. For a *negative* shift it truncates the shift first
+and then subtracts, so there the two agree. Asymmetric, and reproduced rather than tidied up.
+
+**`Wipe` is not bit-exact, and the reason is `cv::cvtColor`.** It keys on a thresholded
+`COLOR_BGRA2GRAY`, and OpenCV's 8-bit luminance turns out not to be reproducible from its own
+documented fixed-point formula. Measured over a 64³ grid:
+
+| candidate | differs from OpenCV |
+|---|---|
+| `(B*1868 + G*9617 + R*4899 + 8192) >> 14` | **703 of 262,144**, by 1 |
+| the same without rounding | 131,368, by 1 |
+| `round(0.114B + 0.587G + 0.299R)` | 278 of 262,144, by 1 |
+
+Nothing lands on zero, so OpenCV's result comes from a path — almost certainly its SIMD
+intrinsics — that neither expression describes. A 1 LSB grey would normally be invisible, but the
+wipe **thresholds** it, so a pixel whose luminance sits exactly on the threshold flips between
+"keep the grey" and "clamp to 0" and the output moves by a full step: **max 76 on 144 pixels** of a
+synthetic ramp. It still measures 62–85 dB, comfortably inside W20's 45 dB gate, and the golden
+suite is green on real content — but that is content-dependent luck, not a guarantee.
+
+**The fix, if bit-exactness is wanted, is on the CPU side and is small:** have the submodule compute
+the luminance with an explicit expression instead of calling `cv::cvtColor`. Then both stacks are
+reproducible from the same source, which is the whole point of the shared-shader design. It is a
+cross-repo change, so it is a decision rather than a patch.
+
+**A correction to the W21 entry above.** The displacement map uses the same `COLOR_BGRA2GRAY` and is
+therefore exposed to the same 703-in-262,144 difference; it came out bit-exact on the golden content
+but is not guaranteed to be. It is far less sensitive than the wipe, because there a 1 LSB grey
+moves the sample position by `1/255 × scale` — about 0.19 px at a typical displacement — which
+rounds to the same texel almost always. The wipe amplifies; the displacement map does not.
+
+**New in the prelude: `osIDiv`.** Integer division that survives the GPU's 2.5 ULP allowance, for
+the many places a C++ twin divides exactly (`>> 14`, `(c * inv + 127) / 255`). It is deliberately
+**not** used where the C++ divides in floating point — there the C++'s own rounding is what has to
+be reproduced, and being more accurate than it is still a difference. That distinction is the whole
+of this port's parity story, and it is now written into the prelude where it will be read.
+
+**One measurement is less stable than it looked.** The exhaustive unpremultiply probe read 588
+differing pairs across several runs earlier in the day and **763** after these changes, with the
+same standalone shader. The magnitude (1 LSB, ~2 % of pairs) is stable; the exact count is not, so
+it should be quoted as a rate and not as a fixed number.
+
 ### The 0.2 ms per-effect gate is the cost of a pass, not of an effect (2026-09-22, W19)
 
 **Needs restating by the project owner**, in the same way W07's fps gates did.

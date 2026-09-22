@@ -973,8 +973,31 @@ is that it is still **+14 %**, not a loss: a partly-ported chain is safe.
 > a 720p preview, and 1.33x in the front end's own slow-effect proxy path. Fix that first; no
 > amount of shared shader source addresses it.
 
-- [ ] Port the `image-processing-lib` vocabulary to SkSL: box/diagonal/rotational/zoom blur, zoom,
-      border-reflected move and rotation, threshold wipe, circle mask, split shift, colour shift.
+> **2026-09-22 — the blocker is narrower than this item reads, and two effects are done.**
+> `TRANSITION-PARITY.md`'s reference-resolution bug affects **only box, diagonal and zoom blur**;
+> the note says so itself. Everything else in the vocabulary is already resolution-independent, so
+> seven of the ten remaining variants are not waiting on that decision.
+> **Note also that W20's gate is PSNR ≥ 45 dB, not bit-exact** — a looser parity class than every
+> W19 fragment was held to. Only two of these effects have C++ that is exactly reproducible at all;
+> the rest resample.
+
+- [x] `SplitShift` — **8/8 bit-exact.** Two integer rectangle blits. One trap, reproduced rather
+      than fixed: for a *positive* shift the C++ builds its rectangles from the **double**, so the
+      copied span is `int(extent - shift)` and not `extent - int(shift)`, a whole missing row.
+- [x] `Wipe` (threshold wipe mask) — **62–85 dB, not bit-exact**, and the cause is `cv::cvtColor`:
+      OpenCV's 8-bit `COLOR_BGRA2GRAY` is not reproducible from its own documented formula
+      (703 of 262,144 colours differ by 1). The wipe *thresholds* that grey, so the 1 LSB becomes a
+      full step on a few pixels. Inside W20's gate, green on the golden suite, but content-dependent.
+      **The fix is on the CPU side**: have the submodule compute the luminance explicitly instead of
+      calling `cv::cvtColor`. Cross-repo, so it is a decision. See `GPU-DECISIONS.md`.
+- [ ] Not blocked, and left: `Zoom`, `BorderReflectedMove`, `BorderReflectedRotation`, `CircleMask`,
+      rotational blur. All four resample (`warpAffine`, `cv::resize`, `cv::circle` with `LINE_AA`),
+      so all four are 45 dB-class ports, not exact ones. The spike in `spikes/sksl-glsl/` already
+      measured rotational blur at 57–61 dB.
+- [ ] **Blocked on the reference-resolution decision:** box/horizontal-vertical blur, diagonal blur,
+      zoom blur.
+- [ ] `ColorShift` — **already done under W19**; `ColorShift` calls the submodule's
+      `applyColorShiftEffect`, so there is no separate port here.
 - [ ] Keep the sources in `image-processing-lib/shaders/` so CanvasKit can load the same code.
 - [ ] The C++ stays as the oracle.
 

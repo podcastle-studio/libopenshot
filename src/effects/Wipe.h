@@ -1,7 +1,7 @@
 #ifndef OPENSHOT_WIPE_EFFECT_H
 #define OPENSHOT_WIPE_EFFECT_H
 
-#include "../EffectBase.h"
+#include "../GpuEffect.h"
 
 #include "../Json.h"
 #include "../KeyFrame.h"
@@ -14,11 +14,19 @@ namespace openshot
 	// Forward declaration
 	class ReaderBase;
 
-	class Wipe : public EffectBase
+	class Wipe : public GpuEffect
 	{
 	private:
 		/// Init effect settings
 		void init_effect_details();
+
+	protected:
+		/// The SkSL twin of applyThresholdWipeMaskEffect.
+		const char* GpuShaderSource() const override;
+
+		/// The two thresholds as bytes, resolved exactly as the C++ resolves them.
+		bool SetGpuUniforms(SkRuntimeEffectBuilder& builder, int64_t frame_number,
+							int width, int height) const override;
 
 	public:
         Keyframe mLevelsLowPercentage;
