@@ -63,16 +63,22 @@ Parity measured on Vulkan (RTX A2000), 2026-09-22. "images" is parameter cases �
 | **ColorShift** | 2 | 16 | **16** | 0 | transitions | four wrapped integer gathers; no arithmetic |
 | **Bars** | 2 | 16 | **16** | 0 | transitions | opaque black over four edge bands |
 | **ChromaKey** | 3 | 24 | 22 | 2 | per clip | **YCbCr method only** — see 2.3 |
-| **LightAdjustment** | 9 | 72 | 62 | 1 | per clip | contrast LUT uploaded as a 256×1 texture |
+| **LightAdjustment** | 9 | 72 | 64 | 1 | per clip | contrast LUT uploaded as a 256×1 texture |
 | **Mask** | 4 | 32 | 26 | 1 | per clip | matte built on CPU, uploaded as a texture |
 | **Enhancement** | 4 | 32 | 26 | 1 | per clip | **no grain pass** — see 2.3; first two-pass effect |
 | **ColorAdjustment** | 4 | 32 | 16 | 1 | per clip | `double` params → `float` uniforms |
 | **Brightness** | 4 | 32 | 24 | 3 | transitions | unpremultiplies |
 | **Exposure** | 3 | 24 | 16 | 5 | transitions | unpremultiplies |
-| **total** | 37 | **296** | **240** | 5 | | 81 % exact |
+| **total** | 37 | **296** | **242** | 5 | | 82 % exact |
 
 > Earlier commit messages quoted 214/297 and 246/329 for this table. Those counts accidentally
-> included the timing rows of the same report. **296 comparisons, 240 exact** is the correct figure.
+> included the timing rows of the same report. **296 comparisons, 242 exact** is the correct figure
+> for W19's effects alone; the whole suite including W20's is 416 and 346.
+>
+> **These counts drift by a few between runs** and should be read as rates, not constants. The
+> effects that divide by alpha inherit the GPU's 2.5 ULP allowance, and the number of pairs that
+> lands on the wrong side of an integer is not fixed — the exhaustive probe read 588 one day and
+> 763 the next with the same shader. The *magnitude* (1 LSB) is stable; the count is not.
 
 **ChromaKey's production configuration is 8/8 bit-exact** (green key, fuzz 70, halo 20 — the only
 thing the service builds). Only a deliberately wide halo moves, on 4 and 11 pixels of two images.
@@ -213,6 +219,18 @@ luminance on ~0.27 % of colours, which re-baselined `transitions.threshold_wipe_
 **Cross-repo: the front end compiles the same source to WASM and picks it up when it updates the
 submodule. The submodule commit is local and unpushed.**
 
+Parity measured on Vulkan, 2026-09-22, same harness and same eight images as W19:
+
+| effect | cases | images | bit-exact | worst | note |
+|---|---:|---:|---:|---:|---|
+| **Wipe** | 3 | 24 | **24** | 0 | after the `cv::cvtColor` fix |
+| **SplitShift** | 3 | 24 | **24** | 0 | two integer rectangle blits |
+| **CircleMask** | 3 | 24 | **24** | 0 | OpenCV rasterises the circle; the fragment does arithmetic |
+| **BorderReflectedRotation** | 2 | 16 | **16** | 0 | reproduces `warpAffine`'s 10-bit fixed-point map |
+| **BorderReflectedMove** | 2 | 16 | 12 | 4 | exact on smooth content; 46.5–47.5 dB on noise |
+| **Zoom** | 2 | 16 | 4 | 1 | zoom-in only; 57–78 dB |
+| **total** | 15 | **120** | **104** | 4 | against W20's 45 dB gate, nothing fails |
+
 **Nothing in W20 is open any more: it is six done and four blocked**, all four on the same
 reference-resolution decision. Rotational blur joined the three blur modes there — its parameter is
 in degrees, but `applyRotationalBlur` downscales before it works and the threshold keys on the
@@ -267,7 +285,7 @@ and the two should be measured together.
 
 ---
 
-## 5. The gates, and why both need restating
+## 5. The gates, and why all four need restating
 
 Measured interleaved on **mains power**, 1080p, `render`, 150 frames, GPU off against Vulkan:
 
@@ -283,9 +301,11 @@ carried. The gate should move there.
 
 **`heavy_effects` cannot reach 60 fps from Stage 6 at all.** Its chain is rounded `Crop`, `Blur`,
 `Enhancement(noise 0.3, …)`, `ColorAdjustment`, `LightAdjustment`, `ColorMap`, plus clip shadow and
-blur. Of those: Crop is **ruled out**, `Blur` is **W20, not W19**, `ColorMap` is **blocked**, and
-that `Enhancement` **asks for grain**, the one pass that cannot be ported. Four of six stay on the
-CPU whatever W19 does, so the chain crosses PCIe repeatedly.
+blur. Of those: Crop is **ruled out**, `Blur` is **W20 and blocked there** — all four of its modes are,
+including rotational — `ColorMap` is **blocked on the front end**, and that `Enhancement` **asks for
+grain**, the one pass that cannot be ported. Four of six stay on the CPU whatever Stage 6 does, so
+the chain crosses PCIe repeatedly, and **no decision available to this project unblocks it except
+the reference-resolution one.**
 
 The useful part of that measurement: it is still **+14 %, not a loss**. A partly-ported chain does
 not come out slower than pure CPU, so partial porting is safe and the order of the remaining work
@@ -300,20 +320,42 @@ one. Fixing this means not giving every effect its own pass — a zero-copy sour
 `SkSurfaces::AsImage` consumes the surface, so it cannot simply ping-pong through the pool) or
 composing a chain into one draw. **Its own item, not a fragment's problem.**
 
+**And W21's timing clause has nothing to measure.** It reads "a transition frame costs no more than
+a plain two-clip frame ±10 %", and there is no plain-two-clip scenario to compare against. Measured
+against itself instead — both libraries built up front and swapped in place so the arms interleave
+— `transitions_chain` is 17.0 fps without W21 and 16.8 with, with CPU occupancy 2.2 → 1.9 cores and
+peak RSS 1.13 → 1.05 GB. The wall clock does not move because the transition effects around the
+overlay were still on the CPU when that was measured; **six of them are now fragments, so this is
+worth re-measuring** before the clause is rewritten.
+
 ---
 
 ## 6. What is left, in order
 
-1. **Nothing in W19 that this machine can finish unaided.** ColorMap needs two answers from the
-   front-end team (§2.6). Crop and CameraMovement need a product decision, not code (§2.5).
-2. ~~**W21 — overlay clips.**~~ **Done 2026-09-22** (§4).
-3. **W20 — transitions.** 7 classes / 10 variants (§3). Gated on the `TRANSITION-PARITY.md`
-   reference-resolution decision first. **This is the only item left in Stage 6 that is not
-   blocked on someone else**, and it is what makes W21 pay.
-4. **Restate the gates** (§5, and W21's timing clause) — owner decision, same shape as W07's.
-5. **Open question worth an answer before W20:** should `Blur` be pulled forward? It is in
-   `heavy_effects`, it is the only unported effect in that chain that is neither blocked nor ruled
-   out, and it is four transition variants at once.
+**Stage 6 has nothing left that this machine can finish unaided.** Everything outstanding is
+waiting on a person, and there are only three of them.
+
+1. **The reference-resolution decision** (`TRANSITION-PARITY.md`, "Open questions") — a product
+   decision, because fixing it shifts existing projects. It blocks **all four remaining W20
+   variants**: horizontal/vertical blur, diagonal blur, zoom blur, and — corrected 2026-09-22 —
+   **rotational blur**, which is resolution-dependent through its downscale threshold rather than
+   through its parameter.
+2. **Two answers from the front-end team**, which block **ColorMap** and nothing else (§2.6): which
+   `interpolation` they pass to `apply_lut`, and how they set the LUT domain. The second is a live
+   bug today, not a migration concern.
+3. **Owner decisions that are not blocking anything**, but should be settled before the numbers are
+   quoted anywhere:
+   - **Crop and CameraMovement** (§2.5) — porting either is a redefine-class change to the pixels.
+   - **The gates** (§5) — both fps gates and the per-effect ≤ 0.2 ms clause measure something other
+     than what they say.
+   - **Push the submodule.** `image-processing-lib` commit `f8873e0` (the explicit BGRA luminance)
+     is committed locally and **unpushed**; the front end compiles the same source to WASM and
+     picks it up when it updates the submodule.
+
+**Two earlier entries here are now answered and are recorded so they are not re-asked:**
+~~"W20 is the only item left not blocked on someone else"~~ — it is now fully blocked. ~~"Should
+`Blur` be pulled forward?"~~ — no: `Blur` *is* three of the four blocked variants, plus rotational,
+so it cannot move ahead of the decision that blocks it.
 
 ## 7. Cross-references
 
