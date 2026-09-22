@@ -23,15 +23,19 @@ Other project commands: `/check` (golden suite + visual diff), `/bench` (perform
    W01…W31, one item to a session, each with sub-tasks, dependencies and a numeric gate. Read only
    the item you are doing. It opens with the protocol for running one item and clearing the context
    afterwards.
-3. `doc/gpu-migration/GPU-RENDER-PLAN.md` — the reasoning behind the worklist, not a step list:
+3. `doc/gpu-migration/STAGE6-EFFECTS.md` — **the map of the effects work (Stage 6)**: every effect
+   the service uses, from all three call sites, marked done / partial (with what was excluded) /
+   ruled out (with the reason) / blocked (on whom), and what is left in order. Read this before
+   touching W19, W20 or W21 instead of reconstructing it from the worklist.
+4. `doc/gpu-migration/GPU-RENDER-PLAN.md` — the reasoning behind the worklist, not a step list:
    measurements (§0), the GPU primer and why Skia/Graphite/Vulkan (§1), the Qt inventory (§2),
    sizing for N parallel exports (§4), the parity policy (§5), standing gotchas (§6).
-4. `tests/golden/README.md` — the regression suite that gates every change.
-5. `doc/PERFORMANCE-BASELINE.md` — benchmark history (`tests/bench`, `openshot-bench`). Re-run at the
+5. `tests/golden/README.md` — the regression suite that gates every change.
+6. `doc/PERFORMANCE-BASELINE.md` — benchmark history (`tests/bench`, `openshot-bench`). Re-run at the
    end of every optimisation phase, commit the JSON under `tests/bench/results/`, append the table.
-6. `doc/gpu-migration/GPU-DECISIONS.md` — decisions already taken (do not re-litigate) and the ones
+7. `doc/gpu-migration/GPU-DECISIONS.md` — decisions already taken (do not re-litigate) and the ones
    still open.
-7. `doc/gpu-migration/TRANSITION-PARITY.md` — **read before W20.** How the editor (PixiJS + the
+8. `doc/gpu-migration/TRANSITION-PARITY.md` — **read before W20.** How the editor (PixiJS + the
    OpenCV WASM) and the export stay visually identical once transitions move to shaders, and the
    measured parameter-resolution bug that already breaks them today.
 

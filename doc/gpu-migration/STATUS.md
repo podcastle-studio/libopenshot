@@ -468,6 +468,11 @@ ask it for you) and none reads the environment for itself — the new `control` 
 > no longer Stage 1 — both moved to Stage 10, at the end of the worklist**, so the file reads in
 > execution order. The item IDs are unchanged; every cross-reference still says W01 and W02.
 
+> **Stage 6 has its own map: `doc/gpu-migration/STAGE6-EFFECTS.md`.** Every effect the service
+> uses, from all three call sites (per clip, transitions, animation), with its state — ported,
+> partial and what was excluded, ruled out and why, or blocked and on whom — plus what is left in
+> order. Read that instead of reconstructing it from the log below.
+
 **W11, W12 and W13 are done** (2026-09-16). The four decisions the compositor bakes in are in
 `GPU-DECISIONS.md` — canvas `kRGBA_8888` (overriding the F16 recommendation that was on file),
 Graphite only, LUT matched to the front end at native cube size, nearest sampling kept.

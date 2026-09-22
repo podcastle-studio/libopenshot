@@ -849,6 +849,11 @@ touched**. `ENABLE_PLAYER=OFF` build: same 98 scenarios / 295 frames / 17 checks
 
 ## Stage 6 — Effects and transitions as shaders (R4, first half)
 
+> **Map of this whole stage: `STAGE6-EFFECTS.md`.** Which effects are ported, which are partial and
+> what was left out of them, which were examined and ruled out with the reason, which are blocked
+> and on whom — and what is left, in order. Written 2026-09-22 so this does not have to be
+> reconstructed from the item text and the log.
+
 Depends on W12/W13 only — **not** on Stage 7. Can run in parallel with Stage 7 and with each other.
 
 ### W19 — `GpuEffect` base and the per-pixel shaders · legacy `4.5`
