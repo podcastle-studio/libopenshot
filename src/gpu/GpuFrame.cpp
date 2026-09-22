@@ -21,13 +21,25 @@
 using namespace openshot;
 
 GpuFrame::GpuFrame(sk_sp<SkSurface> surface, int width, int height, SkColorType color_type)
-	: frame_surface(std::move(surface)), frame_width(width), frame_height(height),
-	  frame_color_type(color_type)
+	: frame_surface(std::move(surface)), frame_generation(GpuDevice::Generation()),
+	  frame_width(width), frame_height(height), frame_color_type(color_type)
 {
+}
+
+bool GpuFrame::ownedByThisThread() const
+{
+	return frame_owner == std::this_thread::get_id() &&
+		   frame_generation == GpuDevice::Generation();
 }
 
 GpuFrame::~GpuFrame()
 {
+	// release() only ever matches a surface in the calling thread's own pool, so a
+	// frame destroyed on the wrong thread is not put into the wrong pool -- it is
+	// simply not returned, and the owning pool keeps it marked in use. That is a
+	// surface the pool can no longer recycle, which is why ownedByThisThread()
+	// exists: anything holding a GPU frame across calls should be releasing it on
+	// the thread that made it.
 	GpuSurfacePool::Instance().release(frame_surface);
 }
 

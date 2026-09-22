@@ -32,6 +32,9 @@
 #include "Exceptions.h"
 #include "MemoryTrim.h"
 #include "QtUtilities.h"   // aligned_free, for the frame-buffer pool below
+#include "gpu/GpuDevice.h"
+#include "gpu/GpuFrame.h"
+#include "gpu/GpuYuv.h"
 #include "Timeline.h"
 #include "ZmqLogger.h"
 
@@ -1337,6 +1340,24 @@ bool FFmpegReader::GetIsDurationKnown() {
 	return this->is_duration_known;
 }
 
+namespace {
+
+/// A cached frame is only usable if this thread can actually read its pixels.
+///
+/// A GPU-backed frame's surface belongs to the recorder that made it, and recorders are per
+/// thread; it also dies with the device. A cached frame that fails either test is dropped so the
+/// caller decodes it again rather than reading a surface it does not own. Costs a re-decode in a
+/// case the render path does not hit -- Timeline -> Clip -> reader is one thread -- and is what
+/// makes handing out GPU frames safe for the callers that are not.
+bool cachedFrameIsUsable(const std::shared_ptr<openshot::Frame>& frame) {
+	if (!frame || !frame->IsGpuBacked())
+		return true;
+	const std::shared_ptr<openshot::GpuFrame>& gpu = frame->GpuBacking();
+	return gpu && gpu->ownedByThisThread();
+}
+
+}   // namespace
+
 std::shared_ptr<Frame> FFmpegReader::GetFrame(int64_t requested_frame) {
 	// Check for open reader (or throw exception)
 	if (!is_open)
@@ -1356,6 +1377,10 @@ std::shared_ptr<Frame> FFmpegReader::GetFrame(int64_t requested_frame) {
 
 	// Check the cache for this frame
 	std::shared_ptr<Frame> frame = final_cache.GetFrame(requested_frame);
+	if (frame && !cachedFrameIsUsable(frame)) {
+		final_cache.Remove(requested_frame);
+		frame.reset();
+	}
 	if (frame) {
 		// Debug output
 		ZmqLogger::Instance()->AppendDebugMethod("FFmpegReader::GetFrame", "returned cached frame", requested_frame);
@@ -1369,6 +1394,10 @@ std::shared_ptr<Frame> FFmpegReader::GetFrame(int64_t requested_frame) {
 
 		// Check the cache a 2nd time (due to the potential previous lock)
 		frame = final_cache.GetFrame(requested_frame);
+		if (frame && !cachedFrameIsUsable(frame)) {
+			final_cache.Remove(requested_frame);
+			frame.reset();
+		}
 		if (frame) {
 			// Debug output
 			ZmqLogger::Instance()->AppendDebugMethod("FFmpegReader::GetFrame", "returned cached frame on 2nd look", requested_frame);
@@ -2028,7 +2057,55 @@ void FFmpegReader::ProcessVideoPacket(int64_t requested_frame) {
         );
     }
 
-    // 5. Allocate aligned RGBA buffer and cached RGB frame
+    // 5. The GPU converts and pre-scales in one pass when there is one.
+    //
+    // This is the point of the whole GPU path: the frame is born on the GPU and stays there for
+    // the compositor, so the only thing that crosses the bus is the YUV (1.5 bytes a pixel against
+    // 4 for the RGBA that would come back), and sws_scale -- 95 % of this reader's wall clock --
+    // does not run at all. Null means "no GPU, or a layout this does not handle", and the swscale
+    // path below is unchanged.
+    std::shared_ptr<Frame> f = CreateFrame(current_frame);
+    std::shared_ptr<openshot::GpuFrame> gpu_converted;
+    if (openshot::Settings::Instance()->GPU_DECODE &&
+        openshot::GpuDevice::Instance().available() &&
+        openshot::GpuYuv::Supports((int) src_pix_fmt)) {
+        openshot::GpuYuvPlane gpu_planes[3];
+        const int plane_count =
+            openshot::GpuYuv::LayoutOf((int) src_pix_fmt) == openshot::GpuYuv::Layout::NV12 ? 2 : 3;
+        const bool chroma_half_height = true;   // every layout here is 4:2:0
+        for (int plane = 0; plane < plane_count; ++plane) {
+            gpu_planes[plane].data = pFrame->data[plane];
+            gpu_planes[plane].stride = pFrame->linesize[plane];
+            const bool is_luma = plane == 0;
+            gpu_planes[plane].width = is_luma ? src_w : (src_w + 1) / 2;
+            gpu_planes[plane].height =
+                is_luma || !chroma_half_height ? src_h : (src_h + 1) / 2;
+        }
+        gpu_converted = openshot::GpuYuv::Convert(
+            openshot::GpuYuv::LayoutOf((int) src_pix_fmt),
+            openshot::GpuYuv::MatrixOf((int) pFrame->colorspace, src_w, src_h),
+            openshot::GpuYuv::IsFullRange((int) src_pix_fmt) ||
+                pFrame->color_range == AVCOL_RANGE_JPEG,
+            gpu_planes, plane_count, output_width, output_height);
+    }
+
+    if (gpu_converted) {
+        f->AttachGpuFrame(gpu_converted);
+        working_cache.Add(f);
+        last_video_frame = f;
+        RemoveAVFrame(pFrame);
+
+        video_pts_seconds = (double(video_pts) * info.video_timebase.ToDouble()) + pts_offset_seconds;
+        ZmqLogger::Instance()->AppendDebugMethod(
+            "FFmpegReader::ProcessVideoPacket (After, on the GPU)",
+            "requested_frame", (float)requested_frame,
+            "current_frame",   (float)current_frame,
+            "f->number",       (float)f->number
+        );
+        return;
+    }
+
+    // 5b. Allocate aligned RGBA buffer and cached RGB frame
     const int bytes_per_pixel = 4;
 
     // Force a tight bytes-per-line (no hidden alignment that can truncate the effective width).
@@ -2089,7 +2166,6 @@ void FFmpegReader::ProcessVideoPacket(int64_t requested_frame) {
     //
     // The QImage is built here rather than through AddImage(raw), because that overload hard-codes
     // openshot::cleanUpBuffer as the cleanup and this buffer has to go back to the pool instead.
-    std::shared_ptr<Frame> f = CreateFrame(current_frame);
     auto wrapped = std::make_shared<QImage>(
         buffer, output_width, output_height, bytes_per_line,
         info.has_alpha ? QImage::Format_RGBA8888 : QImage::Format_RGBA8888_Premultiplied,

@@ -1,5 +1,7 @@
 #include "Harness.h"
 
+#include "gpu/GpuYuv.h"
+
 #include "gpu/GpuDevice.h"
 
 #include "Clip.h"
@@ -119,6 +121,13 @@ RunSummary runAll(const Options& opts) {
         std::vector<Captured> captured;
         std::vector<Check> checks;
         std::string error;
+        // A scenario whose frames the reader decoded on the GPU cannot be held to CPU goldens
+        // bit-for-bit, and asking the scenario's tags would not know: whether a GPU decoded
+        // depends on the build, the backend and the pixel format, not on the scenario. So ask
+        // the converter instead, the same way unit.gpu_effect_path asks GpuEffect -- a check
+        // that cannot tell whether the GPU ran proves nothing.
+        const unsigned long long decodes_before = openshot::GpuYuv::Conversions();
+        const unsigned long long scaled_before = openshot::GpuYuv::ScaledConversions();
         try {
             Scene scene;
             scene.mediaDir = opts.mediaDir;
@@ -151,6 +160,22 @@ RunSummary runAll(const Options& opts) {
             continue;
         }
 
+        // Relax the scenario's own GPU band by the decode band, never tighten it: a scenario
+        // that already allows more (a rotation the compositor resamples, say) keeps what it
+        // allows, and one held exact gets just enough room for the conversion.
+        const auto relax = [](Tolerance band, const Tolerance& by) {
+            band.psnrMin = std::min(band.psnrMin, by.psnrMin);
+            band.ssimMin = std::min(band.ssimMin, by.ssimMin);
+            band.maxAbs = std::max(band.maxAbs, by.maxAbs);
+            band.pctOver2Max = std::max(band.pctOver2Max, by.pctOver2Max);
+            return band;
+        };
+        Tolerance gpu_tol = s.gpuTol;
+        if (openshot::GpuYuv::ScaledConversions() > scaled_before)
+            gpu_tol = relax(gpu_tol, Tolerance::GpuDecodeScaled());
+        else if (openshot::GpuYuv::Conversions() > decodes_before)
+            gpu_tol = relax(gpu_tol, Tolerance::GpuDecode());
+
         for (const auto& cap : captured) {
             FrameResult r;
             r.scenario = s.name;
@@ -178,7 +203,7 @@ RunSummary runAll(const Options& opts) {
                 continue;
             }
             r.metrics = compare(*golden, cap.image);
-            r.pass = passes(r.metrics, gpu_active ? s.gpuTol : s.tol);
+            r.pass = passes(r.metrics, gpu_active ? gpu_tol : s.tol);
             if (!r.pass) ++summary.failures;
             if (!r.pass || opts.allImages) {
                 const std::string base = (opts.reportDir.empty() ? opts.outDir : opts.reportDir) + "/" + s.name + "/" + cap.label;

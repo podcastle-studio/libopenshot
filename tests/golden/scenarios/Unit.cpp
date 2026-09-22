@@ -27,6 +27,7 @@
 #include "effects/Brightness.h"
 #include "effects/ColorMap.h"
 #include "gpu/GpuDevice.h"
+#include "gpu/GpuYuv.h"
 #include "gpu/GpuOverlay.h"
 
 #include "effects/image-processing-lib/src/Effects/effects.h"
@@ -482,6 +483,78 @@ void golden::registerUnitScenarios() {
             const long long match_passes = count(match);
             checks.push_back({"colormap_match_declines", match_passes == 0,
                               "gpu_passes=" + std::to_string(match_passes)});
+        });
+
+    // Is the reader's GPU YUV->RGBA pass the same function as swscale's?
+    //
+    // This is the sharp gate on that path, and the reason the golden tolerances for a
+    // GPU-decoded scenario can afford to be loose: it compares the two conversions directly,
+    // on an unscaled clip, with nothing else in the frame. It also asserts the GPU actually
+    // ran -- GpuYuv::Convert declining is a normal answer and the swscale result is then
+    // correct, so a comparison that cannot tell the two apart would pass on a shader that
+    // never compiled.
+    addCustom("unit.gpu_decode", {"unit", "gpu"}, unitScene,
+        [](Scene& s, std::vector<Captured>&, std::vector<Check>& checks) {
+            const int wanted = 4;
+            const std::string clip = s.media("clip_a_640x360_30.mp4");
+            const auto decode = [&](bool on_gpu) {
+                openshot::Settings::Instance()->GPU_DECODE = on_gpu;
+                std::vector<std::vector<uint8_t>> frames;
+                openshot::FFmpegReader reader(clip);
+                reader.Open();
+                for (int i = 1; i <= wanted; ++i) {
+                    auto image = reader.GetFrame(i)->GetImage();
+                    frames.emplace_back(image->bits(), image->bits() + image->sizeInBytes());
+                }
+                reader.Close();
+                return frames;
+            };
+
+            openshot::Settings* settings = openshot::Settings::Instance();
+            const bool previous = settings->GPU_DECODE;
+            const std::vector<std::vector<uint8_t>> cpu = decode(false);
+            const unsigned long long before = openshot::GpuYuv::Conversions();
+            const std::vector<std::vector<uint8_t>> gpu = decode(true);
+            const unsigned long long ran = openshot::GpuYuv::Conversions() - before;
+            settings->GPU_DECODE = previous;
+
+            const bool have_gpu = openshot::GpuDevice::Instance().available();
+            if (!have_gpu) {
+                // No GPU is a supported configuration: the pass must decline, and declining
+                // must leave the swscale result untouched.
+                bool same = true;
+                for (int i = 0; i < wanted && same; ++i) same = cpu[i] == gpu[i];
+                checks.push_back({"gpu_decode_declines", ran == 0 && same,
+                                  ran == 0 && same
+                                      ? "no GPU: the pass declined and the frames are identical"
+                                      : "the pass ran or changed pixels with no GPU"});
+                return;
+            }
+
+            double worst = 1e9;
+            int worst_delta = 0;
+            for (int i = 0; i < wanted; ++i) {
+                if (cpu[i].size() != gpu[i].size()) { worst = 0; break; }
+                double sum = 0;
+                for (std::size_t p = 0; p < cpu[i].size(); ++p) {
+                    const int d = int(cpu[i][p]) - int(gpu[i][p]);
+                    if (std::abs(d) > worst_delta) worst_delta = std::abs(d);
+                    sum += double(d) * d;
+                }
+                const double mse = sum / cpu[i].size();
+                const double psnr = mse == 0 ? 1e9 : 10.0 * std::log10(255.0 * 255.0 / mse);
+                worst = std::min(worst, psnr);
+            }
+            // >=, not ==: the reader decodes ahead, so more frames go through the pass than
+            // were asked for. What matters is that it ran at all.
+            const bool ok = ran >= static_cast<unsigned long long>(wanted) && worst >= 44.0 &&
+                            worst_delta <= 4;
+            char detail[192];
+            std::snprintf(detail, sizeof(detail),
+                          "%llu frames on the GPU (%d asked for), worst PSNR %.2f dB (gate 44), max "
+                          "delta %d (gate 4)",
+                          ran, wanted, worst, worst_delta);
+            checks.push_back({"gpu_decode_matches_swscale", ok, detail});
         });
 
     // Hardware decode must not take the process with it.

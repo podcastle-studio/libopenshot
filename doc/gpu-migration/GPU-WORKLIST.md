@@ -1242,17 +1242,66 @@ VP9, AV1, MPEG-4" sub-task is optional here.
 
       Bit-identical: four-way sweep 307/307, 26 checks. This is a CPU win on the path that ships,
       and it is what the "< 1 core" half of the gate has to be measured against from now on.
-- [ ] Decoder output stays `AV_PIX_FMT_CUDA`.
-- [ ] YUV→RGBA becomes an SkSL pass (matrix and range from the stream, default BT.709 at ≥ 720p)
-      that also applies the pre-scale.
+- [ ] Decoder output stays `AV_PIX_FMT_CUDA`. **This is the only piece left, and W22 is its
+      input**: `CudaInterop::copyNV12` already puts NVDEC's two planes into Vulkan images, and
+      `GpuYuv` already samples exactly that layout (`Layout::NV12`). What is missing is the reader
+      handing the images over instead of uploading host planes.
+- [x] **YUV→RGBA is an SkSL pass** (`src/gpu/GpuYuv.{h,cpp}`, 2026-09-22), matrix and range from
+      the stream, doing the pre-scale in a second pass. The reader attaches the result with
+      `Frame::AttachGpuFrame`, so a decoded frame is **born on the GPU and stays there** for the
+      compositor. **Flagged off** behind `Settings::GPU_DECODE` — see the parity note below.
+      - Faithful: **47.4 dB, max 3 LSB** against swscale on an unscaled clip, gated by
+        `unit.gpu_decode`, which also asserts the pass actually ran.
+      - The **pre-scale** is a second draw (Mitchell), not folded into the conversion sample: one
+        bilinear tap is not a downscale filter and measured 29 dB. Even done properly it is
+        28.9–30.7 dB against the CPU, because swscale's `SWS_FAST_BILINEAR` carries a half-pixel
+        phase — a whole column of wrong pixels at every colour-bar edge. **Open question: should
+        the reader pre-scale at all once the frame stays on the GPU?** The compositor already
+        scales, with the same sampler, in its own transformed draw.
+      - End to end, 4K → 1080p, `OPENSHOT_GPU=vulkan`, interleaved: **87–91 fps with swscale
+        against 87–89 with the shader** — a wash on wall clock, but **CPU falls from ~2.0 to ~1.8
+        cores** and RSS rises 916 → 990 MB. It does not pay yet because both ends still copy:
+        NVDEC is not feeding it (the sub-task above) and the writer still reads back (W25).
 - [ ] Remove `DE_LIMIT_*`. Software decode + `upload()` stays the fallback.
 - [ ] *(optional)* extend `IsHardwareDecodeSupported` to HEVC, VP9, AV1, MPEG-4.
 
-**Gate.** Decode-only 4K ≥ **120 fps** and < 1 core; decoded frame vs software decode PSNR ≥ 48 dB;
-a BT.709 chart decodes to the right sRGB values.
-**Expected re-baseline.** This intentionally *differs* from the CPU goldens, which apply swscale's
-BT.601 default. Record it in `GPU-DECISIONS.md` and re-baseline the affected `readers.*` scenarios
-once.
+**Gate — restated 2026-09-22, because all three clauses were measured to be wrong.** The original
+read: *"Decode-only 4K ≥ 120 fps and < 1 core; decoded frame vs software decode PSNR ≥ 48 dB; a
+BT.709 chart decodes to the right sRGB values."* What each clause turned out to be worth:
+
+1. **"Decode-only 4K ≥ 120 fps" was already met before this item started**, and by the CPU: the
+   reader does 126–135 fps, and 195–198 after the buffer pool. Worse, decode-only fps is the wrong
+   measure — end to end at 4K → 1080p the reader is not the bottleneck, and a faster reader moved
+   the pipeline by nothing. **Replaced by: the end-to-end `source_4k` render must not regress, and
+   the reader's CPU time per frame must fall.**
+2. **"< 1 core" is the real content of the gate** and it stands. Measured today: ~1.8 cores end to
+   end with the shader against ~2.0 with swscale, so it is not met and NVDEC is what is left to
+   meet it.
+3. **"vs software decode PSNR ≥ 48 dB" is unreachable as written, and against the wrong
+   reference.** Hardware decode returns NV12 and software returns YUV420P, and **swscale converts
+   the same 4:2:0 samples to RGBA 40.5 dB apart depending only on which of the two they are laid
+   out as** — reproduced with the ffmpeg CLI alone, so it is swscale's chroma handling, not ours.
+   Comparing after the conversion measures swscale's inconsistency, not the decoder's fidelity.
+   **Replaced by two sharper checks:** (a) the SkSL conversion against swscale on *identical*
+   planes, ≥ 44 dB and ≤ 4 LSB — `unit.gpu_decode`, measured 47.4 dB / 3 LSB; and (b) NVDEC
+   against software decode compared **in YUV, before any conversion**, where H.264 is normative
+   and the two should agree exactly.
+4. **The BT.709 chart clause stands unchanged.**
+
+**Expected re-baseline.** This intentionally *differs* from the CPU goldens — and it is now clear
+exactly how. Two separate differences, and only the second is a colour change:
+
+- **Rounding**, 3 LSB, from doing the same BT.601 conversion in floating point. Small, everywhere.
+- **The stream's declared colour space is honoured, and swscale as this reader configures it never
+  did.** The suite's own media is untagged, so it decodes BT.601 either way — but the files the
+  suite *exports* are tagged `bt709`, and decoding those as BT.709 shifts them by several LSB with
+  a systematic per-channel bias. That is the correct answer and a different picture.
+
+With `GPU_DECODE` on, that costs 19 of 307 frames in the Vulkan arm: the blend modes whose formula
+amplifies a sub-LSB input difference, ChromaKey (a threshold), `effects.enhancement`, and
+`export.roundtrip_x264` (the colour-space clause above). **Turning the flag on is the project
+owner's decision**, and it re-baselines every golden that decodes video. Until then the path is
+built, tested by `unit.gpu_decode` on both backends, and off.
 **Size.** ~1.5 weeks.
 
 ### W24 — Decode read-ahead · legacy `4.3`

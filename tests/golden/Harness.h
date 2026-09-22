@@ -55,6 +55,27 @@ struct Tolerance {
     /// `openshot-gpu-blend-parity` is, and it is far sharper -- it blends identical pixels
     /// with no resampling and holds every mode to 2 LSB. Run it when touching blend code.
     static Tolerance GpuAmplified() { return {25.0, 0.96, 255, 100.0}; }
+
+    /// For a scenario whose video frames the GPU decoded: the reader ran the YUV->RGBA
+    /// conversion as an SkSL pass instead of handing it to swscale.
+    ///
+    /// The conversion itself is faithful -- measured **46.2 dB, SSIM 0.9997, 3 LSB at worst**
+    /// on an unscaled 640x360 clip, which is rounding plus swscale's own fixed-point maths.
+    /// This band is a little wider than that measurement and no wider.
+    static Tolerance GpuDecode() { return {44.0, 0.999, 4, 3.0}; }
+
+    /// For a scenario where the reader ALSO pre-scaled on the GPU, which is a different
+    /// story: swscale's SWS_FAST_BILINEAR is fast because it carries a half-pixel phase,
+    /// and on colour bars that puts a whole column of wrong pixels at every bar edge.
+    /// Measured 28.9-30.7 dB, SSIM 0.9912-0.9941, up to 211 LSB -- all of it at edges the
+    /// two filters place differently, with the flat areas matching.
+    ///
+    /// The band is too wide to catch a regression, exactly as GpuAmplified is. It is not
+    /// the real gate on this path: unit.gpu_decode is, and it compares the two conversions
+    /// directly on an unscaled clip, with nothing else in the frame. **Whether the reader should pre-scale at all once
+    /// the frame stays on the GPU is an open question** -- the compositor already scales,
+    /// with the same sampler, in its own transformed draw. See GPU-WORKLIST W23.
+    static Tolerance GpuDecodeScaled() { return {28.0, 0.99, 255, 100.0}; }
 };
 
 // Everything a scenario builds lives here so teardown order is fixed:

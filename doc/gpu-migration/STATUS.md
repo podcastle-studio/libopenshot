@@ -27,7 +27,7 @@ Stated by the project owner, 2026-09-14. This overrides anything in
    and all four must be **295/295** (292 until W18 added three frames of background-colour
    coverage). Commands are in `CLAUDE.md` under "GPU rendering (`src/gpu`)".
 
-Last updated: 2026-09-22 (Stage 6 complete; **W22 done**; **W23 started** — plan step 1.5's crash fix is in, the SkSL YUV→RGBA pass is next) · branch `feature/gpu-rendering`.
+Last updated: 2026-09-22 (Stage 6 complete; **W22 done**; **W23 part done** — 1.5's crash fix, the buffer pool, and the SkSL YUV→RGBA pass built and flagged off; NVDEC feeding it is what is left) · branch `feature/gpu-rendering`.
 **Phase 2 is complete.** 2.0 landed 2026-09-15 (the GPU-capable image, in
 `../video-rendering-service` branch `feature/gpu-rendering`), which was the last thing in it and the
 only thing stopping R2a and R2b from shipping. **R2a complete** (2.1, 2.2, 2.3); **2.4 done, gate
@@ -788,6 +788,38 @@ production corpus) remain open; W05–W10 are the CPU quick wins. W01/W02 stay d
   x264 loss, not a matrix bug.
 
 ## Log
+
+- 2026-09-22 — **Decoded frames are born on the GPU now: `src/gpu/GpuYuv` converts YUV to RGBA as
+  an SkSL pass and the reader attaches it with `Frame::AttachGpuFrame`. Built, tested, and
+  flagged off behind `Settings::GPU_DECODE`.**
+  **Why off, and it is not because it is unfinished.** It changes pixels twice over. The
+  conversion itself is faithful — **47.4 dB, max 3 LSB** against swscale on an unscaled clip,
+  gated by the new `unit.gpu_decode`, which also asserts the pass actually ran (a check that
+  cannot tell whether the GPU ran proves nothing). But it **honours the stream's declared colour
+  space and swscale, as this reader configures it, never did**: the suite's media is untagged so
+  it decodes BT.601 either way, while the files the suite *exports* are tagged `bt709`, and
+  decoding those correctly shifts them. With the flag on, 19 of 307 frames in the Vulkan arm move
+  — the blend modes that amplify a sub-LSB input difference, ChromaKey's threshold,
+  `effects.enhancement`, and `export.roundtrip_x264`. **Turning it on is the owner's call and
+  re-baselines every golden that decodes video.** Four-way sweep with it off: **307/307, 27
+  checks, all four arms.**
+  **What it is worth today: not much, and the reason is instructive.** End to end at 4K → 1080p
+  on Vulkan, interleaved: **87–91 fps with swscale against 87–89 with the shader** — a wash —
+  while CPU falls from **~2.0 to ~1.8 cores** and RSS rises 916 → 990 MB. Both ends still copy.
+  The YUV is uploaded from host memory because NVDEC is not feeding it yet, and the frame is read
+  back at the encoder because the writer still wants pixels. **W22's `CudaInterop` is exactly the
+  missing input** — `copyNV12` already produces the two Vulkan images `GpuYuv` samples — and W25
+  is the missing output. Until both ends close, moving the conversion alone buys 0.2 of a core.
+  **Two things found on the way.** The pre-scale cannot ride along in the conversion's sample: one
+  bilinear tap is not a downscale filter (29 dB), so it is a second Mitchell draw — and even done
+  properly it is 28.9–30.7 dB against the CPU, because swscale's `SWS_FAST_BILINEAR` carries a
+  half-pixel phase. **Whether the reader should pre-scale at all once the frame stays on the GPU
+  is now an open question**: the compositor already scales, with the same sampler, in its own
+  transformed draw. And `GpuFrame` now carries its owning thread and generation
+  (`ownedByThisThread()`), because a cached GPU-backed frame handed to another thread is a
+  surface that thread's recorder does not own; the reader drops and re-decodes those.
+  **W23's gate has been restated in the worklist** — all three of its clauses were measured to be
+  wrong, one of them unreachable in principle. See the item.
 
 - 2026-09-22 — **The reader is 48 % faster at 4K, on the CPU path, and it was never the
   conversion's fault.** `sws_scale` is **95 % of the reader's wall clock** at 4K, and it was taking

@@ -241,6 +241,13 @@ GPU to take over. Earlier, lower figures in the docs were measured on an Intel i
   `RenderBackend::videoCodec()`, which reads `ENCODER` (`libx264` default, or `h264_nvenc`), probes
   it once and falls back to libx264 if no device answers. `OPENSHOT_GPU` is likewise passed through
   to the library. Both default to the CPU, and the runtime image is GPU-*capable*, not GPU-requiring.
+- **The reader can convert YUV→RGBA on the GPU** (`src/gpu/GpuYuv`, `Settings::GPU_DECODE`,
+  2026-09-22): the decoded frame is born on a GPU surface and stays there for the compositor.
+  **Off by default because it changes pixels** — 3 LSB of rounding, plus it honours the stream's
+  declared colour space where swscale here never did, so a `bt709`-tagged file decodes
+  differently. `unit.gpu_decode` gates the conversion at 44 dB / 4 LSB and asserts the pass ran.
+  It buys ~0.2 of a core and no wall clock until NVDEC feeds it (`CudaInterop::copyNV12` is the
+  input) and the writer stops reading back.
 - Hardware decode (`HARDWARE_DECODER != 0`) **worked again as of 2026-09-22** (plan step 1.5):
   `ProcessVideoPacket` takes swscale's source format from the frame it converts, not from
   `pCodecCtx->pix_fmt`, which is `AV_PIX_FMT_CUDA` once NVDEC is on. `~FFmpegReader` also no

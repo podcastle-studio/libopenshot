@@ -73,6 +73,29 @@ namespace openshot {
 		/// Scale mode used in FFmpeg decoding and encoding (used as an optimization for faster previews)
 		bool HIGH_QUALITY_SCALING = true;
 
+		/**
+		 * @brief Let the reader convert YUV to RGBA on the GPU, so decoded frames stay there.
+		 *
+		 * Needs a GPU as well (@c GpuDevice::available()); with one, the reader runs the
+		 * conversion and the pre-scale as an SkSL pass and hands the compositor a GPU-backed
+		 * frame, so nothing crosses the bus but the YUV. It replaces @c sws_scale, which is
+		 * 95 % of the reader's wall clock.
+		 *
+		 * **Off by default because it changes pixels, not because it is unfinished.** Two
+		 * differences, both measured (see GPU-WORKLIST W23):
+		 *
+		 * - the conversion itself is faithful — 46.2 dB, 3 LSB at worst — but it is not
+		 *   bit-identical, and effects that threshold or divide (chroma key, colour-burn)
+		 *   turn 3 LSB into a visible difference;
+		 * - **it honours the stream's declared colour space and swscale, as this reader
+		 *   configures it, never did.** A file tagged @c bt709 decoded as BT.709 rather than
+		 *   BT.601 is the correct answer and a different picture.
+		 *
+		 * Turning it on is the project owner's call, and it re-baselines every golden that
+		 * decodes video.
+		 */
+		bool GPU_DECODE = false;
+
 		/// Number of OpenMP threads
 		int OMP_THREADS = 2;
 

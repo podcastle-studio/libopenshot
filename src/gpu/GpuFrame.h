@@ -4,6 +4,7 @@
 // lifetime, with CPU transfers both ways.
 
 #include <memory>
+#include <thread>
 
 #include "skia/include/core/SkCanvas.h"
 #include "skia/include/core/SkColorSpace.h"
@@ -53,6 +54,17 @@ namespace openshot
 
 		~GpuFrame();
 
+		/// Is this frame usable from the calling thread?
+		///
+		/// A Graphite surface belongs to the recorder that made it, and recorders
+		/// are per thread, so reading or drawing one from another thread is not
+		/// safe. It also dies with the device, so a surface from an older
+		/// GpuDevice::Generation() is gone whatever thread asks. Anything that
+		/// holds a GPU-backed frame across calls — a reader's frame cache, say —
+		/// has to ask this before using one, and produce the frame again if the
+		/// answer is no.
+		bool ownedByThisThread() const;
+
 		int width() const { return frame_width; }
 		int height() const { return frame_height; }
 		SkColorType colorType() const { return frame_color_type; }
@@ -81,6 +93,8 @@ namespace openshot
 		GpuFrame(sk_sp<SkSurface> surface, int width, int height, SkColorType color_type);
 
 		sk_sp<SkSurface> frame_surface;
+		std::thread::id frame_owner = std::this_thread::get_id();
+		unsigned long long frame_generation = 0;
 		int frame_width = 0;
 		int frame_height = 0;
 		SkColorType frame_color_type = kUnknown_SkColorType;
