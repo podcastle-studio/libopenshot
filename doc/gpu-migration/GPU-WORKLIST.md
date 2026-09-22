@@ -875,8 +875,11 @@ Depends on W12/W13 only — **not** on Stage 7. Can run in parallel with Stage 7
         the one readback, so the wrong order makes the shader pay an upload and a readback every
         frame: measured 3.2–3.5 ms a pass against 0.15–0.22 ms. Output is identical either way,
         so only the timing catches it.
-      - Exposure's remaining gap is the CPU path's pointless `Format_ARGB32` round trip, not the
-        fragment. See `GPU-DECISIONS.md`; removing it is proposed, not done.
+      - **Measure before blaming the CPU path.** Exposure's remaining gap was put down to its
+        `Format_ARGB32` round trip; removing that changed *no* pixel of any golden and not one
+        parity digit, because Qt's round trip is lossless. The cause is the same division every
+        dividing fragment pays, confirmed exhaustively. The round trip was removed anyway — it is
+        dead work worth ~15 % of Exposure's CPU cost — but on its own merits.
 - [x] **Golden coverage for the four effects the service builds only in `Transition.cpp`.**
       `effects.{brightness,exposure,colorshift,bars}_alpha`, on a 1:1 clip with partial alpha, held
       to `Tolerance::Exact()` with no `gpu-composite` band — the sweep is 307/307 in all four arms.

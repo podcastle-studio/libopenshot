@@ -771,6 +771,25 @@ production corpus) remain open; W05–W10 are the CPU quick wins. W01/W02 stay d
 
 ## Log
 
+- 2026-09-22 — **Exposure: the ARGB32 round trip removed, and a diagnosis corrected.** The previous
+  entry recorded that `Exposure.cpp`'s conversion to `Format_ARGB32` — which `AddImage` converts
+  straight back in place, so it is a round trip and not a conversion — was quantising pixels before
+  the effect ran, and that this explained the fragment differing from the C++ on 19 % of a noise
+  image. **Removing it proved that wrong: not one pixel of any golden moved, and the parity numbers
+  were identical to the digit.** Qt's unpremultiply/re-premultiply pair is lossless, so there was
+  nothing to re-baseline.
+  Measured exhaustively instead, the whole `exposure(1.0)` chain disagrees on **exactly the same 588
+  of 32,896 pairs as the bare unpremultiply**, and the byte the fragment reads is correct in **all
+  32,896** — so there is one cause, the division, and `osBytes` is trustworthy. The 19 % was an
+  artefact of the test image: `setPremul` clamps each channel to its alpha, so half of `noise`'s
+  channels have `v == a`, which is exactly the integer quotient the division disagrees on.
+  The round trip is removed anyway, on its own merits: it is dead work, and dropping it takes
+  Exposure from **7.0–7.8 ms to 5.9–6.6 ms at 1080p (~15 %)** on the CPU path that ships, with
+  provably identical output. Four-way sweep 307/307.
+  `openshot-gpu-effect-parity` now also prints each effect's **CPU twin cost**, which is what made
+  the 15 % measurable at all, and carries an exhaustive probe for the unpremultiply and for the
+  full exposure chain.
+
 - 2026-09-22 — **W19: Alpha, Exposure and ColorShift fragments — and what decides whether one is
   exact.** Four effects are now shaders. **72 of 88 image/parameter combinations are bit-exact**,
   the other 16 at 55–75 dB with a 5 LSB worst case against a 48 dB gate. Four-way sweep 307/307.

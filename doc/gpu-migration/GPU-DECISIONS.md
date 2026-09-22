@@ -787,16 +787,28 @@ four *different* pixels, so it can emit colour above its own alpha — invalid p
 which the C++ produces too. It is bit-exact, so **Skia does not clamp runtime-effect output to
 valid premul**, and a fragment may reproduce a C++ twin that does not maintain the invariant.
 
-**Exposure carries a second, separate divergence, and it is the CPU path's fault.** `Exposure.cpp`
-converts the frame to `Format_ARGB32` and hands it to `AddImage`, which converts it straight back
-to premultiplied RGBA in place. The branch always fires, so every exposure frame goes through an
-unpremultiply and a re-premultiply in 8 bits that changes nothing except to lose up to 1 LSB on a
-partially transparent pixel. At `exposure(1.0)` — an identity multiply — the fragment still differs
-from the C++ on **19 % of the `noise` image**, and that round trip is the entire reason.
-Its other cause is plain: the C++ multiplies by the keyframe as a `double` and an SkSL uniform is
-`float`, so at `exposure(4.2)` even fully opaque pixels move by 1 LSB.
-Deleting the round trip would make CPU and GPU agree *and* make the CPU path slightly more
-accurate and slightly faster — but it moves production output, so it is proposed rather than done.
+**Exposure's divergence is the same division, and a wrong guess about it is worth recording.**
+The first reading of this was that `Exposure.cpp`'s `Format_ARGB32` conversion — which `AddImage`
+converts straight back to premultiplied RGBA in place, so it is a round trip, not a conversion —
+was quantising the pixels before the effect ran and that this explained `exposure(1.0)` differing
+from its fragment on 19 % of the `noise` image. **That was wrong, and removing the round trip
+proved it: not one pixel of any golden moved and the parity numbers were identical to the digit.**
+Qt's unpremultiply/re-premultiply pair is lossless.
+
+Measured exhaustively instead, the whole `exposure(1.0)` chain — `floor(floor(v/a) * a)` — disagrees
+on **exactly the same 588 of 32,896 pairs as the bare unpremultiply**, and the byte the fragment
+reads out of the texture is correct in **all 32,896**. So there is one cause, not two: the division,
+and `osBytes` is trustworthy. The 19 % figure was an artefact of the test image — `setPremul`
+clamps each channel to the alpha, so about half of `noise`'s channels have `v == a` exactly, which
+is precisely the exact-integer quotient the division disagrees on. Real content is not that
+adversarial.
+
+Exposure's one genuinely separate cause is plain: the C++ multiplies by the keyframe as a `double`
+and an SkSL uniform is `float`, so at `exposure(4.2)` even fully opaque pixels move by 1 LSB.
+
+The round trip was still removed, on the honest grounds rather than the assumed ones: it is dead
+work. Two full-image conversions and an allocation per frame, **7.0–7.8 ms down to 5.9–6.6 ms at
+1080p, about 15 %**, with provably identical output.
 
 **And an ordering rule that costs 20x if you get it wrong.** `ApplyOnGpu` must come *before* any
 `frame->GetImage()` in a `GetFrame`. On a GPU-backed frame `GetImage()` **is** the one readback, so

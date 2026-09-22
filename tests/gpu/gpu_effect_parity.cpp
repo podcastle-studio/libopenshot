@@ -424,6 +424,76 @@ int checkUnpremul() {
     return 0;
 }
 
+// The whole exposure(1.0) chain -- floor(floor(v/a) * a), an identity in exact arithmetic -- over
+// every legal (premultiplied byte, alpha) pair.
+//
+// This exists because the parity numbers did not add up. The unpremultiply above disagrees on
+// 1.8 % of pairs, but exposure at 1.0 disagrees on 19 % of a noise image, and the composition
+// cannot amplify a disagreement tenfold. Either the multiply back is also disagreeing, or the
+// bytes the fragment reads are not the bytes the C++ reads -- and the second would matter to every
+// fragment, not just this one. So the chain is measured whole, over the same exhaustive input.
+int checkExposureChain() {
+    using namespace openshot;
+    auto [effect, error] = SkRuntimeEffect::MakeForShader(SkString(
+        "uniform shader osSrc;\n"
+        "float4 main(float2 p) {\n"
+        "  float4 b = floor(float4(osSrc.eval(p)) * 255.0 + 0.5);\n"
+        "  float ap = b.a == 0.0 ? 1.0 : b.a / 255.0;\n"
+        "  float u = floor(b.r / ap);\n"
+        "  float v = floor(u * ap);\n"
+        // Two channels out: the chain's result, and the raw byte the fragment read, so a
+        // disagreement in reading the texture is distinguishable from one in the arithmetic.
+        "  return float4(v / 255.0, b.r / 255.0, 0.0, 1.0);\n"
+        "}\n"));
+    if (!effect) { std::printf("  exposure chain probe: %s\n", error.c_str()); return 1; }
+
+    QImage img(256, 256, QImage::Format_RGBA8888_Premultiplied);
+    for (int a = 0; a < 256; ++a)
+        for (int r = 0; r < 256; ++r)
+            setPremul(img.scanLine(a) + r * 4, r, 0, 0, a);
+
+    auto source = GpuFrame::Create(256, 256, kRGBA_8888_SkColorType);
+    auto target = GpuFrame::Create(256, 256, kRGBA_8888_SkColorType);
+    const SkPixmap pixels(
+        SkImageInfo::Make(256, 256, kRGBA_8888_SkColorType, kPremul_SkAlphaType),
+        img.constBits(), img.bytesPerLine());
+    if (!source || !target || !source->upload(pixels)) { std::printf("  chain: setup failed\n"); return 1; }
+
+    SkRuntimeEffectBuilder builder(effect);
+    builder.child("osSrc") = source->snapshot()->makeShader(
+        SkTileMode::kClamp, SkTileMode::kClamp, SkSamplingOptions());
+    SkPaint paint;
+    paint.setBlendMode(SkBlendMode::kSrc);
+    paint.setShader(builder.makeShader());
+    target->canvas()->drawRect(SkRect::MakeIWH(256, 256), paint);
+
+    QImage out(256, 256, QImage::Format_RGBA8888_Premultiplied);
+    const SkPixmap dst(SkImageInfo::Make(256, 256, kRGBA_8888_SkColorType, kPremul_SkAlphaType),
+                       out.bits(), out.bytesPerLine());
+    if (!target->readback(dst)) { std::printf("  chain: readback failed\n"); return 1; }
+
+    long compared = 0, chain_differ = 0, byte_differ = 0;
+    int worst = 0, worst_r = 0, worst_a = 0;
+    for (int a = 0; a < 256; ++a)
+        for (int r = 0; r <= a && r < 256; ++r) {
+            const float alpha_percent = a == 0 ? 1.0f : a / 255.0f;
+            const int u = (int) (unsigned char) (r / alpha_percent);
+            const int cpu = (int) (unsigned char) (u * alpha_percent);
+            const int gpu = out.scanLine(a)[r * 4];
+            const int gpu_byte = out.scanLine(a)[r * 4 + 1];
+            compared++;
+            if (gpu_byte != r) byte_differ++;
+            if (cpu != gpu) {
+                chain_differ++;
+                if (std::abs(cpu - gpu) > worst) { worst = std::abs(cpu - gpu); worst_r = r; worst_a = a; }
+            }
+        }
+    std::printf("  exposure(1.0) chain: %ld of %ld pairs differ, worst %d LSB (byte %d over alpha %d)\n",
+                chain_differ, compared, worst, worst_r, worst_a);
+    std::printf("  the byte the fragment reads: %ld of %ld wrong\n", byte_differ, compared);
+    return 0;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -495,11 +565,20 @@ int main(int argc, char** argv) {
         }
     }
 
+    // The CPU twin's own cost at 1080p, measured with the device still off. Printed beside the
+    // shader figures so the two are comparable, and because it is the number that says whether a
+    // change to the CPU path was worth making.
+    std::printf("\n1080p cost per frame, CPU twin (device off)\n");
+    for (const Case& c : all)
+        std::printf("       %-22s %6.3f ms\n", c.name.c_str(),
+                    msSingleWithTransfers(c.make, 1920, 1080));
+
     // Timing needs the GPU back.
     openshot::GpuDevice::SetBackend(backend);
     if (openshot::GpuDevice::Instance().available()) {
         std::printf("\nthe shared unpremultiply step, over every legal pair\n");
         checkUnpremul();
+        checkExposureChain();
         std::printf("\n1080p breakdown of one pass\n");
         probe(1920, 1080);
         // The 0.2 ms gate is about a GPU. Lavapipe is Mesa's software rasteriser and exists here

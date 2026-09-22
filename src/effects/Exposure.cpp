@@ -42,31 +42,32 @@ std::shared_ptr<openshot::Frame> Exposure::GetFrame(std::shared_ptr<openshot::Fr
 	// Get keyframe exposure value (ensuring a minimum value of 1.0)
 	auto exposure_value = std::max(1.0, exposure.GetValue(frame_number));
 
-	// The shader when there is a GPU to run it on, the C++ otherwise.
-	//
-	// Note what the GPU path skips: the ARGB32 conversion below is a round trip, not
-	// a conversion. A Frame's image is Format_RGBA8888_Premultiplied, so the branch
-	// always fires, and AddImage converts the copy straight back to premultiplied
-	// RGBA in place -- so applyExposureEffect still sees premultiplied RGBA, having
-	// been through an unpremultiply and a re-premultiply in 8 bits on the way. That
-	// costs up to 1 LSB on a partially transparent pixel and buys nothing. The
-	// fragment does not reproduce it; whether that shows up is measured by
-	// openshot-gpu-effect-parity rather than assumed.
-	// It has to come before GetImage(): on a GPU-backed frame that call IS the one
-	// readback, so asking for the pixels first flattens the frame and the shader
-	// then pays an upload and a readback every frame -- measured at 3.3 ms a pass
-	// against 0.15 ms with the order this way round.
+	// The shader when there is a GPU to run it on, the C++ otherwise. It has to come
+	// before GetImage(): on a GPU-backed frame that call IS the one readback, so
+	// asking for the pixels first flattens the frame and the shader then pays an
+	// upload and a readback every frame -- measured at 3.3 ms a pass against 0.15 ms
+	// with the order this way round.
 	if (ApplyOnGpu(frame, frame_number))
 		return frame;
 
-	// Get the frame's image
+	// Get the frame's image, which is always Format_RGBA8888_Premultiplied: GetImage()
+	// either reads back a GPU surface into that format or returns an image AddImage()
+	// has already converted to it.
+	//
+	// This used to convert to Format_ARGB32 first and hand the copy to AddImage(),
+	// which converted it straight back in place -- so applyExposureEffect saw
+	// premultiplied RGBA either way, having gone through an unpremultiply and a
+	// re-premultiply to get there. The branch always fired, because a Frame's image
+	// is always Format_RGBA8888_Premultiplied.
+	//
+	// Removed 2026-09-22 as dead work, and measured rather than assumed: Qt's round
+	// trip turns out to be *lossless*, so not one pixel of any golden moved and the
+	// GPU parity numbers did not shift either. What it cost was time -- two full-image
+	// conversions and an allocation per frame, 7.0-7.8 ms down to 5.9-6.6 ms at 1080p,
+	// about 15 %. (The earlier guess that this round trip explained Exposure's
+	// remaining GPU divergence was wrong; that is the unpremultiply's division, the
+	// same one every dividing fragment pays. See GPU-DECISIONS.md, W19.)
 	std::shared_ptr<QImage> frame_image = frame->GetImage();
-
-	// Ensure the image is in a 32-bit format (ARGB32)
-	if (frame_image->format() != QImage::Format_ARGB32 && frame_image->format() != QImage::Format_RGB32) {
-		frame_image = std::make_shared<QImage>(frame_image->convertToFormat(QImage::Format_ARGB32));
-		frame->AddImage(frame_image);
-	}
 
 	// Retrieve the raw pixel data and image dimensions.
 	uchar *bits = frame_image->bits();
