@@ -1101,7 +1101,32 @@ converted either way. **W25 only pays once W12 has put the frame on the GPU.** S
 
 ### W22 — `src/gpu/CudaInterop` · legacy `4.1`
 
-- [ ] Import a Vulkan image's memory and semaphore into CUDA (`vkGetMemoryFdKHR` →
+> **Premise measured 2026-09-22, before any code, and it moves the item's shape.** Two facts:
+>
+> 1. **Every extension this needs is present on the A2000** — `VK_KHR_external_memory{,_fd}`,
+>    `VK_KHR_external_semaphore{,_fd}`, `VK_EXT_external_memory_dma_buf`,
+>    `VK_KHR_timeline_semaphore` — and on the Intel iGPU too. **lavapipe has no
+>    `external_semaphore_fd`**, so the interop path declines there, which is the normal answer and
+>    not a failure. CUDA 12.8 and an FFmpeg with the `cuda` hwaccel are both installed.
+> 2. **Skia does not enable any of them off Android**, and **Graphite cannot export its own
+>    allocations.** `VulkanPreferredFeatures` names external memory only under
+>    `SK_BUILD_FOR_ANDROID`, so `GpuDevice` has to add the two `_fd` extensions to
+>    `device_extensions` itself. And the only door into Graphite is
+>    `BackendTextures::MakeVulkan(dimensions, info, layout, queueFamily, VkImage, VulkanAlloc)`,
+>    which takes an image **the caller owns** — so the images CUDA imports must be ours,
+>    allocated with `VkExternalMemoryImageCreateInfo` + `VkExportMemoryAllocateInfo` and our own
+>    `vkAllocateMemory` (no VMA), then wrapped.
+>
+> **So `GpuSurfacePool`'s surfaces can never be the imported ones.** The sub-tasks below read as
+> if an existing Vulkan image can be handed to CUDA; it cannot. This item is really: enable two
+> device extensions, add an *exportable* allocation path beside the pool, and import those.
+> Nothing here blocks the item — it is ~100 lines larger than "~300" and the pool stays untouched.
+
+- [ ] Add `VK_KHR_external_memory_fd` and `VK_KHR_external_semaphore_fd` to `GpuDevice`'s device
+      extensions when the physical device offers them, and record their absence as a decline.
+- [ ] An exportable image allocation (`VkExportMemoryAllocateInfo`), wrapped for Graphite with
+      `BackendTextures::MakeVulkan`. Separate from `GpuSurfacePool`, which stays VMA-backed.
+- [ ] Import that memory and a semaphore into CUDA (`vkGetMemoryFdKHR` →
       `cuImportExternalMemory`, `cuImportExternalSemaphore`).
 - [ ] `copyNV12(AVFrame* cudaFrame, GpuImage& y, GpuImage& uv, stream)` as two device-to-device
       `cuMemcpy2DAsync`.

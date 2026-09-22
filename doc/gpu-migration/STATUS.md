@@ -786,6 +786,26 @@ production corpus) remain open; W05–W10 are the CPU quick wins. W01/W02 stay d
 
 ## Log
 
+- 2026-09-22 — **Stage 7 opened: W22's premise measured before any code, and it changes the item's
+  shape.** Nothing is implemented; this is the measurement the protocol asks for first.
+  **Everything the interop needs is on this machine.** The A2000 offers
+  `VK_KHR_external_memory{,_fd}`, `VK_KHR_external_semaphore{,_fd}`,
+  `VK_EXT_external_memory_dma_buf` and `VK_KHR_timeline_semaphore`; so does the Intel iGPU. CUDA
+  12.8 is installed and FFmpeg has the `cuda` hwaccel. **lavapipe has no `external_semaphore_fd`**
+  — so the interop declines there, which is the normal answer and is what that arm is for.
+  **But Skia enables none of them off Android, and Graphite cannot export its own allocations.**
+  `VulkanPreferredFeatures` names external memory only under `SK_BUILD_FOR_ANDROID`, so
+  `GpuDevice` must add the two `_fd` extensions itself. And the only door into Graphite is
+  `BackendTextures::MakeVulkan(..., VkImage, VulkanAlloc)`, which takes an image the **caller**
+  owns — so the images CUDA imports have to be ours, allocated with
+  `VkExternalMemoryImageCreateInfo` + `VkExportMemoryAllocateInfo` and our own `vkAllocateMemory`.
+  **`GpuSurfacePool`'s surfaces can therefore never be the imported ones**, which the item's
+  sub-tasks read as if they could. W22 is: two device extensions, an exportable allocation path
+  beside the pool, then the import. The worklist item carries the detail.
+  **W23 also depends on something already on file**: hardware decode throws on the first frame in
+  this fork (`HARDWARE_DECODER != 0`), and plan step 1.5 is its fix. That is W23's problem, not
+  W22's, but it is the next thing after this one.
+
 - 2026-09-22 — **Stage 6 is complete: zoom blur and ColorMap are both in, and both were unblocked
   by a decision rather than by work.** W19 is 11 of 13 (2 ruled out), W20 is 10 of 10, W21 was
   already done. Four-way sweep **307/307 in all four arms**, 25 non-image checks,
