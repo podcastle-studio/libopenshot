@@ -384,3 +384,35 @@ inside half a VMAF point.
 - **`allow_b_frames` was unusable on NVENC**, which is how the B-frame numbers came to be measured
   at all: `add_video_stream` sets `max_b_frames = 10`, NVENC's H.264 limit is 4, and `avcodec_open2`
   failed with `Max B-frames 10 exceed 4` → `InvalidCodec`. The writer now clamps.
+
+## 2026-09-22 — W20: the box blur as a shader unsplits `{Zoom, Blur, Alpha}`
+
+Measured on mains power on a settled machine, **interleaved with both libraries built up front and
+swapped in place** — the method `GPU-DECISIONS.md` records after a sequential A/B on this laptop
+once read +55 % where the truth was 0 %. Three repeats of each of the four arms, medians below.
+1080p, `render`, 150 frames, `transitions_chain`.
+
+| library | GPU off | Vulkan | Vulkan vs off |
+|---|---:|---:|---:|
+| before (Blur on the CPU) | 27.3 fps | 20.2 fps | **−26 %** |
+| after (Blur, diagonal and rotational as fragments) | 27.3 fps | 25.1 fps | **−8 %** |
+
+**The Vulkan arm gains 24 %**, 20.2 → 25.1 fps, and the GPU regression narrows from −26 % to −8 %.
+The CPU arm does not move at all — 27.3 fps in both, which is the standing constraint holding.
+CPU occupancy on the GPU arm is 1.0 cores against the CPU arm's 2.1; peak RSS 0.92 GB against
+1.13 GB.
+
+**What the gain is.** `transitions_chain`'s first transition applies `{Zoom, Blur, Alpha}` to both
+clips. With `Blur` on the CPU that read `GPU → readback → CPU → upload → GPU` once per clip per
+frame; it is now one unbroken GPU chain.
+
+**Why it is still a regression, and what would end it.** Every clip's frame still arrives from the
+decoder on the CPU and is read back for Qt to composite, so the chain pays an upload and a readback
+per clip per frame — about 5 ms each way at 1080p, three clips. That crossing is W22–W25's, not
+W20's, and it is the same thing standing between `chroma_key_green`'s 43.6 fps and its 70 fps gate.
+
+**What a fragment costs against an O(1) CPU kernel.** `cv::blur` is a moving average: three passes
+cost three sweeps whatever the radius. The fragment cannot be O(1), so at 1080p with a radius-40
+parameter it is six draws of up to 35 taps — 206 fetches a pixel. That is why this is +24 % and not
+a multiple: the blur is the one effect in the vocabulary whose CPU twin is already asymptotically
+better, and the win here is the crossing it stops forcing, not the arithmetic.

@@ -15,7 +15,7 @@ Deleted with the rest of `doc/gpu-migration/` when the migration lands.
 | item | scope | state |
 |---|---|---|
 | **W19** | `GpuEffect` base + per-pixel effect fragments | **10 of 13 done**, 2 ruled out, 1 blocked |
-| **W20** | transition vocabulary from `image-processing-lib` as shared SkSL | **6 of 10 done**, **4 unblocked and next** |
+| **W20** | transition vocabulary from `image-processing-lib` as shared SkSL | **9 of 10 done**, 1 blocked on a product decision |
 | **W21** | overlay clips as textures (additive blend, displacement map) | **done** (2026-09-22) |
 
 `libopenshot` carries 47 effect classes. Only the ones
@@ -205,10 +205,10 @@ resample, which is why the item was written that way.
 | `Zoom` | **done** (zoom-in only) | max 1 LSB, 57–78 dB; zoom-out declines — it can change the frame's size |
 | `BorderReflectedMove` | **done** | exact on smooth content, 46.5–47.5 dB on noise — clears W20's 45 dB gate |
 | `CircleMask` | **done** | **24/24 bit-exact**, by not drawing the circle — see below |
-| rotational blur | **next** | unblocked 2026-09-22; its downscale is now reference-based |
-| box / horizontal-vertical blur | **next** | unblocked 2026-09-22 |
-| diagonal blur | **next** | unblocked 2026-09-22 |
-| zoom blur | **next** | unblocked 2026-09-22 |
+| rotational blur | **done** | **74–102 dB, max 1 LSB on every image**, noise included |
+| box / horizontal-vertical blur | **done** | 57–78 dB, max 1 LSB; **bit-exact on a single axis** |
+| diagonal blur | **done** | **24/24 bit-exact** |
+| zoom blur | **blocked** | both polar conversions are nearest-neighbour — see below |
 
 **The `cv::cvtColor` problem is fixed.** `Wipe` thresholds a BGRA luminance, and OpenCV's 8-bit
 grey is not reproducible from any documented formula — the fixed-point expression differs on 703 of
@@ -231,14 +231,45 @@ Parity measured on Vulkan, 2026-09-22, same harness and same eight images as W19
 | **Zoom** | 2 | 16 | 4 | 1 | zoom-in only; 57–78 dB |
 | **total** | 15 | **120** | **104** | 4 | against W20's 45 dB gate, nothing fails |
 
-**The four blur variants were unblocked on 2026-09-22** and are the only Stage 6 work left. The
-reference-resolution decision landed (1280 px, unversioned), the C++ was rewritten accordingly —
-normalised lengths, reference-based downscales, and three box passes instead of one — and the
-goldens were re-baselined. What remains is writing their four SkSL fragments.
+**Three of the four blur variants landed on 2026-09-22.** The fourth, zoom blur, turned out not to
+be blocked by the reference-resolution decision at all — see below.
 
-They are also the highest-value fragments left, because `Blur` sits in the middle of the
-`{Zoom, Blur, Alpha}` transition and is currently what splits that chain and costs 30 % on the GPU
-path.
+The box blur was done first because `Blur` sits in the middle of the `{Zoom, Blur, Alpha}`
+transition and was what split that chain. It is **six draws**, one separable half-pass each:
+`applyBlurEffect` is three `cv::blur` calls and each of those is itself separable, so the fragment
+follows. A two-dimensional fragment would be `taps²` fetches — 3675 per pixel at 1080p against 206
+— and the C++ is O(1) per pixel whatever its width, so the separable form is the only one that is
+not slower than the thing it replaces. The cost of the split is the one extra rounding to 8 bit
+between the two draws, worth at most 1 LSB on 7–12 % of a noise image; a blur on **one axis only
+has no intermediate and is bit-exact**, which is the direct confirmation.
+
+Rotational blur is 74–102 dB against the spike's 57–61 dB for the same effect, and the whole
+difference is that this one reproduces `warpAffine`'s **fixed-point map**: OpenCV quantises the
+source position to 1/32 of a pixel, so its INTER_LINEAR is a lerp on a 5-bit grid and not an exact
+one.
+
+**Zoom blur is blocked, and on something nobody knew was there.** `cv::linearPolar` takes its
+interpolation from `flags & INTER_MAX`, and the effect passes neither `INTER_LINEAR` nor
+`INTER_NEAREST` — so **both of its polar conversions run nearest-neighbour**, which is what makes
+this effect alias into spokes. The port is finished and measured in
+`spikes/zoom-blur-polar/`: the forward map is exact on all 300,304 channels, but the inverse map's
+angle comes from `cv::cartToPolar`'s float polynomial and is irreducibly wrong on ~0.23 % of
+positions — and under a nearest remap that is a whole different source pixel, so 30–41 dB on blocky
+and noisy content against a 45 dB gate. It is not precision: the same algorithm in `double` gives
+the identical figure. **Passing `INTER_LINEAR` to both calls would unblock the port and fix the
+aliasing**, and it moves existing output — the same class of decision as the `cv::cvtColor` fix
+that took `Wipe` from 62–85 dB to bit-exact.
+
+Parity for the three that landed, Vulkan, the same eight images:
+
+| effect | cases | images | bit-exact | worst | note |
+|---|---:|---:|---:|---:|---|
+| **diagonal blur** | 3 | 24 | **24** | 0 | reproduces `sum * invKernelSize`, a float reciprocal |
+| **rotational blur** | 4 | 32 | 8 | 1 | 74–102 dB; skips the sub-15° Gaussian, worth <0.1 LSB |
+| **box blur** | 4 | 32 | 16 | 1 | 57–78 dB; the two single-axis cases are 8/8 exact |
+
+`unit.gpu_blur_path` asserts the path per mode and checks the box blur's **pass count**, not just
+that it is non-zero — a silently skipped half would still look like "the shader ran".
 
 **A rule that has now been right three times: whatever a rasteriser or a transcendental decides
 stays on the CPU and arrives as a texture; the fragment does arithmetic.** LightAdjustment's tone
@@ -309,12 +340,28 @@ grain**, the one pass that cannot be ported. Four of six stay on the CPU whateve
 the chain crosses PCIe repeatedly, and **no decision available to this project unblocks it except
 the reference-resolution one.**
 
-**That measurement was read too generously at the time, and `transitions_chain` corrects it.**
-Interleaved on a settled machine, 1080p render: **31.5 fps with the GPU off against 22.4 on Vulkan
-— about 30 % slower**, while using half the CPU (2.3 → 1.1 cores). Its first transition applies
-`{Zoom, Blur, Alpha}` to both clips, which now reads **GPU → readback → CPU → upload → GPU**:
-`Zoom` and `Alpha` are fragments and `Blur`, the one still on the CPU, sits in the middle. Before
-W20 all three were CPU and the frame crossed once.
+**That measurement was read too generously at the time, and `transitions_chain` corrected it** —
+31.5 fps with the GPU off against 22.4 on Vulkan, about 30 % slower, because `Blur` sat on the CPU
+between two fragments and the frame crossed PCIe twice per clip.
+
+**2026-09-22: closed, and re-measured properly.** With the box blur a fragment the chain is
+unbroken. Interleaved, both libraries built up front and swapped in place, three repeats, 1080p
+`render`, medians:
+
+| library | GPU off | Vulkan | Vulkan vs off |
+|---|---:|---:|---:|
+| before | 27.3 fps | 20.2 fps | −26 % |
+| after | 27.3 fps | **25.1 fps** | **−8 %** |
+
+**The Vulkan arm gains 24 % and the CPU arm does not move.** What is left of the gap is the
+crossing: every clip's frame still arrives from the decoder on the CPU and is read back for Qt to
+composite, about 5 ms each way at 1080p on three clips. That is W22–W25, the same thing standing
+between `chroma_key_green`'s 43.6 and its 70 fps gate.
+
+**And a fragment cannot beat this particular CPU kernel on arithmetic.** `cv::blur` is O(1) per
+pixel whatever its radius; six draws of up to 35 taps is 206 fetches per pixel. The win here is the
+crossing the blur stops forcing, not the blur itself — which is worth saying because it is the
+opposite of every other effect in this stage.
 
 So: **partial porting is safe for correctness and not for speed.** Every arm of the sweep is green
 and an effect that declines just runs its C++ twin — but a CPU effect *between* two GPU effects
@@ -356,11 +403,16 @@ worth re-measuring** before the clause is rewritten.
 **Stage 6 has nothing left that this machine can finish unaided.** Everything outstanding is
 waiting on a person, and there are only three of them.
 
-1. **The reference-resolution decision** (`TRANSITION-PARITY.md`, "Open questions") — a product
-   decision, because fixing it shifts existing projects. It blocks **all four remaining W20
-   variants**: horizontal/vertical blur, diagonal blur, zoom blur, and — corrected 2026-09-22 —
-   **rotational blur**, which is resolution-dependent through its downscale threshold rather than
-   through its parameter.
+1. **Zoom blur wants one line changed, and it is not ours to change.** `applyZoomBlurEffect` passes
+   no interpolation flag to either `cv::linearPolar`, so **both polar conversions run
+   nearest-neighbour** — which is what makes the effect alias, and reads like an omission. Passing
+   `cv::INTER_LINEAR` fixes the aliasing and unblocks the port, whose only remaining error is an
+   angle from `cv::cartToPolar`'s float polynomial that a nearest remap turns into a whole wrong
+   pixel. It moves existing output and the front end compiles the same source, so it is the same
+   class of decision as the `cv::cvtColor` fix. Everything measured is in
+   `spikes/zoom-blur-polar/`.
+   ~~The reference-resolution decision~~ — **taken 2026-09-22**, and it unblocked the other three,
+   which are now done.
 2. **Two answers from the front-end team**, which block **ColorMap** and nothing else (§2.6): which
    `interpolation` they pass to `apply_lut`, and how they set the LUT domain. The second is a live
    bug today, not a migration concern.
@@ -373,10 +425,17 @@ waiting on a person, and there are only three of them.
      is committed locally and **unpushed**; the front end compiles the same source to WASM and
      picks it up when it updates the submodule.
 
-**Two earlier entries here are now answered and are recorded so they are not re-asked:**
-~~"W20 is the only item left not blocked on someone else"~~ — it is now fully blocked. ~~"Should
-`Blur` be pulled forward?"~~ — no: `Blur` *is* three of the four blocked variants, plus rotational,
-so it cannot move ahead of the decision that blocks it.
+Add to (3): **diagonal blur still carries the downscale threshold the reference-resolution
+decision retired.** That entry names "half size above 1 megapixel" as one of the two thresholds
+replaced; rotational blur's was, diagonal blur's was not, so the same authored radius still renders
+at full scale from 720p and at half from 1080p. Left as found — and note that replacing it would
+make the fragment *harder*, since a 0.5 `INTER_AREA` is a 2x2 average and a 1280/1920 one is a
+weighted area kernel.
+
+**Earlier entries here, now answered and recorded so they are not re-asked:**
+~~"W20 is the only item left not blocked on someone else"~~ and ~~"Should `Blur` be pulled
+forward?"~~ — both overtaken: the reference-resolution decision landed, `Blur`'s three portable
+modes are fragments, and what is left of W20 is one line in the zoom blur.
 
 ## 7. Cross-references
 

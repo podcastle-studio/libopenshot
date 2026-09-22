@@ -13,7 +13,7 @@
 #ifndef OPENSHOT_BLUR_EFFECT_H
 #define OPENSHOT_BLUR_EFFECT_H
 
-#include "../EffectBase.h"
+#include "../GpuEffect.h"
 
 #include "../Frame.h"
 #include "../Json.h"
@@ -33,7 +33,7 @@ namespace openshot
 	 * box blur effect, use identical horizontal and vertical blur values. To achieve a Gaussian blur,
 	 * use 3 iterations, a sigma of 3.0, and a radius between 3 and X (depending on how much blur you want).
 	 */
-	class Blur : public EffectBase
+	class Blur : public GpuEffect
 	{
 	public:
 		Keyframe horizontal_radius;	///< Horizontal blur radius keyframe. The size of the horizontal blur operation in pixels.
@@ -92,9 +92,65 @@ namespace openshot
 		/// Get all properties for a specific frame (perfect for a UI to display the current state
 		/// of all properties at any time)
 		std::string PropertiesJSON(int64_t requested_frame) const override;
-    private:
-        /// Init effect settings
-        void init_effect_details();
+	protected:
+		/// The fragment for the pass GetFrame is about to run. Blur is four effects in
+		/// one class and each is its own SkSL source, so this is not a constant — see
+		/// GpuEffect::GpuShaderSource() on why the cache keys on the pointer.
+		const char* GpuShaderSource() const override;
+
+		/// Bind the pass GetFrame selected. Every value is resolved here rather than in
+		/// the fragment, and by the same functions the CPU twin uses.
+		bool SetGpuUniforms(SkRuntimeEffectBuilder& builder, int64_t frame_number,
+							int width, int height) const override;
+
+	private:
+		/// Init effect settings
+		void init_effect_details();
+
+		/// The box blur as up to six fragment passes — horizontal and vertical for each
+		/// of applyBlurEffect's three. False means nothing was touched and the caller
+		/// must run the C++; it is decided before the first pass, so a half-blurred
+		/// frame is not a state this can leave behind.
+		bool ApplyBoxBlurOnGpu(std::shared_ptr<openshot::Frame> frame, int64_t frame_number,
+							   int horizontal, int vertical);
+
+		/// The diagonal blur as one fragment pass, for the frame sizes applyDiagonalBlurEffect
+		/// does not downscale. False means the caller must run the C++.
+		bool ApplyDiagonalBlurOnGpu(std::shared_ptr<openshot::Frame> frame, int64_t frame_number,
+									int authored_radius);
+
+		/// The rotational blur as one fragment pass, for the frame widths applyRotationalBlur
+		/// does not downscale. False means the caller must run the C++.
+		bool ApplyRotationalBlurOnGpu(std::shared_ptr<openshot::Frame> frame, int64_t frame_number,
+									  double angle_degrees);
+
+		/// Which fragment the next ApplyOnGpu call runs, and with what. Mutable because
+		/// SetGpuUniforms is const; written immediately before each call and read once.
+		/// Blur is four effects in one class, so this selects the source as well as the
+		/// uniforms — see GpuShaderSource().
+		enum class GpuPass { Box, Diagonal, Rotational };
+		mutable GpuPass gpu_pass = GpuPass::Box;
+
+		/// Box: one half of one pass — which way it runs and how wide it is.
+		mutable float gpu_dir_x = 1.0f;
+		mutable float gpu_dir_y = 0.0f;
+		mutable float gpu_taps = 1.0f;
+
+		/// Diagonal: the kernel, and the float reciprocal the C++ multiplies by.
+		mutable float gpu_diag_taps = 1.0f;
+		mutable float gpu_diag_radius = 1.0f;
+		mutable float gpu_diag_inv_taps = 1.0f;
+
+		/// Rotational: the iteration count, the C++'s float weight, the border mode, and
+		/// warpAffine's inverse map per iteration — OpenCV's own, computed on the host.
+		/// Four floats an element because a float4 array element is sixteen bytes under
+		/// every uniform layout rule; see shaders/rotational_blur.sksl.
+		static constexpr int kMaxRotationalIterations = 30;
+		mutable float gpu_rot_iters = 0.0f;
+		mutable float gpu_rot_inv_iters = 1.0f;
+		mutable float gpu_rot_use_reflect = 0.0f;
+		mutable float gpu_rot_inv_row0[kMaxRotationalIterations * 4] = {};
+		mutable float gpu_rot_inv_row1[kMaxRotationalIterations * 4] = {};
 	};
 
 }

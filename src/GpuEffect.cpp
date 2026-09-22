@@ -17,6 +17,8 @@
 #include "gpu/GpuFrame.h"
 
 #include <atomic>
+#include <utility>
+#include <vector>
 
 #include <QImage>
 
@@ -48,6 +50,23 @@ struct GpuEffect::Program
 {
 	sk_sp<SkRuntimeEffect> effect;  ///< null once compilation has been tried and failed
 	bool compiled = false;          ///< tried, so a failure is not retried every frame
+};
+
+// One Program per distinct fragment. Most effects have exactly one; Blur has four and picks
+// between them per pass, so the cache is keyed on the source pointer rather than being a single
+// slot. A vector because the count is one to four — a map would be more machinery than lookups.
+struct GpuEffect::ProgramCache
+{
+	std::vector<std::pair<const char*, Program>> entries;
+
+	Program& for_source(const char* source)
+	{
+		for (auto& entry : entries)
+			if (entry.first == source)
+				return entry.second;
+		entries.emplace_back(source, Program{});
+		return entries.back().second;
+	}
 };
 
 namespace
@@ -104,12 +123,16 @@ bool GpuEffect::ApplyOnGpu(std::shared_ptr<openshot::Frame> frame, int64_t frame
 	if (!GpuDevice::Instance().available())
 		return declined();
 
-	if (!program)
-		program = std::make_shared<Program>();
-	if (!program->compiled) {
-		program->compiled = true;
+	const char* fragment = GpuShaderSource();
+	if (!fragment)
+		return declined();
+	if (!programs)
+		programs = std::make_shared<ProgramCache>();
+	Program& program_ref = programs->for_source(fragment);
+	if (!program_ref.compiled) {
+		program_ref.compiled = true;
 		SkString source(GpuShaderPrelude());
-		source.append(GpuShaderSource());
+		source.append(fragment);
 		auto [effect, error] = SkRuntimeEffect::MakeForShader(source);
 		if (!effect) {
 			// A fragment that will not compile is a mistake in this repo, not a
@@ -122,9 +145,9 @@ bool GpuEffect::ApplyOnGpu(std::shared_ptr<openshot::Frame> frame, int64_t frame
 			ZmqLogger::Instance()->Log("GpuEffect: " + info.class_name + " SkSL: " +
 									   std::string(error.c_str()));
 		}
-		program->effect = std::move(effect);
+		program_ref.effect = std::move(effect);
 	}
-	if (!program->effect)
+	if (!program_ref.effect)
 		return declined();
 
 	const int width = frame->GetWidth();
@@ -169,7 +192,7 @@ bool GpuEffect::ApplyOnGpu(std::shared_ptr<openshot::Frame> frame, int64_t frame
 	if (!destination)
 		return declined();
 
-	SkRuntimeEffectBuilder builder(program->effect);
+	SkRuntimeEffectBuilder builder(program_ref.effect);
 
 	// Nearest sampling, no local matrix. main()'s coordinate is the destination
 	// pixel centre, so with an identity mapping every eval() lands on exactly one

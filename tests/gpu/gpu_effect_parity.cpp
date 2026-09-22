@@ -20,6 +20,7 @@
 #include "KeyFrame.h"
 #include "effects/Alpha.h"
 #include "effects/Bars.h"
+#include "effects/Blur.h"
 #include "effects/BorderReflectedMove.h"
 #include "effects/BorderReflectedRotation.h"
 #include "effects/Brightness.h"
@@ -358,6 +359,42 @@ std::vector<Case> cases() {
                                            Keyframe(-0.2), false, Keyframe(0.3)); }},
         {"splitshift(horiz)",     [] { return std::make_shared<openshot::SplitShift>(
                                            Keyframe(0.15), true, Keyframe(0.62)); }},
+
+        // The box blur, as six half-passes of blur.sksl. Radii are large because these images are
+        // 256 wide and the parameter is in reference pixels: anything under about 20 resolves to a
+        // one-tap kernel here, which is the identity and would compare two untouched images.
+        // One case per axis on its own, because a one-tap half is skipped rather than drawn.
+        {"blur(40, 40)",          [] { return std::make_shared<openshot::Blur>(
+                                           Keyframe(40.0), Keyframe(40.0)); }, kTransitionGate},
+        {"blur(100, 100)",        [] { return std::make_shared<openshot::Blur>(
+                                           Keyframe(100.0), Keyframe(100.0)); }, kTransitionGate},
+        {"blur(100, 0)",          [] { return std::make_shared<openshot::Blur>(
+                                           Keyframe(100.0), Keyframe(0.0)); }, kTransitionGate},
+        {"blur(0, 60)",           [] { return std::make_shared<openshot::Blur>(
+                                           Keyframe(0.0), Keyframe(60.0)); }, kTransitionGate},
+
+        // The diagonal blur. Its reflection length is the length of each pixel's own diagonal, so
+        // the short corner diagonals are the interesting part of a 256x256 image, not the middle.
+        // A radius of 15 resolves to a 3-tap kernel here, which is the smallest the effect builds.
+        {"diagonal_blur(15)",     [] { return std::make_shared<openshot::Blur>(
+                                           Keyframe(0.0), Keyframe(0.0), Keyframe(15.0)); }, kTransitionGate},
+        {"diagonal_blur(40)",     [] { return std::make_shared<openshot::Blur>(
+                                           Keyframe(0.0), Keyframe(0.0), Keyframe(40.0)); }, kTransitionGate},
+        {"diagonal_blur(100)",    [] { return std::make_shared<openshot::Blur>(
+                                           Keyframe(0.0), Keyframe(0.0), Keyframe(100.0)); }, kTransitionGate},
+
+        // The rotational blur, across all four of its parameter branches: below 10 degrees it
+        // uses BORDER_REPLICATE and above it BORDER_REFLECT; below 15 it takes the other angle
+        // schedule and adds the mild Gaussian this fragment leaves out; 25 and 45 differ only in
+        // tap count, which is what the iteration clamp is there to bound.
+        {"rotational_blur(5)",    [] { return std::make_shared<openshot::Blur>(
+                                           Keyframe(0.0), Keyframe(0.0), Keyframe(0.0), Keyframe(5.0)); }, kTransitionGate},
+        {"rotational_blur(12)",   [] { return std::make_shared<openshot::Blur>(
+                                           Keyframe(0.0), Keyframe(0.0), Keyframe(0.0), Keyframe(12.0)); }, kTransitionGate},
+        {"rotational_blur(25)",   [] { return std::make_shared<openshot::Blur>(
+                                           Keyframe(0.0), Keyframe(0.0), Keyframe(0.0), Keyframe(25.0)); }, kTransitionGate},
+        {"rotational_blur(45)",   [] { return std::make_shared<openshot::Blur>(
+                                           Keyframe(0.0), Keyframe(0.0), Keyframe(0.0), Keyframe(45.0)); }, kTransitionGate},
 
         {"mask(replace_image)",   [] {
                                        auto m = std::make_shared<openshot::Mask>(

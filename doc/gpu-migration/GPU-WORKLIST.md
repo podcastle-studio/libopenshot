@@ -1007,14 +1007,31 @@ is that it is still **+14 %**, not a loss: a partly-ported chain is safe.
       fills a polygon approximation with OpenCV's own scanline coverage; an analytic disc would be
       a better circle and a worse port. The mask is built by the same OpenCV call, cached on
       (radius, frame size, `Generation()`), and uploaded as a texture.
-- [ ] **The four blur fragments — unblocked 2026-09-22 and the only Stage 6 work left.** The
-      reference-resolution decision landed (1280 px wide, unversioned) and the C++ was rewritten to
-      match: lengths normalised inside the effect functions, the per-effect downscale thresholds
-      replaced by working at the reference width, and `applyBlurEffect` changed from one box pass
-      to three. Goldens re-baselined, four-way sweep 307/307. What is left is the SkSL:
-      horizontal/vertical blur, diagonal blur, zoom blur, rotational blur.
-      **Do `Blur` (h/v) first**: it sits in the middle of the `{Zoom, Blur, Alpha}` transition and
-      is what currently splits that chain and costs 30 % on the GPU path.
+- [x] **Blur (horizontal/vertical)** — six draws, one separable half-pass each, skipping any half
+      whose kernel is a single tap. 57–78 dB, max 1 LSB; **bit-exact when only one axis is
+      blurred**, which is the direct proof that the 8-bit intermediate between the two draws is the
+      whole of the difference. A two-dimensional fragment would have been `taps²` fetches — 3675 a
+      pixel at 1080p against 206 — and the C++ is O(1) per pixel, so separable is the only form
+      that is not slower than what it replaces.
+- [x] **Diagonal blur** — **24/24 bit-exact**, by adding the taps instead of prefix-summing them;
+      every value in the C++'s prefix sum is an integer below 2²⁴, so a window is a difference of
+      two exact integers. Declines above a megapixel, where the C++ halves the image with
+      INTER_AREA and upsamples with INTER_LINEAR.
+- [x] **Rotational blur** — **74–102 dB, max 1 LSB on every image including noise**, against the
+      spike's 57–61 dB for the same effect. All of the difference is `warpAffine`'s fixed-point
+      map: it quantises the source position to 1/32 of a pixel, so OpenCV's INTER_LINEAR is a lerp
+      on a 5-bit grid rather than an exact one. Declines above the reference width.
+- [ ] **Zoom blur — the one left, and it is blocked on a product decision, not on work.**
+      `cv::linearPolar` takes its interpolation from `flags & INTER_MAX`, and the effect passes
+      neither `INTER_LINEAR` nor `INTER_NEAREST`, so **both polar conversions are
+      nearest-neighbour** — which is what makes them alias, and almost certainly an omission. The
+      port is finished and measured in `spikes/zoom-blur-polar/`: forward map exact on 300,304 of
+      300,304 channels, but the inverse map's angle comes from OpenCV's `cartToPolar` polynomial
+      and is irreducibly wrong on ~0.23 % of positions — which under a nearest remap is a whole
+      different source pixel, so 30–41 dB on blocky and noisy content. Not precision: the same
+      algorithm in `double` gives the identical figure. **Passing `INTER_LINEAR` to both calls
+      unblocks it and improves the effect**, and moves existing output — the same shape as the
+      `cv::cvtColor` fix that took `Wipe` to bit-exact.
 - [x] `ColorShift` — **already done under W19**; `ColorShift` calls the submodule's
       `applyColorShiftEffect`, so there is no separate port here.
 - [x] **The sources live in `image-processing-lib/shaders/`** — one `.sksl` per effect plus

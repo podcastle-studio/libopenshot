@@ -82,6 +82,13 @@ namespace openshot
 		/// This effect's SkSL body: uniform declarations plus
 		/// `float4 main(float2 p)`. It is concatenated onto GpuShaderPrelude(),
 		/// whose helpers it is expected to use for anything touching bytes or alpha.
+		///
+		/// An effect that is more than one fragment — Blur is four, and runs one of
+		/// them up to six times — returns whichever source the pass it is about to
+		/// run needs. Each distinct source is compiled once and cached on its own; the
+		/// cache is keyed on the returned pointer, so a fragment must come from a
+		/// stable address. Every one of them does: they are the `constexpr char[]`
+		/// constants the build embeds from image-processing-lib/shaders/.
 		virtual const char* GpuShaderSource() const = 0;
 
 		/// Bind this frame's uniform values. Returning false declines the GPU path
@@ -108,7 +115,9 @@ namespace openshot
 
 	private:
 		struct Program;
-		std::shared_ptr<Program> program; ///< compiled SkSL, per effect instance
+		struct ProgramCache;
+		/// Compiled SkSL, per effect instance, one entry per distinct GpuShaderSource().
+		std::shared_ptr<ProgramCache> programs;
 	};
 }
 

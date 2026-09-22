@@ -1341,6 +1341,142 @@ deviation, if that trade ever looks better.
 sign the change is surgical — the suite renders at 640x360, where both the old thresholds and the
 new reference rule resolve to full scale.
 
+### W20 — three of the four blurs in, and a box blur is six draws (2026-09-22)
+
+`Blur` is four effects in one class. Three of them are now fragments: horizontal/vertical,
+diagonal and rotational. The fourth is below.
+
+**The box blur runs as six draws, not one, and that is the design rather than a compromise.**
+`applyBlurEffect` is three `cv::blur` calls, and each of those is itself separable — an exact
+integer row sum, an exact integer column sum, one rounding to the byte. A fragment doing the
+two-dimensional box would be `taps²` fetches: at 1080p the widest pass this effect produces is 35
+taps, so 1225 fetches per pixel per pass and 3675 for the effect, against 206 separable. The C++ is
+O(1) per pixel whatever its width and a fragment is not, so the separable form is the only one that
+is not slower than the thing it replaces.
+
+**What the split costs is one rounding, and it is measurable rather than argued.** cv::blur carries
+its row sums as exact integers; two draws have to round the intermediate to a byte, because the
+surface between them is 8-bit and a runtime effect's child returns `half4`. An F32 intermediate does
+not help — eleven bits of mantissa where a 35-tap row sum needs fourteen, so the precision would be
+lost coming back in, not in the surface. The extra rounding is averaged over the second axis:
+
+| radius | 640 wide | 1280 wide | 1920 wide |
+|---|---:|---:|---:|
+| 6 | 57.3 dB | — | 57.5 dB |
+| 20 | 59.7 dB | — | 59.8 dB |
+| 40 | 59.5 dB | — | 59.3 dB |
+
+Always max 1 LSB, on 7–12 % of the pixels of a noise image. **A blur on one axis only is
+bit-exact**, because then there is no intermediate at all — `blur(100, 0)` and `blur(0, 60)` are
+8/8 exact, which is the direct confirmation that the intermediate rounding is the whole of the
+difference.
+
+**Diagonal blur is 24/24 bit-exact** by adding the taps rather than prefix-summing them: every
+value in the C++'s prefix sum is an integer below 2²⁴ and the window is a difference of two of
+them, so the two agree exactly. The one thing that had to be reproduced rather than improved is
+`sum * invKernelSize` — the C++ precomputes a float reciprocal and multiplies, and a correctly
+rounded division is a different number.
+
+**Rotational blur is 74–102 dB, max 1 LSB, on every image including noise** — against the spike's
+57–61 dB for the same effect. The difference is entirely `warpAffine`'s fixed-point map.
+`warpAffine` precomputes per-column and per-row terms in 10-bit fixed point, adds them as integers
+and shifts to 5 fractional bits, so **OpenCV's INTER_LINEAR is a lerp on a 1/32 grid, not an exact
+lerp**. On smooth content that is invisible; on noise it is a systematic weight error of up to 1/64
+against neighbours differing by up to 255. The inverse matrices come from the host because the C++
+stores each one as a `cv::Matx23f` — already rounded to float32 — which `warpAffine` then widens and
+inverts in double, and re-deriving that from the angle is a different matrix in the last bits.
+
+Two things the rotational fragment leaves out, both named in it: above the reference width the C++
+works on a resized copy, and below 15 degrees it finishes with a `GaussianBlur` of sigma = angle/60,
+whose derived kernel at that sigma has side weights below 3.4e-4 — under a tenth of an LSB. The
+12-degree case, the one that asks for it, is 74–99 dB with it skipped.
+
+Parity on Vulkan, the same eight images as W19:
+
+| effect | cases | images | bit-exact | worst |
+|---|---:|---:|---:|---:|
+| **diagonal blur** | 3 | 24 | **24** | 0 |
+| **rotational blur** | 4 | 32 | 8 | 1 |
+| **box blur** | 4 | 32 | 16 | 1 |
+
+`unit.gpu_blur_path` asserts the path per mode, and checks the box blur's **pass count** rather
+than only that it is non-zero: a silently skipped half would still look like "the shader ran", and
+the expected count comes from the same function the effect resolves its kernels with.
+
+**`GpuEffect` now caches one compiled program per fragment** rather than one per effect instance,
+keyed on the pointer `GpuShaderSource()` returns. Blur is the first effect that is more than one
+fragment; everything else has one and is unaffected.
+
+### The chain is unbroken, and it is still 8 % slower than the CPU (2026-09-22, W20)
+
+Interleaved on mains on a settled machine, both libraries built up front and swapped in place,
+three repeats. 1080p `render`, 150 frames, `transitions_chain`. Medians:
+
+| library | GPU off | Vulkan | Vulkan vs off |
+|---|---:|---:|---:|
+| before (Blur on the CPU) | 27.3 fps | 20.2 fps | **−26 %** |
+| after | 27.3 fps | **25.1 fps** | **−8 %** |
+
+**The Vulkan arm gains 24 % and the CPU arm does not move**, which is the standing constraint
+holding. CPU occupancy 1.1 → 1.0 cores against the CPU arm's 2.1; peak RSS unchanged at 0.92 GB.
+
+Two things worth keeping:
+
+- **What is left of the gap is the crossing, not the effects.** Every clip's frame arrives from the
+  decoder on the CPU and is read back for Qt to composite — about 5 ms each way at 1080p, three
+  clips. W22–W25.
+- **A fragment cannot beat this CPU kernel on arithmetic, and that is not a defect.** `cv::blur` is
+  O(1) per pixel whatever its radius, where six draws of up to 35 taps is 206 fetches. The blur is
+  the only effect in the vocabulary whose CPU twin is asymptotically better than any fragment, so
+  the win here is the crossing it stops forcing. Expecting a multiple from this one would be
+  reading the wrong lesson off `chroma_key_green`'s 6.3x.
+
+### Zoom blur: `cv::linearPolar` is nearest-neighbour, and nobody meant it to be (2026-09-22, W20)
+
+**This is a live finding about the effect, not only about its port.**
+`cv::linearPolar(src, dst, centre, maxRadius, flags)` passes `flags & INTER_MAX` to `remap` as the
+interpolation. `applyZoomBlurEffect` passes `WARP_FILL_OUTLIERS` on the way out and
+`WARP_INVERSE_MAP` on the way back, and neither has a bit inside `INTER_MAX` (7) — so **both polar
+conversions run INTER_NEAREST (0)**. Nearest through two polar conversions is what produces this
+effect's spoke aliasing. It reads like an omission rather than a choice, and it sits two lines above
+the `if (int gaussBlurStrength = ...)` whose body is empty.
+
+The port is written and measured and is in `spikes/zoom-blur-polar/`. Its forward half is **exact
+on all 300,304 channels**; the inverse map's `rho` is exact; the **angle** is not, and cannot be
+made so from this repo — `warpPolar`'s inverse takes it from `cv::cartToPolar`, a float polynomial,
+and the closest reachable spelling is still wrong on 136 of ~59,000 positions. Because the remap is
+nearest, a quarter of a percent of positions picks a *different source pixel*, not a shifted weight:
+
+| case | opaque_ramp | corners | noise |
+|---|---:|---:|---:|
+| `zoom_blur(40, centre)` | 69.9 dB | **30.1 dB** (max 255) | **40.7 dB** (max 118) |
+| `zoom_blur(100, off-centre)` | 69.9 dB | 52.6 dB | 47.2 dB |
+
+**It is not floating-point precision.** The same algorithm in `double` on the CPU gives 39.837 dB
+on noise — the identical figure to the `float` version and to the shader — so no amount of care
+inside the fragment changes it.
+
+**So zoom blur declines, and the decision that would unblock it is a product one:** passing
+`cv::INTER_LINEAR` to both `linearPolar` calls. Then a thousandth-of-a-column difference in the
+angle costs a fraction of an LSB rather than a whole pixel, the port becomes an ordinary resampling
+one, and the effect stops aliasing. It moves existing projects' output and the front end compiles
+the same source to WASM, which is the same shape as the `cv::cvtColor` fix that took `Wipe` from
+62–85 dB to bit-exact.
+
+### Diagonal blur still has the downscale threshold the reference decision retired (2026-09-22)
+
+The 2026-09-22 reference-resolution entry says the per-effect downscale thresholds "went with it"
+and names diagonal blur's "half size above 1 megapixel" as one of the two. **Rotational blur's was
+replaced; diagonal blur's was not** — `applyDiagonalBlurEffect` still carries
+`LARGE_IMAGE_THRESHOLD = 1'000'000` and a 0.5 `INTER_AREA` resize. So the effect is still
+resolution-dependent in exactly the way the decision set out to remove: the same authored radius
+renders at full scale from a 720p source and at half scale from 1080p.
+
+Left as found, because changing it is the owner's call and not a port's. It is also why the
+diagonal fragment declines above a megapixel — and note that **replacing the threshold with
+`referenceWorkingScale` would make the fragment harder, not easier**: a 0.5 `INTER_AREA` is a 2x2
+average, and a 1280/1920 one is a weighted area kernel.
+
 ## Open — decide before plan phase 4
 
 The four that blocked the compositor were taken on 2026-09-16; see the W11 entry above.

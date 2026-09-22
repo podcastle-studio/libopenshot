@@ -168,8 +168,12 @@ support, opt-in Qt6, thread-budget settings that overlap step 1.2, and ~15 crash
 
 ## Open decisions (record in `doc/gpu-migration/GPU-DECISIONS.md` when taken)
 
-- Timeline canvas precision for the GPU compositor: RGBA8 or RGBA16F (RGBA16F recommended).
-- Reference for LUT rounding: native `ColorMap.cpp` or the WASM `LutApply.cpp` path.
+- ~~Timeline canvas precision for the GPU compositor: RGBA8 or RGBA16F~~ — **taken in W11**:
+  `kRGBA_8888`, overriding the F16 recommendation. See `GPU-DECISIONS.md`.
+- ~~Reference for LUT rounding: native `ColorMap.cpp` or the WASM `LutApply.cpp` path~~ —
+  **answered 2026-09-22**: neither. The front end never calls the WASM for LUTs; it grades in a
+  PixiJS GLSL pass, trilinear at the cube's native size, honouring `DOMAIN_MIN`/`DOMAIN_MAX`. See
+  the log entry below.
 
 ## Key finding from the second pass (superseded in part — see the table above)
 
@@ -775,6 +779,60 @@ production corpus) remain open; W05–W10 are the CPU quick wins. W01/W02 stay d
   x264 loss, not a matrix bug.
 
 ## Log
+
+- 2026-09-22 — **W20: three of the four blurs are shaders, zoom blur is blocked on a product
+  decision, and the parity harness is red on timing.** `Blur` is a `GpuEffect` now, with three
+  fragments: the box blur as **six separable half-passes** (one per axis per `cv::blur`), the
+  diagonal blur as one, the rotational blur as one. Parity on Vulkan, eight images, against W20's
+  45 dB gate: diagonal **24/24 bit-exact**, box 16/32 exact and **8/8 on either single axis**
+  (the 8-bit intermediate between the two draws is the whole of the difference), rotational 8/32
+  exact at 74–102 dB — max 1 LSB everywhere, nothing failing. Four-way sweep **307/307**,
+  `openshot-gpu-checks` clean on both backends. `unit.gpu_blur_path` asserts the path per mode and
+  checks the box blur's pass *count*, because a silently skipped half still looks like "the shader
+  ran". The reasoning is in `GPU-DECISIONS.md`; the numbers are in `STAGE6-EFFECTS.md` and
+  `doc/PERFORMANCE-BASELINE.md`.
+  **`openshot-gpu-effect-parity` exits 1 with 21 failures, and 11 of them are these blurs.** The
+  0.200 ms gate is a *per-pixel fragment* gate and a blur cannot meet it by construction — the box
+  blur is 206 fetches per pixel where the rest of the vocabulary is one. Measured at 1080p, shader
+  pass against the CPU twin's whole frame: box **7.5–28.0 ms** against 21.8–27.9, diagonal
+  **7.0–18.6** against 20.6–22.2, rotational **66–125** against 70–195. So every one of them is at
+  or ahead of the thing it replaces, and none is within two orders of magnitude of 0.200 ms.
+  The other 10 failures are in cases this session did not touch (`enhance` x3, `mask` x4,
+  `reflmove` x2, `brightness(0, 3)` at 0.206). **The gate needs restating before the harness means
+  anything again**: a multi-fetch effect should be held against its CPU twin, not against a number
+  written for a one-fetch fragment.
+  Also seen during the timing section: repeated `[graphite] Failed to allocate unprotected
+  dedicated image memory` on a card with 7 GB free. `msChainedPass` runs 150 `GetFrame` calls with
+  no readback between them, which for the box blur is 900 pooled surfaces in one recording. Not
+  investigated; it does not affect parity, only the timings of the cases it lands on.
+  **Zoom blur is the one W20 item left and it is blocked on a product decision, not on work.**
+  `applyZoomBlurEffect` passes no interpolation flag to either `cv::linearPolar`, so both polar
+  conversions run nearest-neighbour — which is what makes the effect alias. The port is finished
+  and measured in `spikes/zoom-blur-polar/`: forward map exact on all 300,304 channels, inverse
+  map's angle irreducibly wrong on ~0.23 % of positions because it comes from `cv::cartToPolar`'s
+  float polynomial, and under a nearest remap that is a whole different source pixel — 30–41 dB.
+  The options are in that README.
+
+- 2026-09-22 — **ColorMap is unblocked: the front end does not use the WASM for LUTs at all.** The
+  project owner supplied the editor's `lut.frag` and its write-up (`tmp/`), and they settle both
+  questions §2.6 was waiting on, differently from how the item assumed they would be answered.
+  **There is no `apply_lut` call to ask about.** The grade is a single PixiJS filter pass in GLSL:
+  the cube is packed into an RGBA32F 2-D atlas sampled NEAREST, and the shader does **trilinear by
+  hand** — 8 fetches, 7 mixes — at the LUT's **native cube size**. That is exactly what W11 decided
+  for our side, so the two now agree by construction, and the tetrahedral option in
+  `lutWrappers.cpp` is dead code on a dead path.
+  **They do honour `DOMAIN_MIN`/`DOMAIN_MAX`**: `t = clamp((c - domainMin) / domainSpan, 0, 1)`,
+  with the span collapsed to 1 when it is degenerate. `parseCubeText` drops both
+  (`ColorGradingCore.cpp:378`), so the export is the side that is wrong — the live bug is ours.
+  **They grade straight RGB**: un-premultiply (guarded at alpha > 1e-5), grade, `mix(straight,
+  graded, intensity)`, re-premultiply. `ColorMap.cpp` demultiplies too, so the alpha model already
+  matches; the intensity blend has to happen on straight RGB as well.
+  What follows, in order: drop the 17³ resample in `ColorMap.cpp:243` (W11's decision, re-baselines
+  `effects.colormap_lut` and `effects.stack_crop_chroma_light_lut`, and costs CPU LUT throughput —
+  measure it), honour the domain in the parser, then the fragment with the cube as a 3-D texture.
+  **And a divergence to record rather than fix**: the editor renders a clip **ungraded** when the
+  cube is 1-D-only, when a 3-D cube carries a 1-D shaper, or when the renderer is not WebGL2. The
+  export grades all of them. Same `.cube`, different picture, and no shader parity work touches it.
 
 - 2026-09-22 — **The blur is normalised and is no longer a box; the four blur shaders are now
   unblocked.** Three owner decisions landed and are implemented.

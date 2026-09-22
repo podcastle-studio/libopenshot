@@ -1,0 +1,84 @@
+// zoom_blur.sksl
+//
+// The SkSL twin of applyZoomBlurEffect: a radial streak, done as a horizontal box blur in polar
+// space. The C++ reflects the frame outward by the blur strength, converts to polar, blurs along
+// rho, converts back and crops. This fragment composes all four steps for one output pixel, which
+// costs `taps` fetches along a single ray.
+//
+// **Both polar conversions are NEAREST, and that is the whole reason this is portable.**
+// `cv::linearPolar(src, dst, centre, maxRadius, flags)` passes `flags & INTER_MAX` to remap as the
+// interpolation, and the C++ passes only WARP_FILL_OUTLIERS / WARP_INVERSE_MAP -- neither of which
+// has any bit inside INTER_MAX, so the interpolation is INTER_NEAREST (0). Measured against
+// OpenCV 4.6 rather than assumed: recovering both maps by warping a coordinate image, the forward
+// map agrees with round(formula) on 9076 of 9076 positions and the inverse on 12699 of 12707.
+// So there are no interpolation weights to reproduce here at all, only a rounding.
+//
+// The C++ also has a trailing `if (int gaussBlurStrength = ...)` whose body is empty. It computes
+// a value and does nothing with it, so there is nothing to port; it is left alone rather than
+// tidied, because tidying the oracle is how the two sides drift.
+//
+// Out-of-range handling differs between the two conversions and both are reproduced. The forward
+// one is given WARP_FILL_OUTLIERS, so remap uses BORDER_CONSTANT and a sample off the padded image
+// reads zero. The inverse one is not, so remap uses BORDER_TRANSPARENT and *leaves the destination
+// untouched* -- and the destination is the padded source itself, so a pixel whose radius exceeds
+// the polar image's width keeps its original colour instead of being blurred.
+uniform float2 size;          // the frame
+uniform float2 paddedSize;    // the frame plus `pad` on every side -- the polar image's size too
+uniform float2 paddedCenter;  // the blur's centre, in padded pixels
+uniform float  pad;
+uniform float  kAngle;        // 2*pi / paddedSize.y
+uniform float  kMag;          // maxRadius / paddedSize.x
+uniform float  taps;          // the polar blur's kernel, odd
+
+const float kTwoPi = 6.283185307179586;
+
+// The loop bound has to be constant; the break keeps the cost at `taps`. 511 covers a
+// strength-100 parameter at 4K, and the host declines above it.
+const int kMaxZoomTaps = 511;
+
+// copyMakeBorder's BORDER_REFLECT around the frame, then one texel of it.
+float4 paddedTexel(float2 s) {
+	return osBytes(osReflect2(s - pad, size) + 0.5);
+}
+
+float4 main(float2 p) {
+	float2 q = floor(p);
+	float2 d = (q + pad) - paddedCenter;
+
+	// The inverse polar map, nearest. cvRound, not floor(x + 0.5): remap rounds the map with
+	// saturate_cast and OpenCV's tie goes to the even integer.
+	float rho = osRoundEven(sqrt(dot(d, d)) / kMag);
+	float ang = atan(d.y, d.x);
+	if (ang < 0.0) ang += kTwoPi;
+	float phi = osRoundEven(ang / kAngle);
+	if (phi >= paddedSize.y) phi -= paddedSize.y;   // warpPolar's wrapped angle border
+
+	// BORDER_TRANSPARENT: outside the polar image the inverse remap writes nothing, and what was
+	// already there is the padded source.
+	if (rho > paddedSize.x - 1.0)
+		return osBytes(q + 0.5) / 255.0;
+
+	// The ray this pixel's polar column lies on. Constant across the blur, so it is computed once.
+	float a = kAngle * phi;
+	float2 dir = float2(cos(a), sin(a));
+
+	float first = -floor(taps * 0.5);
+	float4 sum = float4(0.0);
+	for (int k = 0; k < kMaxZoomTaps; ++k) {
+		if (float(k) >= taps) break;
+		// cv::blur along rho, with its BORDER_REFLECT_101 over the polar image's width.
+		float u = osReflect101(rho + first + float(k), paddedSize.x);
+		float2 s = float2(osRoundEven(paddedCenter.x + kMag * u * dir.x),
+						  osRoundEven(paddedCenter.y + kMag * u * dir.y));
+		// WARP_FILL_OUTLIERS on the forward conversion: BORDER_CONSTANT, and the constant is zero.
+		if (s.x >= 0.0 && s.y >= 0.0 && s.x <= paddedSize.x - 1.0 && s.y <= paddedSize.y - 1.0)
+			sum += paddedTexel(s);
+	}
+
+	// round(sum / taps), as an integer division -- see blur.sksl for why this spelling.
+	float dv = 2.0 * taps;
+	return float4(osIDiv(2.0 * sum.r + taps, dv),
+				  osIDiv(2.0 * sum.g + taps, dv),
+				  osIDiv(2.0 * sum.b + taps, dv),
+				  osIDiv(2.0 * sum.a + taps, dv)) / 255.0;
+}

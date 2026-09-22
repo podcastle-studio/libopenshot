@@ -21,10 +21,18 @@
 #include "Color.h"
 #include "GpuEffect.h"
 #include "Timeline.h"
+#include "effects/Blur.h"
 #include "effects/Brightness.h"
 #include "gpu/GpuDevice.h"
 #include "gpu/GpuOverlay.h"
 
+#include "effects/image-processing-lib/src/Effects/effects.h"
+
+#include "Frame.h"
+
+#include <QImage>
+
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -367,6 +375,68 @@ void golden::registerUnitScenarios() {
                                   passes == 0 && fallbacks > 0
                                       ? counts
                                       : "no GPU, so every effect should have fallen back: " + counts});
+        });
+
+    // Blur is four effects in one class and three of them are now shaders, each declining
+    // silently -- and a decline produces exactly the golden frame, so transitions.blur passing on
+    // Vulkan says nothing about which path drew it. This asserts the path, per mode.
+    //
+    // The box blur's pass count is checked as well as its being non-zero: it is separable and runs
+    // one draw per axis per box, so a half silently skipped would still look like "the shader
+    // ran". The expected count comes from the same function the effect resolves its kernels with.
+    addCustom("unit.gpu_blur_path", {"unit", "gpu"},
+        [](Scene& s) {
+            auto& tl = s.makeTimeline();
+            using namespace golden::recipes;
+            tl.AddClip(backgroundClip(s, s.media("background_960x540.png")));
+            MediaSpec m; m.path = s.media("image_alpha_320x200.png"); m.isImage = true; m.end = 1.0;
+            tl.AddClip(mediaClip(s, m));
+            tl.Open();
+        },
+        [](Scene& s, std::vector<Captured>&, std::vector<Check>& checks) {
+            const bool gpu = openshot::GpuDevice::Instance().available();
+
+            // A private copy of a real composited frame for each mode, so the three do not blur
+            // each other's output, and applied straight to it so this measures the effect rather
+            // than the compositor around it.
+            const std::shared_ptr<QImage> source = s.timeline->GetFrame(1)->GetImage();
+            auto count = [&](openshot::Blur& blur) {
+                auto frame = std::make_shared<openshot::Frame>();
+                frame->AddImage(std::make_shared<QImage>(source->copy()));
+                openshot::GpuEffect::ResetCounters();
+                blur.GetFrame(frame, 1);
+                return openshot::GpuEffect::GpuPasses();
+            };
+
+            constexpr int kRadius = 40;
+            openshot::Blur box{openshot::Keyframe(kRadius), openshot::Keyframe(kRadius)};
+            openshot::Blur diagonal{0, 0, openshot::Keyframe(kRadius)};
+            openshot::Blur rotational{0, 0, 0, openshot::Keyframe(25.0)};
+
+            const long long box_passes = count(box);
+            const long long diagonal_passes = count(diagonal);
+            const long long rotational_passes = count(rotational);
+
+            // One draw per axis per box, minus any whose kernel is a single tap.
+            const Podcastle::Effects::BlurBoxes boxes =
+                Podcastle::Effects::blurBoxSizes(s.width, kRadius, kRadius);
+            long long expected_box = 0;
+            for (int pass = 0; pass < 3; ++pass) {
+                if (boxes.x[pass] > 1) expected_box++;
+                if (boxes.y[pass] > 1) expected_box++;
+            }
+
+            auto report = [](const char* name, long long passes, long long expected, bool gpu_on,
+                             std::vector<Check>& out) {
+                const long long want = gpu_on ? expected : 0;
+                const std::string got = "gpu_passes=" + std::to_string(passes);
+                out.push_back({name, passes == want,
+                               passes == want ? got
+                                              : got + ", expected " + std::to_string(want)});
+            };
+            report("box_blur_pass_count", box_passes, expected_box, gpu, checks);
+            report("diagonal_blur_pass_count", diagonal_passes, 1, gpu, checks);
+            report("rotational_blur_pass_count", rotational_passes, 1, gpu, checks);
         });
 
     addCustom("unit.color", {"unit"}, unitScene,
