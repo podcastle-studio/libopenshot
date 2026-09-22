@@ -865,9 +865,18 @@ Depends on W12/W13 only — **not** on Stage 7. Can run in parallel with Stage 7
       per effect instance, uploads only when the frame is not already GPU-backed, and **leaves the
       result on the GPU** so a chain pays one crossing rather than one per effect. Declining is a
       normal answer and the CPU twin runs untouched.
-- [ ] One SkSL fragment each, with a parity test against the C++ twin: **Brightness (done)**, Alpha,
-      Exposure, ColorShift, Bars, ChromaKey, ColorAdjustment, LightAdjustment, Enhancement,
-      ColorMap (3-D LUT texture), Mask, Crop, CameraMovement.
+- [ ] One SkSL fragment each, with a parity test against the C++ twin. **Done: Brightness, Alpha,
+      Exposure, ColorShift** (2026-09-22) — 72 of 88 image/parameter combinations bit-exact, the
+      rest 55–75 dB with a 5 LSB worst case. **Left:** Bars, ChromaKey, ColorAdjustment,
+      LightAdjustment, Enhancement, ColorMap (3-D LUT texture), Mask, Crop, CameraMovement.
+      - A fragment is exact **exactly when it does not unpremultiply**: Alpha and ColorShift are
+        16/16, Brightness and Exposure are not. Do not expect better from one that divides.
+      - **`ApplyOnGpu` goes before any `frame->GetImage()`.** On a GPU-backed frame that call is
+        the one readback, so the wrong order makes the shader pay an upload and a readback every
+        frame: measured 3.2–3.5 ms a pass against 0.15–0.22 ms. Output is identical either way,
+        so only the timing catches it.
+      - Exposure's remaining gap is the CPU path's pointless `Format_ARGB32` round trip, not the
+        fragment. See `GPU-DECISIONS.md`; removing it is proposed, not done.
 - [x] **Golden coverage for the four effects the service builds only in `Transition.cpp`.**
       `effects.{brightness,exposure,colorshift,bars}_alpha`, on a 1:1 clip with partial alpha, held
       to `Tolerance::Exact()` with no `gpu-composite` band — the sweep is 307/307 in all four arms.
@@ -885,13 +894,21 @@ Depends on W12/W13 only — **not** on Stage 7. Can run in parallel with Stage 7
       tetrahedral diverge by up to 98 LSB.
 
 **Gate per effect.** PSNR ≥ 48 dB vs the CPU effect on eight test images including transparent
-and semi-transparent pixels, ≤ 0.2 ms at 1080p. Both are measured by
-`tests/gpu/gpu_effect_parity.cpp` (`openshot-gpu-effect-parity`), which also reports whether the
-two agree *exactly* — the stronger claim the fragments are written for — and refuses to compare a
-case that never reached the GPU. **Brightness, 2026-09-22: bit-exact on 26 of 32 image/parameter
-combinations, the other six at 69–74 dB with a 1–3 LSB maximum, all of it on semi-transparent
-pixels; 0.14–0.19 ms chained at 1080p on the A2000.** The timing gate is exempt on lavapipe, a
-software rasteriser that measures ~25x slower.
+and semi-transparent pixels, ≤ 0.2 ms at 1080p. Measured by `tests/gpu/gpu_effect_parity.cpp`
+(`openshot-gpu-effect-parity`), which also reports whether the two agree *exactly* and refuses to
+compare a case that never reached the GPU. The timing gate is exempt on lavapipe, a software
+rasteriser that measures ~25x slower.
+
+**2026-09-22, four effects done.** Parity: **72 of 88 combinations bit-exact**, the other 16 at
+55–75 dB, worst 5 LSB — comfortably inside the 48 dB clause. Timing at 1080p chained: Alpha
+0.12–0.15 ms, Exposure 0.15–0.19, Brightness 0.16–0.21, ColorShift **0.22**.
+
+**The ≤ 0.2 ms clause needs restating** — as W07's fps gates did. A *do-nothing* passthrough
+fragment measures 0.19–0.22 ms in the same harness, because a pass copies the source surface and
+then reads and writes an 8.3 MB surface before the fragment does anything. The gate is therefore
+the floor of one full-frame pass and no fragment can meet it with margin; ColorShift is over it
+only because it makes four texture fetches instead of one. Fixing it means not giving every effect
+its own pass, which is its own item. See `GPU-DECISIONS.md`.
 **Gate.** `heavy_effects` render ≥ **60 fps** (11.5); `chroma_key_green` ≥ **70 fps** (12.9);
 `tools/golden.sh check --filter effects`.
 **Size.** ~2 weeks.

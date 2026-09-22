@@ -1,7 +1,7 @@
 #ifndef OPENSHOT_ALPHA_EFFECT_H
 #define OPENSHOT_ALPHA_EFFECT_H
 
-#include "../EffectBase.h"
+#include "../GpuEffect.h"
 
 #include "../Frame.h"
 #include "../Json.h"
@@ -20,11 +20,21 @@
 
 namespace openshot
 {
-	class Alpha : public EffectBase
+	class Alpha : public GpuEffect
 	{
 	private:
 		/// Init effect settings
 		void init_effect_details();
+
+	protected:
+		/// The SkSL twin of applyAlphaPremultiplied. Premultiplied channels scale
+		/// directly -- this effect does not unpremultiply, and must not.
+		const char* GpuShaderSource() const override;
+
+		/// The single scale factor, or false when this frame takes one of the CPU
+		/// path's two shortcuts (a >= 1.0 is a no-op, a <= 0 is a memset).
+		bool SetGpuUniforms(SkRuntimeEffectBuilder& builder, int64_t frame_number,
+							int width, int height) const override;
 
 	public:
 		Keyframe alpha;

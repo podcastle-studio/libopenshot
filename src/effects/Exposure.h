@@ -1,7 +1,7 @@
 #ifndef OPENSHOT_EXPOSURE_EFFECT_H
 #define OPENSHOT_EXPOSURE_EFFECT_H
 
-#include "../EffectBase.h"
+#include "../GpuEffect.h"
 
 #include "../Frame.h"
 #include "../Json.h"
@@ -17,11 +17,19 @@ namespace openshot
 	 * @brief This class adjusts the exposure of an image, and can be animated
 	 * with openshot::Keyframe curves over time.
 	 */
-	class Exposure : public EffectBase
+	class Exposure : public GpuEffect
 	{
 	private:
 		/// Init effect settings
 		void init_effect_details();
+
+	protected:
+		/// The SkSL twin of applyExposureEffect.
+		const char* GpuShaderSource() const override;
+
+		/// The exposure multiplier, clamped to >= 1.0 as GetFrame clamps it.
+		bool SetGpuUniforms(SkRuntimeEffectBuilder& builder, int64_t frame_number,
+							int width, int height) const override;
 
 	public:
 		Keyframe exposure;	///< exposure keyframe.

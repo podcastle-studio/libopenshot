@@ -771,6 +771,28 @@ production corpus) remain open; W05–W10 are the CPU quick wins. W01/W02 stay d
 
 ## Log
 
+- 2026-09-22 — **W19: Alpha, Exposure and ColorShift fragments — and what decides whether one is
+  exact.** Four effects are now shaders. **72 of 88 image/parameter combinations are bit-exact**,
+  the other 16 at 55–75 dB with a 5 LSB worst case against a 48 dB gate. Four-way sweep 307/307.
+  **The split is not complexity, it is division**: Alpha (scales premultiplied channels) and
+  ColorShift (four wrapped integer gathers) are **16/16 exact**; Brightness and Exposure, which
+  unpremultiply, are not. That confirms the earlier finding from the other side.
+  ColorShift also settles a question worth having settled: it gathers r, g, b and a from four
+  different pixels and so emits colour above its own alpha, and it is still bit-exact — **Skia does
+  not clamp runtime-effect output to valid premultiplied colour.**
+  **An ordering rule that costs 20x**: `ApplyOnGpu` must come before any `frame->GetImage()`,
+  because on a GPU-backed frame that call *is* the one readback. Exposure and ColorShift were both
+  written the wrong way round first and measured 3.2–3.5 ms a pass; corrected, 0.15–0.22 ms. The
+  output is identical either way, so only the timing caught it.
+  **Two things are recorded rather than fixed.** Exposure's residual gap is the CPU path's own
+  `Format_ARGB32` round trip — a conversion straight back to premultiplied RGBA that loses up to
+  1 LSB on partial alpha and buys nothing (at `exposure(1.0)`, an identity, the two still differ on
+  19 % of the noise image). Deleting it would make CPU and GPU agree and make the CPU path more
+  accurate and faster, but it moves production output, so it is proposed. And **the ≤ 0.2 ms
+  per-effect gate needs restating by the project owner**: a do-nothing passthrough fragment
+  measures 0.19–0.22 ms in the same harness, so the gate is the floor of one full-frame pass, not
+  the cost of an effect. ColorShift is over it at 0.22 and shipped on those grounds.
+
 - 2026-09-22 — **W19: four effect scenarios on partial alpha, and the instability they turned up.**
   `effects.{brightness,exposure,colorshift,bars}_alpha` — the four effects the service builds only
   in `Transition.cpp`, constructed exactly as it constructs them, now driven over **semi-transparent**

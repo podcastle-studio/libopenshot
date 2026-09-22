@@ -18,7 +18,10 @@
 #include "Frame.h"
 #include "gpu/GpuFrame.h"
 #include "KeyFrame.h"
+#include "effects/Alpha.h"
 #include "effects/Brightness.h"
+#include "effects/ColorShift.h"
+#include "effects/Exposure.h"
 #include "gpu/GpuDevice.h"
 
 #include <QImage>
@@ -185,6 +188,26 @@ std::vector<Case> cases() {
         {"brightness(0.25, 10)",  [] { return std::make_shared<openshot::Brightness>(Keyframe(0.25), Keyframe(10.0)); }},
         {"brightness(-0.4, 20)",  [] { return std::make_shared<openshot::Brightness>(Keyframe(-0.4), Keyframe(20.0)); }},
         {"brightness(0.6, 100)",  [] { return std::make_shared<openshot::Brightness>(Keyframe(0.6), Keyframe(100.0)); }},
+
+        // Alpha takes the CPU shortcuts at 0 and 1, so only the interior is a shader.
+        {"alpha(0.5)",            [] { return std::make_shared<openshot::Alpha>(Keyframe(0.5)); }},
+        {"alpha(0.13)",           [] { return std::make_shared<openshot::Alpha>(Keyframe(0.13)); }},
+
+        {"exposure(1.0)",         [] { return std::make_shared<openshot::Exposure>(Keyframe(1.0)); }},
+        {"exposure(1.7)",         [] { return std::make_shared<openshot::Exposure>(Keyframe(1.7)); }},
+        {"exposure(4.2)",         [] { return std::make_shared<openshot::Exposure>(Keyframe(4.2)); }},
+
+        // Shifts chosen to be non-integer fractions of 256, so the host's round()
+        // actually rounds, and with a negative one because the sign is applied after
+        // the magnitude. The last shifts alpha too, which is the case that can emit
+        // colour above its own alpha -- invalid premultiplied data that the C++
+        // produces and the fragment must not quietly clamp.
+        {"colorshift(rgb)",       [] { return std::make_shared<openshot::ColorShift>(
+                                           Keyframe(0.031), Keyframe(0.0), Keyframe(0.0), Keyframe(-0.017),
+                                           Keyframe(0.0074), Keyframe(0.0), Keyframe(0.0), Keyframe(0.0)); }},
+        {"colorshift(rgb+alpha)", [] { return std::make_shared<openshot::ColorShift>(
+                                           Keyframe(0.05), Keyframe(0.02), Keyframe(-0.03), Keyframe(0.04),
+                                           Keyframe(0.01), Keyframe(-0.06), Keyframe(0.02), Keyframe(0.03)); }},
     };
 }
 

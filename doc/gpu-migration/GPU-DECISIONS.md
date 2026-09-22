@@ -764,6 +764,66 @@ the upload and readback around it. `ApplyOnGpu` therefore leaves its result on t
 `Frame::GetImage()` read back once, so a chain pays the crossing once — and W22–W25 is what removes
 it for the first effect too.
 
+### W19 — three more fragments, and the two things that decide whether one is exact (2026-09-22)
+
+Alpha, Exposure and ColorShift, on top of Brightness. **72 of 88 image/parameter combinations are
+bit-exact**; the 16 that are not run 55–75 dB with a 5 LSB worst case, against a 48 dB gate.
+
+The split is not about effect complexity. **A fragment is bit-exact exactly when it does not
+unpremultiply**:
+
+| effect | what it does | result |
+|---|---|---|
+| `Alpha` | scales premultiplied channels directly | **16/16 exact** |
+| `ColorShift` | four wrapped integer gathers, no arithmetic | **16/16 exact** |
+| `Brightness` | unpremultiply → contrast → shift → premultiply | 26/32 exact, ≤ 3 LSB |
+| `Exposure` | unpremultiply → scale → premultiply | 16/24 exact, ≤ 5 LSB |
+
+That is the same division-rounding limit recorded above, now confirmed from the other side: the two
+fragments that never divide are exact everywhere, including on `alpha_one` and `noise`.
+
+**ColorShift also settles a question about premultiplied output.** It gathers r, g, b and a from
+four *different* pixels, so it can emit colour above its own alpha — invalid premultiplied data,
+which the C++ produces too. It is bit-exact, so **Skia does not clamp runtime-effect output to
+valid premul**, and a fragment may reproduce a C++ twin that does not maintain the invariant.
+
+**Exposure carries a second, separate divergence, and it is the CPU path's fault.** `Exposure.cpp`
+converts the frame to `Format_ARGB32` and hands it to `AddImage`, which converts it straight back
+to premultiplied RGBA in place. The branch always fires, so every exposure frame goes through an
+unpremultiply and a re-premultiply in 8 bits that changes nothing except to lose up to 1 LSB on a
+partially transparent pixel. At `exposure(1.0)` — an identity multiply — the fragment still differs
+from the C++ on **19 % of the `noise` image**, and that round trip is the entire reason.
+Its other cause is plain: the C++ multiplies by the keyframe as a `double` and an SkSL uniform is
+`float`, so at `exposure(4.2)` even fully opaque pixels move by 1 LSB.
+Deleting the round trip would make CPU and GPU agree *and* make the CPU path slightly more
+accurate and slightly faster — but it moves production output, so it is proposed rather than done.
+
+**And an ordering rule that costs 20x if you get it wrong.** `ApplyOnGpu` must come *before* any
+`frame->GetImage()` in a `GetFrame`. On a GPU-backed frame `GetImage()` **is** the one readback, so
+asking for pixels first flattens the frame and the shader then pays an upload and a readback every
+frame. Exposure and ColorShift were both written that way at first and measured **3.2–3.5 ms** a
+pass; with the order corrected they are **0.15–0.22 ms**. Nothing about the output changes, which
+is why only the timing caught it.
+
+### The 0.2 ms per-effect gate is the cost of a pass, not of an effect (2026-09-22, W19)
+
+**Needs restating by the project owner**, in the same way W07's fps gates did.
+
+Measured at 1080p, chained: Alpha 0.12–0.15 ms, Brightness 0.16–0.21, Exposure 0.15–0.19,
+ColorShift **0.22**. ColorShift misses the 0.2 ms gate by 10 % because it makes four texture
+fetches where the others make one.
+
+But a **do-nothing passthrough fragment measures 0.19–0.22 ms in the same harness**, and the pool
+acquire is 0.016 ms of that. The rest is the `snapshot()` copy of the source surface plus the read
+and write of an 8.3 MB surface — about 33 MB of traffic before a fragment does any work. So the
+gate sits exactly at the floor of one full-frame pass and no fragment can meet it with margin.
+
+The fix is not in any fragment. It is to stop giving every effect its own pass — either a
+zero-copy source (Graphite's `SkSurfaces::AsImage` consumes the surface, so it cannot simply
+ping-pong through the pool, and this needs design) or composing a chain of effects into one draw.
+Either is its own item. Until then ColorShift is **over the written gate and shipped**, on the
+grounds that the gate as written is unreachable by construction.
+
 ### A GPU test that cannot tell whether the GPU ran proves nothing (2026-09-22, W19)
 
 Worth its own entry because it produced a completely clean result that was completely wrong. The

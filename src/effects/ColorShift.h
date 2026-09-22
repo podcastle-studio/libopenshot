@@ -13,7 +13,7 @@
 #ifndef OPENSHOT_COLOR_SHIFT_EFFECT_H
 #define OPENSHOT_COLOR_SHIFT_EFFECT_H
 
-#include "../EffectBase.h"
+#include "../GpuEffect.h"
 
 #include <cmath>
 #include <stdio.h>
@@ -32,11 +32,20 @@ namespace openshot
 	 * Shifting pixels can be used in many interesting ways, especially when animating the movement of the pixels.
 	 * The pixels wrap around the image (the pixels drop off one side and appear on the other side of the image).
 	 */
-	class ColorShift : public EffectBase
+	class ColorShift : public GpuEffect
 	{
 	private:
 		/// Init effect settings
 		void init_effect_details();
+
+	protected:
+		/// The SkSL twin of applyColorShiftEffect: four independent wrapped gathers.
+		const char* GpuShaderSource() const override;
+
+		/// The eight per-channel pixel offsets, already resolved to integers, or
+		/// false when every one of them is zero.
+		bool SetGpuUniforms(SkRuntimeEffectBuilder& builder, int64_t frame_number,
+							int width, int height) const override;
 
 	public:
 		Keyframe red_x;	///< Shift the Red X coordinates (left or right)

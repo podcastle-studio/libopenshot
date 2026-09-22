@@ -1,5 +1,7 @@
 #include "Alpha.h"
 #include "Exceptions.h"
+
+#include "skia/include/effects/SkRuntimeEffect.h"
 #include "./image-processing-lib/src/Effects/effects.h"
 
 using namespace openshot;
@@ -85,11 +87,45 @@ void Alpha::init_effect_details() {
 
 // This method is required for all derived classes of EffectBase, and returns a
 // modified openshot::Frame object
+// The SkSL twin of applyAlphaPremultiplied. The whole effect is one multiply per
+// channel with a cast, and alpha scales with the colour because the data is
+// premultiplied -- so unlike every other fragment here there is no unpremultiply
+// round trip, and nothing for the prelude's alpha helpers to do.
+const char* Alpha::GpuShaderSource() const
+{
+	return R"SKSL(
+uniform float k;   // the alpha keyframe, strictly between 0 and 1
+
+float4 main(float2 p) {
+	// floor(), matching static_cast<uint8_t>(px[i] * k). Every channel is
+	// non-negative and k < 1, so the cast cannot wrap.
+	return floor(osBytes(p) * k) / 255.0;
+}
+)SKSL";
+}
+
+bool Alpha::SetGpuUniforms(SkRuntimeEffectBuilder& builder, int64_t frame_number,
+						   int width, int height) const
+{
+	const double alphaValue = alpha.GetValue(frame_number);
+	// The CPU path short-circuits both ends: >= 1.0 returns the frame untouched and
+	// <= 0 memsets it. Neither is worth a shader pass, and reproducing the memset in
+	// SkSL would only be a slower way to write zeroes, so decline and let it run.
+	if (alphaValue >= 1.0 || alphaValue <= 0.0)
+		return false;
+	// float, because applyAlphaPremultiplied narrows to float before multiplying.
+	builder.uniform("k") = static_cast<float>(alphaValue);
+	return true;
+}
+
 std::shared_ptr<openshot::Frame> Alpha::GetFrame(std::shared_ptr<openshot::Frame> frame, int64_t frame_number) {
 	const double alphaValue = alpha.GetValue(frame_number);
 	if (alphaValue >= 1.0) {
 		return frame;
 	}
+
+	if (ApplyOnGpu(frame, frame_number))
+		return frame;
 
 	std::shared_ptr<QImage> img = frame->GetImage();
 	applyAlphaPremultiplied(*img, alphaValue);
