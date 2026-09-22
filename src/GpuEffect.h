@@ -63,6 +63,19 @@ namespace openshot
 	public:
 		~GpuEffect() override;
 
+		/// How many frames have run as a shader, and how many fell back to the CPU
+		/// twin, process-wide since the counters were last reset.
+		///
+		/// This exists because a GPU path with a silent fallback cannot be tested
+		/// without it. ApplyOnGpu declining is a normal answer, so a check that only
+		/// compares pixels passes just as happily when no shader ever ran — which is
+		/// how the first version of openshot-gpu-effect-parity reported a perfect
+		/// result for a fragment that had not compiled. `unit.gpu_effect_path` in the
+		/// golden suite asserts against these.
+		static long long GpuPasses();
+		static long long CpuFallbacks();
+		static void ResetCounters();
+
 	protected:
 		GpuEffect();
 

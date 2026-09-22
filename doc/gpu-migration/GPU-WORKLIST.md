@@ -868,11 +868,14 @@ Depends on W12/W13 only — **not** on Stage 7. Can run in parallel with Stage 7
 - [ ] One SkSL fragment each, with a parity test against the C++ twin: **Brightness (done)**, Alpha,
       Exposure, ColorShift, Bars, ChromaKey, ColorAdjustment, LightAdjustment, Enhancement,
       ColorMap (3-D LUT texture), Mask, Crop, CameraMovement.
-- [ ] **Four of these effects have no golden scenario at all** — `Brightness`, `Exposure`,
-      `ColorShift` and `Bars` are constructed by the service and covered by nothing in
-      `tests/golden`, so the four-way sweep says nothing about them. Add a scenario per effect
-      **with semi-transparent content**, or the sweep keeps passing while the port is unverified.
-      A pre-existing gap that W19 makes dangerous, not one W19 created.
+- [x] **Golden coverage for the four effects the service builds only in `Transition.cpp`.**
+      `effects.{brightness,exposure,colorshift,bars}_alpha`, on a 1:1 clip with partial alpha, held
+      to `Tolerance::Exact()` with no `gpu-composite` band — the sweep is 307/307 in all four arms.
+      (The earlier claim that these four had *no* scenario was wrong: `Transitions.cpp` generates
+      one per `TransitionEffect` in a loop. The real gap was that all of it was opaque pixels under
+      a 45 dB band.) Also `unit.gpu_effect_path`, which asserts on `GpuEffect::GpuPasses()` that a
+      shader actually ran — a pixel comparison cannot, because the CPU fallback produces the right
+      frame. Adding the remaining fragments means extending these two, not inventing a pattern.
 - [ ] **ColorMap carries two W11 consequences.** (a) The shader matches the *front end* at the LUT's
       native cube size, so `ColorMap.cpp` must **drop its 17³ resample too** — otherwise CPU and GPU
       diverge by up to 17 LSB and the four-way sweep stops meaning anything. That re-baselines the

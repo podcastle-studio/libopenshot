@@ -19,7 +19,10 @@
 #include "Recipes.h"
 
 #include "Color.h"
+#include "GpuEffect.h"
 #include "Timeline.h"
+#include "effects/Brightness.h"
+#include "gpu/GpuDevice.h"
 
 #include <string>
 #include <vector>
@@ -281,6 +284,48 @@ void unitScene(Scene& s) {
 } // namespace
 
 void golden::registerUnitScenarios() {
+    // Does a GPU effect actually run as a shader in the real render path?
+    //
+    // This is not a pixel check and cannot be one. GpuEffect::ApplyOnGpu declining is a normal
+    // answer -- no GPU, OPENSHOT_GPU=off, a fragment that will not compile -- and the CPU twin
+    // then produces the correct frame. So a comparison of pixels passes identically whether the
+    // shader ran or never existed, which is how the first openshot-gpu-effect-parity reported 32
+    // bit-exact results for a fragment that had failed to compile (GPU-DECISIONS.md, W19).
+    //
+    // GpuEffect's counters are the only way to tell the two apart, so this asserts on them: with
+    // a GPU up, at least one frame must have gone through a shader; with the GPU off, none may.
+    addCustom("unit.gpu_effect_path", {"unit", "gpu"},
+        [](Scene& s) {
+            auto& tl = s.makeTimeline();
+            using namespace golden::recipes;
+            tl.AddClip(backgroundClip(s, s.media("background_960x540.png")));
+            MediaSpec m; m.path = s.media("image_alpha_320x200.png"); m.isImage = true; m.end = 1.0;
+            auto* c = mediaClip(s, m);
+            c->AddEffect(new openshot::Brightness(openshot::Keyframe(0.2)));
+            tl.AddClip(c);
+            tl.Open();
+        },
+        [](Scene& s, std::vector<Captured>&, std::vector<Check>& checks) {
+            const bool gpu = openshot::GpuDevice::Instance().available();
+            openshot::GpuEffect::ResetCounters();
+            s.timeline->GetFrame(1);
+            const long long passes = openshot::GpuEffect::GpuPasses();
+            const long long fallbacks = openshot::GpuEffect::CpuFallbacks();
+
+            const std::string counts = "gpu_passes=" + std::to_string(passes) +
+                                       " cpu_fallbacks=" + std::to_string(fallbacks);
+            if (gpu)
+                checks.push_back({"effect_ran_as_shader", passes > 0,
+                                  passes > 0 ? counts
+                                             : "a GPU is available but no effect ran as a shader: "
+                                               + counts});
+            else
+                checks.push_back({"effect_ran_on_cpu", passes == 0 && fallbacks > 0,
+                                  passes == 0 && fallbacks > 0
+                                      ? counts
+                                      : "no GPU, so every effect should have fallen back: " + counts});
+        });
+
     addCustom("unit.color", {"unit"}, unitScene,
         [](Scene&, std::vector<Captured>&, std::vector<Check>& checks) {
             checkTable("named_colors", kNamedCases,

@@ -730,6 +730,24 @@ production corpus) remain open; W05–W10 are the CPU quick wins. W01/W02 stay d
 
 ## Known oddities worth a look
 
+- **A scenario's resampled alpha boundary depends on what else ran in the process** (found
+  2026-09-22 while adding the W19 effect scenarios, **not fixed**). An effect scenario built on
+  `image_alpha_320x200.png` — alphas 0/217/255 — scaled to fit had **1,280 pixels move between an
+  isolated run and a full-suite run**, all of them on the interpolated alpha *boundaries*, and
+  those same pixels also moved **between two identical 4-thread full-suite runs**. Single-threaded
+  it was stable run to run but still differed from the isolated run, so there are two things here:
+  a race at 4 threads and an order or state dependence underneath it.
+  Only `Brightness` and `ColorShift` showed it, because the unpremultiply amplifies a 1 LSB alpha
+  difference at low alpha and the other two effects in the set do not — which is also why nothing
+  in the suite had caught it before. The region was the clip's own area (a 320x200 source drawn at
+  288x160), so this is the resampling of the alpha channel, not the effects.
+  The new scenarios were rebuilt on a 1:1 clip with uniform alpha from an `Alpha` effect and are
+  bit-stable in every arm, so **nothing is currently red** — but the underlying instability is
+  real, pre-existing, and worth its own item. A likely place to start is whether anything caches a
+  scaled image per *path* rather than per reader instance: `image_alpha_320x200.png` is opened at
+  different sizes by the ClipFx, Compositing, Readers and Export scenarios.
+
+
 - **Text is visibly different on the GPU.** The `text.*` scenarios are not bit-exact between the CPU
   and GPU paths — worst case 106 LSB (`text.curved`, PSNR 39.99) — and pass only because `Text.cpp`
   puts them all on `Tolerance::Loose()` (PSNR ≥ 38) for glyph anti-aliasing. Expected rather than
@@ -752,6 +770,26 @@ production corpus) remain open; W05–W10 are the CPU quick wins. W01/W02 stay d
   x264 loss, not a matrix bug.
 
 ## Log
+
+- 2026-09-22 — **W19: four effect scenarios on partial alpha, and the instability they turned up.**
+  `effects.{brightness,exposure,colorshift,bars}_alpha` — the four effects the service builds only
+  in `Transition.cpp`, constructed exactly as it constructs them, now driven over **semi-transparent**
+  pixels. `transitions.*` already drove all four, but over opaque video through a scaled clip and
+  therefore under the wide `gpu-composite` band; these are 1:1 and held to `Tolerance::Exact()`
+  with no GPU band at all. **Brightness is bit-identical on Vulkan on partial alpha** (`max=0`),
+  which is a sharper result than the parity test's 1-LSB class predicted — that class is real but
+  does not bite at these alphas, and `openshot-gpu-effect-parity` remains its gate.
+  Suite is **307/307** in all four arms, up from 295.
+  Also added `unit.gpu_effect_path`, which asserts on `GpuEffect::GpuPasses()` rather than on
+  pixels: with a GPU up at least one effect must have run as a shader, with the GPU off none may.
+  It reports `gpu_passes=1 cpu_fallbacks=0` on Vulkan and the reverse with the GPU off, so **the
+  timeline path does hand effects a GPU-capable frame** — which nothing had actually established.
+  **Correction to the 2026-09-22 entry below**: it recorded that Brightness, Exposure, ColorShift
+  and Bars "have no golden scenario at all". They did — `Transitions.cpp` generates one per
+  `TransitionEffect` in a loop, so a grep for the class names finds only the enum. What was true is
+  that the coverage was over opaque pixels and under a 45 dB band.
+  **And one thing is now on the list rather than fixed** — see "Known oddities": the first version
+  of these scenarios, built on a PNG's own alpha channel, was not bit-stable across suite context.
 
 - 2026-09-22 — **W19 started: the `GpuEffect` base, the first fragment, and three things that
   constrain the other twelve.** `src/GpuEffect.{h,cpp}` compiles a shared prelude plus the effect's

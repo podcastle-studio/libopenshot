@@ -16,6 +16,8 @@
 #include "gpu/GpuDevice.h"
 #include "gpu/GpuFrame.h"
 
+#include <atomic>
+
 #include <QImage>
 
 #include "skia/include/core/SkBlendMode.h"
@@ -46,8 +48,33 @@ struct GpuEffect::Program
 	bool compiled = false;          ///< tried, so a failure is not retried every frame
 };
 
+namespace
+{
+	// Relaxed: these are for tests and diagnostics, so a torn read across threads
+	// costs nothing worth an ordering guarantee.
+	std::atomic<long long>& gpuPassCounter()
+	{
+		static std::atomic<long long> passes{0};
+		return passes;
+	}
+	std::atomic<long long>& cpuFallbackCounter()
+	{
+		static std::atomic<long long> fallbacks{0};
+		return fallbacks;
+	}
+}
+
 GpuEffect::GpuEffect() = default;
 GpuEffect::~GpuEffect() = default;
+
+long long GpuEffect::GpuPasses() { return gpuPassCounter().load(std::memory_order_relaxed); }
+long long GpuEffect::CpuFallbacks() { return cpuFallbackCounter().load(std::memory_order_relaxed); }
+
+void GpuEffect::ResetCounters()
+{
+	gpuPassCounter().store(0, std::memory_order_relaxed);
+	cpuFallbackCounter().store(0, std::memory_order_relaxed);
+}
 
 const char* GpuEffect::GpuShaderPrelude()
 {
@@ -107,13 +134,21 @@ float4 osPremul(float3 bytes, float alpha_percent, float a_byte) {
 
 bool GpuEffect::ApplyOnGpu(std::shared_ptr<openshot::Frame> frame, int64_t frame_number)
 {
-	if (!frame)
+	// Counted on every path so a test can tell "the shader ran" from "the shader
+	// declined and the CPU twin produced the same pixels", which look identical
+	// from the outside. See GpuPasses().
+	const auto declined = []() -> bool {
+		cpuFallbackCounter().fetch_add(1, std::memory_order_relaxed);
 		return false;
+	};
+
+	if (!frame)
+		return declined();
 
 	// The one question every GPU path in this fork asks, and false is a normal
 	// answer: no GPU, OPENSHOT_GPU=off, or SetBackend(Off) at runtime.
 	if (!GpuDevice::Instance().available())
-		return false;
+		return declined();
 
 	if (!program)
 		program = std::make_shared<Program>();
@@ -136,12 +171,12 @@ bool GpuEffect::ApplyOnGpu(std::shared_ptr<openshot::Frame> frame, int64_t frame
 		program->effect = std::move(effect);
 	}
 	if (!program->effect)
-		return false;
+		return declined();
 
 	const int width = frame->GetWidth();
 	const int height = frame->GetHeight();
 	if (width <= 0 || height <= 0)
-		return false;
+		return declined();
 
 	// The source pixels as a texture. A frame that is already GPU-backed — the
 	// previous effect in the chain, or a text clip — costs nothing here beyond the
@@ -157,28 +192,28 @@ bool GpuEffect::ApplyOnGpu(std::shared_ptr<openshot::Frame> frame, int64_t frame
 	} else {
 		std::shared_ptr<QImage> image = frame->GetImage();
 		if (!image || image->isNull())
-			return false;
+			return declined();
 		// Format_RGBA8888_Premultiplied is byte-for-byte kRGBA_8888 premultiplied,
 		// so this needs no conversion and no channel swap — the same reasoning as
 		// Frame::FlattenGpuFrame in the other direction.
 		if (image->format() != QImage::Format_RGBA8888_Premultiplied)
-			return false;
+			return declined();
 		const SkPixmap pixels(
 			SkImageInfo::Make(image->width(), image->height(), kRGBA_8888_SkColorType,
 							  kPremul_SkAlphaType),
 			image->constBits(), image->bytesPerLine());
 		staging = GpuFrame::Create(image->width(), image->height(), kRGBA_8888_SkColorType);
 		if (!staging || !staging->upload(pixels))
-			return false;
+			return declined();
 		source = staging->snapshot();
 	}
 	if (!source)
-		return false;
+		return declined();
 
 	std::shared_ptr<GpuFrame> destination =
 		GpuFrame::Create(width, height, kRGBA_8888_SkColorType);
 	if (!destination)
-		return false;
+		return declined();
 
 	SkRuntimeEffectBuilder builder(program->effect);
 
@@ -190,11 +225,11 @@ bool GpuEffect::ApplyOnGpu(std::shared_ptr<openshot::Frame> frame, int64_t frame
 	builder.child("osSrc") = source->makeShader(SkTileMode::kClamp, SkTileMode::kClamp,
 												SkSamplingOptions());
 	if (!SetGpuUniforms(builder, frame_number, width, height))
-		return false;
+		return declined();
 
 	sk_sp<SkShader> shader = builder.makeShader();
 	if (!shader)
-		return false;
+		return declined();
 
 	SkPaint paint;
 	paint.setShader(std::move(shader));
@@ -203,11 +238,12 @@ bool GpuEffect::ApplyOnGpu(std::shared_ptr<openshot::Frame> frame, int64_t frame
 	paint.setBlendMode(SkBlendMode::kSrc);
 	SkCanvas* canvas = destination->canvas();
 	if (!canvas)
-		return false;
+		return declined();
 	canvas->drawRect(SkRect::MakeIWH(width, height), paint);
 
 	// The result becomes the frame's pixels without a readback: GetImage() will do
 	// that once, whenever the first unported path asks.
 	frame->AttachGpuFrame(std::move(destination));
+	gpuPassCounter().fetch_add(1, std::memory_order_relaxed);
 	return true;
 }

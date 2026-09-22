@@ -4,10 +4,14 @@
 
 #include "Timeline.h"
 #include "effects/Alpha.h"
+#include "effects/Bars.h"
+#include "effects/Brightness.h"
 #include "effects/ChromaKey.h"
 #include "effects/ColorAdjustment.h"
 #include "effects/ColorMap.h"
+#include "effects/ColorShift.h"
 #include "effects/Enhancement.h"
+#include "effects/Exposure.h"
 #include "effects/LightAdjustment.h"
 
 using namespace golden;
@@ -28,6 +32,37 @@ openshot::Clip* baseScene(Scene& s, const std::string& file = "clip_a_640x360_30
     tl.AddClip(backgroundClip(s, s.media("background_960x540.png")));
     MediaSpec m; m.path = s.media(file); m.end = 3.0; m.speed = speed;
     m.transform = Transform{BBox{0.5f, 0.5f, 0.9f, 0.9f}};
+    auto* c = mediaClip(s, m);
+    tl.AddClip(c);
+    return c;
+}
+
+// A 1:1 clip with UNIFORM partial alpha, for the four effects below.
+//
+// Three properties, each of which one earlier attempt at this scenario got wrong.
+//
+// Partial alpha is the point: every CPU effect unpremultiplies, operates and re-premultiplies,
+// and that round trip is where a fragment and its C++ twin can disagree (GPU-DECISIONS.md, W19).
+// Opaque pixels exercise none of it, which is why transitions.{brightness,exposure,colorshift,bars}
+// -- which drive all four over opaque video -- do not cover this.
+//
+// The clip is 640x360, exactly the golden timeline size, with no transform, so it lands 1:1 and
+// the GPU composite is a translate-only draw that can be bit-exact. baseScene's 0.9x box would
+// make Skia's bilinear resample where QPainter uses its smooth transform, forcing the whole
+// scenario into the wide gpu-composite band and hiding the small differences it exists to catch.
+//
+// And the alpha comes from an Alpha effect rather than from a source PNG's alpha channel, so it
+// is uniform. An earlier version used image_alpha_320x200.png, whose alphas are 0/217/255: scaled
+// to fit, its alpha *boundaries* interpolate, and those boundary pixels turned out to depend on
+// what else had run in the same process -- 1280 of them moved between an isolated run and a full
+// suite run, and between two 4-thread full runs. Only brightness and colorshift showed it,
+// because the unpremultiply amplifies a 1 LSB alpha difference at low alpha and the other two
+// effects do not. That instability is real and pre-existing; it is written up in STATUS.md rather
+// than papered over with a tolerance here, and these scenarios simply do not depend on it.
+openshot::Clip* uniformAlphaScene(Scene& s) {
+    auto& tl = s.makeTimeline();
+    tl.AddClip(backgroundClip(s, s.media("background_960x540.png")));
+    MediaSpec m; m.path = s.media("clip_a_640x360_30.mp4"); m.end = 3.0;
     auto* c = mediaClip(s, m);
     tl.AddClip(c);
     return c;
@@ -98,6 +133,49 @@ void golden::registerEffectScenarios() {
     add("effects.alpha_effect", {"effects", "exact", "gpu-composite"}, F, [](Scene& s) {
         auto* c = baseScene(s);
         c->AddEffect(new openshot::Alpha(ramp(1.0, 0.15)));
+        s.timeline->Open();
+    });
+
+    // The four effects the service builds only in Transition.cpp, applied to semi-transparent
+    // pixels. They are constructed exactly as addBrightnessEffect / addExposureEffect /
+    // addColorShiftEffect / addBarsEffect construct them -- one keyframe for brightness, so
+    // contrast keeps its 3.0 default, and zero alpha shift for ColorShift -- because measuring a
+    // configuration production never builds is what tests/golden/Recipes.cpp was doing before W09.
+    //
+    // transitions.{brightness,exposure,colorshift,bars} already drive all four, but through a
+    // scaled clip and therefore under the wide gpu-composite band, and over opaque video. These
+    // hold them to the exact class on partial alpha instead.
+    add("effects.brightness_alpha", {"effects", "filters", "alpha", "exact"}, F, [](Scene& s) {
+        auto* c = uniformAlphaScene(s);
+        c->AddEffect(new openshot::Alpha(ramp(1.0, 0.35)));
+        c->AddEffect(new openshot::Brightness(ramp(-0.3, 0.4)));
+        s.timeline->Open();
+    });
+
+    add("effects.exposure_alpha", {"effects", "filters", "alpha", "exact"}, F, [](Scene& s) {
+        auto* c = uniformAlphaScene(s);
+        c->AddEffect(new openshot::Alpha(ramp(1.0, 0.35)));
+        // Exposure clamps to >= 1.0, so a ramp below it is a ramp to the clamp.
+        c->AddEffect(new openshot::Exposure(ramp(1.0, 2.5)));
+        s.timeline->Open();
+    });
+
+    add("effects.colorshift_alpha", {"effects", "filters", "alpha", "exact"}, F, [](Scene& s) {
+        auto* c = uniformAlphaScene(s);
+        c->AddEffect(new openshot::Alpha(ramp(1.0, 0.35)));
+        c->AddEffect(new openshot::ColorShift(ramp(0, 0.04), ramp(0, -0.02),
+                                              ramp(0, -0.03), ramp(0, 0.03),
+                                              ramp(0, 0.02), ramp(0, 0.05),
+                                              0, 0));
+        s.timeline->Open();
+    });
+
+    add("effects.bars_alpha", {"effects", "filters", "alpha", "exact"}, F, [](Scene& s) {
+        auto* c = uniformAlphaScene(s);
+        c->AddEffect(new openshot::Alpha(ramp(1.0, 0.35)));
+        c->AddEffect(new openshot::Bars(openshot::Color("#000000"),
+                                        ramp(0, 0.2), ramp(0, 0.15),
+                                        ramp(0, 0.1), ramp(0, 0.25)));
         s.timeline->Open();
     });
 
