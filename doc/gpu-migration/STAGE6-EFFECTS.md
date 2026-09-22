@@ -307,9 +307,24 @@ grain**, the one pass that cannot be ported. Four of six stay on the CPU whateve
 the chain crosses PCIe repeatedly, and **no decision available to this project unblocks it except
 the reference-resolution one.**
 
-The useful part of that measurement: it is still **+14 %, not a loss**. A partly-ported chain does
-not come out slower than pure CPU, so partial porting is safe and the order of the remaining work
-does not matter for correctness.
+**That measurement was read too generously at the time, and `transitions_chain` corrects it.**
+Interleaved on a settled machine, 1080p render: **31.5 fps with the GPU off against 22.4 on Vulkan
+— about 30 % slower**, while using half the CPU (2.3 → 1.1 cores). Its first transition applies
+`{Zoom, Blur, Alpha}` to both clips, which now reads **GPU → readback → CPU → upload → GPU**:
+`Zoom` and `Alpha` are fragments and `Blur`, the one still on the CPU, sits in the middle. Before
+W20 all three were CPU and the frame crossed once.
+
+So: **partial porting is safe for correctness and not for speed.** Every arm of the sweep is green
+and an effect that declines just runs its C++ twin — but a CPU effect *between* two GPU effects
+costs a readback and an upload, ~5 ms each way at 1080p. The order of the remaining work therefore
+does matter, in one specific way: an unported effect in the middle of a common chain is much worse
+than one at the end. `Blur` is the worst case of that — it is blocked, and it is in the middle of
+the most common transition. **A second, independent reason to settle the reference-resolution
+decision.**
+
+The CPU path is untouched and measures what it always did, and `OPENSHOT_GPU` is a per-deployment
+switch, so nothing about the standing constraint is at risk. But a GPU deployment running
+transitions is currently worse off than a CPU one.
 
 **The per-effect `≤ 0.2 ms at 1080p` clause also needs restating.** A *do-nothing passthrough*
 fragment measures 0.19–0.21 ms in the same harness on mains, because a pass copies the source
@@ -320,7 +335,11 @@ one. Fixing this means not giving every effect its own pass — a zero-copy sour
 `SkSurfaces::AsImage` consumes the surface, so it cannot simply ping-pong through the pool) or
 composing a chain into one draw. **Its own item, not a fragment's problem.**
 
-**And W21's timing clause has nothing to measure.** It reads "a transition frame costs no more than
+**W21's timing clause is now entangled with the above.** Re-measured after six transition effects
+became fragments, `transitions_chain` regressed on the GPU for the reason just given — which is
+W20's fragmentation, not W21's doing. W21 itself measured neutral in a clean A/B.
+
+**And W21's timing clause still has nothing to measure.** It reads "a transition frame costs no more than
 a plain two-clip frame ±10 %", and there is no plain-two-clip scenario to compare against. Measured
 against itself instead — both libraries built up front and swapped in place so the arms interleave
 — `transitions_chain` is 17.0 fps without W21 and 16.8 with, with CPU occupancy 2.2 → 1.9 cores and

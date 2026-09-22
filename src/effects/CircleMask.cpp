@@ -20,6 +20,8 @@
 #include "skia/include/core/SkSamplingOptions.h"
 #include "skia/include/core/SkShader.h"
 #include "skia/include/core/SkTileMode.h"
+#include "EffectShaders.h"
+
 #include "skia/include/effects/SkRuntimeEffect.h"
 
 #include <opencv2/imgproc.hpp>
@@ -92,33 +94,12 @@ struct CircleMask::CoverageCache
 	std::shared_ptr<GpuFrame> owner;   // keeps the pooled surface alive alongside its snapshot
 };
 
-// The SkSL twin of applyCircleMaskEffect -- of its per-pixel half only.
-//
-// **OpenCV rasterises the circle and the GPU never does.** cv::circle with LINE_AA does not draw a
-// circle at all: it fills a polygon approximation with OpenCV's own scanline coverage, at 1/8-pixel
-// precision via the shift argument. An analytic disc in SkSL would be a *better* circle and a worse
-// port -- the edge ring is where the whole effect lives, and a different rasteriser there is a
-// visible difference on every frame, not a rounding one.
-//
-// So the mask is built by the same OpenCV call as before, cached (it depends only on the radius and
-// the frame size, and a still radius is the common case), and uploaded as a texture. Exactly the
-// arrangement Mask uses for its matte and LightAdjustment for its tone curve: the CPU keeps
-// ownership of anything a rasteriser decides, and the fragment does the arithmetic.
+// The shared SkSL source lives in image-processing-lib/shaders/ so the editor loads the
+// same bytes through CanvasKit; it is embedded here at build time. Read it there --
+// including why it is written the way it is.
 const char* CircleMask::GpuShaderSource() const
 {
-	return R"SKSL(
-uniform shader coverage;   // 8-bit, frame-sized, 255 inside / 0 outside / partial on the edge
-
-float4 main(float2 p) {
-	float4 bytes = osBytes(p);
-	float c = floor(float4(coverage.eval(p)).r * 255.0 + 0.5);
-	// (channel * coverage + 127) / 255, integer division, on every channel including alpha
-	// because the frame is premultiplied -- scaling alpha alone leaves a bright fringe.
-	float4 n = bytes * c + 127.0;
-	return float4(osIDiv(n.r, 255.0), osIDiv(n.g, 255.0),
-				  osIDiv(n.b, 255.0), osIDiv(n.a, 255.0)) / 255.0;
-}
-)SKSL";
+	return openshot::shaders::kCircleMask;
 }
 
 bool CircleMask::SetGpuUniforms(SkRuntimeEffectBuilder& builder, int64_t frame_number,

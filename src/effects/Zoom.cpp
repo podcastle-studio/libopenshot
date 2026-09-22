@@ -1,6 +1,8 @@
 #include "Zoom.h"
 
 #include "skia/include/core/SkM44.h"
+#include "EffectShaders.h"
+
 #include "skia/include/effects/SkRuntimeEffect.h"
 
 #include <algorithm>
@@ -60,44 +62,12 @@ std::shared_ptr<openshot::Frame> Zoom::GetFrame(std::shared_ptr<openshot::Frame>
 	return frame;
 }
 
-// The SkSL twin of applyZoomEffect, zoom-IN only.
-//
-// **Zoom-out is deliberately not here.** That branch downscales with cv::resize and then pads back
-// out with copyMakeBorder, and both the resized size and the four paddings are computed with
-// independent roundings and then clamped to >= 0 -- so the result is not reliably the frame's own
-// size, and the C++ assigns it back with `image = result`, changing the frame's dimensions.
-// ApplyOnGpu draws into a surface of a fixed size and has no way to express that. SetGpuUniforms
-// declines, and the OpenCV path runs.
-//
-// The zoom-in branch is a crop to an integer rectangle followed by cv::resize back to full size.
-// cv::resize's INTER_LINEAR maps dst to src as (dst + 0.5) * scale - 0.5 and clamps at the edges,
-// which is what this reproduces; its weights are 11-bit fixed point where this is float, so the
-// two agree closely rather than exactly.
+// The shared SkSL source lives in image-processing-lib/shaders/ so the editor loads the
+// same bytes through CanvasKit; it is embedded here at build time. Read it there --
+// including why it is written the way it is.
 const char* Zoom::GpuShaderSource() const
 {
-	return R"SKSL(
-uniform float2 size;      // the frame
-uniform float2 cropOrigin; // the ROI's top-left, in pixels
-uniform float2 cropSize;   // the ROI's size, in pixels
-
-float4 main(float2 p) {
-	float2 q = floor(p);
-	// cv::resize's coordinate convention, then offset into the crop rectangle.
-	float2 scale = cropSize / size;
-	float2 src = (q + 0.5) * scale - 0.5 + cropOrigin;
-
-	// Bilinear, clamped to the crop rectangle -- cv::resize replicates its edge pixels.
-	float2 lo = cropOrigin;
-	float2 hi = cropOrigin + cropSize - 1.0;
-	float2 base = floor(src);
-	float2 f = src - base;
-	float4 c00 = osBytes(clamp(base + float2(0.0, 0.0), lo, hi) + 0.5);
-	float4 c10 = osBytes(clamp(base + float2(1.0, 0.0), lo, hi) + 0.5);
-	float4 c01 = osBytes(clamp(base + float2(0.0, 1.0), lo, hi) + 0.5);
-	float4 c11 = osBytes(clamp(base + float2(1.0, 1.0), lo, hi) + 0.5);
-	return mix(mix(c00, c10, f.x), mix(c01, c11, f.x), f.y) / 255.0;
-}
-)SKSL";
+	return openshot::shaders::kZoom;
 }
 
 bool Zoom::SetGpuUniforms(SkRuntimeEffectBuilder& builder, int64_t frame_number,

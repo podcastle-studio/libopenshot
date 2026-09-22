@@ -13,6 +13,8 @@
 #include "ColorShift.h"
 
 #include "skia/include/core/SkM44.h"
+#include "EffectShaders.h"
+
 #include "skia/include/effects/SkRuntimeEffect.h"
 
 #include <cmath>
@@ -102,43 +104,12 @@ std::shared_ptr<openshot::Frame> ColorShift::GetFrame(std::shared_ptr<openshot::
 	return frame;
 }
 
-// The SkSL twin of applyColorShiftEffect. Four independent gathers with wraparound
-// and nothing else -- no arithmetic on the values, so no rounding to reproduce and
-// no unpremultiply. Note that rgb and a can come from four different pixels, so the
-// result is not necessarily valid premultiplied colour; that is what the C++ does,
-// and the fragment copies it rather than clamping.
+// The shared SkSL source lives in image-processing-lib/shaders/ so the editor loads the
+// same bytes through CanvasKit; it is embedded here at build time. Read it there --
+// including why it is written the way it is.
 const char* ColorShift::GpuShaderSource() const
 {
-	return R"SKSL(
-uniform float2 size;       // frame size in pixels
-uniform float2 redOff;     // signed pixel offsets, already resolved on the host
-uniform float2 greenOff;
-uniform float2 blueOff;
-uniform float2 alphaOff;
-
-// (size + pos + limit) % size, which is what the C++ computes, but spelled without
-// a division. GLSL's mod() is x - y*floor(x/y), and a division is the one operation
-// Vulkan does not have to round exactly -- it already costs this port 1 LSB in the
-// shared unpremultiply (GPU-DECISIONS.md, W19), and there is no reason to invite it
-// where plain subtraction is exact. |limit| <= size, so pos + limit + size lands in
-// [0, 3*size) and at most two subtractions bring it back.
-float2 osWrap(float2 v, float2 s) {
-	v = v - s * step(s, v);
-	return v - s * step(s, v);
-}
-
-float4 main(float2 p) {
-	// p is the destination pixel centre; floor() is its integer coordinate, and
-	// adding 0.5 back puts each gather on a texel centre so nothing interpolates.
-	float2 base = floor(p);
-	float4 result;
-	result.r = osBytes(osWrap(base + redOff   + size, size) + 0.5).r;
-	result.g = osBytes(osWrap(base + greenOff + size, size) + 0.5).g;
-	result.b = osBytes(osWrap(base + blueOff  + size, size) + 0.5).b;
-	result.a = osBytes(osWrap(base + alphaOff + size, size) + 0.5).a;
-	return result / 255.0;
-}
-)SKSL";
+	return openshot::shaders::kColorShift;
 }
 
 bool ColorShift::SetGpuUniforms(SkRuntimeEffectBuilder& builder, int64_t frame_number,

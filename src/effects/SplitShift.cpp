@@ -13,6 +13,8 @@
 #include "SplitShift.h"
 
 #include "skia/include/core/SkM44.h"
+#include "EffectShaders.h"
+
 #include "skia/include/effects/SkRuntimeEffect.h"
 
 #include <algorithm>
@@ -71,43 +73,12 @@ std::shared_ptr<openshot::Frame> SplitShift::GetFrame(std::shared_ptr<openshot::
 	return frame;
 }
 
-// The SkSL twin of applySplitShiftEffect.
-//
-// The effect splits the frame in two and slides the halves in opposite directions, leaving
-// transparent black where neither half lands. It is two integer rectangle blits in the C++, so it
-// is exactly reproducible -- nothing resamples and nothing is interpolated.
-//
-// One thing that looks load-bearing and is not: the C++ passes the source as its own mask to
-// copyTo, which copies each channel only where that channel is non-zero. Because the destination
-// starts as zeros, "copy v where v != 0, else leave 0" is just "copy v", so the mask is a no-op
-// and the fragment does not reproduce it.
+// The shared SkSL source lives in image-processing-lib/shaders/ so the editor loads the
+// same bytes through CanvasKit; it is embedded here at build time. Read it there --
+// including why it is written the way it is.
 const char* SplitShift::GpuShaderSource() const
 {
-	return R"SKSL(
-uniform float splitAt;     // the split coordinate, in pixels, along the axis being split
-uniform float shift;       // signed, in whole pixels, along the axis being moved
-uniform float span;        // how many pixels each half actually covers -- see the host side
-uniform float horizontal;  // 1 when the split runs along y and the shift along x
-
-float4 main(float2 p) {
-	float2 q = floor(p);
-	// Which side of the split this pixel is on, and therefore which way it pulls from.
-	float along = horizontal > 0.0 ? q.y : q.x;
-	float moved = horizontal > 0.0 ? q.x : q.y;
-	bool  first = along < splitAt;
-
-	// Each half covers `span` pixels starting here. The two starts differ by the shift, and
-	// which one starts at zero depends on the sign -- that is the C++'s two rectangle layouts
-	// expressed once.
-	float start = first ? max(0.0, -shift) : max(0.0, shift);
-	if (moved < start || moved >= start + span)
-		return float4(0.0);   // neither half reaches here
-
-	float source = first ? moved + shift : moved - shift;
-	float2 from = horizontal > 0.0 ? float2(source, q.y) : float2(q.x, source);
-	return osBytes(from + 0.5) / 255.0;
-}
-)SKSL";
+	return openshot::shaders::kSplitShift;
 }
 
 bool SplitShift::SetGpuUniforms(SkRuntimeEffectBuilder& builder, int64_t frame_number,

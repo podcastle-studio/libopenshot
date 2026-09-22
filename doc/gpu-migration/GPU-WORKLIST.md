@@ -1015,10 +1015,16 @@ is that it is still **+14 %**, not a loss: a partly-ported chain is safe.
       reproducible window at 1080p is a blur of at most 6° where transitions use 25.
 - [ ] **Blocked on the reference-resolution decision:** box/horizontal-vertical blur, diagonal blur,
       zoom blur.
-- [ ] `ColorShift` — **already done under W19**; `ColorShift` calls the submodule's
+- [x] `ColorShift` — **already done under W19**; `ColorShift` calls the submodule's
       `applyColorShiftEffect`, so there is no separate port here.
-- [ ] Keep the sources in `image-processing-lib/shaders/` so CanvasKit can load the same code.
-- [ ] The C++ stays as the oracle.
+- [x] **The sources live in `image-processing-lib/shaders/`** — one `.sksl` per effect plus
+      `_prelude.sksl`, with a README setting out what a host must bind. The editor loads them
+      directly through CanvasKit; libopenshot embeds the same bytes at build time
+      (`cmake/scripts/embed_shaders.cmake` → `EffectShaders.h`) so the export has no runtime
+      data-path dependency and the two cannot drift. Verified behaviour-neutral: parity 346/416 and
+      the four-way sweep 307/307, both unchanged by the move.
+- [x] The C++ stays as the oracle. It is what `openshot-gpu-effect-parity` measures every fragment
+      against, and what runs whenever `GpuDevice::available()` is false.
 
 **Gate.** PSNR ≥ 45 dB against the OpenCV version at three parameter values each;
 `transitions_chain` render ≥ **70 fps** (27.4).

@@ -776,6 +776,31 @@ production corpus) remain open; W05–W10 are the CPU quick wins. W01/W02 stay d
 
 ## Log
 
+- 2026-09-22 — **The shared shaders are shared for real; and a partly-ported chain is not free.**
+  Two things, one good and one that corrects an earlier conclusion.
+  **The fragments now live in `image-processing-lib/shaders/`** — one `.sksl` per effect plus
+  `_prelude.sksl` and a README of the host contract. Until now they were C++ string literals inside
+  libopenshot, which made the "one source, both sides" decision true in intent and false in fact:
+  the editor could not load any of them. libopenshot embeds the same bytes at build time
+  (`cmake/scripts/embed_shaders.cmake` → `EffectShaders.h`) rather than reading them at runtime, so
+  there is one copy and no data-path dependency. Verified behaviour-neutral — parity **346/416** and
+  the sweep **307/307**, both identical to the run before the move.
+  **`transitions_chain` is ~30 % SLOWER on the GPU than off it** — 31.5 fps against 22.4, three
+  interleaved pairs on a settled machine, with CPU occupancy halved (2.3 → 1.1 cores). The work did
+  move to the GPU and the wall clock got worse anyway. Its first transition applies
+  `{Zoom, Blur, Alpha}` to both clips, which now reads **GPU → readback → CPU → upload → GPU**:
+  `Zoom` and `Alpha` are fragments and `Blur` — the one still on the CPU — sits in the middle.
+  **This corrects what was concluded from `heavy_effects` earlier the same day** ("a partly-ported
+  chain does not come out slower, so the order of the remaining work does not matter"). Correctness
+  is unaffected, and an effect that declines simply runs its C++ twin; but a CPU effect *between*
+  two GPU effects costs a readback and an upload, ~5 ms each way at 1080p, so **the order does
+  matter**: an unported effect in the middle of a common chain is far worse than one at the end.
+  `Blur` is the worst case — blocked, and in the middle of the most common transition. That is a
+  second and independent reason to settle the reference-resolution decision.
+  Nothing is reverted: the CPU path is untouched at 31.5 fps and `OPENSHOT_GPU` is a per-deployment
+  switch. But a GPU deployment running transitions is currently worse off than a CPU one, and that
+  should be known rather than discovered.
+
 - 2026-09-22 — **W20: CircleMask in; rotational blur turns out to be blocked, not open.** Six of ten
   transition variants are done and **nothing is open any more** — the remaining four are all blocked
   on the same reference-resolution decision. Parity **346 of 416 comparisons bit-exact**, four-way

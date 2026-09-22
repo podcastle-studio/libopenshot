@@ -1,5 +1,7 @@
 #include "Wipe.h"
 
+#include "EffectShaders.h"
+
 #include "skia/include/effects/SkRuntimeEffect.h"
 
 #include <algorithm>
@@ -63,39 +65,12 @@ std::shared_ptr<openshot::Frame> Wipe::GetFrame(std::shared_ptr<openshot::Frame>
 	return frame;
 }
 
-// The SkSL twin of applyThresholdWipeMaskEffect.
-//
-// The luminance is OpenCV's, and OpenCV's is fixed-point: cv::cvtColor(COLOR_BGRA2GRAY) on 8-bit
-// is (B*1868 + G*9617 + R*4899 + 8192) >> 14, not a float dot product. Same formula W21's
-// displacement map needed, and it is exact.
-//
-// Note what the threshold does NOT do: a value between the two thresholds keeps its grey, it is
-// not remapped. Only below-low becomes 0 and above-high becomes 255, so the mask is a soft ramp
-// with two hard ends.
+// The shared SkSL source lives in image-processing-lib/shaders/ so the editor loads the
+// same bytes through CanvasKit; it is embedded here at build time. Read it there --
+// including why it is written the way it is.
 const char* Wipe::GpuShaderSource() const
 {
-	return R"SKSL(
-uniform float lowThreshold;
-uniform float highThreshold;
-
-float4 main(float2 p) {
-	float4 bytes = osBytes(p);
-	// >> 14, and the C++'s shift is exact, so the shader's divide has to be too -- without
-	// osIDiv this lands one below on the quotients that are exact integers, and a grey that
-	// crosses a threshold by one turns into a visible step. Measured: max 76 on opaque_ramp.
-	float grey = osIDiv(bytes.b * 1868.0 + bytes.g * 9617.0 + bytes.r * 4899.0 + 8192.0, 16384.0);
-
-	if (grey < lowThreshold)       grey = 0.0;
-	else if (grey > highThreshold) grey = 255.0;
-
-	// Every channel scales by the coverage, because the frame is premultiplied -- scaling alpha
-	// alone would leave a bright fringe on the edge. (c * inv + 127) / 255 is integer division.
-	float inv = 255.0 - grey;
-	float4 n = bytes * inv + 127.0;
-	return float4(osIDiv(n.r, 255.0), osIDiv(n.g, 255.0),
-				  osIDiv(n.b, 255.0), osIDiv(n.a, 255.0)) / 255.0;
-}
-)SKSL";
+	return openshot::shaders::kThresholdWipeMask;
 }
 
 bool Wipe::SetGpuUniforms(SkRuntimeEffectBuilder& builder, int64_t frame_number,

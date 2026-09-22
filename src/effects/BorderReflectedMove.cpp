@@ -1,6 +1,8 @@
 #include "BorderReflectedMove.h"
 
 #include "skia/include/core/SkM44.h"
+#include "EffectShaders.h"
+
 #include "skia/include/effects/SkRuntimeEffect.h"
 #include "Exceptions.h"
 #include "./image-processing-lib/src/Effects/effects.h"
@@ -57,26 +59,12 @@ std::shared_ptr<openshot::Frame> BorderReflectedMove::GetFrame(std::shared_ptr<o
 	return frame;
 }
 
-// The SkSL twin of applyBorderReflectedMoveEffect.
-//
-// The C++ builds a reflected border, warps the bordered image by the shift, then crops back to the
-// original size. Composed, all of that is one thing: **dst(x, y) = src_reflected(x - shiftX,
-// y - shiftY)**, sampled bilinearly. The border exists only so warpAffine has valid pixels to read;
-// it is not visible in the result, so the fragment reproduces the function and not the machinery.
-//
-// The sampling is OpenCV's INTER_LINEAR, which uses 5-bit fixed-point weights where this uses
-// float, so the two agree to about an LSB rather than exactly -- W20's gate is 45 dB for exactly
-// this reason.
+// The shared SkSL source lives in image-processing-lib/shaders/ so the editor loads the
+// same bytes through CanvasKit; it is embedded here at build time. Read it there --
+// including why it is written the way it is.
 const char* BorderReflectedMove::GpuShaderSource() const
 {
-	return R"SKSL(
-uniform float2 size;
-uniform float2 shift;   // in pixels; positive moves the content in +x / +y
-
-float4 main(float2 p) {
-	return osSampleReflectedLinear(p - shift, size) / 255.0;
-}
-)SKSL";
+	return openshot::shaders::kBorderReflectedMove;
 }
 
 bool BorderReflectedMove::SetGpuUniforms(SkRuntimeEffectBuilder& builder, int64_t frame_number,

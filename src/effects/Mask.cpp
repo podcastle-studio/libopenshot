@@ -20,6 +20,8 @@
 #include "skia/include/core/SkSamplingOptions.h"
 #include "skia/include/core/SkShader.h"
 #include "skia/include/core/SkTileMode.h"
+#include "EffectShaders.h"
+
 #include "skia/include/effects/SkRuntimeEffect.h"
 
 #include <cmath>
@@ -206,51 +208,12 @@ struct Mask::MaskTextureCache
 	std::shared_ptr<GpuFrame> owner;   // keeps the pooled surface alive alongside its snapshot
 };
 
-// The SkSL twin of the mask's grey-to-alpha arithmetic.
-//
-// Only the arithmetic. Building the mask -- scaling a reader's frame with Qt::SmoothTransformation,
-// or painting an antialiased rounded rectangle -- stays on the CPU and is handed to the fragment as
-// a texture. That is not a compromise: the mask is cached across frames and is usually still, so
-// the expensive part happens once either way, and it keeps Qt's rasteriser as the single source of
-// the mask's edges rather than introducing a second one that would not agree with it.
+// The shared SkSL source lives in image-processing-lib/shaders/ so the editor loads the
+// same bytes through CanvasKit; it is embedded here at build time. Read it there --
+// including why it is written the way it is.
 const char* Mask::GpuShaderSource() const
 {
-	return R"SKSL(
-uniform shader maskImage;      // the prepared mask, same size as the frame, 1:1
-uniform float  brightnessShift; // 255 * brightness
-uniform float  contrastFactor;  // 20 / max(0.00001, 20 - contrast)
-uniform float  invertMask;      // 1 or 0
-uniform float  replaceImage;    // 1 or 0
-
-float4 main(float2 p) {
-	float4 bytes = osBytes(p);
-	float4 m = floor(float4(maskImage.eval(p)) * 255.0 + 0.5);
-
-	// qGray: (r*11 + g*16 + b*5) / 32, integer division.
-	float grey = floor((m.r * 11.0 + m.g * 16.0 + m.b * 5.0) / 32.0);
-
-	// Both of these assign a floating-point expression back to an int in the C++, so both
-	// truncate rather than round, and brightness can push the value negative on the way.
-	grey = osToInt1(grey + brightnessShift);
-	grey = osToInt1(contrastFactor * (grey - 128.0) + 128.0);
-
-	if (invertMask > 0.0)
-		grey = 255.0 - grey;
-
-	// constrain(A - grey) / 255, where constrain clamps to a byte.
-	float alpha_percent = osConstrain1(m.a - grey) / 255.0;
-
-	if (replaceImage > 0.0) {
-		// constrain(255 * alpha_percent) into all four channels -- the debug view of the mask.
-		float v = osConstrain1(osToInt1(255.0 * alpha_percent));
-		return float4(v, v, v, v) / 255.0;
-	}
-
-	// Multiply through every channel, alpha included, because the data is premultiplied. The
-	// truncation is `unsigned char *= float`.
-	return floor(bytes * alpha_percent) / 255.0;
-}
-)SKSL";
+	return openshot::shaders::kMask;
 }
 
 bool Mask::SetGpuUniforms(SkRuntimeEffectBuilder& builder, int64_t frame_number,

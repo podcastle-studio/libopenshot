@@ -13,6 +13,8 @@
 #include "Bars.h"
 
 #include "skia/include/core/SkM44.h"
+#include "EffectShaders.h"
+
 #include "skia/include/effects/SkRuntimeEffect.h"
 #include "Exceptions.h"
 #include "./image-processing-lib/src/Effects/effects.h"
@@ -80,28 +82,12 @@ std::shared_ptr<openshot::Frame> Bars::GetFrame(std::shared_ptr<openshot::Frame>
 	return frame;
 }
 
-// The SkSL twin of applyBarsEffect. Opaque black over four edge bands.
-//
-// Black is hardcoded, exactly as the C++ hardcodes it: Bars carries a `color`
-// member and a constructor that takes one, and applyBarsEffect ignores it and
-// writes zeroes. The fragment reproduces the behaviour, not the parameter.
+// The shared SkSL source lives in image-processing-lib/shaders/ so the editor loads the
+// same bytes through CanvasKit; it is embedded here at build time. Read it there --
+// including why it is written the way it is.
 const char* Bars::GpuShaderSource() const
 {
-	return R"SKSL(
-uniform float2 size;   // frame size in pixels
-uniform float4 bars;   // left, top, right, bottom, in whole pixels
-
-float4 main(float2 p) {
-	float2 q = floor(p);
-	// The C++ paints a full row for a top or bottom bar and only then the left and
-	// right columns on the remaining rows; the union is the same set of pixels, so
-	// this is one test rather than a nest. Each bound is exclusive at the far edge
-	// because the loops run col < left and col from width - right.
-	bool bar = q.y < bars.y || q.y >= size.y - bars.w ||
-			   q.x < bars.x || q.x >= size.x - bars.z;
-	return bar ? float4(0.0, 0.0, 0.0, 1.0) : osBytes(p) / 255.0;
-}
-)SKSL";
+	return openshot::shaders::kBars;
 }
 
 bool Bars::SetGpuUniforms(SkRuntimeEffectBuilder& builder, int64_t frame_number,

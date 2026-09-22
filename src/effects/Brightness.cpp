@@ -13,6 +13,8 @@
 #include "Brightness.h"
 #include "Exceptions.h"
 
+#include "EffectShaders.h"
+
 #include "skia/include/effects/SkRuntimeEffect.h"
 #include "./image-processing-lib/src/Effects/effects.h"
 
@@ -66,24 +68,12 @@ namespace {
 	}
 }
 
-// The SkSL twin of Podcastle::Effects::applyBrightnessEffect. Same arithmetic in
-// the same order, through the prelude's helpers so the byte truncation matches:
-// unpremultiply, contrast about mid-grey, brightness shift, premultiply back.
+// The shared SkSL source lives in image-processing-lib/shaders/ so the editor loads the
+// same bytes through CanvasKit; it is embedded here at build time. Read it there --
+// including why it is written the way it is.
 const char* Brightness::GpuShaderSource() const
 {
-	return R"SKSL(
-uniform float factor;   // (259 * (contrast + 255)) / (255 * (259 - contrast))
-uniform float shift;    // 255 * brightness
-
-float4 main(float2 p) {
-	float4 bytes = osBytes(p);
-	float alpha_percent = osAlphaPercent(bytes.a);
-	float3 c = osUnpremul(bytes.rgb, alpha_percent);
-	c = osConstrain3(osToInt3(factor * (c - 128.0) + 128.0));
-	c = osConstrain3(osToInt3(c + shift));
-	return osPremul(c, alpha_percent, bytes.a);
-}
-)SKSL";
+	return openshot::shaders::kBrightness;
 }
 
 bool Brightness::SetGpuUniforms(SkRuntimeEffectBuilder& builder, int64_t frame_number,

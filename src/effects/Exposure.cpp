@@ -1,5 +1,7 @@
 #include "Exposure.h"
 
+#include "EffectShaders.h"
+
 #include "skia/include/effects/SkRuntimeEffect.h"
 
 #include <algorithm>
@@ -81,20 +83,12 @@ std::shared_ptr<openshot::Frame> Exposure::GetFrame(std::shared_ptr<openshot::Fr
 	return frame;
 }
 
-// The SkSL twin of applyExposureEffect: unpremultiply, scale, clamp, premultiply.
+// The shared SkSL source lives in image-processing-lib/shaders/ so the editor loads the
+// same bytes through CanvasKit; it is embedded here at build time. Read it there --
+// including why it is written the way it is.
 const char* Exposure::GpuShaderSource() const
 {
-	return R"SKSL(
-uniform float exposure;   // >= 1.0, clamped on the host as GetFrame clamps it
-
-float4 main(float2 p) {
-	float4 bytes = osBytes(p);
-	float alpha_percent = osAlphaPercent(bytes.a);
-	float3 c = osUnpremul(bytes.rgb, alpha_percent);
-	c = osConstrain3(osToInt3(c * exposure));
-	return osPremul(c, alpha_percent, bytes.a);
-}
-)SKSL";
+	return openshot::shaders::kExposure;
 }
 
 bool Exposure::SetGpuUniforms(SkRuntimeEffectBuilder& builder, int64_t frame_number,

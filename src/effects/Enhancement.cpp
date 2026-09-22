@@ -12,6 +12,8 @@
 #include "Enhancement.h"
 
 #include "skia/include/core/SkM44.h"
+#include "EffectShaders.h"
+
 #include "skia/include/effects/SkRuntimeEffect.h"
 #include "Exceptions.h"
 
@@ -355,71 +357,12 @@ Enhancement::GetFrame(std::shared_ptr<openshot::Frame> frame, int64_t frame_numb
 
 /* ---------- GPU ---------- */
 
-// The SkSL twin of the clarity and sharpness passes.
-//
-// **The grain pass is deliberately absent.** applyNoisePass is built on the classic GLSL hash
-// fract(sin(x * 12.9898 + y * 78.233) * 43758.5453). At 1080p the argument to sin() reaches ~85,000,
-// where the result depends entirely on how many bits the implementation carries: the C++ evaluates
-// it in double, an SkSL fragment in float. The two do not differ by an LSB, they differ by an
-// arbitrary amount in [0, 1), which the pass then scales to as much as ~140 LSB of grain. There is
-// no way to make them agree short of changing the CPU's hash, so a frame that asks for grain runs
-// entirely on the CPU -- SetGpuUniforms never sees it, because GetFrame checks first.
-//
-// Two details of the C++ that are easy to miss and are reproduced here: both passes SKIP the
-// one-pixel border (their loops run 1..h-2 and 1..w-2), leaving it exactly as it was; and both
-// work in 0..1 from the premultiplied bytes without unpremultiplying, then round rather than
-// truncate on the way back out (clamp255 uses std::round).
+// The shared SkSL source lives in image-processing-lib/shaders/ so the editor loads the
+// same bytes through CanvasKit; it is embedded here at build time. Read it there --
+// including why it is written the way it is.
 const char* Enhancement::GpuShaderSource() const
 {
-	return R"SKSL(
-uniform float2 size;   // frame size in pixels
-uniform float  mode;   // 0 clarity, 1 sharpen, 2 blur-mix
-uniform float  k;      // strength * 3 for clarity and sharpen; the mix amount for blur
-
-// The C++ accumulates each neighbour already divided by 255, so the division happens nine times
-// and not once at the end. That is not the same sum in floating point, and this is a parity
-// fragment, so it accumulates the same way.
-float3 osBlur3x3(float2 p) {
-	float3 sum = float3(0.0);
-	for (int dy = -1; dy <= 1; ++dy)
-		for (int dx = -1; dx <= 1; ++dx)
-			sum += osBytes(p + float2(float(dx), float(dy))).rgb / 255.0;
-	return sum / 9.0;
-}
-
-float4 main(float2 p) {
-	float4 bytes = osBytes(p);
-	float2 q = floor(p);
-	// The border the C++ never writes.
-	if (q.x < 1.0 || q.y < 1.0 || q.x >= size.x - 1.0 || q.y >= size.y - 1.0)
-		return bytes / 255.0;
-
-	float3 base = bytes.rgb / 255.0;
-	float3 c;
-
-	if (mode < 0.5) {
-		// Clarity: unsharp mask against a 3x3 box blur.
-		c = base + (base - osBlur3x3(p)) * k;
-	} else if (mode < 1.5) {
-		// Sharpen: a 4-neighbour Laplacian at half scale, as highPass4 computes it.
-		float3 l = osBytes(p + float2(-1.0,  0.0)).rgb / 255.0;
-		float3 r = osBytes(p + float2( 1.0,  0.0)).rgb / 255.0;
-		float3 t = osBytes(p + float2( 0.0, -1.0)).rgb / 255.0;
-		float3 b = osBytes(p + float2( 0.0,  1.0)).rgb / 255.0;
-		float3 edge = (base * 4.0 - (l + r + t + b)) * 0.5;
-		c = base + edge * k;
-	} else {
-		// Negative sharpness: mix toward the blur. No clamp here, matching the C++, which
-		// clamps only in the two branches above -- the mix cannot leave 0..1 anyway.
-		c = base * (1.0 - k) + osBlur3x3(p) * k;
-		return float4(clamp(floor(c * 255.0 + 0.5), 0.0, 255.0), bytes.a) / 255.0;
-	}
-
-	c = clamp(c, 0.0, 1.0);
-	// clamp255 rounds; it does not truncate like the other effects' constrain().
-	return float4(clamp(floor(c * 255.0 + 0.5), 0.0, 255.0), bytes.a) / 255.0;
-}
-)SKSL";
+	return openshot::shaders::kEnhancement;
 }
 
 bool Enhancement::SetGpuUniforms(SkRuntimeEffectBuilder& builder, int64_t frame_number,

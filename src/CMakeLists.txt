@@ -595,6 +595,29 @@ endif()
 ### Babl
 ###
 
+################## SHARED EFFECT SHADERS ###################
+# The .sksl sources in the image-processing-lib submodule are shared verbatim with the web front
+# end, which loads them through CanvasKit. Embedding them here keeps one source of truth without
+# giving the export a runtime data-path dependency. See that directory's README.
+set(OPENSHOT_SHADER_DIR "${CMAKE_CURRENT_SOURCE_DIR}/effects/image-processing-lib/shaders")
+set(OPENSHOT_SHADER_HEADER "${CMAKE_CURRENT_BINARY_DIR}/EffectShaders.h")
+file(GLOB OPENSHOT_SHADER_SOURCES "${OPENSHOT_SHADER_DIR}/*.sksl")
+
+add_custom_command(
+  OUTPUT "${OPENSHOT_SHADER_HEADER}"
+  COMMAND ${CMAKE_COMMAND}
+          -DSHADER_DIR=${OPENSHOT_SHADER_DIR}
+          -DOUTPUT=${OPENSHOT_SHADER_HEADER}
+          -P ${PROJECT_SOURCE_DIR}/cmake/scripts/embed_shaders.cmake
+  DEPENDS ${OPENSHOT_SHADER_SOURCES} ${PROJECT_SOURCE_DIR}/cmake/scripts/embed_shaders.cmake
+  COMMENT "Embedding shared effect shaders"
+  VERBATIM)
+add_custom_target(openshot_shaders DEPENDS "${OPENSHOT_SHADER_HEADER}")
+add_dependencies(openshot openshot_shaders)
+# CMAKE_CURRENT_BINARY_DIR is already on openshot's include path (OpenShotVersion.h lives there),
+# so the generated header is reachable as "EffectShaders.h".
+target_sources(openshot PRIVATE "${OPENSHOT_SHADER_HEADER}")
+
 # Find babl library for colourspace conversion (used for advanced chroma keying
 find_package(babl)
 

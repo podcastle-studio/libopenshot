@@ -1,6 +1,8 @@
 #include "Alpha.h"
 #include "Exceptions.h"
 
+#include "EffectShaders.h"
+
 #include "skia/include/effects/SkRuntimeEffect.h"
 #include "./image-processing-lib/src/Effects/effects.h"
 
@@ -85,23 +87,12 @@ void Alpha::init_effect_details() {
 	info.has_video = true;
 }
 
-// This method is required for all derived classes of EffectBase, and returns a
-// modified openshot::Frame object
-// The SkSL twin of applyAlphaPremultiplied. The whole effect is one multiply per
-// channel with a cast, and alpha scales with the colour because the data is
-// premultiplied -- so unlike every other fragment here there is no unpremultiply
-// round trip, and nothing for the prelude's alpha helpers to do.
+// The shared SkSL source lives in image-processing-lib/shaders/ so the editor loads the
+// same bytes through CanvasKit; it is embedded here at build time. Read it there --
+// including why it is written the way it is.
 const char* Alpha::GpuShaderSource() const
 {
-	return R"SKSL(
-uniform float k;   // the alpha keyframe, strictly between 0 and 1
-
-float4 main(float2 p) {
-	// floor(), matching static_cast<uint8_t>(px[i] * k). Every channel is
-	// non-negative and k < 1, so the cast cannot wrap.
-	return floor(osBytes(p) * k) / 255.0;
-}
-)SKSL";
+	return openshot::shaders::kAlpha;
 }
 
 bool Alpha::SetGpuUniforms(SkRuntimeEffectBuilder& builder, int64_t frame_number,

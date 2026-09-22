@@ -1165,6 +1165,62 @@ the single-pass window above. It is not a port of the effect as production calls
 **Rotational blur therefore joins the three blur modes as blocked on the reference-resolution
 decision**, and W20's remaining surface is those four and nothing else.
 
+### A partly-ported chain is safe for correctness and NOT safe for speed (2026-09-22, W20)
+
+**This corrects the conclusion drawn from `heavy_effects` earlier the same day.** That measurement
+(+14 % with four of six effects still on the CPU) was read as "a mixed chain does not come out
+slower than pure CPU, so partial porting is safe and the order of the remaining work does not
+matter". The first half is right. The second is wrong, and `transitions_chain` shows it.
+
+Measured interleaved on a settled machine, 1080p render, 150 frames, three pairs:
+
+| arm | fps | cores | peak RSS |
+|---|---:|---:|---:|
+| `OPENSHOT_GPU=off` | 31.5, 31.5, 32.2 | 2.3 | 1.12 GB |
+| `OPENSHOT_GPU=vulkan` | 22.0, 22.4, 22.4 | 1.1 | 0.92 GB |
+
+**The GPU path is ~30 % slower**, consistently, while using half the CPU. The work did move to the
+GPU; the wall clock got worse anyway.
+
+The cause is in the scenario and is not subtle. Its first transition applies
+`{Zoom, Blur, Alpha}` to **both** clips, and after this session that reads **GPU → readback → CPU →
+upload → GPU**: `Zoom` and `Alpha` are fragments, `Blur` is the one effect in the chain still on the
+CPU, and it sits in the middle. Before W20 all three were CPU and the frame crossed once.
+
+So the rule is:
+
+- **Correctness is unaffected** by partial porting — every arm of the sweep is green, and an effect
+  that declines simply runs its C++ twin.
+- **Speed is not.** A CPU effect *between* two GPU effects costs a readback and an upload, and at
+  1080p that is ~5 ms each way. Two or three such splits per frame is the whole budget.
+- **Therefore the order does matter**, in exactly one way: an unported effect that sits in the
+  middle of a common chain is worse than an unported effect at the end of one.
+
+`Blur` is the worst possible case of this — it is the blocked effect, and it is in the middle of the
+most common transition. That is a second, independent argument for settling the reference-resolution
+decision: it is not merely "four effects unported", it is "the unported one fragments the chain and
+costs 30 %".
+
+**Nothing is reverted.** The CPU path is untouched and measures the same 31.5 fps it always did, and
+`OPENSHOT_GPU` is a per-deployment switch — the standing constraint is intact. But a GPU deployment
+running transitions is currently worse off than a CPU one, and that should be known rather than
+discovered.
+
+### The shared shaders are shared for real now (2026-09-22, W20)
+
+The fragments were C++ string literals inside libopenshot, which meant the "one source, both sides"
+decision was true in intent and false in fact: the editor could not load any of them. They now live
+in `image-processing-lib/shaders/` — one `.sksl` per effect, plus `_prelude.sksl`, plus a README
+saying what a host must bind and what the fragments are held to.
+
+libopenshot embeds the same bytes at build time (`cmake/scripts/embed_shaders.cmake` generates
+`EffectShaders.h`) rather than reading them at runtime, so the export gains no data-path dependency
+and the two copies cannot drift — there is only one copy. The generator rewrites the header only
+when the content changes, so a no-op build stays a no-op.
+
+Verified behaviour-neutral: parity **346 of 416** and the four-way sweep **307/307**, both identical
+to the run before the move.
+
 ### The 0.2 ms per-effect gate is the cost of a pass, not of an effect (2026-09-22, W19)
 
 **Needs restating by the project owner**, in the same way W07's fps gates did.

@@ -33,6 +33,8 @@
 #include "skia/include/core/SkShader.h"
 #include "skia/include/core/SkString.h"
 #include "skia/include/core/SkTileMode.h"
+#include "EffectShaders.h"
+
 #include "skia/include/effects/SkRuntimeEffect.h"
 
 using namespace openshot;
@@ -78,106 +80,10 @@ void GpuEffect::ResetCounters()
 
 const char* GpuEffect::GpuShaderPrelude()
 {
-	// Keep this in step with the front end's copy. Every helper exists because a
-	// CPU twin does exactly this and a shader that does the cleaner thing instead
-	// stops being bit-identical.
-	//
-	// SkSL is the GLSL ES 1.00 intrinsic set, which is narrower than it looks:
-	// there is no round() and no trunc(), only floor(). That is not a Skia quirk to
-	// route around — the front end reaches these fragments through CanvasKit, which
-	// has the same ceiling, so a helper written in terms of floor() is a helper both
-	// sides can actually run. `openshot-gpu-effect-parity --sksl` asks the compiler
-	// directly when something looks like it ought to work.
-	return R"SKSL(
-uniform shader osSrc;   // the frame: premultiplied, sampled 1:1 at texel centres
-
-// The premultiplied source pixel at p, as the four 0..255 bytes the C++ reads.
-// Rounding is safe rather than sloppy: the surface is 8-bit, so every channel came
-// from an exact byte, and rounding recovers it even through a half-precision
-// eval() (half carries 11 bits and 255 needs 8). floor(x + 0.5) because SkSL has
-// no round(); the values are never negative, so the two agree.
-float4 osBytes(float2 p) { return floor(float4(osSrc.eval(p)) * 255.0 + 0.5); }
-
-// Alpha as a fraction, with the CPU twins' guard: A == 0 becomes 1.0 so the
-// unpremultiply has something to divide by. Those pixels are fully transparent
-// and their colour is not observable either way.
-float osAlphaPercent(float a_byte) { return a_byte == 0.0 ? 1.0 : a_byte / 255.0; }
-
-// Unpremultiply to 0..255. floor(), not round(), because the C++ writes
-// static_cast<unsigned char>(pixels[i] / alpha_percent) and a cast truncates.
-// A premultiplied channel never exceeds its alpha, so the quotient stays <= 255
-// and the cast's wrap-around is unreachable.
-float3 osUnpremul(float3 premul_bytes, float alpha_percent) {
-	return floor(premul_bytes / alpha_percent);
-}
-
-// floor(n / d) for non-negative n and an integer-valued d, immune to the GPU's division
-// rounding. Vulkan allows 2.5 ULP on a division, which is enough to drop an exactly
-// integral quotient to the value below -- and floor() then turns that into a whole
-// unit of error, not a fraction. The correction below costs two multiplies and makes
-// the result exact whatever the divide returned.
-//
-// Use this wherever the C++ twin does INTEGER division, which it does more often than
-// it looks: `>> 14` in OpenCV's fixed-point luminance, `(c * inv + 127) / 255` in the
-// wipe. Do NOT use it where the C++ divides in floating point -- there the C++'s own
-// rounding is what has to be reproduced, and being more accurate than it is still a
-// difference. That distinction is the whole of this port's parity story.
-float osIDiv(float n, float d) {
-	float q = floor(n / d);
-	if ((q + 1.0) * d <= n) q += 1.0;
-	if (q * d > n) q -= 1.0;
-	return q;
-}
-
-// OpenCV's BORDER_REFLECT, which is NOT Skia's kMirror.
-//
-// BORDER_REFLECT repeats the edge pixel -- fedcba|abcdefgh|hgfedcb -- while Skia's kMirror and
-// OpenCV's BORDER_REFLECT_101 do not: gfedcb|abcdefgh|gfedcba. One pixel of difference at every
-// boundary, every frame, on effects whose whole visible content near the edge IS the reflection.
-// So the tile mode cannot do this and the fragment has to.
-float osReflect(float p, float n) {
-	float period = 2.0 * n;
-	float m = mod(p, period);
-	if (m < 0.0) m += period;
-	return m < n ? m : period - 1.0 - m;
-}
-
-float2 osReflect2(float2 p, float2 n) {
-	return float2(osReflect(p.x, n.x), osReflect(p.y, n.y));
-}
-
-// Bilinear from the source, on reflected coordinates, at a continuous position. OpenCV's
-// INTER_LINEAR uses 5-bit fixed-point weights and this uses float, so the two agree to about an
-// LSB rather than exactly -- which is why W20's gate is 45 dB and not bit-exactness.
-float4 osSampleReflectedLinear(float2 p, float2 size) {
-	float2 base = floor(p - 0.5);
-	float2 f = p - 0.5 - base;
-	float4 c00 = osBytes(osReflect2(base + float2(0.0, 0.0), size) + 0.5);
-	float4 c10 = osBytes(osReflect2(base + float2(1.0, 0.0), size) + 0.5);
-	float4 c01 = osBytes(osReflect2(base + float2(0.0, 1.0), size) + 0.5);
-	float4 c11 = osBytes(osReflect2(base + float2(1.0, 1.0), size) + 0.5);
-	return mix(mix(c00, c10, f.x), mix(c01, c11, f.x), f.y);
-}
-
-// The constrain() every CPU effect defines for itself. Named per arity because
-// SkSL is not GLSL and does not promise user-function overloading.
-float3 osConstrain3(float3 v) { return clamp(v, 0.0, 255.0); }
-float  osConstrain1(float v)  { return clamp(v, 0.0, 255.0); }
-
-// static_cast<int>, which truncates toward zero rather than flooring. SkSL has no
-// trunc(), so it is spelled out. It only differs from floor() on negatives, and
-// every caller so far clamps those to 0 immediately, but a helper that is only
-// right for its current callers is a trap for the next fragment.
-float3 osToInt3(float3 v) { return sign(v) * floor(abs(v)); }
-float  osToInt1(float v)  { return sign(v) * floor(abs(v)); }
-
-// Premultiply back and return what the surface stores. Truncating again, because
-// the C++ writes static_cast<unsigned char>(Rb * alpha_percent). The result is
-// valid premultiplied colour: floor(b * alpha) <= floor(255 * alpha) <= A.
-float4 osPremul(float3 bytes, float alpha_percent, float a_byte) {
-	return float4(floor(bytes * alpha_percent), a_byte) / 255.0;
-}
-)SKSL";
+	// The shared prelude lives in image-processing-lib/shaders/_prelude.sksl, so the editor
+	// concatenates the same bytes before the same fragments; it is embedded here at build time.
+	// Every helper in it is explained there, including why each one exists.
+	return openshot::shaders::kPrelude;
 }
 
 bool GpuEffect::ApplyOnGpu(std::shared_ptr<openshot::Frame> frame, int64_t frame_number)

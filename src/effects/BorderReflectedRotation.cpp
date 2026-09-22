@@ -1,6 +1,8 @@
 #include "BorderReflectedRotation.h"
 
 #include "skia/include/core/SkM44.h"
+#include "EffectShaders.h"
+
 #include "skia/include/effects/SkRuntimeEffect.h"
 
 #include <opencv2/imgproc.hpp>
@@ -60,52 +62,12 @@ std::shared_ptr<openshot::Frame> BorderReflectedRotation::GetFrame(std::shared_p
 	return frame;
 }
 
-// The SkSL twin of applyBorderReflectedRotationEffect.
-//
-// **This one samples NEAREST**, not linear -- the C++ passes cv::INTER_NEAREST with the
-// INTER_LINEAR alternative commented out beside it, which CLAUDE.md records as a deliberate
-// choice shared with the front end's WASM build. So there is no interpolation to approximate here
-// and the only thing between this and bit-exactness is where the rounding falls.
-//
-// warpAffine maps destination to source through the INVERSE of the matrix it is given, so the
-// inverse is computed on the host by OpenCV itself (getRotationMatrix2D then
-// invertAffineTransform) rather than re-derived here -- that way the matrix is OpenCV's own, and
-// only the sampling is this fragment's.
+// The shared SkSL source lives in image-processing-lib/shaders/ so the editor loads the
+// same bytes through CanvasKit; it is embedded here at build time. Read it there --
+// including why it is written the way it is.
 const char* BorderReflectedRotation::GpuShaderSource() const
 {
-	return R"SKSL(
-uniform float2 size;
-uniform float3 invRow0;   // the inverse affine, row 0: x' = a*x + b*y + c
-uniform float3 invRow1;
-
-float4 main(float2 p) {
-	// warpAffine maps the destination pixel's INTEGER coordinate through the matrix, not its
-	// centre. Using the centre instead is a half-pixel error, which on smooth content reads as
-	// ~1 LSB and on anything high-frequency reads as the wrong pixel entirely -- measured 11 dB
-	// on a noise image against 55 dB on a ramp, which is what made it obvious.
-	float2 q = floor(p);
-
-	// warpAffine does not evaluate the map in floating point. It precomputes per-column and
-	// per-row terms in 10-bit fixed point and adds them as integers:
-	//
-	//     adelta[x] = round(M0 * x * 1024)
-	//     X0        = round((M1 * y + M2) * 1024) + 512      (the +512 is nearest's rounding)
-	//     srcX      = (X0 + adelta[x]) >> 10
-	//
-	// Doing it in float instead is right to within a fraction of a pixel, which is invisible on
-	// smooth content and completely wrong on anything high-frequency: it left 252 pixels of a
-	// noise image sampling the wrong texel, at 39 dB. Reproducing the fixed-point pipeline costs
-	// two rounds and a shift, and osIDiv makes the shift exact on a GPU that is allowed 2.5 ULP
-	// on a divide.
-	float ax = floor(invRow0.x * q.x * 1024.0 + 0.5);
-	float x0 = floor((invRow0.y * q.y + invRow0.z) * 1024.0 + 0.5) + 512.0;
-	float ay = floor(invRow1.x * q.x * 1024.0 + 0.5);
-	float y0 = floor((invRow1.y * q.y + invRow1.z) * 1024.0 + 0.5) + 512.0;
-
-	float2 src = float2(osIDiv(x0 + ax, 1024.0), osIDiv(y0 + ay, 1024.0));
-	return osBytes(osReflect2(src, size) + 0.5) / 255.0;
-}
-)SKSL";
+	return openshot::shaders::kBorderReflectedRotation;
 }
 
 bool BorderReflectedRotation::SetGpuUniforms(SkRuntimeEffectBuilder& builder, int64_t frame_number,
