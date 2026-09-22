@@ -142,9 +142,25 @@ FFmpegReader::FFmpegReader(const std::string &path, DurationStrategy duration_st
 }
 
 FFmpegReader::~FFmpegReader() {
-	if (is_open)
-		// Auto close reader if not already done
-		Close();
+	if (is_open) {
+		// Auto close reader if not already done.
+		//
+		// Close() drains the decoder, which runs ProcessVideoPacket, which can throw -- and an
+		// exception leaving a destructor is terminate(), so a reader that failed to decode used to
+		// abort the whole process instead of failing its job. Swallow it here; an explicit Close()
+		// still reports.
+		try {
+			Close();
+		} catch (const std::exception& e) {
+			ZmqLogger::Instance()->AppendDebugMethod(
+				"FFmpegReader::~FFmpegReader (Close threw, swallowed so the destructor cannot "
+				"terminate) " + path + ": " + e.what());
+		} catch (...) {
+			ZmqLogger::Instance()->AppendDebugMethod(
+				"FFmpegReader::~FFmpegReader (Close threw, swallowed so the destructor cannot "
+				"terminate) " + path);
+		}
+	}
 }
 
 // This struct holds the associated video frame and starting sample # for an audio packet.
@@ -1838,7 +1854,15 @@ void FFmpegReader::ProcessVideoPacket(int64_t requested_frame) {
     );
 
     // 3. Sizes / formats
-    const PixelFormat src_pix_fmt = pCodecCtx->pix_fmt; // accurate src fmt
+    // The source format is the one pFrame actually holds, NOT pCodecCtx->pix_fmt. With hardware
+    // decode on, the codec context's format is the hardware one (AV_PIX_FMT_CUDA for NVDEC) while
+    // pFrame is the frame that came back from av_hwframe_transfer_data, in a software format
+    // (NV12). Handing swscale the hardware format makes sws_getCachedContext return null --
+    // "cuda is not supported as input pixel format" -- and the reader threw OutOfMemory on the
+    // first frame. That was the whole of the hardware-decode breakage; see GPU-WORKLIST W23.
+    PixelFormat src_pix_fmt = (PixelFormat) pFrame->format;
+    if (src_pix_fmt == AV_PIX_FMT_NONE)
+        src_pix_fmt = pCodecCtx->pix_fmt;
     const int src_w = info.width;
     const int src_h = info.height;
 

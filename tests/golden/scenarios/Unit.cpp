@@ -19,7 +19,9 @@
 #include "Recipes.h"
 
 #include "Color.h"
+#include "FFmpegReader.h"
 #include "GpuEffect.h"
+#include "Settings.h"
 #include "Timeline.h"
 #include "effects/Blur.h"
 #include "effects/Brightness.h"
@@ -480,6 +482,51 @@ void golden::registerUnitScenarios() {
             const long long match_passes = count(match);
             checks.push_back({"colormap_match_declines", match_passes == 0,
                               "gpu_passes=" + std::to_string(match_passes)});
+        });
+
+    // Hardware decode must not take the process with it.
+    //
+    // With HARDWARE_DECODER set, FFmpegReader used to throw on the first frame
+    // (OutOfMemory: "Failed to initialize sws context", because swscale was configured from
+    // pCodecCtx->pix_fmt, which is AV_PIX_FMT_CUDA once NVDEC is on) -- and then abort the whole
+    // process, because Close() drains the decoder through the same call and ~FFmpegReader let the
+    // throw escape a destructor. Both are fixed; this is the guard.
+    //
+    // It passes either way on purpose. On a machine with no NVDEC the reader falls back to
+    // software and still decodes, which is the supported answer; what is being asserted is that
+    // asking for hardware decode never throws and never aborts.
+    addCustom("unit.hardware_decode", {"unit"}, unitScene,
+        [](Scene& s, std::vector<Captured>&, std::vector<Check>& checks) {
+            openshot::Settings* settings = openshot::Settings::Instance();
+            const int previous = settings->HARDWARE_DECODER;
+            settings->HARDWARE_DECODER = 2;   // CUDA / NVDEC
+
+            const int wanted = 8;
+            int decoded = 0;
+            std::string detail;
+            bool threw = false;
+            try {
+                openshot::FFmpegReader reader(s.media("clip_a_640x360_30.mp4"));
+                reader.Open();
+                for (int i = 1; i <= wanted; ++i)
+                    if (reader.GetFrame(i)) ++decoded;
+                reader.Close();
+            } catch (const std::exception& e) {
+                threw = true;
+                detail = std::string("threw: ") + e.what();
+            } catch (...) {
+                threw = true;
+                detail = "threw a non-std exception";
+            }
+            // Restore before anything else runs: Settings is process-wide and every later
+            // scenario would otherwise decode with hardware acceleration asked for.
+            settings->HARDWARE_DECODER = previous;
+
+            const bool ok = !threw && decoded == wanted;
+            if (!threw)
+                detail = std::to_string(decoded) + " of " + std::to_string(wanted) +
+                         " frames decoded with HARDWARE_DECODER=2";
+            checks.push_back({"hardware_decode_no_throw", ok, detail});
         });
 
     addCustom("unit.color", {"unit"}, unitScene,

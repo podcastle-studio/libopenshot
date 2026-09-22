@@ -27,7 +27,7 @@ Stated by the project owner, 2026-09-14. This overrides anything in
    and all four must be **295/295** (292 until W18 added three frames of background-colour
    coverage). Commands are in `CLAUDE.md` under "GPU rendering (`src/gpu`)".
 
-Last updated: 2026-09-22 (Stage 6 complete; **Stage 7: W22 done**, gate met at 0.166 ms per 4K frame — W23 is next) · branch `feature/gpu-rendering`.
+Last updated: 2026-09-22 (Stage 6 complete; **W22 done**; **W23 started** — plan step 1.5's crash fix is in, the SkSL YUV→RGBA pass is next) · branch `feature/gpu-rendering`.
 **Phase 2 is complete.** 2.0 landed 2026-09-15 (the GPU-capable image, in
 `../video-rendering-service` branch `feature/gpu-rendering`), which was the last thing in it and the
 only thing stopping R2a and R2b from shipping. **R2a complete** (2.1, 2.2, 2.3); **2.4 done, gate
@@ -788,6 +788,28 @@ production corpus) remain open; W05–W10 are the CPU quick wins. W01/W02 stay d
   x264 loss, not a matrix bug.
 
 ## Log
+
+- 2026-09-22 — **Plan step 1.5 done: hardware decode works again, and can no longer take the
+  process with it.** Two changes in `FFmpegReader.cpp`, both small, neither moving a pixel on any
+  path the suite exercises — four-way sweep **307/307, 26 checks** in all four arms.
+  `ProcessVideoPacket` now takes swscale's source format from **the frame it is converting**
+  instead of from `pCodecCtx->pix_fmt`, which is the hardware format (`AV_PIX_FMT_CUDA`) once
+  NVDEC is on while the frame is the downloaded NV12 one. And `~FFmpegReader` no longer lets
+  `Close()` throw out of a destructor — `Close()` drains the decoder through the same
+  `ProcessVideoPacket`, so the throw came back out of the destructor and was `terminate()`.
+  **New guard: `unit.hardware_decode`** (scenario 107, check 26) opens a reader with
+  `HARDWARE_DECODER=2` and requires eight frames and no throw. It passes on a machine with no
+  NVDEC too, where the reader falls back to software — what it asserts is that asking for hardware
+  decode never throws and never aborts. Verified to **fail** with either fix reverted.
+  **`HARDWARE_DECODER` still defaults to 0** and the service never touches `Settings`, so nothing
+  about production changed.
+  **Two things this did not fix, both W23's remaining half.** Hardware decode is still *slower*
+  (4K: 44 fps against 126–135 in software), because download + swscale stay serial — exactly what
+  plan §0.3 predicted. And **the PSNR half of W23's gate is unreachable through swscale**:
+  hardware gives NV12, software gives YUV420P, and swscale converts the same 4:2:0 samples to RGBA
+  **40.5 dB apart, max channel delta 79** — reproduced with the ffmpeg CLI alone, so it is
+  swscale's chroma upsampling and not ours. ≥ 48 dB is only reachable once YUV→RGBA is our own
+  SkSL pass, and then the software path is the wrong reference anyway. That gate wants restating.
 
 - 2026-09-22 — **W23's premise measured before any code, and it corrects three things.** Nothing is
   implemented; this is the protocol's first half. Numbers and detail in the W23 item.

@@ -1202,7 +1202,25 @@ VP9, AV1, MPEG-4" sub-task is optional here.
 > 5. **The re-baseline below is bigger than "the affected `readers.*` scenarios".** BT.601 → BT.709
 >    moves every scenario that decodes an `.mp4` — ~32 references across 11 scenario files, not the
 >    3 `readers.*` video ones.
+> 6. **Measured after the 1.5 fix landed: the PSNR half of the gate is unreachable through
+>    swscale, before colour space is even discussed.** Hardware-decoded frames come back as NV12
+>    and software ones as YUV420P, and swscale converts the *same* 4:2:0 samples to RGBA
+>    differently depending on which of the two they are laid out as: **40.5 dB, max channel delta
+>    79**, reproduced with the ffmpeg CLI alone (`-pix_fmt rgba` from the file, against the same
+>    frame round-tripped through `-pix_fmt nv12`). The reader measures the same 40 dB. So "decoded
+>    frame vs software decode PSNR ≥ 48 dB" can only be met once YUV→RGBA is our own SkSL pass and
+>    we choose the chroma upsampling — which also makes the software path the wrong reference to
+>    measure against. **The gate wants restating before this item is finished.**
 
+- [x] **Plan step 1.5, done 2026-09-22 — hardware decode works again, and can no longer abort the
+      process.** Two changes, no pixel change on any path the suite exercises (four-way sweep
+      307/307, 26 checks): `ProcessVideoPacket` takes swscale's source format from the frame it is
+      converting rather than from `pCodecCtx->pix_fmt`, and `~FFmpegReader` no longer lets
+      `Close()` throw out of a destructor. Guarded by `unit.hardware_decode`, which fails with
+      either fix reverted. `HARDWARE_DECODER` still defaults to 0, so nothing about production
+      changed. **What it does not fix is speed** — as plan §0.3 predicted, hardware decode is
+      *slower* in wall-clock (4K: 44 fps against 126–135 software) because download + swscale stay
+      serial. That is the rest of this item.
 - [ ] Decoder output stays `AV_PIX_FMT_CUDA`.
 - [ ] YUV→RGBA becomes an SkSL pass (matrix and range from the stream, default BT.709 at ≥ 720p)
       that also applies the pre-scale.

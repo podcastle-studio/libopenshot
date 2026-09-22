@@ -241,8 +241,13 @@ GPU to take over. Earlier, lower figures in the docs were measured on an Intel i
   `RenderBackend::videoCodec()`, which reads `ENCODER` (`libx264` default, or `h264_nvenc`), probes
   it once and falls back to libx264 if no device answers. `OPENSHOT_GPU` is likewise passed through
   to the library. Both default to the CPU, and the runtime image is GPU-*capable*, not GPU-requiring.
-- Hardware decode (`HARDWARE_DECODER != 0`) throws on the first frame in this fork; the fix is
-  plan step 1.5. Upstream 1.0.0 fixed it with `sw_pix_fmt`.
+- Hardware decode (`HARDWARE_DECODER != 0`) **worked again as of 2026-09-22** (plan step 1.5):
+  `ProcessVideoPacket` takes swscale's source format from the frame it converts, not from
+  `pCodecCtx->pix_fmt`, which is `AV_PIX_FMT_CUDA` once NVDEC is on. `~FFmpegReader` also no
+  longer lets `Close()` throw out of a destructor — `Close()` drains the decoder through that same
+  call, so any decode failure used to `terminate()` the process. `unit.hardware_decode` guards
+  both. It is still *slower* than software decode until W23 moves YUV→RGBA off swscale, and
+  `HARDWARE_DECODER` stays 0 by default.
 - Three time→frame conventions and two bezier-handle conventions coexist in the service; see
   `tests/golden/Recipes.h`.
 - `Scene` in the golden harness must delete readers in reverse creation order (a FrameMapper before
