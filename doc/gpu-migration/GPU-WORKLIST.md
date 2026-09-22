@@ -867,16 +867,20 @@ Depends on W12/W13 only — **not** on Stage 7. Can run in parallel with Stage 7
       normal answer and the CPU twin runs untouched.
 - [ ] One SkSL fragment each, with a parity test against the C++ twin. **Done: Brightness, Alpha,
       Exposure, ColorShift, Bars, ChromaKey (YCbCr only), ColorAdjustment, LightAdjustment,
-      Enhancement (no grain)** (2026-09-22) — 214 of 297 image/parameter combinations bit-exact,
-      nothing over 2 LSB outside Brightness and Exposure. **Left:** ColorMap (3-D LUT texture),
-      Mask, CameraMovement. **Crop will not be ported — see below.**
-      - **Crop is not a per-pixel effect.** It is `QPainter` with antialiasing: a rounded-rect clip
-        and a `drawImage` between fractional `QRectF`s, so the corners and the edges are a
-        *rasteriser* difference, not an arithmetic one, and `resize` changes the image size, which
-        `ApplyOnGpu` cannot express. The service always sets `resize = false` and passes a radius
-        curve, so rounded corners are the normal case and there is no exact subset to port. Doing
-        it anyway is a **redefine**-class product decision; it belongs with the compositor's parity
-        work. `GPU-DECISIONS.md` has the reasoning.
+      Enhancement (no grain), Mask** (2026-09-22) — 246 of 329 image/parameter combinations
+      bit-exact, nothing over 2 LSB outside Brightness and Exposure. **Left: ColorMap only**, and
+      it is blocked on the front end. **Crop and CameraMovement will not be ported — see below.**
+      - **Crop and CameraMovement are not per-pixel effects.** Both are `QPainter` with
+        resampling — Crop an antialiased rounded-rect clip and a `drawImage` between fractional
+        `QRectF`s, CameraMovement a `setWorldTransform` with `SmoothPixmapTransform` — so the
+        difference from Skia is in the *rasteriser*, not the arithmetic. Porting either is a
+        **redefine**-class product decision and belongs with the compositor's parity work.
+        CameraMovement has one exactly portable subset, recorded but not built: at zoom 100 % and
+        rotation 0 the transform is a pure translation and Qt takes its `TxTranslate` fast path,
+        which `draw_to_canvas` already reproduces. `GPU-DECISIONS.md` has both.
+      - **Mask's matte stays on the CPU and is uploaded as a texture**, like LightAdjustment's tone
+        curve. It is cached and usually still, so the cost is paid once — and it keeps Qt as the
+        single source of the mask's edges.
       - **Enhancement's grain pass stays on the CPU.** `fract(sin(...) * 43758.5453)` evaluated in
         `double` and in `float` do not agree to an LSB, they agree to nothing — up to ~140 LSB of
         grain. A frame that asks for grain runs entirely on the CPU.
@@ -940,6 +944,17 @@ only because it makes four texture fetches instead of one. Fixing it means not g
 its own pass, which is its own item. See `GPU-DECISIONS.md`.
 **Gate.** `heavy_effects` render ≥ **60 fps** (11.5); `chroma_key_green` ≥ **70 fps** (12.9);
 `tools/golden.sh check --filter effects`.
+
+**2026-09-22 — both fps gates need restating, and one of them cannot be met from this item.**
+Measured interleaved on mains, 1080p render, 150 frames: `chroma_key_green` **6.9 → 43.6 fps
+(6.3×)** on Vulkan, `heavy_effects` **4.9 → 5.6 fps (+14 %)**.
+`chroma_key_green` is one clip with one ported effect, and what remains between 43.6 and 70 is the
+PCIe crossing — W22–W25, where the compositor's gates were already carried.
+`heavy_effects` is a different matter: **four of its six effects stay on the CPU whatever W19
+does** — Crop is ruled out as a rasteriser difference, `Blur` is not in this item's list at all,
+`ColorMap` is blocked on the front end, and its `Enhancement` asks for grain, the one pass that
+cannot be ported. Its chain therefore crosses PCIe repeatedly. The useful part of that measurement
+is that it is still **+14 %**, not a loss: a partly-ported chain is safe.
 **Size.** ~2 weeks.
 
 ### W20 — Transition shaders · legacy `4.6`

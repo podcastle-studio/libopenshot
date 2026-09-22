@@ -27,6 +27,7 @@
 #include "effects/Enhancement.h"
 #include "effects/Exposure.h"
 #include "effects/LightAdjustment.h"
+#include "effects/Mask.h"
 #include "gpu/GpuDevice.h"
 
 #include <QImage>
@@ -283,6 +284,30 @@ std::vector<Case> cases() {
                                            Keyframe(0.0), Keyframe(0.0), Keyframe(-0.7)); }},
         {"enhance(clarity+sharp)",[] { return std::make_shared<openshot::Enhancement>(
                                            Keyframe(0.0), Keyframe(0.4), Keyframe(0.35)); }},
+
+        // Mask through the ROUNDED_CORNERS type, which builds its own mask and so needs no
+        // reader here. The mask itself is CPU-built either way; what is under test is the
+        // grey-to-alpha arithmetic on top of it.
+        {"mask(rounded)",         [] { return std::make_shared<openshot::Mask>(
+                                           openshot::Mask::ROUNDED_CORNERS, Keyframe(0.0),
+                                           Keyframe(0.0)); }},
+        {"mask(bright+contrast)", [] { return std::make_shared<openshot::Mask>(
+                                           openshot::Mask::ROUNDED_CORNERS, Keyframe(0.25),
+                                           Keyframe(8.0)); }},
+        {"mask(inverted)",        [] {
+                                       auto m = std::make_shared<openshot::Mask>(
+                                           openshot::Mask::ROUNDED_CORNERS, Keyframe(-0.15),
+                                           Keyframe(-5.0));
+                                       m->invert = true;
+                                       return m;
+                                   }},
+        {"mask(replace_image)",   [] {
+                                       auto m = std::make_shared<openshot::Mask>(
+                                           openshot::Mask::ROUNDED_CORNERS, Keyframe(0.1),
+                                           Keyframe(3.0));
+                                       m->replace_image = true;
+                                       return m;
+                                   }},
     };
 }
 

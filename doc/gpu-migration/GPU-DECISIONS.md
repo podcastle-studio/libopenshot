@@ -904,6 +904,52 @@ and passes a radius *curve*, so rounded corners are the normal case. Porting Cro
 it belongs with the compositor's parity work rather than with the per-pixel fragments. **Left on
 the CPU, with no fragment written.**
 
+### W19 — Mask in, CameraMovement out, and what the two item gates actually measure (2026-09-22)
+
+Ten effects are now fragments. **246 of 329 image/parameter combinations bit-exact**, and Mask never
+exceeds 1 LSB — three of its four cases are 8/8.
+
+**A mask belongs in a texture, like a tone curve.** `Mask` builds its matte on the CPU either by
+scaling a reader's frame with `Qt::SmoothTransformation` or by painting an antialiased rounded
+rectangle, and caches it. The fragment takes that result as a texture child and does only the
+grey-to-alpha arithmetic. That is not a compromise: the mask is usually still, so the expensive part
+happens once either way, and it keeps **Qt's rasteriser as the single source of the mask's edges**
+rather than introducing a second one that would not agree with it.
+
+**CameraMovement will not be ported, for the same reason as Crop.** It is `QPainter` with
+`setWorldTransform` and `SmoothPixmapTransform`: a resampling geometric transform, so the difference
+from Skia is in the *rasteriser*, not the arithmetic — already on file for the compositor.
+There is one exactly portable subset and it is worth writing down rather than discovering later: at
+`zoom == 100 %` and `rotation == 0` the combined transform reduces to a pure translation **and the
+C++ does not even enable smooth transform**, so Qt takes its `TxTranslate` fast path — round the
+translation, blit unfiltered, which `draw_to_canvas` already reproduces (see the W12 entry above).
+A pan-only CameraMovement is therefore portable exactly. It is **not** done here: the effect exists
+for zoom and rotation, the golden scenario uses zoom, and a fragment that declines in the normal
+case earns little. Revisit if a payload capture shows pan-only is common.
+
+### What W19's two gates actually measure (2026-09-22) — **both need restating**
+
+Measured interleaved on mains power, 1080p, `render`, 150 frames, GPU off against Vulkan:
+
+| scenario | GPU off | Vulkan | |
+|---|---|---|---|
+| `chroma_key_green` | 6.9 fps | **43.6 fps** | **6.3×** |
+| `heavy_effects` | 4.9 fps | 5.6 fps | +14 % |
+
+**`chroma_key_green` is what a ported effect in a clean chain looks like**: one clip, one effect, one
+upload, one readback, and the per-pixel work — a babl conversion plus a distance test, 1.1 cores of
+it — moves to the GPU. 6.3× and it still misses its **70 fps** gate at 43.6, because what is left is
+the crossing. That is W22–W25, exactly as for the compositor, and the gate should be carried there.
+
+**`heavy_effects` cannot reach 60 fps from this item, and the reason is in the scenario.** Its chain
+is rounded `Crop`, `Blur`, `Enhancement(noise 0.3, …)`, `ColorAdjustment`, `LightAdjustment`,
+`ColorMap`, plus clip shadow and blur. Of those, **Crop is ruled out** (rasteriser), **`Blur` is not
+in W19's list at all**, **`ColorMap` is blocked** on the front end, and **that `Enhancement` asks for
+grain**, which is the one pass that cannot be ported — so four of its six effects stay on the CPU
+whatever W19 does. The chain therefore crosses PCIe repeatedly, and +14 % is what that buys. It is
+still a win, which is the useful part of the measurement: a mixed chain does **not** come out slower
+than pure CPU, so partial porting is safe.
+
 ### The 0.2 ms per-effect gate is the cost of a pass, not of an effect (2026-09-22, W19)
 
 **Needs restating by the project owner**, in the same way W07's fps gates did.

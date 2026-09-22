@@ -13,7 +13,7 @@
 #ifndef OPENSHOT_MASK_EFFECT_H
 #define OPENSHOT_MASK_EFFECT_H
 
-#include "../EffectBase.h"
+#include "../GpuEffect.h"
 
 #include "../Json.h"
 #include "../KeyFrame.h"
@@ -33,7 +33,7 @@ namespace openshot
 	 * These masks / wipes can also be combined, such as a transparency mask on top of a clip, which
 	 * is then wiped away with another animated version of this effect.
 	 */
-	class Mask : public EffectBase
+	class Mask : public GpuEffect
 	{
 	private:
 		ReaderBase *reader;
@@ -43,6 +43,24 @@ namespace openshot
         int roundedRadiusY;
 		/// Init effect settings
 		void init_effect_details();
+
+	protected:
+		/// The SkSL twin of the mask's grey-to-alpha arithmetic.
+		const char* GpuShaderSource() const override;
+
+		/// The brightness/contrast/invert/replace controls, plus the prepared mask
+		/// image bound as a texture. False when no mask has been prepared.
+		bool SetGpuUniforms(SkRuntimeEffectBuilder& builder, int64_t frame_number,
+							int width, int height) const override;
+
+	private:
+		/// The prepared mask as a GPU texture, cached across frames -- a still mask is
+		/// the normal case and re-uploading it every frame would cost more than the
+		/// effect. Keyed on the QImage's cacheKey() AND GpuDevice::Generation().
+		/// Defined in the .cpp: this header is installed and compiled without Skia on
+		/// the include path, so no Skia type may appear here.
+		struct MaskTextureCache;
+		mutable std::shared_ptr<MaskTextureCache> mask_texture;
 
 	protected:
 		bool HandlesMaskInternally() const override { return true; }

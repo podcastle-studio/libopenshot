@@ -771,6 +771,27 @@ production corpus) remain open; W05–W10 are the CPU quick wins. W01/W02 stay d
 
 ## Log
 
+- 2026-09-22 — **W19: Mask in, CameraMovement ruled out, and both item gates measured.** Ten
+  effects are fragments; **246 of 329 image/parameter combinations bit-exact**, Mask never over
+  1 LSB with three of its four cases 8/8. Four-way sweep 307/307. **Only ColorMap is left**, and it
+  is blocked on the front end.
+  **Mask's matte stays on the CPU and is uploaded as a texture**, like LightAdjustment's tone curve
+  — it is cached and usually still, so the cost is paid once, and it keeps Qt's rasteriser as the
+  single source of the mask's edges instead of introducing a second one.
+  **CameraMovement is ruled out for the same reason as Crop**: `QPainter` with a world transform
+  and `SmoothPixmapTransform` is a rasteriser difference, not an arithmetic one. One subset is
+  exactly portable and is written down rather than left to be rediscovered — at zoom 100 % and
+  rotation 0 the transform is a pure translation and Qt takes its `TxTranslate` fast path, which
+  `draw_to_canvas` already reproduces. Not built: the effect exists for zoom, and a fragment that
+  declines in the normal case earns little.
+  **Both of W19's fps gates now have numbers, and both need restating.** Interleaved on mains,
+  1080p render, 150 frames: **`chroma_key_green` 6.9 → 43.6 fps, a 6.3× speed-up** — one clip, one
+  ported effect, one crossing — still short of its 70 fps gate, and what is left is the crossing,
+  which is W22–W25. **`heavy_effects` 4.9 → 5.6 fps, +14 %**, and it **cannot** reach 60 from this
+  item: four of its six effects stay on the CPU whatever W19 does (Crop ruled out, `Blur` not in
+  the item's list, `ColorMap` blocked, and its `Enhancement` asks for grain). The useful part is
+  that a partly-ported chain is still a win rather than a loss.
+
 - 2026-09-22 — **W19: LightAdjustment and Enhancement in, Crop ruled out.** Nine effects are
   fragments; **214 of 297 image/parameter combinations bit-exact**, and neither new effect ever
   exceeds **1 LSB**. Four-way sweep 307/307.
