@@ -311,6 +311,10 @@ drawing one fragment into a frame of **its own** size, which is what an intermed
 shape requires. `ApplyOnGpu` is now those two called in sequence.
 
 Parity on Vulkan, three centre/strength configurations: **56.3–82.4 dB, max 8 LSB, 24/24 passing**.
+On lavapipe the same cases pass at **51.3–82.4 dB, max 198** — a handful of positions where the two
+drivers' `sqrt`/`atan` fall on opposite sides of remap's 1/32 grid and pick the neighbouring polar
+cell. Both clear the gate; an effect that resamples through a transcendental is vendor-sensitive in
+its last bit, and the lavapipe arm is what makes that visible rather than latent.
 
 Parity for the three box-family blurs, Vulkan, the same eight images:Parity for the three that landed, Vulkan, the same eight images:
 

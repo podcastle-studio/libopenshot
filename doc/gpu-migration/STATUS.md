@@ -825,8 +825,22 @@ production corpus) remain open; W05–W10 are the CPU quick wins. W01/W02 stay d
   one, so it misses a 0.200 ms gate written for the others by two orders of magnitude while being
   at or ahead of the CPU twin it replaces. That gate needs restating; it is the last thing in
   Stage 6 that means less than it says.
+  **Effect parity over the whole suite: 552 comparisons, 416 bit-exact on Vulkan and 425 on
+  lavapipe, zero parity failures on either.** The 35 failures the harness exits on are all timing.
+  Zoom blur is the one effect where the two backends differ visibly in the last bit — max 8 LSB on
+  Vulkan against 198 on lavapipe, on a handful of positions where `sqrt`/`atan` land on opposite
+  sides of remap's 1/32 grid and pick the neighbouring polar cell. Both clear the 45 dB gate.
+  **The WASM LUT path is deleted** (owner, 2026-09-22): `wasm/wrappers/lutWrappers.{h,cpp}`,
+  `src/ColorGrading/LutApply.{h,cpp}` and `LutCore.h`, plus their fourteen exported functions and
+  the two source entries in the submodule's `CMakeLists.txt`. The editor grades LUTs in its own
+  PixiJS pass and never called any of it. `ColorGradingCore.{h,cpp}` **stays** — libopenshot's
+  `ColorMap` includes it directly for `.cube` parsing and the colour-match statistics — but it is
+  no longer compiled into the WASM. Note that the **colour-match entry points went with the file**
+  (`init_core`, `compute_ref_stats`, `get_ref_stat`, `set_ref_stats`, `set_cm_params`,
+  `bake_cm_lut`): they lived in `lutWrappers.cpp` and shared its `LutState`. The prebuilt
+  `wasm/dist/*.js` are untouched and now stale by that much.
   **Everything on the submodule side is uncommitted by request** — the `INTER_LINEAR` change, the
-  domain parsing, `osFixedPoint`, and the three new `.sksl` sources.
+  domain parsing, `osFixedPoint`, the three new `.sksl` sources and this deletion.
 
 - 2026-09-22 — **W20: three of the four blurs are shaders, zoom blur is blocked on a product
   decision, and the parity harness is red on timing.** `Blur` is a `GpuEffect` now, with three

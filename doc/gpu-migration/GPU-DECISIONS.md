@@ -1490,6 +1490,14 @@ thirty-second of a pixel. That is now `osFixedPoint` in the prelude. Recovering 
 a coordinate image showed the closed form agrees with OpenCV's to 7e-6 — i.e. to well inside that
 quantisation — so the maps themselves needed no special handling once the grid did.
 
+**Lavapipe disagrees with Vulkan about a handful of polar cells, and the gate still holds.** On the
+`corners` image the same case reads max **8 LSB on Vulkan and 198 on lavapipe** — 51.3 dB against
+62.0, over 1,571 of 262,144 channels. A weight error cannot produce 198 on hard-edged content; a
+*cell* error can, so on those few positions the two drivers' `sqrt`/`atan` land on opposite sides
+of the 1/32 grid. Both clear the 45 dB gate, and this is exactly what the lavapipe arm exists to
+surface: the port is correct, its last bit is vendor-sensitive, and an effect that resamples
+through a transcendental will always be.
+
 **`GpuEffect` grew the two halves this needed.** `GpuSourceFrame()` puts the frame's pixels on the
 GPU (its own backing, or one upload), and `RunGpuPass()` draws `GpuShaderSource()` into a frame of
 **its own** size, calling `SetGpuUniforms` with that size rather than the frame's. `ApplyOnGpu` is
