@@ -1253,6 +1253,49 @@ against passes hardest when it is most broken.
 same trap is waiting in any check of a path that has a silent fallback — which, under the standing
 constraint, is every GPU path in this fork.
 
+### The proxy no longer varies: the reference resolution is 720p (2026-09-22, project owner)
+
+`TRANSITION-PARITY.md` listed "which resolution the front end's slow-effect proxy uses, and whether
+it varies" as open, and noted that if it varied no fixed compensation factor could exist. **It no
+longer varies: the front end runs a 720p proxy on the GPU.** So the reference is fixed.
+
+**Every length-valued effect parameter is defined at 1280 px wide**, and a host scales it by
+`frame_width / 1280`. That closes both halves of the measured divergence: the preview stops
+disagreeing with itself, and an export stops depending on its source's resolution.
+
+Affected: horizontal/vertical blur, diagonal blur, zoom blur — and rotational blur, whose parameter
+is in degrees but whose internal downscale threshold keys on the image (see the correction in
+`TRANSITION-PARITY.md`). Nothing else: `BorderReflectedMove`, `Zoom`, `SplitShift`, `ColorShift`,
+`CircleMask` and the displacement map are already fractions or percentages.
+
+### ColorMap: trilinear at the LUT's native cube size (2026-09-22)
+
+The front end asked us to choose so both sides match; this is the choice, and the reasoning is
+measured on the **production** LUT (`tmp/payloads/prod-2026-09-16/media/e333f84ebb10.cube`, 25³)
+rather than on the golden fixture:
+
+| comparison | max | mean | >1 LSB |
+|---|---:|---:|---:|
+| `ColorMap`'s 17³ resample vs native | **9.95 LSB** | 0.657 | 20.8 % |
+| tetrahedral vs trilinear, both native | 6.32 LSB | 0.269 | 3.2 % |
+
+**The resample is the divergence that matters; the interpolation kind is the smaller one**, by 2.4×
+on both max and mean. Trilinear wins on everything else:
+
+- `ColorMap.cpp`'s own kernel is already trilinear, and it is the front end's `interpolation = 0`
+  path — so this is the option where *neither* side changes its interpolation.
+- It is the cheaper fragment, and one less thing to reproduce exactly.
+- Tetrahedral's advantage is real only on coarse LUTs. The 98 LSB figure on file came from a 2³
+  fixture in `examples/`; production ships 25³ and 33³, where it is worth 0.27 LSB on average.
+
+*Revisit if* production starts shipping LUTs below about 8³, where the two genuinely diverge — and
+then both sides move together, as always.
+
+**So the remaining ColorMap work is unblocked except for one fact**: how the front end sets the LUT
+domain. `parseCubeText` drops `DOMAIN_MIN`/`DOMAIN_MAX` while their `applyLut` normalises by a
+domain set from JS, so for any non-0…1 cube the two already disagree — a live bug today,
+independent of the GPU work.
+
 ## Open — decide before plan phase 4
 
 The four that blocked the compositor were taken on 2026-09-16; see the W11 entry above.

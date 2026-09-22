@@ -212,8 +212,10 @@ Everything else trades some parity for speed, and it is better to choose that kn
   existing projects: old payloads carry radii authored against the old, undefined behaviour. Either
   the fix is versioned in the payload, or existing projects shift. This needs a product decision,
   not a technical one.
-- **Which resolution the front end's slow-effect proxy uses**, and whether it varies. If it varies,
-  no fixed compensation factor exists — normalisation is the only fix.
+- ~~**Which resolution the front end's slow-effect proxy uses**, and whether it varies.~~
+  **Answered 2026-09-22: it does not vary — the front end runs a 720p proxy on the GPU.** So the
+  reference resolution is fixed at **1280 px wide**, and a host scales a length-valued parameter by
+  `frame_width / 1280`. See `GPU-DECISIONS.md`.
 - ~~**Whether the front end adopts the shared shaders at all.**~~ **Decided 2026-09-18: yes, as
   SkSL through CanvasKit.** What replaces it is narrower and is a question for the front-end team,
   not a decision: **can they route video frames through CanvasKit, or only text?** Everything above
