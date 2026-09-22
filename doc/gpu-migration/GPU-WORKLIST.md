@@ -853,10 +853,26 @@ Depends on W12/W13 only — **not** on Stage 7. Can run in parallel with Stage 7
 
 ### W19 — `GpuEffect` base and the per-pixel shaders · legacy `4.5`
 
-- [ ] `GpuEffect` base class.
-- [ ] One SkSL fragment each, with a parity test against the C++ twin: Alpha, Brightness, Exposure,
-      ColorShift, Bars, ChromaKey, ColorAdjustment, LightAdjustment, Enhancement, ColorMap (3-D LUT
-      texture), Mask, Crop, CameraMovement.
+> **Started 2026-09-22 — the base class and the first fragment are in.** What the port learned
+> applies to all thirteen and is in `GPU-DECISIONS.md` under "W19 — what a shared effect fragment
+> can and cannot be": SkSL is the GLSL ES 1.00 intrinsic set (no `round`, no `trunc`), the
+> fragments are defined on straight RGB and reproduce the C++ byte truncation so they come out
+> bit-exact, and the one place they cannot is the shared unpremultiply's division — 1 LSB on 1.8 %
+> of legal (byte, alpha) pairs, because Vulkan allows 2.5 ULP there. Parity class is therefore
+> **exact on opaque, close on semi-transparent**, at 69–74 dB against the 48 dB gate.
+
+- [x] `GpuEffect` base class. `src/GpuEffect.{h,cpp}`: compiles the prelude plus the fragment once
+      per effect instance, uploads only when the frame is not already GPU-backed, and **leaves the
+      result on the GPU** so a chain pays one crossing rather than one per effect. Declining is a
+      normal answer and the CPU twin runs untouched.
+- [ ] One SkSL fragment each, with a parity test against the C++ twin: **Brightness (done)**, Alpha,
+      Exposure, ColorShift, Bars, ChromaKey, ColorAdjustment, LightAdjustment, Enhancement,
+      ColorMap (3-D LUT texture), Mask, Crop, CameraMovement.
+- [ ] **Four of these effects have no golden scenario at all** — `Brightness`, `Exposure`,
+      `ColorShift` and `Bars` are constructed by the service and covered by nothing in
+      `tests/golden`, so the four-way sweep says nothing about them. Add a scenario per effect
+      **with semi-transparent content**, or the sweep keeps passing while the port is unverified.
+      A pre-existing gap that W19 makes dangerous, not one W19 created.
 - [ ] **ColorMap carries two W11 consequences.** (a) The shader matches the *front end* at the LUT's
       native cube size, so `ColorMap.cpp` must **drop its 17³ resample too** — otherwise CPU and GPU
       diverge by up to 17 LSB and the four-way sweep stops meaning anything. That re-baselines the
@@ -865,8 +881,14 @@ Depends on W12/W13 only — **not** on Stage 7. Can run in parallel with Stage 7
       front end passes to `apply_lut` before writing the shader — on a coarse LUT trilinear and
       tetrahedral diverge by up to 98 LSB.
 
-**Gate per effect.** PSNR ≥ 48 dB vs the CPU effect on eight test images including transparent and
-semi-transparent pixels, ≤ 0.2 ms at 1080p.
+**Gate per effect.** PSNR ≥ 48 dB vs the CPU effect on eight test images including transparent
+and semi-transparent pixels, ≤ 0.2 ms at 1080p. Both are measured by
+`tests/gpu/gpu_effect_parity.cpp` (`openshot-gpu-effect-parity`), which also reports whether the
+two agree *exactly* — the stronger claim the fragments are written for — and refuses to compare a
+case that never reached the GPU. **Brightness, 2026-09-22: bit-exact on 26 of 32 image/parameter
+combinations, the other six at 69–74 dB with a 1–3 LSB maximum, all of it on semi-transparent
+pixels; 0.14–0.19 ms chained at 1080p on the A2000.** The timing gate is exempt on lavapipe, a
+software rasteriser that measures ~25x slower.
 **Gate.** `heavy_effects` render ≥ **60 fps** (11.5); `chroma_key_green` ≥ **70 fps** (12.9);
 `tools/golden.sh check --filter effects`.
 **Size.** ~2 weeks.

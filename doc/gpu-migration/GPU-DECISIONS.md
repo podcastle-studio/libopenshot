@@ -717,6 +717,66 @@ CPU the same three scenarios remain gated `exact`, and nothing about the CPU pat
 amplification with it, and these three should return to the normal `GpuClose` band.
 
 
+### W19 — what a shared effect fragment can and cannot be (2026-09-22)
+
+Three things measured while porting the first effect. All of them apply to the remaining twelve,
+so they are here rather than in the item.
+
+**SkSL is the GLSL ES 1.00 intrinsic set, and that is load-bearing rather than annoying.** There
+is no `round()` and no `trunc()` — only `floor()`. The first prelude used both, failed to compile,
+and fell back to the CPU *silently*, which is the important part of this entry (see below). The
+ceiling is not Skia's to relax and it is the same ceiling CanvasKit gives the front end, so a
+helper written in terms of `floor()` is one both sides can actually run. Ask the compiler rather
+than the documentation: `openshot-gpu-effect-parity --sksl` reads a fragment on stdin.
+
+**The fragments are defined on straight RGB, and reproduce the C++ byte truncation deliberately.**
+Every CPU twin in `image-processing-lib` unpremultiplies, operates and re-premultiplies, truncating
+to a byte at each step (`static_cast<unsigned char>`), because a libopenshot `Frame` is
+`Format_RGBA8888_Premultiplied` while the front end's canvas pixels are straight. A fragment that
+did the same arithmetic in clean floating point would be *close* and would need a tolerance band;
+reproducing the truncation makes it **bit-exact**, and the effects goldens keep `Tolerance::Exact()`
+on the GPU. `GpuEffect::GpuShaderPrelude()` owns the helpers and no fragment open-codes the
+rounding.
+
+**One place bit-exactness is not reachable, and it is not an effect's fault.** The shared
+unpremultiply divides by `alpha/255`, and Vulkan permits 2.5 ULP on a division where IEEE requires
+exact rounding. Over every legal `(premultiplied byte, alpha)` pair — 32,896 of them — **588 differ
+by exactly 1 LSB on Vulkan and 576 on lavapipe** (1.8 %), always where the true quotient is an
+exact integer and the two paths fall on opposite sides of it: byte 1 over alpha 3 is exactly 85.
+Two different rates on two drivers is the proof it is the division and not the fragment.
+
+A contrast or exposure factor then amplifies that 1 LSB — measured at up to **3 LSB** on
+`brightness(0.6, 100)`. So the reachable parity class is **exact on opaque pixels, close on
+semi-transparent ones**, at PSNR 69–74 dB against a 48 dB gate. Closing it entirely would mean
+changing how the *CPU* unpremultiplies, which moves production output and belongs to its own item,
+not to W19.
+
+**A pass costs what a full-frame pass costs; the arithmetic is free.** At 1080p one chained shader
+pass measures **0.14–0.19 ms** against the item's 0.2 ms gate — but a *do-nothing* passthrough
+fragment measures 0.19–0.22 ms in the same harness, and the pool acquire is 0.016 ms of it. The
+rest is the `snapshot()` copy plus the read and write of an 8.3 MB surface. Two consequences: the
+gate is measuring memory traffic rather than any effect's cost, and the obvious optimisation for
+every fragment is to stop copying the source (a zero-copy `SkSurfaces::AsImage` ping-pong instead
+of a snapshot), which is worth its own item once more than one effect is on the GPU.
+
+**Single-effect cost is still dominated by the crossing**: 0.15 ms of shader against ~4.1 ms with
+the upload and readback around it. `ApplyOnGpu` therefore leaves its result on the GPU and lets
+`Frame::GetImage()` read back once, so a chain pays the crossing once — and W22–W25 is what removes
+it for the first effect too.
+
+### A GPU test that cannot tell whether the GPU ran proves nothing (2026-09-22, W19)
+
+Worth its own entry because it produced a completely clean result that was completely wrong. The
+first run of `openshot-gpu-effect-parity` reported all 32 image/parameter combinations **bit-exact**.
+The fragment had not compiled: `ApplyOnGpu` did what it is designed to do, declined, and both arms
+of the comparison ran the same CPU code. A parity test whose fallback is the thing it is comparing
+against passes hardest when it is most broken.
+
+`ApplyOnGpu` leaves the frame GPU-backed on success and the CPU twin does not, so
+`Frame::IsGpuBacked()` after the call is the proof, and the test now fails loudly without it. The
+same trap is waiting in any check of a path that has a silent fallback — which, under the standing
+constraint, is every GPU path in this fork.
+
 ## Open — decide before plan phase 4
 
 The four that blocked the compositor were taken on 2026-09-16; see the W11 entry above.

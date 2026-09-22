@@ -171,6 +171,14 @@ OPENSHOT_GPU=vulkan cmake-build-gpu/tests/gpu/openshot-gpu-checks     # and =lav
 BUILD_DIR=$PWD/cmake-build-gpu tools/golden.sh check                  # must stay 295/295
 ```
 
+Effect shaders (`src/GpuEffect.h`) are gated by `openshot-gpu-effect-parity`: PSNR and max LSB
+against each effect's C++ twin over eight images built around the alpha edge cases, plus the 1080p
+cost per pass. It refuses to compare a case that did not actually reach the GPU — `ApplyOnGpu`
+declining looks like a perfect match otherwise, and once did. `--sksl` compiles a fragment from
+stdin, which is the quick way to find out what SkSL supports: it is the **GLSL ES 1.00** intrinsic
+set, so there is no `round` and no `trunc`, only `floor`. That is CanvasKit's ceiling too, so the
+prelude's helpers are written within it on purpose.
+
 Rules that are easy to get wrong and crash in the NVIDIA driver rather than anywhere useful:
 
 - **Nothing Graphite hands out may outlive the `Context`.** `GpuDevice::DestroyInstance()` empties

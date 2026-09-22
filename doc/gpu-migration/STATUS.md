@@ -27,7 +27,7 @@ Stated by the project owner, 2026-09-14. This overrides anything in
    and all four must be **295/295** (292 until W18 added three frames of background-colour
    coverage). Commands are in `CLAUDE.md` under "GPU rendering (`src/gpu`)".
 
-Last updated: 2026-09-18 (end of session, W09) · branch `feature/gpu-rendering`.
+Last updated: 2026-09-22 (W19 in progress) · branch `feature/gpu-rendering`.
 **Phase 2 is complete.** 2.0 landed 2026-09-15 (the GPU-capable image, in
 `../video-rendering-service` branch `feature/gpu-rendering`), which was the last thing in it and the
 only thing stopping R2a and R2b from shipping. **R2a complete** (2.1, 2.2, 2.3); **2.4 done, gate
@@ -752,6 +752,31 @@ production corpus) remain open; W05–W10 are the CPU quick wins. W01/W02 stay d
   x264 loss, not a matrix bug.
 
 ## Log
+
+- 2026-09-22 — **W19 started: the `GpuEffect` base, the first fragment, and three things that
+  constrain the other twelve.** `src/GpuEffect.{h,cpp}` compiles a shared prelude plus the effect's
+  fragment once per instance and **leaves the result on the GPU**, so a chain of GPU effects pays
+  one crossing instead of one each — per-effect readback would make a shader slower than the C++ it
+  replaces (0.15 ms of shader against ~4.1 ms with the transfers around it). `Brightness` is the
+  first fragment: **bit-exact against its C++ twin on 26 of 32 image/parameter combinations**, the
+  other six at 69–74 dB / 1–3 LSB, and **0.14–0.19 ms chained at 1080p** against a 0.2 ms gate.
+  Four-way sweep 295/295, `openshot-gpu-checks` 8/8 on both backends.
+  Three findings, all in `GPU-DECISIONS.md` because they apply to every remaining fragment:
+  **SkSL is the GLSL ES 1.00 intrinsic set** — no `round`, no `trunc` — which is also CanvasKit's
+  ceiling, so it shapes the shared source rather than just this port;
+  **the fragments reproduce the C++ byte truncation deliberately**, which is what makes them
+  bit-exact instead of merely close and lets the effects goldens keep `Tolerance::Exact()`;
+  and **the shared unpremultiply cannot be made exact** — Vulkan allows 2.5 ULP on a division, so
+  588 of 32,896 legal (byte, alpha) pairs differ by 1 LSB on Vulkan and 576 on lavapipe, always
+  where the true quotient is an exact integer. Two rates on two drivers is the proof it is the
+  division, not the fragment.
+  **The first version of the parity test reported all 32 combinations bit-exact while the shader
+  had not compiled at all** — `ApplyOnGpu` declined and both arms ran the same CPU code. It now
+  requires `Frame::IsGpuBacked()` after the call and fails loudly without it. Worth remembering for
+  any check of a path that has a silent fallback, which is every GPU path in this fork.
+  **Also found, and not created here: `Brightness`, `Exposure`, `ColorShift` and `Bars` have no
+  golden scenario at all**, though the service constructs all four — so the four-way sweep
+  currently says nothing about them. Added as a W19 sub-task.
 
 - 2026-09-18 — **W09 done: NVENC rate control, and the VMAF comparison that had never been run.**
   The gate is met on all three clauses (VMAF −0.21, size +1.7 %, `single_video` nvenc 122.4 → 122.3

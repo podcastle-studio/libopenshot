@@ -12,6 +12,8 @@
 
 #include "Brightness.h"
 #include "Exceptions.h"
+
+#include "skia/include/effects/SkRuntimeEffect.h"
 #include "./image-processing-lib/src/Effects/effects.h"
 
 using namespace openshot;
@@ -43,10 +45,67 @@ void Brightness::init_effect_details()
 	info.has_video = true;
 }
 
+// The contrast factor and brightness shift, computed once for a frame. Kept in
+// one place so the shader and the C++ cannot drift: the shader is only
+// bit-identical while it is handed exactly these two floats, rounded from double
+// at exactly this point.
+namespace {
+	struct BrightnessUniforms { float factor; float shift; };
+
+	// float, not double, on purpose: GetFrame() below narrows the keyframe values to
+	// float before handing them to applyBrightnessEffect(), which then widens them
+	// again for this arithmetic. Taking doubles here would skip that round trip and
+	// the shader would stop being bit-identical for no visible reason.
+	BrightnessUniforms brightnessUniforms(float brightness_value, float contrast_value)
+	{
+		return {
+			static_cast<float>((259.0 * (contrast_value + 255.0)) /
+							   (255.0 * (259.0 - contrast_value))),
+			static_cast<float>(255.0 * brightness_value),
+		};
+	}
+}
+
+// The SkSL twin of Podcastle::Effects::applyBrightnessEffect. Same arithmetic in
+// the same order, through the prelude's helpers so the byte truncation matches:
+// unpremultiply, contrast about mid-grey, brightness shift, premultiply back.
+const char* Brightness::GpuShaderSource() const
+{
+	return R"SKSL(
+uniform float factor;   // (259 * (contrast + 255)) / (255 * (259 - contrast))
+uniform float shift;    // 255 * brightness
+
+float4 main(float2 p) {
+	float4 bytes = osBytes(p);
+	float alpha_percent = osAlphaPercent(bytes.a);
+	float3 c = osUnpremul(bytes.rgb, alpha_percent);
+	c = osConstrain3(osToInt3(factor * (c - 128.0) + 128.0));
+	c = osConstrain3(osToInt3(c + shift));
+	return osPremul(c, alpha_percent, bytes.a);
+}
+)SKSL";
+}
+
+bool Brightness::SetGpuUniforms(SkRuntimeEffectBuilder& builder, int64_t frame_number,
+								int width, int height) const
+{
+	const BrightnessUniforms u = brightnessUniforms(
+		static_cast<float>(brightness.GetValue(frame_number)),
+		static_cast<float>(contrast.GetValue(frame_number)));
+	builder.uniform("factor") = u.factor;
+	builder.uniform("shift") = u.shift;
+	return true;
+}
+
 // This method is required for all derived classes of EffectBase, and returns a
 // modified openshot::Frame object
 std::shared_ptr<openshot::Frame> Brightness::GetFrame(std::shared_ptr<openshot::Frame> frame, int64_t frame_number)
 {
+	// The shader when there is a GPU to run it on, the C++ otherwise. ApplyOnGpu
+	// declining is the normal no-GPU answer, and the CPU path below is untouched.
+	if (ApplyOnGpu(frame, frame_number))
+		return frame;
+
 	// Get the frame's image
 	std::shared_ptr<QImage> frame_image = frame->GetImage();
 

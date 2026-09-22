@@ -13,7 +13,7 @@
 #ifndef OPENSHOT_BRIGHTNESS_EFFECT_H
 #define OPENSHOT_BRIGHTNESS_EFFECT_H
 
-#include "../EffectBase.h"
+#include "../GpuEffect.h"
 
 #include "../Frame.h"
 #include "../Json.h"
@@ -31,11 +31,19 @@ namespace openshot
 	 *
 	 * Adjusting the brightness and contrast over time can create many different powerful effects.
 	 */
-	class Brightness : public EffectBase
+	class Brightness : public GpuEffect
 	{
 	private:
 		/// Init effect settings
 		void init_effect_details();
+
+	protected:
+		/// The SkSL twin of applyBrightnessEffect(), bit-identical to it. See GpuEffect.
+		const char* GpuShaderSource() const override;
+
+		/// Contrast factor and brightness shift, computed exactly as the C++ does
+		bool SetGpuUniforms(SkRuntimeEffectBuilder& builder, int64_t frame_number,
+							int width, int height) const override;
 
 	public:
 		Keyframe brightness;	///< Brightness keyframe. A constant value here will prevent animation.

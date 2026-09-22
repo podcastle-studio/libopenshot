@@ -90,6 +90,7 @@ set(OPENSHOT_SOURCES
   ScreenCaptureReader.cpp
   WriterBase.cpp
   EffectBase.cpp
+  GpuEffect.cpp
   EffectInfo.cpp
   FFmpegReader.cpp
   FFmpegWriter.cpp
