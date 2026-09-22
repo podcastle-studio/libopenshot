@@ -17,8 +17,11 @@
 #include <chrono>	// for std::chrono::milliseconds
 #include <algorithm>
 #include <cmath>
+#include <map>
+#include <mutex>
 #include <sstream>
 #include <unistd.h>
+#include <vector>
 
 #include <QTransform>
 
@@ -28,6 +31,7 @@
 #include "FFmpegReader.h"
 #include "Exceptions.h"
 #include "MemoryTrim.h"
+#include "QtUtilities.h"   // aligned_free, for the frame-buffer pool below
 #include "Timeline.h"
 #include "ZmqLogger.h"
 
@@ -182,6 +186,95 @@ bool AudioLocation::is_near(AudioLocation location, int samples_per_frame, int64
 }
 
 #if USE_HW_ACCEL
+
+namespace {
+
+/// Recycles the RGBA buffers the reader hands to each decoded Frame.
+///
+/// Every decoded frame needs its own width*height*4 buffer, and at 4K that is 33 MB — above
+/// glibc's mmap threshold (which caps at 32 MB), so each frame mmap'd 33 MB and munmap'd it again
+/// when its Frame died. The kernel then had to fault and zero every page of it, and because the
+/// first thing to touch the buffer is sws_scale, that cost landed *inside* the conversion: 6.5 ms
+/// per 4K frame against ffmpeg's 2.7 ms for the identical unscaled yuv420p→rgba converter, and
+/// 612k minor faults over 150 frames against ffmpeg's 271k. Reusing the buffers is what closes
+/// that gap; there is nothing wrong with the conversion itself.
+///
+/// Buffers come back through Release(), which is the QImageCleanupFunction on the QImage that
+/// wraps them — so a buffer returns when its Frame is destroyed, wherever and whenever that
+/// happens. The pool is therefore process-wide, locked, and deliberately never destroyed: a
+/// QImage can outlive any static destructor that would take the pool with it.
+///
+/// Stale contents are not a problem: sws_scale writes every pixel of the destination, which is the
+/// same reason the memset W08 removed was not needed.
+class FrameBufferPool
+{
+public:
+	static FrameBufferPool& Instance() {
+		static FrameBufferPool* pool = new FrameBufferPool();   // leaked on purpose, see above
+		return *pool;
+	}
+
+	/// A 32-byte-aligned buffer of at least @a bytes, recycled when one of that exact size is
+	/// free. Null on allocation failure.
+	unsigned char* acquire(std::size_t bytes) {
+		if (bytes == 0)
+			return nullptr;
+		{
+			const std::lock_guard<std::mutex> lock(mutex);
+			for (auto it = free_blocks.begin(); it != free_blocks.end(); ++it) {
+				if (it->second != bytes)
+					continue;
+				unsigned char* address = it->first;
+				free_bytes -= bytes;
+				free_blocks.erase(it);
+				return address;
+			}
+		}
+		unsigned char* address = static_cast<unsigned char*>(aligned_malloc(bytes, 32));
+		if (!address)
+			return nullptr;
+		const std::lock_guard<std::mutex> lock(mutex);
+		sizes[address] = bytes;
+		return address;
+	}
+
+	/// QImageCleanupFunction: hand a buffer back rather than freeing it.
+	static void Release(void* address) {
+		if (address)
+			Instance().put(static_cast<unsigned char*>(address));
+	}
+
+private:
+	/// How much free memory the pool may sit on. A 4K RGBA frame is 33 MB, so this is about
+	/// eight of them — enough to keep several readers and a couple of sizes in flight without
+	/// the pool becoming a memory leak in disguise. Peak RSS is a first-class constraint here.
+	static constexpr std::size_t kMaxFreeBytes = 256u * 1024u * 1024u;
+
+	void put(unsigned char* address) {
+		const std::lock_guard<std::mutex> lock(mutex);
+		const auto known = sizes.find(address);
+		if (known == sizes.end()) {
+			// Not ours — should not happen, but freeing is the safe answer.
+			openshot::aligned_free(address);
+			return;
+		}
+		const std::size_t bytes = known->second;
+		if (free_bytes + bytes > kMaxFreeBytes) {
+			sizes.erase(known);
+			openshot::aligned_free(address);
+			return;
+		}
+		free_blocks.emplace_back(address, bytes);
+		free_bytes += bytes;
+	}
+
+	std::mutex mutex;
+	std::vector<std::pair<unsigned char*, std::size_t>> free_blocks;
+	std::map<unsigned char*, std::size_t> sizes;   // every buffer the pool still owns
+	std::size_t free_bytes = 0;
+};
+
+}   // namespace
 
 // Get hardware pix format
 static enum AVPixelFormat get_hw_dec_format(AVCodecContext *ctx, const enum AVPixelFormat *pix_fmts)
@@ -1949,7 +2042,9 @@ void FFmpegReader::ProcessVideoPacket(int64_t requested_frame) {
     constexpr size_t ALIGN = 32;
     const int aligned_size = ((buf_size + SWS_SIMD_PADDING + int(ALIGN) - 1) / int(ALIGN)) * int(ALIGN);
 
-    uint8_t *buffer = (uint8_t*) aligned_malloc(aligned_size, ALIGN);
+    // From the pool, not from malloc: see FrameBufferPool above for what allocating this fresh
+    // every frame was costing.
+    uint8_t *buffer = FrameBufferPool::Instance().acquire(aligned_size);
     if (!buffer) throw OutOfMemory("Failed to allocate image buffer", path);
 
     // Defensive: avoid visible garbage if anything is left unwritten
@@ -1991,14 +2086,15 @@ void FFmpegReader::ProcessVideoPacket(int64_t requested_frame) {
               pFrameRGB->data, pFrameRGB->linesize);
 
     // 7. Wrap in Frame and cache
+    //
+    // The QImage is built here rather than through AddImage(raw), because that overload hard-codes
+    // openshot::cleanUpBuffer as the cleanup and this buffer has to go back to the pool instead.
     std::shared_ptr<Frame> f = CreateFrame(current_frame);
-    if (!info.has_alpha) {
-        f->AddImage(output_width, output_height, bytes_per_pixel,
-                    QImage::Format_RGBA8888_Premultiplied, buffer);
-    } else {
-        f->AddImage(output_width, output_height, bytes_per_pixel,
-                    QImage::Format_RGBA8888, buffer);
-    }
+    auto wrapped = std::make_shared<QImage>(
+        buffer, output_width, output_height, bytes_per_line,
+        info.has_alpha ? QImage::Format_RGBA8888 : QImage::Format_RGBA8888_Premultiplied,
+        (QImageCleanupFunction) &FrameBufferPool::Release, (void*) buffer);
+    f->AddImage(wrapped);
     working_cache.Add(f);
     last_video_frame = f;
 

@@ -1221,6 +1221,27 @@ VP9, AV1, MPEG-4" sub-task is optional here.
       changed. **What it does not fix is speed** — as plan §0.3 predicted, hardware decode is
       *slower* in wall-clock (4K: 44 fps against 126–135 software) because download + swscale stay
       serial. That is the rest of this item.
+- [x] **The reader's own 2.5x, before any GPU work (2026-09-22).** `sws_scale` is **95 % of the
+      reader's wall clock** at 4K (1.08 s of a 1.13 s 150-frame run, measured with an LD_PRELOAD
+      interposer), and it was running at 6.5 ms a frame against ffmpeg's 2.7 ms for the *identical*
+      unscaled `yuv420p → rgba` converter — swscale reports picking the same special converter in
+      both. The difference was not the conversion: the reader allocated a fresh
+      `width*height*4` buffer per frame, 33 MB at 4K, above glibc's 32 MB mmap cap, so every frame
+      mmap'd and munmap'd 33 MB and the kernel faulted and zeroed all of it **inside** `sws_scale`
+      (612k minor faults over 150 frames against ffmpeg's 271k). A recycling pool for those buffers
+      (`FrameBufferPool` in `FFmpegReader.cpp`, returned through the QImage's cleanup function,
+      capped at 256 MB free) closes it. Interleaved, mains power, decode-only:
+
+      | | before | after | |
+      |---|---|---|---|
+      | 3840x2160 | 124–131 fps | **195–198 fps** | **+48 %** |
+      | 1920x1080 | 534–539 fps | **751–785 fps** | **+44 %** |
+      | `sws_scale`, 4K | 6.5–7.0 ms | **4.55 ms** | −31 % |
+      | minor faults, 150 frames at 4K | 612k | **281k** | −54 % |
+      | peak RSS | 1133 MB | 1134 MB | unchanged |
+
+      Bit-identical: four-way sweep 307/307, 26 checks. This is a CPU win on the path that ships,
+      and it is what the "< 1 core" half of the gate has to be measured against from now on.
 - [ ] Decoder output stays `AV_PIX_FMT_CUDA`.
 - [ ] YUV→RGBA becomes an SkSL pass (matrix and range from the stream, default BT.709 at ≥ 720p)
       that also applies the pre-scale.

@@ -789,6 +789,25 @@ production corpus) remain open; W05–W10 are the CPU quick wins. W01/W02 stay d
 
 ## Log
 
+- 2026-09-22 — **The reader is 48 % faster at 4K, on the CPU path, and it was never the
+  conversion's fault.** `sws_scale` is **95 % of the reader's wall clock** at 4K, and it was taking
+  6.5 ms a frame where ffmpeg takes 2.7 ms for the *identical* unscaled `yuv420p → rgba` converter
+  — swscale names the same special converter in both. What differed was the destination: the
+  reader allocated a fresh `w*h*4` buffer per frame, **33 MB at 4K, above glibc's 32 MB mmap cap**,
+  so every frame mmap'd and munmap'd 33 MB and the kernel faulted and zeroed all of it *inside*
+  `sws_scale` — 612k minor faults over 150 frames against ffmpeg's 271k. W08's memset removal was
+  the same phenomenon seen from the other side.
+  **`FrameBufferPool` (file-local in `FFmpegReader.cpp`) recycles them**, handed back through the
+  QImage cleanup function so a buffer returns when its Frame dies, wherever that happens; capped at
+  256 MB free so it cannot become a leak. Interleaved, mains power, decode-only: **4K 124–131 →
+  195–198 fps (+48 %)**, **1080p 534–539 → 751–785 fps (+44 %)**, `sws_scale` 6.5–7.0 → 4.55 ms,
+  faults −54 %, **peak RSS unchanged** (1133 → 1134 MB). Bit-identical — four-way sweep
+  **307/307, 26 checks**.
+  **What this means for W23.** Its "< 1 core" half is the only part still open (the fps half was
+  already met before this), and the measurement above says the target to beat is now 195 fps at
+  4K, not 131. It also says where the remaining CPU goes: ~21 ms of core time a frame, almost all
+  of it still the conversion, which is exactly what the SkSL YUV→RGBA pass removes.
+
 - 2026-09-22 — **Plan step 1.5 done: hardware decode works again, and can no longer take the
   process with it.** Two changes in `FFmpegReader.cpp`, both small, neither moving a pixel on any
   path the suite exercises — four-way sweep **307/307, 26 checks** in all four arms.
