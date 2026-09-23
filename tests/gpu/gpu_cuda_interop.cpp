@@ -47,10 +47,12 @@ extern "C" {
 }
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <thread>
 #include <string>
 #include <vector>
 
@@ -185,7 +187,7 @@ bool renderAndRead(openshot::CudaInterop& interop, openshot::GpuImage& y,
 
     // The copy is still in flight on the CUDA stream; this is the submit that
     // waits for it, and the one that consumes the binary semaphore.
-    const unsigned long long wait = interop.waitSemaphore();
+    const unsigned long long wait = interop.waitSemaphore(y);
     if (!openshot::GpuDevice::Instance().submit(false, &wait, 1)) {
         error = "submit with the interop's wait semaphore failed";
         return false;
@@ -257,6 +259,99 @@ void checkCopy(openshot::CudaInterop& interop, int width, int height, const char
     report("copy", wrong == 0, detail);
 }
 
+// Two image pairs, alternating, with nothing between them that waits on the CPU --
+// what two NVDEC readers in one timeline do (a transition, a video matte). With one
+// Vulkan->CUDA semaphore for the whole interop this hung inside a few frames: the
+// second pair's barrier signalled it again before the first signal had been waited
+// on, and the CUDA wait that lost its signal stalled the stream for good. A
+// readback per frame hides it, which is why "copy" above never saw it.
+void checkPairs(openshot::CudaInterop& interop) {
+    std::string error;
+    const int sizes[2][2] = {{640, 360}, {854, 480}};
+    CudaNV12 sources[2];
+    std::shared_ptr<openshot::GpuImage> ys[2], uvs[2];
+    for (int i = 0; i < 2; ++i) {
+        const int w = sizes[i][0], h = sizes[i][1];
+        if (!sources[i].allocate(w, h, error)) {
+            for (auto& s : sources) s.release();
+            report("pairs", false, error);
+            return;
+        }
+        ys[i] = interop.createImage(w, h, openshot::GpuImage::Format::R8);
+        uvs[i] = interop.createImage((w + 1) / 2, (h + 1) / 2, openshot::GpuImage::Format::R8G8);
+        if (!ys[i] || !uvs[i]) {
+            for (auto& s : sources) s.release();
+            report("pairs", false, "createImage failed: " + interop.lastError());
+            return;
+        }
+    }
+
+    // Watchdog: a regression here is a hang, not a wrong answer.
+    std::atomic<bool> finished{false};
+    std::thread watchdog([&] {
+        for (int i = 0; i < 300 && !finished; ++i)
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        if (!finished) {
+            std::printf("FAIL   pairs      hung: two alternating pairs deadlocked the stream\n");
+            std::fflush(stdout);
+            std::_Exit(1);
+        }
+    });
+
+    const int rounds = 400;
+    bool ok = true;
+    for (int round = 0; round < rounds && ok; ++round) {
+        const int i = round % 2;
+        const int w = sizes[i][0], h = sizes[i][1];
+        if (!interop.copyNV12(&sources[i].frame, *ys[i], *uvs[i])) {
+            error = "copyNV12 failed: " + interop.lastError();
+            ok = false;
+            break;
+        }
+        std::shared_ptr<openshot::GpuFrame> sink = openshot::GpuFrame::Create(w, h);
+        sk_sp<SkImage> luma = ys[i]->image();
+        sk_sp<SkImage> chroma = uvs[i]->image();
+        if (!sink || !luma || !chroma) { error = "no sink or no image"; ok = false; break; }
+        sink->canvas()->drawImage(luma, 0, 0);
+        sink->canvas()->drawImage(chroma, 0, 0);
+        const unsigned long long wait = interop.waitSemaphore(*ys[i]);
+        if (!openshot::GpuDevice::Instance().submit(false, &wait, 1)) {
+            error = "submit failed";
+            ok = false;
+            break;
+        }
+        interop.prepareForCopy(*ys[i], *uvs[i]);
+    }
+
+    // And both pairs still hold the right pixels afterwards.
+    long long wrong = 0;
+    for (int i = 0; i < 2 && ok; ++i) {
+        const int w = sizes[i][0], h = sizes[i][1];
+        std::vector<uint8_t> pixels;
+        if (!interop.copyNV12(&sources[i].frame, *ys[i], *uvs[i]) ||
+            !renderAndRead(interop, *ys[i], *uvs[i], w, h, pixels, error)) {
+            ok = false;
+            break;
+        }
+        for (int py = 0; py < h; ++py)
+            for (int px = 0; px < w; ++px) {
+                const uint8_t* got = &pixels[(static_cast<size_t>(py) * w + px) * 4];
+                if (got[0] != lumaAt(px, py) || got[1] != chromaU(px / 2, py / 2) ||
+                    got[2] != chromaV(px / 2, py / 2))
+                    ++wrong;
+            }
+    }
+    finished = true;
+    watchdog.join();
+    for (auto& s : sources) s.release();
+
+    char detail[192];
+    std::snprintf(detail, sizeof(detail),
+                  "%d alternating copies across two pairs, no CPU sync; %lld pixels wrong after%s%s",
+                  rounds, wrong, error.empty() ? "" : "; ", error.c_str());
+    report("pairs", ok && wrong == 0, detail);
+}
+
 // Nothing the interop hands out may outlive the device. Tear the device down
 // while an image is still held and the image must go invalid rather than take
 // the driver with it — and the interop must come back for the next frame.
@@ -319,7 +414,7 @@ bool measure(openshot::CudaInterop& interop, int width, int height, int iteratio
         // Consume the binary semaphore with a real (tiny) recording, the way a
         // frame would, then wait for the stream so the events are readable.
         sink->canvas()->clear(SK_ColorBLACK);
-        const unsigned long long wait = interop.waitSemaphore();
+        const unsigned long long wait = interop.waitSemaphore(*y);
         openshot::GpuDevice::Instance().submit(true, &wait, 1);
         if (pipelined) interop.prepareForCopy(*y, *uv);
         cuStreamSynchronize(stream);
@@ -386,6 +481,7 @@ int main() {
     checkCopy(interop, 640, 360, "small");
     checkCopy(interop, 3840, 2160, "uhd");
     checkCost(interop);
+    checkPairs(interop);
 
     // checkLifetime releases that context, so stop pointing at it first.
     cuCtxSetCurrent(nullptr);

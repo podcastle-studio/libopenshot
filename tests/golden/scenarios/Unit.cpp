@@ -26,6 +26,7 @@
 #include "effects/Blur.h"
 #include "effects/Brightness.h"
 #include "effects/ColorMap.h"
+#include "gpu/CudaInterop.h"
 #include "gpu/GpuDevice.h"
 #include "gpu/GpuYuv.h"
 #include "gpu/GpuOverlay.h"
@@ -512,11 +513,18 @@ void golden::registerUnitScenarios() {
 
             openshot::Settings* settings = openshot::Settings::Instance();
             const bool previous = settings->GPU_DECODE;
+            // Software decode for both arms, whatever the harness asked for: this compares the
+            // two conversions on identical YUV420P planes, and NVDEC's NV12 would put swscale's
+            // own 40 dB NV12-vs-YUV420P inconsistency into the CPU arm (unit.nvdec_on_device
+            // covers NVDEC).
+            const int previous_hw = settings->HARDWARE_DECODER;
+            settings->HARDWARE_DECODER = 0;
             const std::vector<std::vector<uint8_t>> cpu = decode(false);
             const unsigned long long before = openshot::GpuYuv::Conversions();
             const std::vector<std::vector<uint8_t>> gpu = decode(true);
             const unsigned long long ran = openshot::GpuYuv::Conversions() - before;
             settings->GPU_DECODE = previous;
+            settings->HARDWARE_DECODER = previous_hw;
 
             const bool have_gpu = openshot::GpuDevice::Instance().available();
             if (!have_gpu) {
@@ -555,6 +563,145 @@ void golden::registerUnitScenarios() {
                           "delta %d (gate 4)",
                           ran, wanted, worst, worst_delta);
             checks.push_back({"gpu_decode_matches_swscale", ok, detail});
+        });
+
+    // NVDEC's frames converted where they are (W23): the zero-copy path must be the same picture
+    // as software decode through the same conversion, and it must actually have run.
+    //
+    // Exact, not "close". H.264 decoding is normative -- NVDEC and libavcodec agree to the byte
+    // in YUV (measured on the suite's and the bench's media, 640x360 to 4K) -- and both arms go
+    // through the same GpuYuv shader, so any difference at all is this path's bug: a plane
+    // copied at the wrong pitch, chroma sampled at the wrong size, a missed semaphore showing
+    // the previous frame. DeviceConversions() is what tells the two arms apart; without it a
+    // path that silently downloaded would pass. With no interop (GPU off, lavapipe, no NVIDIA
+    // driver) the path must decline and hardware decode must still produce the same frames.
+    addCustom("unit.nvdec_on_device", {"unit", "gpu"}, unitScene,
+        [](Scene& s, std::vector<Captured>&, std::vector<Check>& checks) {
+            const int wanted = 8;
+            const std::string clip = s.media("clip_a_640x360_30.mp4");
+            openshot::Settings* settings = openshot::Settings::Instance();
+            const bool previous_gpu = settings->GPU_DECODE;
+            const int previous_hw = settings->HARDWARE_DECODER;
+            const auto decode = [&](int hardware) {
+                settings->HARDWARE_DECODER = hardware;
+                std::vector<std::vector<uint8_t>> frames;
+                openshot::FFmpegReader reader(clip);
+                reader.Open();
+                for (int i = 1; i <= wanted; ++i) {
+                    auto image = reader.GetFrame(i)->GetImage();
+                    frames.emplace_back(image->bits(), image->bits() + image->sizeInBytes());
+                }
+                reader.Close();
+                return frames;
+            };
+
+            std::vector<std::vector<uint8_t>> software, nvdec;
+            unsigned long long ran = 0;
+            std::string failure;
+            try {
+                settings->GPU_DECODE = true;
+                software = decode(0);
+                const unsigned long long before = openshot::GpuYuv::DeviceConversions();
+                nvdec = decode(2);
+                ran = openshot::GpuYuv::DeviceConversions() - before;
+            } catch (const std::exception& e) {
+                failure = std::string("threw: ") + e.what();
+            }
+            // Settings is process-wide: restore before anything else can run.
+            settings->GPU_DECODE = previous_gpu;
+            settings->HARDWARE_DECODER = previous_hw;
+            if (!failure.empty()) {
+                checks.push_back({"nvdec_on_device", false, failure});
+                return;
+            }
+
+            int differing = 0, worst = 0;
+            for (int i = 0; i < wanted; ++i) {
+                if (software[i].size() != nvdec[i].size()) { ++differing; worst = 255; continue; }
+                bool frame_differs = false;
+                for (std::size_t p = 0; p < software[i].size(); ++p) {
+                    const int d = std::abs(int(software[i][p]) - int(nvdec[i][p]));
+                    if (d) { frame_differs = true; worst = std::max(worst, d); }
+                }
+                differing += frame_differs;
+            }
+
+            const bool interop = openshot::CudaInterop::Instance().available();
+            // With no GPU at all both arms go through swscale, which converts NV12 and YUV420P
+            // holding the same samples 40 dB apart (GPU-WORKLIST W23). Nothing to hold exact
+            // there; what matters is that the path declined and hardware decode still decoded.
+            const bool same_conversion = openshot::GpuDevice::Instance().available();
+            char detail[224];
+            std::snprintf(detail, sizeof(detail),
+                          "%llu frames converted on the device (%d asked for, interop %s); %d of "
+                          "%d frames differ from software decode, max delta %d%s",
+                          ran, wanted, interop ? "on" : "off", differing, wanted, worst,
+                          same_conversion ? "" : " (swscale both arms: not compared)");
+            // >=, as in unit.gpu_decode: the reader decodes ahead.
+            const bool ok = (differing == 0 || !same_conversion) &&
+                            (interop ? ran >= static_cast<unsigned long long>(wanted) : ran == 0);
+            checks.push_back({interop ? "nvdec_on_device_exact" : "nvdec_on_device_declines", ok,
+                              detail});
+        });
+
+    // A BT.709-tagged chart must decode to the sRGB values it was made from (W23's gate).
+    //
+    // The GPU conversion honours the stream's declared matrix; swscale as this reader configures
+    // it never has, and decodes everything as BT.601. That is why GPU_DECODE changes pixels and
+    // why turning it on is the owner's decision -- so the swscale error is measured and reported
+    // here, not gated. The GPU arms are gated at 3 code values: an exact BT.709 decode of this file
+    // is within 2 of the bars (8-bit YUV), while decoding it as BT.601 is off by ~28.
+    addCustom("unit.bt709_chart", {"unit", "gpu"}, unitScene,
+        [](Scene& s, std::vector<Captured>&, std::vector<Check>& checks) {
+            static const int kBars[8][3] = {{191, 191, 191}, {191, 191, 0}, {0, 191, 191},
+                                            {0, 191, 0},     {191, 0, 191}, {191, 0, 0},
+                                            {0, 0, 191},     {200, 150, 120}};
+            openshot::Settings* settings = openshot::Settings::Instance();
+            const bool previous_gpu = settings->GPU_DECODE;
+            const int previous_hw = settings->HARDWARE_DECODER;
+            // Worst channel error over the bar centres, or -1 if the decode failed.
+            const auto worst_error = [&](bool gpu_decode, int hardware,
+                                         unsigned long long* device_conversions) {
+                settings->GPU_DECODE = gpu_decode;
+                settings->HARDWARE_DECODER = hardware;
+                int worst = -1;
+                try {
+                    const unsigned long long before = openshot::GpuYuv::DeviceConversions();
+                    openshot::FFmpegReader reader(s.media("chart_bt709_640x360_30.mp4"));
+                    reader.Open();
+                    auto image = reader.GetFrame(1)->GetImage();
+                    reader.Close();
+                    if (device_conversions)
+                        *device_conversions = openshot::GpuYuv::DeviceConversions() - before;
+                    worst = 0;
+                    for (int bar = 0; bar < 8; ++bar) {
+                        const uint8_t* px = image->constScanLine(180) + (40 + 80 * bar) * 4;
+                        for (int c = 0; c < 3; ++c)
+                            worst = std::max(worst, std::abs(int(px[c]) - kBars[bar][c]));
+                    }
+                } catch (const std::exception&) {
+                }
+                return worst;
+            };
+
+            const int cpu = worst_error(false, 0, nullptr);
+            const bool have_gpu = openshot::GpuDevice::Instance().available();
+            const int gpu = have_gpu ? worst_error(true, 0, nullptr) : -1;
+            const bool interop = openshot::CudaInterop::Instance().available();
+            unsigned long long device = 0;
+            const int nvdec = interop ? worst_error(true, 2, &device) : -1;
+            settings->GPU_DECODE = previous_gpu;
+            settings->HARDWARE_DECODER = previous_hw;
+
+            const bool ok = cpu >= 0 && (!have_gpu || (gpu >= 0 && gpu <= 3)) &&
+                            (!interop || (nvdec >= 0 && nvdec <= 3 && device >= 1));
+            char detail[224];
+            std::snprintf(detail, sizeof(detail),
+                          "worst channel error: GPU %s, NVDEC on device %s (gate 3); swscale %d "
+                          "(BT.601 by design, not gated)",
+                          have_gpu ? std::to_string(gpu).c_str() : "n/a",
+                          interop ? std::to_string(nvdec).c_str() : "n/a", cpu);
+            checks.push_back({"bt709_chart_srgb", ok, detail});
         });
 
     // Hardware decode must not take the process with it.

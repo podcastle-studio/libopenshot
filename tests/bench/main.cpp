@@ -105,6 +105,12 @@ int runCase(const Opts& o) {
     auto* settings = openshot::Settings::Instance();
     if (o.threads > 0) { settings->OMP_THREADS = o.threads; settings->FF_THREADS = o.threads; }
     settings->DEBUG_TO_STDERR = false;
+    // The decode arms (W23). Bench-side only, as in the golden harness: the library never reads
+    // the environment for these. OPENSHOT_BENCH_HW_DECODE takes a HARDWARE_DECODER value (2 = NVDEC).
+    if (const char* v = std::getenv("OPENSHOT_BENCH_GPU_DECODE"); v && std::string(v) == "1")
+        settings->GPU_DECODE = true;
+    if (const char* v = std::getenv("OPENSHOT_BENCH_HW_DECODE"); v && *v)
+        settings->HARDWARE_DECODER = std::atoi(v);
     bench::setBenchMediaDir(o.benchMedia);
 
     golden::Scene scene;

@@ -551,8 +551,16 @@ std::shared_ptr<Frame> FrameMapper::GetFrame(int64_t requested_frame)
 		// Copy the image from the odd field
 		std::shared_ptr<Frame> odd_frame = mapped_frame;
 
-		if (odd_frame && odd_frame->has_image_data)
-			frame->AddImage(std::make_shared<QImage>(*odd_frame->GetImage()), true);
+		// A GPU-backed source (GPU decode, a text clip) shares its surface, exactly as Frame's
+		// copy constructor does. GetImage() here read every GPU-decoded frame back to the CPU
+		// -- 3.4 ms a frame at 1080p, which cancelled the whole of what the GPU conversion saves
+		// (W23). Only when both fields come from the same frame: merging two fields is a CPU job.
+		if (odd_frame && odd_frame->has_image_data) {
+			if (odd_frame->IsGpuBacked() && mapped.Odd.Frame == mapped.Even.Frame)
+				frame->AttachGpuFrame(odd_frame->GpuBacking());
+			else
+				frame->AddImage(std::make_shared<QImage>(*odd_frame->GetImage()), true);
+		}
 		if (mapped.Odd.Frame != mapped.Even.Frame) {
 			// Add even lines (if different than the previous image)
 			std::shared_ptr<Frame> even_frame;

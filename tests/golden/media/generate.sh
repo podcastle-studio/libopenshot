@@ -18,6 +18,15 @@ ffmpeg -y -hide_banner -v error -f lavfi -i "color=c=0x00FF00:size=640x360:rate=
 ffmpeg -y -hide_banner -v error -f lavfi -i "nullsrc=size=640x360:rate=30,geq=lum='clip(255*((X/W)-(T/4))*4+128,0,255)':cb=128:cr=128" -t 6 $X264 matte_wipe_640x360_30.mp4
 # overlay clip (light-leak stand-in): drifting soft gradients on black (additive blend / displacement)
 ffmpeg -y -hide_banner -v error -f lavfi -i "gradients=size=640x360:rate=30:speed=0.05:nb_colors=3:c0=0x000000:c1=0xFFB040:c2=0x000000" -t 6 $X264 overlay_gradients_640x360_30.mp4
+# BT.709-tagged colour chart for unit.bt709_chart: eight flat 80 px bars from known sRGB values,
+# 3 frames. accurate_rnd, or swscale's RGB->YUV alone costs 3 code values and the gate would be
+# measuring the chart; qp 1, not 0, because qp 0 makes x264 emit High 4:4:4 Predictive, which
+# NVDEC refuses. An exact BT.709 decode of this file is within 2 of the bars. Not in any golden.
+CHART_IN=""; CHART_PADS=""; i=0
+for c in 0xBFBFBF 0xBFBF00 0x00BFBF 0x00BF00 0xBF00BF 0xBF0000 0x0000BF 0xC89678; do
+  CHART_IN="$CHART_IN -f lavfi -i color=c=$c:s=80x360:r=30"; CHART_PADS="$CHART_PADS[$i]"; i=$((i+1))
+done
+ffmpeg -y -hide_banner -v error $CHART_IN -filter_complex "${CHART_PADS}hstack=inputs=8,scale=out_color_matrix=bt709:out_range=tv:flags=accurate_rnd+full_chroma_int,format=yuv420p" -frames:v 3 -c:v libx264 -preset veryfast -qp 1 -g 30 -colorspace bt709 -color_primaries bt709 -color_trc bt709 -color_range tv -movflags +faststart -an chart_bt709_640x360_30.mp4
 # PNG with alpha (image clip, premultiplication check): a transparent border, a 280x160
 # blue box at 85% alpha and an opaque 200x80 yellow box inside it. Built with geq rather
 # than drawbox because drawbox blends RGB only and never writes the alpha plane, so the

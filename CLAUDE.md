@@ -215,6 +215,12 @@ Rules that are easy to get wrong and crash in the NVIDIA driver rather than anyw
   nothing. The driver is dlopen'd: only `cuda.h` is a build dependency, `available()` is false
   without it, and lavapipe declines (no `external_semaphore_fd`). Gate:
   `openshot-gpu-cuda-interop`.
+- **The interop's two binary semaphores are per image pair** (they live on the luma image;
+  `waitSemaphore(y)`), never process-wide. One pair's cycle is self-ordered; two pairs sharing
+  one semaphore re-signal it before it is waited on, and the CUDA wait that loses its signal
+  stalls the stream NVDEC decodes on — every transition hung that way (W23). A readback between
+  frames hides it; `pairs` in `openshot-gpu-cuda-interop` does not. Callers serialise
+  copy → submit → `prepareForCopy` themselves (`FFmpegReader::ConvertOnDevice` holds one lock).
 - `GpuFrame` is `kRGBA_8888` and raster N32 is BGRA on x86, but do **not** "fix" the R/B swap in
   `SkiaRenderer::parseColorString` for the GPU path. It is a logical `SkColor` convention, not a
   byte order; Skia converts correctly in both directions on readback, so it survives the round trip.
@@ -243,18 +249,27 @@ GPU to take over. Earlier, lower figures in the docs were measured on an Intel i
   to the library. Both default to the CPU, and the runtime image is GPU-*capable*, not GPU-requiring.
 - **The reader can convert YUV→RGBA on the GPU** (`src/gpu/GpuYuv`, `Settings::GPU_DECODE`,
   2026-09-22): the decoded frame is born on a GPU surface and stays there for the compositor.
-  **Off by default because it changes pixels** — 3 LSB of rounding, plus it honours the stream's
-  declared colour space where swscale here never did, so a `bt709`-tagged file decodes
-  differently. `unit.gpu_decode` gates the conversion at 44 dB / 4 LSB and asserts the pass ran.
-  It buys ~0.2 of a core and no wall clock until NVDEC feeds it (`CudaInterop::copyNV12` is the
-  input) and the writer stops reading back.
+  **Off by default because it changes pixels** — rounding, plus it honours the stream's declared
+  colour space where swscale here never did, so a `bt709`-tagged file decodes differently; the
+  default is the owner's decision. With `HARDWARE_DECODER=2` as well, NVDEC's frames never leave
+  the device (W23): `source_4k` 78 → ~130 fps at 0.6 cores. Gates: `unit.gpu_decode`,
+  `unit.nvdec_on_device` (bit-exact vs software decode), `unit.bt709_chart`. The harness runs
+  the paths with `OPENSHOT_GOLDEN_GPU_DECODE=1` / `OPENSHOT_GOLDEN_HW_DECODE=1`, the bench with
+  `OPENSHOT_BENCH_GPU_DECODE=1` / `OPENSHOT_BENCH_HW_DECODE=2`. Neutral chroma is **128/255, not
+  0.5** — taking 0.5 was a ~1-code bias on R and B that the chart found.
+- **`FrameMapper` must not `GetImage()` a GPU-backed frame.** It did, for every frame it rebuilt
+  (any clip whose audio mapping differs, i.e. most video), which read every GPU-decoded frame back
+  and made GPU decode look worthless. It shares the surface now, as `Frame`'s copy constructor
+  does. Anything new that copies frames must do the same.
 - Hardware decode (`HARDWARE_DECODER != 0`) **worked again as of 2026-09-22** (plan step 1.5):
   `ProcessVideoPacket` takes swscale's source format from the frame it converts, not from
   `pCodecCtx->pix_fmt`, which is `AV_PIX_FMT_CUDA` once NVDEC is on. `~FFmpegReader` also no
   longer lets `Close()` throw out of a destructor — `Close()` drains the decoder through that same
   call, so any decode failure used to `terminate()` the process. `unit.hardware_decode` guards
-  both. It is still *slower* than software decode until W23 moves YUV→RGBA off swscale, and
-  `HARDWARE_DECODER` stays 0 by default.
+  both. With the download + swscale it is still *slower* than software decode (58 against 78 fps
+  at 4K → 1080p); only with `GPU_DECODE` on too does it pay. `HARDWARE_DECODER` stays 0 by
+  default, and `DE_LIMIT_*` (a 1950x1100 cap that silently sent 4K to software) is gone: a
+  stream NVDEC refuses fails before its first frame and the reader reopens it in software.
 - Three time→frame conventions and two bezier-handle conventions coexist in the service; see
   `tests/golden/Recipes.h`.
 - `Scene` in the golden harness must delete readers in reverse creation order (a FrameMapper before

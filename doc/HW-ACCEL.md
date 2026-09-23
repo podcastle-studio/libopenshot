@@ -196,14 +196,11 @@ int OMP_THREADS = 12;
 /// Number of threads that FFmpeg uses
 int FF_THREADS = 8;
 
-/// Maximum rows that hardware decode can handle
-int DE_LIMIT_HEIGHT_MAX = 1100;
-
-/// Maximum columns that hardware decode can handle
-int DE_LIMIT_WIDTH_MAX = 1950;
-
 /// Which GPU to use to decode (0 is the first, Linux only)
 int HW_DE_DEVICE_SET = 0;
+// (This fork removed DE_LIMIT_WIDTH_MAX / DE_LIMIT_HEIGHT_MAX, a fixed 1950x1100 cap that
+// silently sent every larger stream to software decode. The decoder decides now; one that
+// refuses a stream fails before its first frame and the reader reopens it in software.)
 
 /// Which GPU to use to encode (0 is the first, Linux only)
 int HW_EN_DEVICE_SET = 0;

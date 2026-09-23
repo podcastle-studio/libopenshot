@@ -32,6 +32,7 @@
 #include "Exceptions.h"
 #include "MemoryTrim.h"
 #include "QtUtilities.h"   // aligned_free, for the frame-buffer pool below
+#include "gpu/CudaInterop.h"
 #include "gpu/GpuDevice.h"
 #include "gpu/GpuFrame.h"
 #include "gpu/GpuYuv.h"
@@ -41,9 +42,6 @@
 #define ENABLE_VAAPI 0
 
 #if USE_HW_ACCEL
-#define MAX_SUPPORTED_WIDTH 1950
-#define MAX_SUPPORTED_HEIGHT 1100
-
 #if ENABLE_VAAPI
 #include "libavutil/hwcontext_vaapi.h"
 
@@ -73,6 +71,14 @@ typedef struct VAAPIDecodeContext {
 #endif // ENABLE_VAAPI
 #endif // USE_HW_ACCEL
 
+// NVDEC straight into CUDA-Vulkan interop images (W23): needs hardware decode, a GPU Skia and the
+// CUDA driver headers. Without any of them the reader downloads NVDEC's frames as it always has.
+#if USE_HW_ACCEL && defined(OPENSHOT_HAVE_SKIA_GPU) && defined(OPENSHOT_HAVE_CUDA)
+#define OPENSHOT_NVDEC_ON_DEVICE 1
+extern "C" {
+#include <libavutil/hwcontext_cuda.h>
+}
+#endif
 
 using namespace openshot;
 
@@ -588,8 +594,36 @@ void FFmpegReader::Open() {
 					}
 
 					hw_device_ctx = NULL;
+					hw_frames_on_device = false;
+#if OPENSHOT_NVDEC_ON_DEVICE
+					// NVDEC in the CUDA context that shares memory with the Vulkan device, so its
+					// frames can be copied into images Skia samples and never visit host memory.
+					// Only with GPU_DECODE on: that is the switch for converting on the GPU at all.
+					// Anything short of this is the ordinary device below and the download path.
+					if (hw_de_av_device_type == AV_HWDEVICE_TYPE_CUDA &&
+						openshot::Settings::Instance()->GPU_DECODE &&
+						openshot::CudaInterop::Instance().available()) {
+						AVBufferRef *device = av_hwdevice_ctx_alloc(AV_HWDEVICE_TYPE_CUDA);
+						if (device) {
+							auto *cuda = static_cast<AVCUDADeviceContext *>(
+								reinterpret_cast<AVHWDeviceContext *>(device->data)->hwctx);
+							openshot::CudaInterop &interop = openshot::CudaInterop::Instance();
+							cuda->cuda_ctx = static_cast<CUcontext>(interop.cudaContext());
+							// The interop's own stream: NVDEC's output copy and copyNV12 then queue
+							// in order on one stream, with nothing to synchronise between them.
+							cuda->stream = static_cast<CUstream>(interop.cudaStream());
+							if (av_hwdevice_ctx_init(device) >= 0) {
+								hw_device_ctx = device;
+								hw_frames_on_device = true;
+							} else {
+								av_buffer_unref(&device);
+							}
+						}
+					}
+#endif
 					// Here the first hardware initialisations are made
-					if (av_hwdevice_ctx_create(&hw_device_ctx, hw_de_av_device_type, adapter_ptr, NULL, 0) >= 0) {
+					if (hw_device_ctx ||
+						av_hwdevice_ctx_create(&hw_device_ctx, hw_de_av_device_type, adapter_ptr, NULL, 0) >= 0) {
 						if (!(pCodecCtx->hw_device_ctx = av_buffer_ref(hw_device_ctx))) {
 							throw InvalidCodec("Hardware device reference create failed.", path);
 						}
@@ -679,30 +713,14 @@ void FFmpegReader::Open() {
 						}
 					}
 					else {
-						int max_h, max_w;
-						//max_h = ((getenv( "LIMIT_HEIGHT_MAX" )==NULL) ? MAX_SUPPORTED_HEIGHT : atoi(getenv( "LIMIT_HEIGHT_MAX" )));
-						max_h = openshot::Settings::Instance()->DE_LIMIT_HEIGHT_MAX;
-						//max_w = ((getenv( "LIMIT_WIDTH_MAX" )==NULL) ? MAX_SUPPORTED_WIDTH : atoi(getenv( "LIMIT_WIDTH_MAX" )));
-						max_w = openshot::Settings::Instance()->DE_LIMIT_WIDTH_MAX;
-						ZmqLogger::Instance()->AppendDebugMethod("Constraints could not be found using default limit\n");
-						//cerr << "Constraints could not be found using default limit\n";
-						if (pCodecCtx->coded_width < 0  	||
-								pCodecCtx->coded_height < 0 	||
-								pCodecCtx->coded_width > max_w ||
-								pCodecCtx->coded_height > max_h ) {
-							ZmqLogger::Instance()->AppendDebugMethod("DIMENSIONS ARE TOO LARGE for hardware acceleration\n", "Max Width :", max_w, "Max Height :", max_h, "Frame width :", pCodecCtx->coded_width, "Frame height :", pCodecCtx->coded_height);
-							hw_de_supported = 0;
-							retry_decode_open = 1;
-							AV_FREE_CONTEXT(pCodecCtx);
-							if (hw_device_ctx) {
-								av_buffer_unref(&hw_device_ctx);
-								hw_device_ctx = NULL;
-							}
-						}
-						else {
-							ZmqLogger::Instance()->AppendDebugMethod("\nDecode hardware acceleration is used\n", "Max Width :", max_w, "Max Height :", max_h, "Frame width :", pCodecCtx->coded_width, "Frame height :", pCodecCtx->coded_height);
-							retry_decode_open = 0;
-						}
+						// No constraints to check against -- the case for every device but VAAPI,
+						// NVDEC included. There used to be a fixed 1950x1100 cap here
+						// (DE_LIMIT_*), which silently sent everything above 1080p to software
+						// decode and hid that hardware decode was broken (W23). The decoder is the
+						// authority on what it can do: one that refuses a stream fails before its
+						// first frame, and ReopenWithoutHardwareDecode() takes it from there.
+						ZmqLogger::Instance()->AppendDebugMethod("\nDecode hardware acceleration is used (no device constraints)\n", "Frame width :", pCodecCtx->coded_width, "Frame height :", pCodecCtx->coded_height);
+						retry_decode_open = 0;
 					}
 				} // if hw_de_on && hw_de_supported
 				else {
@@ -917,6 +935,9 @@ void FFmpegReader::Close() {
 					hw_device_ctx = NULL;
 				}
 			}
+			hw_frames_on_device = false;
+			device_luma.reset();
+			device_chroma.reset();
 #endif // USE_HW_ACCEL
 			if (img_convert_ctx) {
 				sws_freeContext(img_convert_ctx);
@@ -1736,7 +1757,21 @@ bool FFmpegReader::GetAVFrame() {
 #if USE_HW_ACCEL
 			if (hw_de_on && hw_de_supported) {
 				int err;
-				if (next_frame2->format == hw_de_av_pix_fmt) {
+				// NV12 in the interop's CUDA context stays where NVDEC put it: ProcessVideoPacket
+				// converts it on the GPU, and downloads it there only if that declines. Anything
+				// else -- 10-bit, 4:4:4, an ordinary device -- is downloaded here as before.
+				bool keep_on_device = false;
+#if OPENSHOT_NVDEC_ON_DEVICE
+				if (hw_frames_on_device && next_frame2->format == AV_PIX_FMT_CUDA &&
+					next_frame2->hw_frames_ctx) {
+					const auto *frames = reinterpret_cast<const AVHWFramesContext *>(
+						next_frame2->hw_frames_ctx->data);
+					keep_on_device = frames->sw_format == AV_PIX_FMT_NV12;
+				}
+#endif
+				if (keep_on_device) {
+					decoded_frame = next_frame2;
+				} else if (next_frame2->format == hw_de_av_pix_fmt) {
 					if ((err = av_hwframe_transfer_data(next_frame, next_frame2, 0)) < 0) {
 						ZmqLogger::Instance()->AppendDebugMethod(
 							"FFmpegReader::GetAVFrame (Failed to transfer data to output frame)",
@@ -1952,6 +1987,59 @@ bool FFmpegReader::CheckSeek(bool is_video) {
 }
 
 // Process a video packet
+// NVDEC's frame -> an RGBA GPU frame, without leaving the device (W23).
+//
+// copyNV12 puts the two planes into this reader's interop images, GpuYuv samples them, and the
+// submit waits on the copy. Null means "download it instead": no interop, the device went away,
+// or anything failed.
+std::shared_ptr<openshot::GpuFrame> FFmpegReader::ConvertOnDevice(int out_width, int out_height) {
+#if OPENSHOT_NVDEC_ON_DEVICE
+	openshot::CudaInterop &interop = openshot::CudaInterop::Instance();
+	if (!pFrame || pFrame->format != AV_PIX_FMT_CUDA || !openshot::GpuDevice::Instance().available() ||
+		!interop.available())
+		return nullptr;
+
+	const int width = pFrame->width;
+	const int height = pFrame->height;
+	if (!device_luma || !device_chroma || !device_luma->valid() || !device_chroma->valid() ||
+		device_luma->width() != width || device_luma->height() != height) {
+		device_luma = interop.createImage(width, height, openshot::GpuImage::Format::R8);
+		device_chroma = interop.createImage((width + 1) / 2, (height + 1) / 2,
+											openshot::GpuImage::Format::R8G8);
+		if (!device_luma || !device_chroma)
+			return nullptr;
+	}
+
+	// Each copy must be waited on by exactly the next submit that names its semaphore, and a
+	// submit takes everything this thread's recorder holds, so copy, draw, submit and re-arm
+	// happen as one step whichever reader, on whichever thread, gets here first.
+	static std::mutex sequence;
+	const std::lock_guard<std::mutex> lock(sequence);
+	if (!interop.copyNV12(pFrame, *device_luma, *device_chroma))
+		return nullptr;
+
+	std::shared_ptr<openshot::GpuFrame> converted = openshot::GpuYuv::Convert(
+		*device_luma, *device_chroma,
+		openshot::GpuYuv::MatrixOf((int) pFrame->colorspace, width, height),
+		pFrame->color_range == AVCOL_RANGE_JPEG, out_width, out_height);
+
+	// Submitted even if the conversion declined: the copy has signalled, and only a submit that
+	// waits on it clears the semaphore for the next frame.
+	const unsigned long long copied = interop.waitSemaphore(*device_luma);
+	if (!openshot::GpuDevice::Instance().submit(false, &copied, 1))
+		return nullptr;
+	// The conversion above is the only thing that samples these images -- the compositor gets
+	// the RGBA frame it drew -- so this is the submit prepareForCopy() has to follow. Re-arming
+	// them now takes the Vulkan-to-CUDA handshake off the next frame's critical path.
+	interop.prepareForCopy(*device_luma, *device_chroma);
+	return converted;
+#else
+	(void) out_width;
+	(void) out_height;
+	return nullptr;
+#endif
+}
+
 void FFmpegReader::ProcessVideoPacket(int64_t requested_frame) {
     // 1. Decode next frame (sets video_pts)
     int frame_finished = GetAVFrame();
@@ -2066,7 +2154,26 @@ void FFmpegReader::ProcessVideoPacket(int64_t requested_frame) {
     // path below is unchanged.
     std::shared_ptr<Frame> f = CreateFrame(current_frame);
     std::shared_ptr<openshot::GpuFrame> gpu_converted;
-    if (openshot::Settings::Instance()->GPU_DECODE &&
+#if USE_HW_ACCEL
+    // NVDEC's frame, still on the device (GetAVFrame kept it there). Converted where it is, or
+    // brought down to the host and handed to the ordinary path below if that declines.
+    if (src_pix_fmt == AV_PIX_FMT_CUDA) {
+        gpu_converted = ConvertOnDevice(output_width, output_height);
+        if (!gpu_converted) {
+            AVFrame *host = AV_ALLOCATE_FRAME();
+            if (!host || av_hwframe_transfer_data(host, pFrame, 0) < 0 ||
+                av_frame_copy_props(host, pFrame) < 0) {
+                AV_FREE_FRAME(&host);
+                throw OutOfMemory("Failed to download a hardware-decoded frame", path);
+            }
+            av_frame_unref(pFrame);
+            av_frame_move_ref(pFrame, host);
+            AV_FREE_FRAME(&host);
+            src_pix_fmt = (PixelFormat) pFrame->format;
+        }
+    }
+#endif
+    if (!gpu_converted && openshot::Settings::Instance()->GPU_DECODE &&
         openshot::GpuDevice::Instance().available() &&
         openshot::GpuYuv::Supports((int) src_pix_fmt)) {
         openshot::GpuYuvPlane gpu_planes[3];

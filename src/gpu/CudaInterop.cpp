@@ -73,6 +73,7 @@ struct CudaApi
 	decltype(&cuCtxPopCurrent) CtxPopCurrent = nullptr;
 	decltype(&cuStreamCreate) StreamCreate = nullptr;
 	decltype(&cuStreamDestroy) StreamDestroy = nullptr;
+	decltype(&cuStreamSynchronize) StreamSynchronize = nullptr;
 	decltype(&cuImportExternalMemory) ImportExternalMemory = nullptr;
 	decltype(&cuDestroyExternalMemory) DestroyExternalMemory = nullptr;
 	decltype(&cuExternalMemoryGetMappedMipmappedArray) GetMappedMipmappedArray = nullptr;
@@ -131,6 +132,7 @@ bool loadCuda(CudaApi& api, std::string& error)
 	OPENSHOT_CU_LOAD(CtxPopCurrent, cuCtxPopCurrent);
 	OPENSHOT_CU_LOAD(StreamCreate, cuStreamCreate);
 	OPENSHOT_CU_LOAD(StreamDestroy, cuStreamDestroy);
+	OPENSHOT_CU_LOAD(StreamSynchronize, cuStreamSynchronize);
 	OPENSHOT_CU_LOAD(ImportExternalMemory, cuImportExternalMemory);
 	OPENSHOT_CU_LOAD(DestroyExternalMemory, cuDestroyExternalMemory);
 	OPENSHOT_CU_LOAD(GetMappedMipmappedArray, cuExternalMemoryGetMappedMipmappedArray);
@@ -172,6 +174,25 @@ struct ImageState
 	CUmipmappedArray mipmap = nullptr;
 	CUarray array = nullptr;
 
+	// The pair's two binary semaphores, held by its luma (R8) image; null on a
+	// chroma image. Per pair, not per interop, because one pair's cycle is
+	// self-ordered -- its barrier is submitted after the draw that waited on its
+	// copy -- while two pairs sharing one semaphore are not: with two readers,
+	// the second pair could signal it again before the first signal had been
+	// waited on, a binary semaphore signalled twice, and a CUDA wait that never
+	// returned stalled the stream NVDEC decodes on (W23, transitions.*).
+	//
+	// ready: Vulkan -> CUDA, orders the layout barrier before the copy.
+	// done:  CUDA -> Vulkan, what the caller's submit waits on.
+	VkSemaphore ready = VK_NULL_HANDLE;
+	CUexternalSemaphore ready_cu = nullptr;
+	VkSemaphore done = VK_NULL_HANDLE;
+	CUexternalSemaphore done_cu = nullptr;
+	/// ready has been signalled and not yet waited on, for this chroma image.
+	/// Binary semaphores take one signal per wait.
+	bool ready_signalled = false;
+	const ImageState* ready_uv = nullptr;
+
 	bool valid() const { return owner != nullptr; }
 
 	VkFormat vkFormat() const
@@ -209,24 +230,12 @@ struct InteropState
 	CUcontext context = nullptr;
 	CUstream stream = nullptr;
 
-	// Binary semaphores, one each way, consumed one per copyNV12 call. The
-	// Vulkan->CUDA one orders the layout barrier before the copy; the CUDA->Vulkan
-	// one is what the caller passes to GpuDevice::submit().
-	VkSemaphore vk_to_cuda = VK_NULL_HANDLE;
-	VkSemaphore cuda_to_vk = VK_NULL_HANDLE;
-	CUexternalSemaphore vk_to_cuda_cu = nullptr;
-	CUexternalSemaphore cuda_to_vk_cu = nullptr;
-
 	VkCommandPool command_pool = VK_NULL_HANDLE;
-	/// vk_to_cuda has been signalled and not yet waited on, and the pair of
-	/// images that signal covers. Binary semaphores take one signal per wait, so
-	/// a second barrier submit must consume the standing one first.
-	bool barrier_signalled = false;
-	const ImageState* barrier_y = nullptr;
-	const ImageState* barrier_uv = nullptr;
 
 	std::mutex mutex;
 	std::vector<ImageState*> images;
+	/// release() has already drained the device, so releaseImage need not.
+	bool draining = false;
 
 	bool initialise();
 	bool setup();
@@ -236,8 +245,9 @@ struct InteropState
 	bool copyNV12(const AVFrame* frame, ImageState& y, ImageState& uv, CUstream stream);
 	bool submitBarriers(ImageState& y, ImageState& uv);
 
-private:
 	bool createSemaphore(VkSemaphore& semaphore, CUexternalSemaphore& imported);
+
+private:
 	int memoryTypeIndex(uint32_t bits) const;
 	bool recordBarrier(ImageState& state);
 };
@@ -387,9 +397,6 @@ bool InteropState::setup()
 			stream = nullptr;
 			return false;
 		}
-		if (!createSemaphore(vk_to_cuda, vk_to_cuda_cu) ||
-			!createSemaphore(cuda_to_vk, cuda_to_vk_cu))
-			return false;
 	}
 
 	VkCommandPoolCreateInfo pool_info{};
@@ -617,11 +624,42 @@ bool InteropState::createImage(ImageState& state, int width, int height,
 		return false;
 	}
 
+	if (format == GpuImage::Format::R8 &&
+		(!createSemaphore(state.ready, state.ready_cu) ||
+		 !createSemaphore(state.done, state.done_cu)))
+		return false;
+
 	return recordBarrier(state);
 }
 
 void InteropState::releaseImage(ImageState& state)
 {
+	// Nothing queued may still name this image or its semaphores. Only a reader
+	// closing gets here outside release(), so a full drain costs nothing.
+	if (!draining && state.image != VK_NULL_HANDLE && device != VK_NULL_HANDLE &&
+		queue != VK_NULL_HANDLE) {
+		GpuDevice::QueueGuard guard;
+		vkQueueWaitIdle(queue);
+	}
+	if (state.external && stream && cu.StreamSynchronize)
+		cu.StreamSynchronize(stream);
+	if (state.ready_cu && cu.DestroyExternalSemaphore)
+		cu.DestroyExternalSemaphore(state.ready_cu);
+	if (state.done_cu && cu.DestroyExternalSemaphore)
+		cu.DestroyExternalSemaphore(state.done_cu);
+	state.ready_cu = nullptr;
+	state.done_cu = nullptr;
+	if (device != VK_NULL_HANDLE) {
+		if (state.ready != VK_NULL_HANDLE)
+			vkDestroySemaphore(device, state.ready, nullptr);
+		if (state.done != VK_NULL_HANDLE)
+			vkDestroySemaphore(device, state.done, nullptr);
+	}
+	state.ready = VK_NULL_HANDLE;
+	state.done = VK_NULL_HANDLE;
+	state.ready_signalled = false;
+	state.ready_uv = nullptr;
+
 	// CUDA first: the mapped array reads memory this is about to free.
 	if (state.mipmap && cu.MipmappedArrayDestroy)
 		cu.MipmappedArrayDestroy(state.mipmap);
@@ -644,11 +682,11 @@ void InteropState::releaseImage(ImageState& state)
 	state.memory = VK_NULL_HANDLE;
 	state.owner = nullptr;
 
-	// Any standing barrier signal named this image; it is now stale.
-	if (barrier_y == &state || barrier_uv == &state) {
-		barrier_y = nullptr;
-		barrier_uv = nullptr;
-	}
+	// A standing signal on another pair that named this chroma image is now for
+	// nothing; submitBarriers consumes it before that luma image is reused.
+	for (ImageState* other : images)
+		if (other->ready_uv == &state)
+			other->ready_uv = nullptr;
 }
 
 void InteropState::release()
@@ -662,16 +700,11 @@ void InteropState::release()
 
 	{
 		ContextGuard guard(cu, context);
+		draining = true;
 		for (ImageState* state : images)
 			releaseImage(*state);
 		images.clear();
-
-		if (vk_to_cuda_cu && cu.DestroyExternalSemaphore)
-			cu.DestroyExternalSemaphore(vk_to_cuda_cu);
-		if (cuda_to_vk_cu && cu.DestroyExternalSemaphore)
-			cu.DestroyExternalSemaphore(cuda_to_vk_cu);
-		vk_to_cuda_cu = nullptr;
-		cuda_to_vk_cu = nullptr;
+		draining = false;
 
 		if (stream && cu.StreamDestroy)
 			cu.StreamDestroy(stream);
@@ -685,17 +718,8 @@ void InteropState::release()
 	if (device != VK_NULL_HANDLE) {
 		if (command_pool != VK_NULL_HANDLE)
 			vkDestroyCommandPool(device, command_pool, nullptr);
-		if (vk_to_cuda != VK_NULL_HANDLE)
-			vkDestroySemaphore(device, vk_to_cuda, nullptr);
-		if (cuda_to_vk != VK_NULL_HANDLE)
-			vkDestroySemaphore(device, cuda_to_vk, nullptr);
 	}
 	command_pool = VK_NULL_HANDLE;
-	vk_to_cuda = VK_NULL_HANDLE;
-	cuda_to_vk = VK_NULL_HANDLE;
-	barrier_signalled = false;
-	barrier_y = nullptr;
-	barrier_uv = nullptr;
 
 	if (cu.library) {
 		dlclose(cu.library);
@@ -717,22 +741,30 @@ void InteropState::release()
 // scope, so the drawing that read these images is ordered before it.
 bool InteropState::submitBarriers(ImageState& y, ImageState& uv)
 {
-	if (barrier_signalled && barrier_y == &y && barrier_uv == &uv)
-		return true;   // already up for this pair
 	if (!y.valid() || !uv.valid()) {
 		error = "the images' device has gone away";
 		return false;
 	}
-	if (barrier_signalled) {
-		// A signal is standing for a different pair — a second image set, or one
-		// that has since been freed. Consume it on the stream (which costs
-		// nothing and does not block) so the semaphore can be signalled again.
+	if (y.ready == VK_NULL_HANDLE) {
+		error = "the luma image carries no semaphores (it must be the R8 one)";
+		return false;
+	}
+	if (y.ready_signalled && y.ready_uv == &uv)
+		return true;   // already up for this pair
+	if (y.ready_signalled) {
+		// A signal is standing for a different chroma image -- one since freed, or
+		// a caller mixing pairs. Consume it, and wait until the consume has actually
+		// happened: a second signal submitted while the first is still pending is
+		// exactly the double signal these per-pair semaphores exist to rule out.
+		// Nothing the reader does takes this path.
 		ContextGuard guard(cu, context);
 		CUDA_EXTERNAL_SEMAPHORE_WAIT_PARAMS wait{};
-		const CUresult result = cu.WaitExternalSemaphores(&vk_to_cuda_cu, &wait, 1, stream);
-		barrier_signalled = false;
+		CUresult result = cu.WaitExternalSemaphores(&y.ready_cu, &wait, 1, stream);
+		if (result == CUDA_SUCCESS)
+			result = cu.StreamSynchronize(stream);
+		y.ready_signalled = false;
 		if (result != CUDA_SUCCESS) {
-			error = cu.message("cuWaitExternalSemaphoresAsync", result);
+			error = cu.message("consuming a standing barrier signal", result);
 			return false;
 		}
 	}
@@ -743,16 +775,15 @@ bool InteropState::submitBarriers(ImageState& y, ImageState& uv)
 	submit.commandBufferCount = 2;
 	submit.pCommandBuffers = buffers;
 	submit.signalSemaphoreCount = 1;
-	submit.pSignalSemaphores = &vk_to_cuda;
+	submit.pSignalSemaphores = &y.ready;
 
 	GpuDevice::QueueGuard guard;   // one queue, externally synchronised
 	if (vkQueueSubmit(queue, 1, &submit, VK_NULL_HANDLE) != VK_SUCCESS) {
 		error = "vkQueueSubmit failed for the layout barrier";
 		return false;
 	}
-	barrier_signalled = true;
-	barrier_y = &y;
-	barrier_uv = &uv;
+	y.ready_signalled = true;
+	y.ready_uv = &uv;
 	return true;
 }
 
@@ -793,8 +824,8 @@ bool InteropState::copyNV12(const AVFrame* frame, ImageState& y, ImageState& uv,
 	}
 
 	CUDA_EXTERNAL_SEMAPHORE_WAIT_PARAMS wait{};
-	CUresult result = cu.WaitExternalSemaphores(&vk_to_cuda_cu, &wait, 1, on_stream);
-	barrier_signalled = false;   // this wait consumes it, queued or not
+	CUresult result = cu.WaitExternalSemaphores(&y.ready_cu, &wait, 1, on_stream);
+	y.ready_signalled = false;   // this wait consumes it, queued or not
 	if (result != CUDA_SUCCESS) {
 		error = cu.message("cuWaitExternalSemaphoresAsync", result);
 		return false;
@@ -819,7 +850,7 @@ bool InteropState::copyNV12(const AVFrame* frame, ImageState& y, ImageState& uv,
 	}
 
 	CUDA_EXTERNAL_SEMAPHORE_SIGNAL_PARAMS signal{};
-	result = cu.SignalExternalSemaphores(&cuda_to_vk_cu, &signal, 1, on_stream);
+	result = cu.SignalExternalSemaphores(&y.done_cu, &signal, 1, on_stream);
 	if (result != CUDA_SUCCESS) {
 		error = cu.message("cuSignalExternalSemaphoresAsync", result);
 		return false;
@@ -961,10 +992,10 @@ void* CudaInterop::cudaStream()
 	return available() ? impl->state.stream : nullptr;
 }
 
-unsigned long long CudaInterop::waitSemaphore() const
+unsigned long long CudaInterop::waitSemaphore(const GpuImage& y) const
 {
 	unsigned long long handle = 0;
-	std::memcpy(&handle, &impl->state.cuda_to_vk, sizeof(impl->state.cuda_to_vk));
+	std::memcpy(&handle, &y.impl->done, sizeof(y.impl->done));
 	return handle;
 }
 
@@ -1049,7 +1080,7 @@ std::string CudaInterop::lastError() const { return impl->error; }
 std::string CudaInterop::deviceName() const { return std::string(); }
 void* CudaInterop::cudaContext() { return nullptr; }
 void* CudaInterop::cudaStream() { return nullptr; }
-unsigned long long CudaInterop::waitSemaphore() const { return 0; }
+unsigned long long CudaInterop::waitSemaphore(const GpuImage&) const { return 0; }
 
 std::shared_ptr<GpuImage> CudaInterop::createImage(int, int, GpuImage::Format)
 {

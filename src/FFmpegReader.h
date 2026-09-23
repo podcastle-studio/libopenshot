@@ -36,6 +36,9 @@
 
 
 namespace openshot {
+	class GpuFrame;
+	class GpuImage;
+
 	/**
 	 * @brief This struct holds the packet counts and end-of-file detection for an openshot::FFmpegReader.
 	 *
@@ -172,6 +175,13 @@ namespace openshot {
 		bool hw_decode_failed = false;
 		int hw_decode_error_count = 0;
 		bool hw_decode_succeeded = false;
+		// NVDEC's frames stay on the device and are converted from there (W23). Set when the
+		// decoder opens in the CUDA context CudaInterop shares with Vulkan, which is the only
+		// way its frames can be copied into images Skia samples. The images are this reader's.
+		bool hw_frames_on_device = false;
+		std::shared_ptr<openshot::GpuImage> device_luma;
+		std::shared_ptr<openshot::GpuImage> device_chroma;
+		std::shared_ptr<openshot::GpuFrame> ConvertOnDevice(int out_width, int out_height);
 #if USE_HW_ACCEL
 		AVPixelFormat hw_de_av_pix_fmt = AV_PIX_FMT_NONE;
 		AVHWDeviceType hw_de_av_device_type = AV_HWDEVICE_TYPE_NONE;

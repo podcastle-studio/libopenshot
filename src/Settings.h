@@ -105,12 +105,6 @@ namespace openshot {
 			/// Minimum number of frames for frame-count-based caches
 			int CACHE_MIN_FRAMES = 24;
 
-			/// Maximum rows that hardware decode can handle
-			int DE_LIMIT_HEIGHT_MAX = 1100;
-
-		/// Maximum columns that hardware decode can handle
-		int DE_LIMIT_WIDTH_MAX = 1950;
-
 		/// Which GPU to use to decode (0 is the first)
 		int HW_DE_DEVICE_SET = 0;
 

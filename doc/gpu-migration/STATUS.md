@@ -27,7 +27,7 @@ Stated by the project owner, 2026-09-14. This overrides anything in
    and all four must be **295/295** (292 until W18 added three frames of background-colour
    coverage). Commands are in `CLAUDE.md` under "GPU rendering (`src/gpu`)".
 
-Last updated: 2026-09-22 (Stage 6 complete; **W22 done**; **W23 part done** — 1.5's crash fix, the buffer pool, and the SkSL YUV→RGBA pass built and flagged off; NVDEC feeding it is what is left) · branch `feature/gpu-rendering`.
+Last updated: 2026-09-23 (**W23 done** — NVDEC frames stay on the device through `CudaInterop` into `GpuYuv`; `DE_LIMIT_*` removed; the FrameMapper readback and two interop bugs found and fixed on the way. **W24 is next.** `GPU_DECODE` default still the owner's call) · branch `feature/gpu-rendering`.
 **Phase 2 is complete.** 2.0 landed 2026-09-15 (the GPU-capable image, in
 `../video-rendering-service` branch `feature/gpu-rendering`), which was the last thing in it and the
 only thing stopping R2a and R2b from shipping. **R2a complete** (2.1, 2.2, 2.3); **2.4 done, gate
@@ -441,7 +441,17 @@ ask it for you) and none reads the environment for itself — the new `control` 
 `doc/gpu-migration/GPU-WORKLIST.md`. One item to a session; the worklist opens with the protocol.
 **The order is Stage 2 → Stage 3 → Stage 6**, by owner decision on 2026-09-18.
 
-> ## Start here (2026-09-18, end of session)
+> ## Start here (2026-09-23, end of session)
+>
+> **W23 is done; a resuming session starts W24** (decode read-ahead). What W23 landed and what it
+> found is in its worklist item and the top of the log. Two things are waiting on the project
+> owner and are **not** a session's to take: (1) whether `Settings::GPU_DECODE` becomes the
+> default — with it on, 12 frames + 3 checks of 307 diverge on Vulkan (list in the log), all the
+> expected "honours BT.709 / GPU rounding" kind; (2) the service never sets `GPU_DECODE` or
+> `HARDWARE_DECODER` (it never touches `Settings`), so production cannot reach this path until a
+> pass-through like `ENCODER`/`OPENSHOT_GPU` exists in `../video-rendering-service`.
+>
+> ## Earlier: start here (2026-09-18, end of session)
 >
 > **W09 is done** — see Stage 3 below. With it, **Stages 2 and 3 hold nothing else this machine can
 > finish unaided**; everything still open there is waiting on the project owner or on a container,
@@ -789,6 +799,34 @@ production corpus) remain open; W05–W10 are the CPU quick wins. W01/W02 stay d
 
 ## Log
 
+- 2026-09-23 — **W23 done: NVDEC's frames never leave the device.** 4K → 1080p `source_4k` on
+  Vulkan, interleaved, mains power: `render` **78–82 → 126–133 fps at 0.6 cores** (was 1.9);
+  `x264` **58–59 → 87–96 fps**. Reader CPU per frame 7.2 → 2.8 ms. Gate met on every clause:
+  no regression (+60 %), < 1 core, NVDEC vs software **byte-identical in YUV** (120 frames at
+  640x360, 1080p, 4K) and `unit.nvdec_on_device` bit-exact after conversion, BT.709 chart within
+  2 code values (`unit.bt709_chart`; swscale is 31 off, BT.601 by design). Four things measured on
+  the way, three of them bugs:
+  1. **`FrameMapper::GetFrame` read every GPU-decoded frame back to the CPU** (`GetImage()` to
+     copy the image into its new frame), 3.4 ms a frame — that is why GPU decode was "a wash" on
+     2026-09-22. It now shares the surface, as `Frame`'s copy constructor already did. On its own:
+     GPU decode 78 → 107 fps. No default pixel moves (four-way 307/307).
+  2. **`GpuYuv` took neutral chroma as 0.5 instead of 128/255**, R and B ~0.9 of a code value high
+     on every pixel. Fixed: `unit.gpu_decode` 47.4 → 49.5 dB against swscale; the GPU_DECODE arm
+     now diverges on 12 frames + 3 checks (was 16 + 3).
+  3. **W22's interop had one Vulkan→CUDA and one CUDA→Vulkan semaphore for the whole process.**
+     Correct for one image pair, which is all W22 tested; with two readers (every transition, the
+     video matte) the second pair re-signalled the binary semaphore before the first signal was
+     waited on, a CUDA wait lost its signal, and the stream NVDEC decodes on stalled for good —
+     every two-video scenario hung on the NVDEC arm (15 transitions + the video matte, before the
+     bisect was stopped). Both semaphores are now per pair (on the
+     luma image), `waitSemaphore(y)` takes the pair, and `pairs` in `openshot-gpu-cuda-interop`
+     runs 400 alternating copies with no CPU sync.
+  4. `DE_LIMIT_*` removed. NVDEC reports no constraints, so the cap was the only check; a stream it
+     refuses (4608x2592 H.264, 10-bit H.264: measured) fails before its first frame and the reader
+     reopens it in software, as it already did for decode errors.
+  With both decode flags on, the whole suite through NVDEC matches the GPU-decode arm exactly.
+  The service's `predictPrescaledSize_ScaleNone` (and the harness's copy) predicts the reader's
+  output size; both GPU paths keep the exact size, so nothing there changes.
 - 2026-09-22 — **The pre-scale question is settled by measurement, and both obvious answers were
   wrong.** Asked: should the reader pre-scale at all once the frame stays on the GPU, given the
   compositor resamples it again anyway? Measured end to end at 4K → 1080p on Vulkan with

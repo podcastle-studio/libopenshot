@@ -19,6 +19,7 @@
 namespace openshot
 {
 	class GpuFrame;
+	class GpuImage;
 
 	/// Decoded YUV planes, as FFmpeg hands them over: a pointer, a stride and the
 	/// plane's own dimensions.
@@ -74,6 +75,17 @@ namespace openshot
 												 const GpuYuvPlane* planes, int plane_count,
 												 int out_width, int out_height);
 
+		/// Convert NVDEC's two planes where they already are -- the images
+		/// CudaInterop::copyNV12 wrote -- so nothing crosses the bus at all. Same
+		/// conversion and pre-scale as the overload above, bit for bit: only where
+		/// the planes come from differs. @a luma must be R8 and @a chroma R8G8.
+		///
+		/// Records the drawing and returns; it does not submit. The caller submits
+		/// waiting on CudaInterop::waitSemaphore(luma), then calls prepareForCopy().
+		static std::shared_ptr<GpuFrame> Convert(const GpuImage& luma, const GpuImage& chroma,
+												 Matrix matrix, bool full_range,
+												 int out_width, int out_height);
+
 		/// How many frames have been converted here. The golden harness reads this
 		/// to know whether a scenario actually went through the GPU: a scenario
 		/// whose pixels a GPU produced cannot be held to CPU goldens bit-for-bit,
@@ -87,5 +99,9 @@ namespace openshot
 		/// phase -- and on colour bars that is a whole column of wrong pixels at
 		/// every edge. The harness picks its tolerance on this.
 		static unsigned long long ScaledConversions();
+
+		/// How many of those came straight from device images (the NVDEC overload),
+		/// so a check can tell the zero-copy path from the host-plane one.
+		static unsigned long long DeviceConversions();
 	};
 }

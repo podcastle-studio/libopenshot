@@ -2,6 +2,7 @@
 
 #include "GpuYuv.h"
 
+#include "CudaInterop.h"
 #include "GpuDevice.h"
 #include "GpuFrame.h"
 
@@ -38,6 +39,12 @@ namespace
 	}
 
 	std::atomic<unsigned long long>& scaledCount()
+	{
+		static std::atomic<unsigned long long> count{0};
+		return count;
+	}
+
+	std::atomic<unsigned long long>& deviceCount()
 	{
 		static std::atomic<unsigned long long> count{0};
 		return count;
@@ -134,13 +141,20 @@ half4 main(float2 p) {
 		const float c_scale = full_range ? 1.0f : 255.0f / 224.0f;
 		const float y_shift = full_range ? 0.0f : 16.0f / 255.0f;
 
+		// Neutral chroma is code 128 in both ranges, which a UNORM texture samples as
+		// 128/255 -- not 0.5. Taking it as 0.5 put R and B about 0.9 of a code value
+		// high on every pixel, all of the "3 LSB against swscale" this pass used to
+		// measure; found by the BT.709 chart (unit.bt709_chart), where it was the
+		// difference between 2 and 3.
+		const float chroma_zero = 128.0f / 255.0f;
+
 		Rows rows{};
 		const auto row = [&](float cb, float cr, float* out) {
 			out[0] = y_scale;
 			out[1] = cb * c_scale;
 			out[2] = cr * c_scale;
-			// The offset undoes the black level and the 0.5 chroma bias.
-			out[3] = -(y_scale * y_shift) - 0.5f * (out[1] + out[2]);
+			// The offset undoes the black level and the chroma bias.
+			out[3] = -(y_scale * y_shift) - chroma_zero * (out[1] + out[2]);
 		};
 		row(0.0f, cr_r, rows.r);
 		row(cb_g, cr_g, rows.g);
@@ -226,32 +240,27 @@ unsigned long long GpuYuv::ScaledConversions()
 	return scaledCount().load();
 }
 
-std::shared_ptr<GpuFrame> GpuYuv::Convert(Layout layout, Matrix matrix, bool full_range,
-										  const GpuYuvPlane* planes, int plane_count,
-										  int out_width, int out_height)
+unsigned long long GpuYuv::DeviceConversions()
 {
-	if (!planes || out_width <= 0 || out_height <= 0)
-		return nullptr;
-	const int wanted_planes = layout == Layout::NV12 ? 2 : 3;
-	if (plane_count < wanted_planes)
-		return nullptr;
-	if (!GpuDevice::Instance().available())
+	return deviceCount().load();
+}
+
+namespace
+{
+// Both Convert() overloads end here: the planes are textures by now, wherever they came from.
+std::shared_ptr<GpuFrame> convertImages(GpuYuv::Layout layout, GpuYuv::Matrix matrix,
+										bool full_range, const sk_sp<SkImage>& luma,
+										const sk_sp<SkImage>& chroma_a,
+										const sk_sp<SkImage>& chroma_b, int luma_width,
+										int luma_height, int chroma_width, int chroma_height,
+										int out_width, int out_height)
+{
+	using Layout = GpuYuv::Layout;
+	if (!luma || !chroma_a || !chroma_b || luma_width <= 0 || luma_height <= 0)
 		return nullptr;
 
 	sk_sp<SkRuntimeEffect> effect = yuvEffect();
 	if (!effect)
-		return nullptr;
-
-	const GpuYuvPlane& luma_plane = planes[0];
-	if (luma_plane.width <= 0 || luma_plane.height <= 0)
-		return nullptr;
-
-	sk_sp<SkImage> luma = planeTexture(luma_plane, kR8_unorm_SkColorType);
-	sk_sp<SkImage> chroma_a = planeTexture(
-		planes[1], layout == Layout::NV12 ? kR8G8_unorm_SkColorType : kR8_unorm_SkColorType);
-	sk_sp<SkImage> chroma_b =
-		layout == Layout::NV12 ? chroma_a : planeTexture(planes[2], kR8_unorm_SkColorType);
-	if (!luma || !chroma_a || !chroma_b)
 		return nullptr;
 
 	// Convert at the source's own resolution, and pre-filter afterwards if the reader asked for a
@@ -273,13 +282,13 @@ std::shared_ptr<GpuFrame> GpuYuv::Convert(Layout layout, Matrix matrix, bool ful
 	// at the halving cost 4.5 dB on readers.video_b_24fps_prescale. At a power-of-two ratio the
 	// halvings land exactly on the target and this step disappears, which is the common case.
 	int scale_steps = 0;
-	for (int w = luma_plane.width, h = luma_plane.height;
+	for (int w = luma_width, h = luma_height;
 		 w / 2 >= out_width && h / 2 >= out_height && scale_steps < 4; w /= 2, h /= 2)
 		++scale_steps;
-	const bool scaling = scale_steps > 0 || out_width != luma_plane.width ||
-						 out_height != luma_plane.height;
+	const bool scaling = scale_steps > 0 || out_width != luma_width ||
+						 out_height != luma_height;
 	std::shared_ptr<GpuFrame> frame =
-		GpuFrame::Create(luma_plane.width, luma_plane.height);
+		GpuFrame::Create(luma_width, luma_height);
 	if (!frame)
 		return nullptr;
 
@@ -308,8 +317,8 @@ std::shared_ptr<GpuFrame> GpuYuv::Convert(Layout layout, Matrix matrix, bool ful
 	builder.uniform("rowB") = SkV4{rows.b[0], rows.b[1], rows.b[2], rows.b[3]};
 	builder.uniform("lumaStep") = SkV2{1.0f, 1.0f};
 	builder.uniform("chromaStep") =
-		SkV2{static_cast<float>(planes[1].width) / static_cast<float>(luma_plane.width),
-			 static_cast<float>(planes[1].height) / static_cast<float>(luma_plane.height)};
+		SkV2{static_cast<float>(chroma_width) / static_cast<float>(luma_width),
+			 static_cast<float>(chroma_height) / static_cast<float>(luma_height)};
 	builder.uniform("interleaved") = layout == Layout::NV12 ? 1 : 0;
 
 	sk_sp<SkShader> shader = builder.makeShader();
@@ -322,8 +331,8 @@ std::shared_ptr<GpuFrame> GpuYuv::Convert(Layout layout, Matrix matrix, bool ful
 	paint.setBlendMode(SkBlendMode::kSrc);
 	frame->canvas()->drawPaint(paint);
 
-	int width = luma_plane.width;
-	int height = luma_plane.height;
+	int width = luma_width;
+	int height = luma_height;
 	for (int step = 0; step < scale_steps; ++step) {
 		sk_sp<SkImage> source = frame->snapshot();
 		const int half_width = width / 2;
@@ -369,3 +378,51 @@ std::shared_ptr<GpuFrame> GpuYuv::Convert(Layout layout, Matrix matrix, bool ful
 	conversionCount()++;
 	return frame;
 }
+}   // namespace
+
+std::shared_ptr<GpuFrame> GpuYuv::Convert(Layout layout, Matrix matrix, bool full_range,
+										  const GpuYuvPlane* planes, int plane_count,
+										  int out_width, int out_height)
+{
+	if (!planes || out_width <= 0 || out_height <= 0)
+		return nullptr;
+	const int wanted_planes = layout == Layout::NV12 ? 2 : 3;
+	if (plane_count < wanted_planes)
+		return nullptr;
+	if (!GpuDevice::Instance().available())
+		return nullptr;
+
+	const GpuYuvPlane& luma_plane = planes[0];
+	if (luma_plane.width <= 0 || luma_plane.height <= 0)
+		return nullptr;
+
+	sk_sp<SkImage> luma = planeTexture(luma_plane, kR8_unorm_SkColorType);
+	sk_sp<SkImage> chroma_a = planeTexture(
+		planes[1], layout == Layout::NV12 ? kR8G8_unorm_SkColorType : kR8_unorm_SkColorType);
+	sk_sp<SkImage> chroma_b =
+		layout == Layout::NV12 ? chroma_a : planeTexture(planes[2], kR8_unorm_SkColorType);
+	return convertImages(layout, matrix, full_range, luma, chroma_a, chroma_b, luma_plane.width,
+						 luma_plane.height, planes[1].width, planes[1].height, out_width,
+						 out_height);
+}
+
+std::shared_ptr<GpuFrame> GpuYuv::Convert(const GpuImage& luma, const GpuImage& chroma,
+										  Matrix matrix, bool full_range, int out_width,
+										  int out_height)
+{
+	if (out_width <= 0 || out_height <= 0 || !GpuDevice::Instance().available())
+		return nullptr;
+	if (luma.format() != GpuImage::Format::R8 || chroma.format() != GpuImage::Format::R8G8)
+		return nullptr;
+	// Fresh wrappers, used for this frame only: see GpuImage::image().
+	sk_sp<SkImage> luma_image = luma.image();
+	sk_sp<SkImage> chroma_image = chroma.image();
+	std::shared_ptr<GpuFrame> frame =
+		convertImages(Layout::NV12, matrix, full_range, luma_image, chroma_image, chroma_image,
+					  luma.width(), luma.height(), chroma.width(), chroma.height(), out_width,
+					  out_height);
+	if (frame)
+		deviceCount()++;
+	return frame;
+}
+

@@ -102,7 +102,7 @@ namespace openshot
 	 * auto uv = interop.createImage(w / 2, h / 2, GpuImage::Format::R8G8);
 	 * interop.copyNV12(decoded, *y, *uv);
 	 * canvas->drawImage(y->image(), 0, 0);       // ...and the shader that samples both
-	 * const unsigned long long wait = interop.waitSemaphore();
+	 * const unsigned long long wait = interop.waitSemaphore(*y);
 	 * GpuDevice::Instance().submit(false, &wait, 1);
 	 * @endcode
 	 */
@@ -137,11 +137,13 @@ namespace openshot
 		/// The @c CUstream copies run on by default. Null when unavailable.
 		void* cudaStream();
 
-		/// The @c VkSemaphore that copyNV12 signals, as an integer handle — pass it
-		/// to GpuDevice::submit() so the drawing that samples the images waits for
-		/// the copy. A binary semaphore: exactly one submit must wait on each
-		/// copyNV12 call, and it must be the next one.
-		unsigned long long waitSemaphore() const;
+		/// The @c VkSemaphore that copyNV12 into @a y signals, as an integer handle —
+		/// pass it to GpuDevice::submit() so the drawing that samples the images
+		/// waits for the copy. Binary, and one per image pair (it lives on the luma
+		/// image): exactly one submit must wait on each copyNV12 call into that pair,
+		/// and it must be the next submit to name it. Callers on several threads
+		/// must serialise copy -> submit themselves.
+		unsigned long long waitSemaphore(const GpuImage& y) const;
 
 		/// An exportable image of this size, or null when unavailable.
 		std::shared_ptr<GpuImage> createImage(int width, int height, GpuImage::Format format);

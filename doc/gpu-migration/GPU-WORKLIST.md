@@ -43,7 +43,8 @@ container** and W10 skipped · **Stage 2 is part done** — W04's mechanism work
 payload is green, but the corpus needs five more captures and W03's workflow has never run ·
 then Stage 6 (W19–W21, effects) · W01/W02 are now **Stage 10**, at the end.
 **Stage 6 is finished (2026-09-22)** and **Stage 7 has started: W22 is done (2026-09-22), gate met
-at 0.166 ms against 0.300 for a 4K frame, exact and clean under `compute-sanitizer`. W23 is next.**
+at 0.166 ms against 0.300 for a 4K frame, exact and clean under `compute-sanitizer`. W23 is done
+(2026-09-23), gate met: `source_4k` 78–82 → 126–133 fps at 0.6 cores. W24 is next.**
 
 > **2026-09-18, project owner — finish Stages 2 and 3 before the effects work.** Stage 5 is done and
 > Stage 6 (effects and transitions as shaders) is the obvious next thing, but the safety net (Stage
@@ -1157,7 +1158,7 @@ interop SKIPs on lavapipe ("does not export memory and semaphores as fds"), with
 where there is no CUDA driver — all three are the normal answer.
 **Size.** ~1 week. ~300 lines. **Actual: ~870 lines** (450 interop, 90 `GpuDevice`, 330 gate).
 
-### W23 — Reader keeps frames on the GPU · legacy `4.2`
+### W23 — Reader keeps frames on the GPU · legacy `4.2` · **DONE 2026-09-23**
 
 **Depends on.** W22 — **done 2026-09-22**. `CudaInterop::Instance()` gives the reader the CUDA
 context to hand FFmpeg (`AVCUDADeviceContext::cuda_ctx`), the stream, and the two images per frame;
@@ -1242,10 +1243,16 @@ VP9, AV1, MPEG-4" sub-task is optional here.
 
       Bit-identical: four-way sweep 307/307, 26 checks. This is a CPU win on the path that ships,
       and it is what the "< 1 core" half of the gate has to be measured against from now on.
-- [ ] Decoder output stays `AV_PIX_FMT_CUDA`. **This is the only piece left, and W22 is its
-      input**: `CudaInterop::copyNV12` already puts NVDEC's two planes into Vulkan images, and
-      `GpuYuv` already samples exactly that layout (`Layout::NV12`). What is missing is the reader
-      handing the images over instead of uploading host planes.
+- [x] **Decoder output stays `AV_PIX_FMT_CUDA` (2026-09-23).** With `HARDWARE_DECODER=2` and
+      `GPU_DECODE` both on, the reader opens NVDEC in `CudaInterop`'s CUDA context and stream,
+      keeps NV12 frames on the device (`GetAVFrame`), and `FFmpegReader::ConvertOnDevice` does
+      copyNV12 → `GpuYuv::Convert(luma, chroma, …)` → submit waiting on the pair's semaphore →
+      `prepareForCopy`, under one process-wide lock. Anything else — 10-bit, 4:4:4, no interop,
+      a failed step — downloads as before. Guarded by `unit.nvdec_on_device` (bit-exact against
+      software decode through the same conversion, and asserts `GpuYuv::DeviceConversions()`).
+      **Two things had to be fixed first, and neither was in this item's premise**: the
+      FrameMapper read every GPU frame back (so nothing had ever "stayed on the GPU"), and W22's
+      semaphores were process-wide, which hangs with two readers. Both are in `STATUS.md`'s log.
 - [x] **YUV→RGBA is an SkSL pass** (`src/gpu/GpuYuv.{h,cpp}`, 2026-09-22), matrix and range from
       the stream, doing the pre-scale in a second pass. The reader attaches the result with
       `Frame::AttachGpuFrame`, so a decoded frame is **born on the GPU and stays there** for the
@@ -1275,8 +1282,16 @@ VP9, AV1, MPEG-4" sub-task is optional here.
       `CacheMemory` would never evict one, and a reader handing out GPU frames would retain
       surfaces without bound. This had to land before the pre-scale question could even be
       measured.
-- [ ] Remove `DE_LIMIT_*`. Software decode + `upload()` stays the fallback.
+- [x] **Remove `DE_LIMIT_*` (2026-09-23).** Gone from `Settings` and the reader. A stream NVDEC
+      refuses falls back through `ReopenWithoutHardwareDecode` (4608x2592 and 10-bit H.264,
+      measured: 15/15 frames).
 - [ ] *(optional)* extend `IsHardwareDecodeSupported` to HEVC, VP9, AV1, MPEG-4.
+
+**Gate result, 2026-09-23 — met.** (1) `source_4k` 1080p `render` 78–82 → **126–133 fps**,
+`x264` 58–59 → **87–96**; reader CPU per frame 7.2 → **2.8 ms**. (2) **0.6 cores** end to end in
+`render`. (3a) `unit.gpu_decode` **49.5 dB / 3 LSB** (after the chroma-bias fix; was 47.4). (3b)
+NVDEC vs software **byte-identical in YUV** over 120 frames at 640x360, 1080p and 4K. (4)
+`unit.bt709_chart`: **2 code values** on both GPU paths, the ideal for the chart's own 8-bit YUV.
 
 **Gate — restated 2026-09-22, because all three clauses were measured to be wrong.** The original
 read: *"Decode-only 4K ≥ 120 fps and < 1 core; decoded frame vs software decode PSNR ≥ 48 dB; a
