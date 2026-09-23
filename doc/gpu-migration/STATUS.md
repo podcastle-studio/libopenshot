@@ -443,8 +443,8 @@ ask it for you) and none reads the environment for itself — the new `control` 
 
 > ## Start here (2026-09-23, end of session)
 >
-> **W25 is done — Stage 7 is finished; a resuming session starts W26** (Stage 8, `Frame` drops
-> `QImage`). W25 is **flagged off** (`Settings::GPU_ENCODE`) and waits on the owner for three
+> **W25 is done — Stage 7 is finished. Stage 8 is void (owner, 2026-09-23: Qt is the CPU path
+> that ships; see `GPU-DECISIONS.md`). A resuming session starts W29** (Stage 9, frames in flight). W25 is **flagged off** (`Settings::GPU_ENCODE`) and waits on the owner for three
 > things: (1) turning it on (it changes pixels: box vs bicubic chroma); (2) the NVENC preset —
 > the pipeline now reaches 349 fps at 1080p and 123 at 2160p on p3, but the service's p5/hq caps
 > the encoder at ~195 / 54; (3) **the writer encodes BT.601 and the service tags BT.709**, a live
@@ -813,6 +813,10 @@ production corpus) remain open; W05–W10 are the CPU quick wins. W01/W02 stay d
 
 ## Log
 
+- 2026-09-23 — **Stage 8 (W26–W28) voided by the project owner**, no code change. Removing Qt
+  would remove the CPU path that ships (QImage/QPainter/BlendModes/CPU effect twins/Qt readers),
+  against the standing constraint and Stage 8's own zero-pixel gate. Qt, ImageMagick and babl stay
+  (~300 MB of image). Next: W29.
 - 2026-09-23 — **W25 done, flagged off (`GPU_ENCODE`), gate restated: NVENC takes the frame
   from the GPU.** The Timeline's thread draws RGBA→NV12 (SkSL) into an exportable interop image
   and CUDA copies it into the encoder's own frame; the encoding thread gets a CUDA frame, which,

@@ -5,6 +5,17 @@ what would have to change for it to be revisited. Referenced from `doc/gpu-migra
 
 ## Taken
 
+### Stage 8 is void: Qt stays, because Qt is the CPU path (2026-09-23, project owner)
+
+W26–W28 (drop `QImage` from `Frame`, delete the Qt/ImageMagick code, remove Qt from the build and
+the image) are not done. Today's shipping CPU path is Qt end to end — `QImage` frames, `QPainter`
+compositing, `BlendModes.cpp`, the CPU effect twins, the Qt image/SVG readers — so removing Qt means
+replacing that path with Skia raster, which renders differently and moves every CPU golden. That
+breaks the standing constraint below and Stage 8's own zero-pixel-change gate. Offered three
+options (void; make Skia raster the new CPU path; only W26's type change); the owner chose to void.
+The cost accepted is ~300 MB of image and a second renderer to maintain. Do not reopen without the
+owner asking for Skia raster as the CPU renderer — that is option 2, and it is a product decision.
+
 ### The CPU path ships; the GPU path is a configurable addition (2026-09-14, project owner)
 
 Not a trade-off to re-open. The runtime image has no GPU, so the CPU path is what production runs

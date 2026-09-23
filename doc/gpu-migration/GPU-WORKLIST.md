@@ -46,7 +46,8 @@ then Stage 6 (W19–W21, effects) · W01/W02 are now **Stage 10**, at the end.
 at 0.166 ms against 0.300 for a 4K frame, exact and clean under `compute-sanitizer`. W23 is done
 (2026-09-23), gate met: `source_4k` 78–82 → 126–133 fps at 0.6 cores. W24 is done (2026-09-23),
 gate restated — its 90 fps is W25's to reach. W25 is done (2026-09-23), flagged off, gate
-restated: NVENC's p5 preset is now the ceiling. Stage 7 is finished; Stage 8 (W26) is next.**
+restated: NVENC's p5 preset is now the ceiling. Stage 7 is finished. Stage 8 is void (owner,
+2026-09-23: Qt is the CPU path that ships). W29 is next.**
 
 > **2026-09-18, project owner — finish Stages 2 and 3 before the effects work.** Stage 5 is done and
 > Stage 6 (effects and transitions as shaders) is the obvious next thing, but the safety net (Stage
@@ -1436,11 +1437,24 @@ RGBA→NV12→RGBA round trip within 1 LSB.
 
 ---
 
-## Stage 8 — Remove Qt and the rest of the CPU stack (R5)
+## Stage 8 — Remove Qt and the rest of the CPU stack (R5) · **VOID 2026-09-23, project owner**
+
+> **Voided by the project owner, 2026-09-23 — no code change.** The CPU path that ships *is* Qt:
+> `QImage` frames, `QPainter` compositing (`Clip.cpp`, `EffectBase.cpp`), `BlendModes.cpp`, the CPU
+> twins of the effects on `QImage`/OpenCV (~60 files), and the image/SVG readers on Qt. W26–W28 would
+> rewrite or delete all of it, and the "Skia raster fallback" W28 keeps is not that path but the GPU
+> compositor on CPU memory — a different renderer that has never produced a production frame and
+> would move every CPU golden. So the stage contradicts both the standing constraint (never delete
+> CPU code; the CPU path stays at full quality) and its own "zero pixel change" gate. It predates
+> the constraint (2026-09-14) and was never reconciled with it, exactly as W15 and W16 were not.
+> **Consequence accepted:** Qt, ImageMagick and babl stay in the build and the image (~300 MB).
+> `ENABLE_PLAYER=OFF` already drops the direct Qt Widgets dependency. Deleting the genuinely unused
+> readers (HTML, screen capture) was left out on purpose — too little gain to touch now.
+> Stage 9 does not depend on Stage 8. The items below are kept for the record only.
 
 **This phase must not alter rendering.** Zero pixel change versus R4 is its gate.
 
-### W26 — `Frame` drops `QImage` · legacy `5.1`
+### W26 — `Frame` drops `QImage` · legacy `5.1` · **VOID**
 
 - [ ] `readback()` returns an `SkPixmap`.
 - [ ] The golden harness's `Image.cpp` switches to `SkPngEncoder`/`SkPngDecoder` — that file is the
@@ -1448,7 +1462,7 @@ RGBA→NV12→RGBA round trip within 1 LSB.
 
 **Size.** ~3 days.
 
-### W27 — Delete the dead code · legacy `5.2`
+### W27 — Delete the dead code · legacy `5.2` · **VOID**
 
 **Depends on.** W26.
 
@@ -1459,7 +1473,7 @@ RGBA→NV12→RGBA round trip within 1 LSB.
 
 **Size.** ~2 days.
 
-### W28 — Remove the dependencies from the build · legacy `5.3`
+### W28 — Remove the dependencies from the build · legacy `5.3` · **VOID**
 
 **Depends on.** W27.
 
@@ -1552,7 +1566,7 @@ For reading old commits, `STATUS.md` and `GPU-DECISIONS.md`.
 | R1 | W05–W10 | `single_video` nvenc 75 → ≥ 105 |
 | R3 | W12–W18 | `grid_3x3` 23 → ≥ 60 |
 | R4 | W19–W25 | `heavy_effects` 11.5 → ≥ 60; CPU < 2 cores |
-| R5 | W26–W28 | no pixel change; −300 MB |
+| R5 ✗ | W26–W28 | **void** (owner, 2026-09-23): Qt is the CPU path |
 | R6 | W29–W31 | `everything` 1.8 → ≥ 30; GPU busy ≥ 70 % |
 
 
