@@ -443,6 +443,13 @@ ask it for you) and none reads the environment for itself — the new `control` 
 
 > ## Start here (2026-09-23, end of session)
 >
+> **Service integration of the GPU flags (owner will do it):** set, once, before any reader or
+> writer is opened: `Settings::GPU_DECODE`, `HARDWARE_DECODER = 2` (NVDEC; needed for frames to
+> stay on the GPU, otherwise GPU_DECODE converts software-decoded frames), `GPU_ENCODE`,
+> `GPU_CROP`. All require `OPENSHOT_GPU=vulkan`; `GPU_ENCODE` also `ENCODER=h264_nvenc`; the
+> NVDEC/NVENC interop needs the NVIDIA driver's `libcuda` in the container. Everything falls back
+> cleanly without them. Re-vendor the library (headers + `.so`) first.
+>
 > **W29 is done (2026-09-23) — as a GPU `Crop` behind `Settings::GPU_CROP`, off by default; a
 > resuming session starts W30** (density: needs the target GPU SKU, an L4, which this laptop is
 > not). With every GPU flag on, `everything` 1080p is ~135 fps at ~80 % GPU busy. **Four flags now
@@ -820,6 +827,12 @@ production corpus) remain open; W05–W10 are the CPU quick wins. W01/W02 stay d
 
 ## Log
 
+- 2026-09-23 — **Owner decisions applied.** (1) **NVENC p4** (service + recipe): same quality as
+  p5, 2x the encoder throughput; W25's gates now met (1080p 299, 2160p 102 fps). (2) **Exports are
+  BT.709**: the writer encodes with the tagged matrix and the reader honours declared matrices on
+  the CPU path; exported bars 30 → 1 code off; GPU-decode divergences 15 → 9; four-way 307/307,
+  35 checks, no re-baseline. (3) The service will set `GPU_DECODE`, `GPU_ENCODE`, `GPU_CROP`
+  itself — what that needs is in the session reply and below under "Service integration".
 - 2026-09-23 — **W29 done differently, by owner decision: `Crop` on the GPU (`GPU_CROP`, off).**
   The readback in `Crop` was the whole of the idle GPU. With it on (and every other GPU path):
   `everything` 1080p nvenc 67–70 → **133–137 fps**, GPU busy **76–85 %**, VRAM flat over 10 080

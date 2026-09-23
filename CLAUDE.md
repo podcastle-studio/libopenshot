@@ -277,8 +277,12 @@ GPU to take over. Earlier, lower figures in the docs were measured on an Intel i
   `everything`'s frame and kept the GPU ~35 % busy; with it on, ~135 fps at ~80 %. The service
   puts a `Crop` on every clip with a crop or rounded corners. Bench `OPENSHOT_BENCH_GPU_CROP=1`,
   `OPENSHOT_BENCH_REPEAT=N` for long runs; harness `OPENSHOT_GOLDEN_GPU_CROP=1`.
-- **The writer encodes BT.601 while the service tags exports BT.709** (swscale is never given a
-  matrix). Found in W25, not fixed — the owner's call; every GPU pass keeps BT.601 to match.
+- **Exports are BT.709 and the reader honours declared matrices** (owner, 2026-09-23). The writer
+  encodes with the matrix the output is tagged with (codec `colorspace`, or `colormatrix=` in
+  `x264-params`), on swscale and `GPU_ENCODE` alike; the reader's CPU path passes the stream's
+  matrix/range to swscale. Untagged stays BT.601 on both sides. Never fix one side alone: until
+  this, BT.601-in/BT.601-out under a BT.709 tag cancelled for video and shifted everything drawn.
+  Gate: `export.bt709_bars`. NVENC preset is **p4** (same VMAF as p5, twice the speed).
 - **`FrameMapper` must not `GetImage()` a GPU-backed frame.** It did, for every frame it rebuilt
   (any clip whose audio mapping differs, i.e. most video), which read every GPU-decoded frame back
   and made GPU decode look worthless. It shares the surface now, as `Frame`'s copy constructor

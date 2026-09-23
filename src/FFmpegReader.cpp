@@ -2391,6 +2391,26 @@ void FFmpegReader::ProcessVideoPacket(int64_t requested_frame) {
     if (!img_convert_ctx)
         throw OutOfMemory("Failed to initialize sws context", path);
 
+    // Decode with the matrix and range the stream declares (2026-09-23), as the GPU conversion
+    // already did. swscale otherwise assumes BT.601 limited whatever the file says, which put a
+    // colour shift on every BT.709-tagged input -- invisible only while the writer made the
+    // opposite mistake. Undeclared streams keep BT.601, so untagged media decodes as it did.
+    {
+        const int space = pFrame->colorspace;
+        const int sws_space = space == AVCOL_SPC_BT709 ? SWS_CS_ITU709
+                            : (space == AVCOL_SPC_BT2020_NCL || space == AVCOL_SPC_BT2020_CL) ? SWS_CS_BT2020
+                            : SWS_CS_DEFAULT;
+        const int full_range = pFrame->color_range == AVCOL_RANGE_JPEG ||
+                               src_pix_fmt == AV_PIX_FMT_YUVJ420P || src_pix_fmt == AV_PIX_FMT_YUVJ422P ||
+                               src_pix_fmt == AV_PIX_FMT_YUVJ444P;
+        const AVPixFmtDescriptor* desc = av_pix_fmt_desc_get((AVPixelFormat) src_pix_fmt);
+        const bool is_rgb = desc && (desc->flags & AV_PIX_FMT_FLAG_RGB);
+        if (sws_space != SWS_CS_DEFAULT && !is_rgb) {
+            sws_setColorspaceDetails(img_convert_ctx, sws_getCoefficients(sws_space), full_range,
+                                     sws_getCoefficients(SWS_CS_DEFAULT), 1, 0, 1 << 16, 1 << 16);
+        }
+    }
+
     sws_scale(img_convert_ctx, pFrame->data, pFrame->linesize, 0, src_h,
               pFrameRGB->data, pFrameRGB->linesize);
 

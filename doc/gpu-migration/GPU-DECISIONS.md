@@ -5,6 +5,31 @@ what would have to change for it to be revisited. Referenced from `doc/gpu-migra
 
 ## Taken
 
+### Exports are BT.709, and the reader honours what a file declares (2026-09-23, project owner)
+
+The writer never gave swscale a matrix, so it encoded **BT.601** while the service tagged every
+export **BT.709**; the reader likewise decoded everything as BT.601. For a BT.709 *video* input
+the two mistakes cancelled; for anything born in RGB — text, graphics, images, subtitles — the
+export played back shifted (bars came back **30 codes off** when decoded as tagged). Now:
+- `FFmpegWriter` encodes with the matrix the output is tagged with — codec-context `colorspace`,
+  or `colormatrix=` inside `x264-params` (the service's x264 branch) — on both the swscale path and
+  `GPU_ENCODE`. Untagged output keeps BT.601.
+- `FFmpegReader`'s CPU path honours the stream's declared matrix and range, as `GPU_DECODE`
+  already did. Undeclared streams keep BT.601, so the suite's untagged media does not move.
+Measured: exported sRGB bars decode within **1 code** (ffmpeg CLI, as tagged) on x264 and NVENC,
+against 30 before (`export.bt709_bars`); a BT.709-tagged 1080p input decodes at the same speed;
+the GPU-decode arm's divergences fall 15 → 9. Both halves must stay together: fixing only the
+writer would shift every BT.709 video input.
+
+### NVENC preset p4, not p5 (2026-09-23, owner delegated the call)
+
+Against a lossless reference at 1080p, p4 matches or beats p5 on VMAF (podcast_pip 98.86 vs 98.83,
+transitions_chain 98.31 vs 97.27, single_video 97.44 vs 97.48) at +1–3 % file size, and doubles the
+encoder's throughput where it is the limit (`single_video` with `GPU_ENCODE`: 1080p 186 → 299 fps,
+2160p 53 → 102 — W25's 250 / 60 gates now met). p3 is no better than p4. `tune hq` and W09's
+`crf 18 → cq 28` stand; the size/VMAF above show the calibration still holds. Changed in the
+service (`VideoRenderingImpl.cpp`) and mirrored in `tests/golden/Recipes.cpp`.
+
 ### Stage 8 is void: Qt stays, because Qt is the CPU path (2026-09-23, project owner)
 
 W26–W28 (drop `QImage` from `Frame`, delete the Qt/ImageMagick code, remove Qt from the build and

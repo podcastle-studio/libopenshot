@@ -404,6 +404,9 @@ void FFmpegWriter::SetAudioOptions(std::string codec, int sample_rate, int bit_r
 
 // Set custom options (some codecs accept additional params)
 void FFmpegWriter::SetOption(StreamType stream, std::string name, std::string value) {
+	if (stream == VIDEO_STREAM && name == "x264-params")
+		x264_params_ = value;   // read by EncodeColorSpace(); still applied below as before
+
 	// Declare codec context
 	AVCodecContext *c = NULL;
 	AVStream *st = NULL;
@@ -2562,11 +2565,13 @@ std::shared_ptr<void> FFmpegWriter::EncodeOnDevice(openshot::GpuFrame& gpu) {
 	sk_sp<SkImage> source = gpu.surface() ? SkSurfaces::AsImage(gpu.surface()) : nullptr;
 	if (!target || !source)
 		return nullptr;
-	// BT.601, as swscale here has always encoded (it is never given another matrix), so this
-	// path changes speed and not colour. The file is tagged by the caller; see GPU-WORKLIST W25
-	// for the mismatch between the two.
-	if (!openshot::GpuYuv::EncodeNV12(source, target->getCanvas(), info.width, info.height,
-									  openshot::GpuYuv::Matrix::BT601))
+	// The same matrix the swscale path encodes with: the one the file is tagged with.
+	const int space = EncodeColorSpace();
+	const openshot::GpuYuv::Matrix matrix =
+		space == AVCOL_SPC_BT709 ? openshot::GpuYuv::Matrix::BT709
+		: (space == AVCOL_SPC_BT2020_NCL || space == AVCOL_SPC_BT2020_CL) ? openshot::GpuYuv::Matrix::BT2020
+		: openshot::GpuYuv::Matrix::BT601;
+	if (!openshot::GpuYuv::EncodeNV12(source, target->getCanvas(), info.width, info.height, matrix))
 		return nullptr;
 
 	unsigned long long wait = 0;
@@ -2582,6 +2587,25 @@ std::shared_ptr<void> FFmpegWriter::EncodeOnDevice(openshot::GpuFrame& gpu) {
 	(void) gpu;
 	return nullptr;
 #endif
+}
+
+// The AVColorSpace the output is tagged with, which is the matrix its RGB must be encoded with.
+// A file tagged BT.709 and encoded BT.601 -- what this writer did until 2026-09-23 -- plays back
+// with a systematic shift on everything born in RGB (text, graphics, images). Untagged output
+// keeps BT.601, swscale's default, so a caller that never asked for a colour space sees no change.
+int FFmpegWriter::EncodeColorSpace() const {
+	if (video_codec_ctx && video_codec_ctx->colorspace != AVCOL_SPC_UNSPECIFIED &&
+		video_codec_ctx->colorspace != AVCOL_SPC_RGB)
+		return video_codec_ctx->colorspace;
+	const std::string::size_type at = x264_params_.find("colormatrix=");
+	if (at != std::string::npos) {
+		const std::string rest = x264_params_.substr(at + 12);
+		const std::string name = rest.substr(0, rest.find(':'));
+		const int v = av_color_space_from_name(name.c_str());
+		if (v >= 0)
+			return v;
+	}
+	return AVCOL_SPC_UNSPECIFIED;
 }
 
 // process video frame
@@ -2685,6 +2709,18 @@ void FFmpegWriter::process_video_packet(std::shared_ptr<Frame> frame) {
 		);
 		if (!img_convert_ctx)
 			throw ErrorEncodingVideo("Could not initialize sws context", -1);
+
+		// Encode with the matrix the file is tagged with (see EncodeColorSpace). RGB in is full
+		// range; YUV out is limited, as every consumer of these files expects.
+		const int space = EncodeColorSpace();
+		const int sws_space = space == AVCOL_SPC_BT709 ? SWS_CS_ITU709
+							: (space == AVCOL_SPC_BT2020_NCL || space == AVCOL_SPC_BT2020_CL) ? SWS_CS_BT2020
+							: SWS_CS_DEFAULT;
+		if (sws_space != SWS_CS_DEFAULT) {
+			const int* coefficients = sws_getCoefficients(sws_space);
+			sws_setColorspaceDetails(img_convert_ctx, sws_getCoefficients(SWS_CS_DEFAULT), 1,
+									 coefficients, 0, 0, 1 << 16, 1 << 16);
+		}
 	}
 
 	// Scale RGBA → dst_fmt into persistent_dst_buffer

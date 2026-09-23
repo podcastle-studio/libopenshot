@@ -613,7 +613,7 @@ void configureWriter(FFmpegWriter& w, int width, int height, Fraction fps, int b
         // VideoRenderingImpl.cpp asks for when RenderBackend::usingHardwareEncoder() is true,
         // including the BT.709 tagging that x264 carries inside x264-params. Measuring anything
         // else here measures a configuration production never runs.
-        w.SetOption(VIDEO_STREAM, "preset", "p5");   // NVENC's equivalent of x264 preset=medium
+        w.SetOption(VIDEO_STREAM, "preset", "p4");   // as the service (W25: p5 quality, 2x the speed)
         w.SetOption(VIDEO_STREAM, "tune", "hq");
         w.SetOption(VIDEO_STREAM, "crf", "18");      // same knob as x264; the writer maps it to cq
         w.SetOption(VIDEO_STREAM, "color_primaries", "bt709");

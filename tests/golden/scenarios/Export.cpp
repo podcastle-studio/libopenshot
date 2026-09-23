@@ -1,6 +1,7 @@
 // Export: FFmpegWriter configured exactly like the service (libx264, silent audio, pipeline mode),
 // decoded back with FFmpegReader and compared to the live timeline frames; plus an audio smoke test.
 #include "Recipes.h"
+#include <QImage>
 #include "Settings.h"
 #include "gpu/GpuDevice.h"
 #include "gpu/CudaInterop.h"
@@ -136,6 +137,58 @@ void golden::registerExportScenarios() {
                                   " dB closer to the timeline than the readback export (gate -0.5); lengths " +
                                   (same_length ? "match" : "differ")});
         });
+
+    // Exports are BT.709 (2026-09-23): the writer encodes RGB with the matrix the file is tagged
+    // with. Known sRGB bars go through the writer the way the service configures it -- x264 tagged
+    // through x264-params, NVENC through the codec context -- and must come back within 3 code
+    // values (8-bit limited-range YUV plus the encoder) when decoded as the tag says. Until this
+    // change they came back ~30 off, because the pixels were BT.601 under a BT.709 label.
+    addCustom("export.bt709_bars", {"export"}, exportScene,
+        [](Scene& s, std::vector<Captured>&, std::vector<Check>& checks) {
+            static const int kBars[8][3] = {{191, 191, 191}, {191, 191, 0}, {0, 191, 191}, {0, 191, 0},
+                                            {191, 0, 191},   {191, 0, 0},   {0, 0, 191},   {200, 150, 120}};
+            const int W = 640, H = 360;
+            for (const std::string codec : {std::string("libx264"), std::string("h264_nvenc")}) {
+                const std::string path = s.workDir + "bars_" + codec + ".mp4";
+                try {
+                    openshot::FFmpegWriter w(path);
+                    configureWriter(w, W, H, s.fps, 8000000, codec);
+                    w.SetOption(openshot::VIDEO_STREAM, "crf", "8");   // the matrix, not the encoder
+                    w.Open();
+                    for (int n = 1; n <= 10; ++n) {
+                        auto image = std::make_shared<QImage>(W, H, QImage::Format_RGBA8888_Premultiplied);
+                        for (int y = 0; y < H; ++y)
+                            for (int x = 0; x < W; ++x) {
+                                uchar* p = image->scanLine(y) + x * 4;
+                                const int* c = kBars[x / 80];
+                                p[0] = uchar(c[0]); p[1] = uchar(c[1]); p[2] = uchar(c[2]); p[3] = 255;
+                            }
+                        auto frame = std::make_shared<openshot::Frame>(n, W, H, "#000000");
+                        frame->AddImage(image);
+                        w.WriteFrame(frame);
+                    }
+                    w.Close();
+                } catch (const std::exception& e) {
+                    if (codec != "libx264") {   // no NVENC here: a supported configuration
+                        checks.push_back({"bt709_bars_" + codec, true, std::string("declined: ") + e.what()});
+                        continue;
+                    }
+                    checks.push_back({"bt709_bars_" + codec, false, std::string("threw: ") + e.what()});
+                    continue;
+                }
+                openshot::FFmpegReader r(path);
+                r.Open();
+                auto image = r.GetFrame(5)->GetImage();
+                int worst = 0;
+                for (int bar = 0; bar < 8; ++bar) {
+                    const uchar* p = image->constScanLine(180) + (40 + 80 * bar) * 4;
+                    for (int c = 0; c < 3; ++c) worst = std::max(worst, std::abs(int(p[c]) - kBars[bar][c]));
+                }
+                r.Close();
+                checks.push_back({"bt709_bars_" + codec, worst <= 3,
+                                  "worst channel error " + std::to_string(worst) + " (gate 3), decoded as tagged"});
+            }
+        }, Tolerance::Codec());
 
     addCustom("export.silent_audio_smoke", {"export", "audio"}, exportScene,
         [](Scene& s, std::vector<Captured>&, std::vector<Check>& checks) {

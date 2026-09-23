@@ -1423,8 +1423,10 @@ through it is on every frame **no less faithful to the timeline than the readbac
 
 **Flagged off** (`Settings::GPU_ENCODE`), like `GPU_DECODE`, because it changes pixels: its chroma
 is a 2×2 box where the readback path's swscale (`HIGH_QUALITY_SCALING`) is bicubic.
-**Found on the way, not fixed — owner's call:** the writer never gives swscale a matrix, so it
-encodes **BT.601** while the service tags every export **BT.709**. That is the systematic
+**Found on the way, fixed 2026-09-23 by owner decision** (see `GPU-DECISIONS.md`): the writer
+never gave swscale a matrix, so it encoded **BT.601** while the service tagged every export
+**BT.709**. **Preset: p4 since 2026-09-23** — 1080p 299 fps, 2160p 102, so the 250 / 60 gates are
+met. That is the systematic
 −1.8/−3.6/+0.6 bias `export.roundtrip_x264` shows under a decoder that honours the tag, and it is
 in production today. The GPU pass keeps BT.601 so that it changes speed, not colour.
 

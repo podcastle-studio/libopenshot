@@ -212,6 +212,12 @@ namespace openshot {
 		std::shared_ptr<void> EncodeOnDevice(openshot::GpuFrame& gpu);
 		struct DeviceFrame;
 
+		// The matrix RGB is encoded with (BT.709 exports, 2026-09-23): the one the output is
+		// tagged with -- colorspace on the codec context, or colormatrix= inside x264-params,
+		// which is how x264 callers tag -- and BT.601 when it says nothing, as swscale always did.
+		std::string x264_params_;
+		int EncodeColorSpace() const;
+
 		/// write all queued frames' audio to the video file
 		void write_audio_packets(bool is_final, std::shared_ptr<openshot::Frame> frame);
 
