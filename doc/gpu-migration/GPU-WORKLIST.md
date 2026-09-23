@@ -48,7 +48,8 @@ at 0.166 ms against 0.300 for a 4K frame, exact and clean under `compute-sanitiz
 gate restated — its 90 fps is W25's to reach. W25 is done (2026-09-23), flagged off, gate
 restated: NVENC's p5 preset is now the ceiling. Stage 7 is finished. Stage 8 is void (owner,
 2026-09-23: Qt is the CPU path that ships). W29 done (2026-09-23) as a GPU `Crop`, flagged off:
-`everything` 67 → 135 fps. W30 is next.**
+`everything` 67 → 135 fps. W30 measured on the laptop (GPU-bound exports do not densify; the L4
+run is owed); W31 is next.**
 
 > **2026-09-18, project owner — finish Stages 2 and 3 before the effects work.** Stage 5 is done and
 > Stage 6 (effects and transitions as shaders) is the obvious next thing, but the safety net (Stage
@@ -1544,7 +1545,33 @@ growth over 10 000 frames.
 
 **Depends on.** W29.
 
-- [ ] Re-run `openshot-bench --parallel 1,2,4` on the target GPU SKU.
+> **Measured 2026-09-23 on the laptop's RTX A2000 — indicative only; the gate is on an L4.**
+> 1080p nvenc, every GPU path on (NVDEC, `GPU_DECODE`, `GPU_ENCODE`, `GPU_CROP`, pipeline mode,
+> p4), 900 frames per process (`OPENSHOT_BENCH_REPEAT=5`, so NVENC start-up does not dominate):
+>
+> | scenario | ×1 fps/export | ×2 fps/export (agg) | ×4 fps/export (agg) | cores/export at ×4 | RSS/export |
+> |---|---|---|---|---|---|
+> | `podcast_pip` | 190 (6.3× RT) | 82 (163) | 47 (179) | 1.3 | 0.6 GB |
+> | `everything` | 97 (3.2× RT) | 50 (99) | 27 (104) | 1.2 | 0.9 GB |
+> | `transitions_chain` | 32 (1.1× RT) | 27 (53) | 20 (78) | 2.7 | 0.9 GB |
+>
+> 1. **A GPU-bound export does not densify: the aggregate stays flat** (`everything` 97 → 104 at
+>    ×4) because one export already keeps the GPU ~85 % busy. The gate's "aggregate ≥ 3.2× single"
+>    assumed one export used a quarter of the GPU — true when it was written, false after W22–W29.
+>    On a GPU node, the unit of density is now the GPU, not the export.
+> 2. **`transitions_chain` does scale (×2.4 at 4) because a single export leaves the GPU idle**,
+>    and the reason is the next lever, not a density setting: only **45 of 180** frames took the
+>    GPU encode path. Frames under the additive **overlay clip** composite on the CPU path
+>    (`Clip::draw_to_canvas` is skipped for `isOverlay`), with 370 readbacks, and its reader
+>    averages 7.6 ms a frame. Worth an item of its own before density is tuned.
+> 3. CPU per export stays **< 2 cores** everywhere except `transitions_chain` ×4 (2.7), which is the
+>    same CPU fallback.
+> **Open:** the L4 run itself, and the service's `SERVICE_NUM_INSTANCES_PARALLEL` / time-slicing /
+> pod requests, which must come from it. Indicative starting point from the laptop: **2 exports per
+> GPU** — enough to fill the idle gaps of latency-bound content, while GPU-bound content just
+> shares. Not set here.
+
+- [ ] Re-run `openshot-bench --parallel 1,2,4` on the target GPU SKU. *(laptop run above; L4 owed)*
 - [ ] Set `SERVICE_NUM_INSTANCES_PARALLEL`, the GPU time-slicing replica count and the pod requests
       from the measurements.
 - [ ] Update `GPU-RENDER-PLAN.md` §4 with real numbers instead of laptop estimates.

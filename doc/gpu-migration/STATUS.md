@@ -827,6 +827,11 @@ production corpus) remain open; W05–W10 are the CPU quick wins. W01/W02 stay d
 
 ## Log
 
+- 2026-09-23 — **W30 measured on the laptop (A2000), L4 owed.** With every GPU path on, a
+  GPU-bound export does not densify: `everything` 1080p aggregates 97 / 99 / 104 fps at ×1/×2/×4
+  (one export already ~85 % GPU busy). `transitions_chain` scales (32 → 78) only because the
+  overlay clip forces 135 of 180 frames onto the CPU path — the next lever. Indicative: 2 exports
+  per GPU; the service settings wait for the L4 numbers.
 - 2026-09-23 — **Owner decisions applied.** (1) **NVENC p4** (service + recipe): same quality as
   p5, 2x the encoder throughput; W25's gates now met (1080p 299, 2160p 102 fps). (2) **Exports are
   BT.709**: the writer encodes with the tagged matrix and the reader honours declared matrices on
