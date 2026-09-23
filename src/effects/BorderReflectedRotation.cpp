@@ -2,6 +2,7 @@
 
 #include "skia/include/core/SkM44.h"
 #include "EffectShaders.h"
+#include "image-processing-lib/src/Planner/EffectPlan.h"
 
 #include "skia/include/effects/SkRuntimeEffect.h"
 
@@ -71,26 +72,13 @@ const char* BorderReflectedRotation::GpuShaderSource() const
 }
 
 bool BorderReflectedRotation::SetGpuUniforms(SkRuntimeEffectBuilder& builder, int64_t frame_number,
-											 int width, int height) const
+								int width, int height) const
 {
-	const double angle_value = angle.GetValue(frame_number);
-	// The C++ returns the frame untouched for these, so decline rather than run an identity pass.
-	if (angle_value == 0 || std::abs(angle_value) == 360)
-		return false;
-
-	const cv::Point2f center(width / 2.0F, height / 2.0F);
-	const cv::Mat forward = cv::getRotationMatrix2D(center, -angle_value, 1.0);
-	cv::Mat inverse;
-	cv::invertAffineTransform(forward, inverse);
-
-	builder.uniform("size") = SkV2{static_cast<float>(width), static_cast<float>(height)};
-	builder.uniform("invRow0") = SkV3{static_cast<float>(inverse.at<double>(0, 0)),
-									  static_cast<float>(inverse.at<double>(0, 1)),
-									  static_cast<float>(inverse.at<double>(0, 2))};
-	builder.uniform("invRow1") = SkV3{static_cast<float>(inverse.at<double>(1, 0)),
-									  static_cast<float>(inverse.at<double>(1, 1)),
-									  static_cast<float>(inverse.at<double>(1, 2))};
-	return true;
+	// Resolved by the shared planner (image-processing-lib/src/Planner), the same code the editor
+	// runs, so the two cannot disagree about what these values mean. It declines -- and the C++
+	// twin runs -- for every case the fragment does not cover.
+	return BindPlan(builder, Podcastle::Effects::planEffect(
+		"BORDER_REFLECTED_ROTATION", {{"angle", angle.GetValue(frame_number)}}, width, height));
 }
 
 // Generate JSON string of this object

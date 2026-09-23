@@ -2,6 +2,9 @@
 
 #include "GpuOverlay.h"
 
+#include "EffectShaders.h"
+#include "../effects/image-processing-lib/src/Planner/EffectPlan.h"
+
 #include "../Frame.h"
 #include "GpuDevice.h"
 #include "GpuFrame.h"
@@ -42,57 +45,13 @@ namespace
 		return fallbacks;
 	}
 
-	// Shared by both fragments: read a pixel's four bytes. Same contract as
-	// GpuEffect's prelude, repeated here because these are not effects and do not go
-	// through GpuEffect -- the overlay composite lives in Clip, not in an EffectBase.
-	const char* kPrelude = R"SKSL(
-uniform shader osSrc;       // the frame being composited onto
-uniform shader osOverlay;   // the overlay clip's frame, same size
-
-float4 osBytes(float2 p)     { return floor(float4(osSrc.eval(p)) * 255.0 + 0.5); }
-float4 osOverlayBytes(float2 p) { return floor(float4(osOverlay.eval(p)) * 255.0 + 0.5); }
-)SKSL";
-
-	// cv::add saturates, and additiveBlend touches only channels 0..2.
-	const char* kAdditiveBlend = R"SKSL(
-float4 main(float2 p) {
-	float4 base = osBytes(p);
-	float4 over = osOverlayBytes(p);
-	return float4(min(base.rgb + over.rgb, 255.0), base.a) / 255.0;
-}
-)SKSL";
-
-	// The displacement map. Two things here are the C++'s and are not free choices:
-	//
-	//   - the luminance comes from cv::cvtColor(..., COLOR_BGRA2GRAY), which for 8-bit
-	//     is a FIXED-POINT sum, not a float one: (B*1868 + G*9617 + R*4899 + 8192) >> 14.
-	//     Writing it as a float dot product would be close and not exact.
-	//   - the gather is nearest with an explicit int(v + 0.5), and clamped to the last
-	//     pixel, not wrapped. CLAUDE.md calls this out: the same code runs in the front
-	//     end's WASM, so switching the shader to bilinear would open the editor/export
-	//     gap that all of this exists to close.
-	const char* kDisplacementMap = R"SKSL(
-uniform float2 size;    // frame size in pixels
-uniform float2 scale;   // hDisplacement * width / 2, vDisplacement * height / 2
-
-float4 main(float2 p) {
-	float4 map = osOverlayBytes(p);
-	float grey = floor((map.b * 1868.0 + map.g * 9617.0 + map.r * 4899.0 + 8192.0) / 16384.0);
-
-	float n = grey / 255.0;
-	float2 q = floor(p);
-	float2 moved = clamp(q + n * scale, float2(0.0), size - 1.0);
-	// int(v + 0.5) on a non-negative value is floor(v + 0.5).
-	float2 sampled = floor(moved + 0.5);
-
-	return osBytes(sampled + 0.5) / 255.0;
-}
-)SKSL";
-
+	// Both fragments are the shared ones in image-processing-lib/shaders/ (additive_blend.sksl,
+	// displacement_map.sksl), concatenated onto the same prelude as every effect fragment -- the
+	// bytes the editor compiles through CanvasKit.
 	SkRuntimeEffect* compiled(const char* body, sk_sp<SkRuntimeEffect>& cache)
 	{
 		if (!cache) {
-			SkString source(kPrelude);
+			SkString source(openshot::shaders::kPrelude);
 			source.append(body);
 			auto [effect, error] = SkRuntimeEffect::MakeForShader(source);
 			cache = std::move(effect);
@@ -193,7 +152,7 @@ bool GpuOverlay::AdditiveBlend(Frame& frame, Frame& overlay)
 	// nothing from the Graphite Context, so unlike a texture it survives a teardown and
 	// needs no Generation() key.
 	static sk_sp<SkRuntimeEffect> cache;
-	return draw(frame, overlay, compiled(kAdditiveBlend, cache),
+	return draw(frame, overlay, compiled(openshot::shaders::kAdditiveBlend, cache),
 				[](SkRuntimeEffectBuilder&) {});
 }
 
@@ -205,16 +164,22 @@ bool GpuOverlay::DisplacementMap(Frame& frame, Frame& overlay,
 		return false;
 	}
 	static sk_sp<SkRuntimeEffect> cache;
-	SkRuntimeEffect* effect = compiled(kDisplacementMap, cache);
+	SkRuntimeEffect* effect = compiled(openshot::shaders::kDisplacementMap, cache);
 
-	const int width = frame.GetWidth();
-	const int height = frame.GetHeight();
+	// The uniforms come from the shared planner, as the editor's do. It only plans a GPU pass
+	// for an overlay the frame's size -- draw() declines the other case itself, before this runs.
+	const Podcastle::Effects::EffectPlan plan = Podcastle::Effects::planEffect(
+		"DISPLACEMENT_MAP",
+		{{"horizontalDisplacement", horizontal}, {"verticalDisplacement", vertical}},
+		frame.GetWidth(), frame.GetHeight(), overlay.GetWidth(), overlay.GetHeight());
+	if (plan.steps.size() != 1 || plan.steps.front().kind != Podcastle::Effects::PlanStep::Kind::Gpu) {
+		fallbackCounter().fetch_add(1, std::memory_order_relaxed);
+		return false;
+	}
+	const Podcastle::Effects::PlanPass& pass = plan.steps.front().passes.front();
 	return draw(frame, overlay, effect, [&](SkRuntimeEffectBuilder& builder) {
-		builder.uniform("size") = SkV2{static_cast<float>(width), static_cast<float>(height)};
-		// float, matching the C++'s static_cast<float> of the same products.
-		builder.uniform("scale") =
-			SkV2{static_cast<float>(horizontal * width / 2.0),
-				 static_cast<float>(vertical * height / 2.0)};
+		for (const Podcastle::Effects::PlanUniform& u : pass.uniforms)
+			builder.uniform(u.name.c_str()).set(u.values.data(), static_cast<int>(u.values.size()));
 	});
 }
 

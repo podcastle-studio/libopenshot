@@ -443,6 +443,15 @@ ask it for you) and none reads the environment for itself — the new `control` 
 
 > ## Start here (2026-09-23, end of session)
 >
+> **The effect resolvers live in the shared submodule now (owner request, done).**
+> `image-processing-lib/src/Planner/EffectPlan` resolves a preset effect at one frame into
+> identity / clear / gpu passes / a cpu call; libopenshot's effects and `GpuOverlay` bind what it
+> returns, and the editor gets the same through the WASM (`planEffect`, `planTexture`). A pure
+> refactor: parity output identical to the pre-refactor tree on Vulkan and lavapipe, four-way
+> 307/307. The contract is `image-processing-lib/shaders/README.md`. **Not done, for the front
+> end:** the editor does not call `planEffect` yet, and `dist/` still holds v2.0.3 — publishing a
+> WASM build with the planner is the front end's step.
+>
 > **W31 is done; the worklist is finished except the L4 half of W30 and Stage 10 (W01/W02,
 > owner-gated).** The service now sets the GPU flags from env (`OPENSHOT_GPU_DECODE`,
 > `OPENSHOT_GPU_ENCODE`, `OPENSHOT_GPU_CROP`, all default off), tags BT.709 on both encoders, and
@@ -835,6 +844,17 @@ production corpus) remain open; W05–W10 are the CPU quick wins. W01/W02 stay d
 
 ## Log
 
+- 2026-09-23 — **Effect resolvers moved into the shared submodule** (owner request). Every preset
+  → uniform computation now lives in `image-processing-lib/src/Planner/EffectPlan`; libopenshot's
+  effects, the four blurs, `CircleMask`'s coverage and `GpuOverlay` bind what it returns, and the
+  WASM exports `planEffect` / `planTexture` (built with emsdk, smoke-tested under node). **Parity
+  gate: `openshot-gpu-effect-parity` output identical to the pre-refactor tree line for line** on
+  Vulkan (A2000) and lavapipe, 552 comparison rows each, timings aside. One Skia log line differs
+  and is explained: under VRAM exhaustion in the Blur timing loop (6 allocation failures, both
+  trees) `RunPlannedStep` leaves the frame untouched, so the CPU twin reads back a surface with a
+  cached snapshot and Graphite warns "Intermingling makeImageSnapshot and asImage". Pixels are
+  right; the old per-pass `ApplyOnGpu` instead left a partly blurred frame for the CPU twin to blur
+  again. Four-way 307/307; checks 36 → 39 (`unit.effect_plan`); `openshot-gpu-checks` clean on both.
 - 2026-09-23 — **W31 done: per-export telemetry**, and the service wired to everything. Library:
   `GpuTelemetry` (counters + NVML sampler). Service: env-driven `GPU_DECODE`/`GPU_ENCODE`/`GPU_CROP`
   (`RenderBackend::applyLibrarySettings`, also in `render-payload`), BT.709 on the codec context

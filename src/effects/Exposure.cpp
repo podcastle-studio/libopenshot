@@ -1,6 +1,7 @@
 #include "Exposure.h"
 
 #include "EffectShaders.h"
+#include "image-processing-lib/src/Planner/EffectPlan.h"
 
 #include "skia/include/effects/SkRuntimeEffect.h"
 
@@ -92,15 +93,13 @@ const char* Exposure::GpuShaderSource() const
 }
 
 bool Exposure::SetGpuUniforms(SkRuntimeEffectBuilder& builder, int64_t frame_number,
-							  int width, int height) const
+					int width, int height) const
 {
-	// The C++ multiplies an unsigned char by the keyframe value as a *double*;
-	// SkSL uniforms are float only, so this narrows and the product can land on the
-	// other side of an integer boundary. That is a known and measured cost of the
-	// port, not an oversight -- see the parity numbers in the W19 worklist item.
-	builder.uniform("exposure") =
-		static_cast<float>(std::max(1.0, exposure.GetValue(frame_number)));
-	return true;
+	// Resolved by the shared planner (image-processing-lib/src/Planner), the same code the editor
+	// runs, so the two cannot disagree about what these values mean. It declines -- and the C++
+	// twin runs -- for every case the fragment does not cover.
+	return BindPlan(builder, Podcastle::Effects::planEffect(
+		"EXPOSURE", {{"exposure", exposure.GetValue(frame_number)}}, width, height));
 }
 
 // Generate JSON string of this object

@@ -14,6 +14,7 @@
 
 #include "skia/include/core/SkM44.h"
 #include "EffectShaders.h"
+#include "image-processing-lib/src/Planner/EffectPlan.h"
 
 #include "skia/include/effects/SkRuntimeEffect.h"
 #include "Exceptions.h"
@@ -91,19 +92,13 @@ const char* Bars::GpuShaderSource() const
 }
 
 bool Bars::SetGpuUniforms(SkRuntimeEffectBuilder& builder, int64_t frame_number,
-						  int width, int height) const
+				int width, int height) const
 {
-	// static_cast<int>, matching applyBarsEffect -- truncation, so a bar of 0.9999
-	// of a 100 px edge is 99 px, not 100.
-	const auto extent = [](double value, int size) {
-		return static_cast<float>(static_cast<int>(value * size));
-	};
-	builder.uniform("size") = SkV2{static_cast<float>(width), static_cast<float>(height)};
-	builder.uniform("bars") = SkV4{extent(left.GetValue(frame_number), width),
-								   extent(top.GetValue(frame_number), height),
-								   extent(right.GetValue(frame_number), width),
-								   extent(bottom.GetValue(frame_number), height)};
-	return true;
+	// Resolved by the shared planner (image-processing-lib/src/Planner), the same code the editor
+	// runs, so the two cannot disagree about what these values mean. It declines -- and the C++
+	// twin runs -- for every case the fragment does not cover.
+	return BindPlan(builder, Podcastle::Effects::planEffect(
+		"BARS", {{"left", left.GetValue(frame_number)}, {"top", top.GetValue(frame_number)}, {"right", right.GetValue(frame_number)}, {"bottom", bottom.GetValue(frame_number)}}, width, height));
 }
 
 // Generate JSON string of this object

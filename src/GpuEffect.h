@@ -26,6 +26,10 @@
 // be forward-declared at all.
 class SkRuntimeEffectBuilder;
 
+// The shared effect planner (image-processing-lib/src/Planner/EffectPlan.h), forward-declared for
+// the same reason: installed headers name no submodule type by value.
+namespace Podcastle { namespace Effects { struct EffectPlan; struct PlanPass; struct PlanStep; } }
+
 namespace openshot
 {
 	class Frame;
@@ -134,11 +138,37 @@ namespace openshot
 		/// so both sides use them and neither open-codes the rounding.
 		static const char* GpuShaderPrelude();
 
+		// --- Driven by the shared effect planner ------------------------------------------
+		//
+		// The parameter arithmetic that turns a preset's values into a fragment's uniforms lives
+		// in image-processing-lib's planner, so the editor resolves them through the same code.
+		// These run what it returns.
+
+		/// Bind the uniforms of a plan that is one GPU step of one pass. False -- decline, run
+		/// the CPU twin -- for anything else: an identity, a clear, a CPU step, several passes.
+		bool BindPlan(SkRuntimeEffectBuilder& builder,
+					  const Podcastle::Effects::EffectPlan& plan) const;
+
+		/// Run one GPU step's passes as a chain over @a frame -- each reads the previous one's
+		/// output, the first reads the frame -- and attach the last one's output. Nothing is
+		/// attached unless every pass ran, so on false the CPU twin finds the frame untouched.
+		bool RunPlannedStep(std::shared_ptr<openshot::Frame> frame, int64_t frame_number,
+							const Podcastle::Effects::PlanStep& step);
+
+		/// The fragment for the pass RunPlannedStep is drawing, or @a fallback outside one.
+		const char* PlannedShaderSource(const char* fallback) const;
+
+		/// Bind the uniforms of the pass RunPlannedStep is drawing. False outside one.
+		bool BindPlannedPass(SkRuntimeEffectBuilder& builder) const;
+
 	private:
 		struct Program;
 		struct ProgramCache;
 		/// Compiled SkSL, per effect instance, one entry per distinct GpuShaderSource().
 		std::shared_ptr<ProgramCache> programs;
+
+		/// The pass RunPlannedStep is drawing; null outside it.
+		const Podcastle::Effects::PlanPass* planned_pass = nullptr;
 	};
 }
 

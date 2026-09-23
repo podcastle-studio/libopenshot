@@ -12,7 +12,8 @@ list(SORT SHADER_FILES)
 
 set(GENERATED "// GENERATED FROM ${SHADER_DIR} -- DO NOT EDIT.\n")
 string(APPEND GENERATED "// Edit the .sksl files; this header is rebuilt from them.\n\n")
-string(APPEND GENERATED "#pragma once\n\nnamespace openshot {\nnamespace shaders {\n\n")
+string(APPEND GENERATED "#pragma once\n\n#include <cstring>\n\nnamespace openshot {\nnamespace shaders {\n\n")
+set(LOOKUP "")
 
 foreach(SHADER ${SHADER_FILES})
   get_filename_component(NAME "${SHADER}" NAME_WE)
@@ -29,8 +30,13 @@ foreach(SHADER ${SHADER_FILES})
   file(READ "${SHADER}" CONTENT)
   # A raw string literal needs a delimiter the content cannot contain.
   string(APPEND GENERATED "inline constexpr char k${SYMBOL}[] = R\"SKSLSRC(\n${CONTENT})SKSLSRC\";\n\n")
+  string(APPEND LOOKUP "\tif (std::strcmp(name, \"${NAME}\") == 0) return k${SYMBOL};\n")
 endforeach()
 
+# By file stem, for hosts driven by the effect planner (image-processing-lib/src/Planner), which
+# names each pass's fragment the way the editor does: "zoom", "blur", "zoom_blur_forward", ...
+# Returns the same pointer every time, which GpuEffect's program cache relies on.
+string(APPEND GENERATED "inline const char* ByName(const char* name)\n{\n${LOOKUP}\treturn nullptr;\n}\n\n")
 string(APPEND GENERATED "} // namespace shaders\n} // namespace openshot\n")
 
 # Only rewrite when the content changed, so a no-op build stays a no-op.

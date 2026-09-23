@@ -14,6 +14,7 @@
 #include "Exceptions.h"
 
 #include "EffectShaders.h"
+#include "image-processing-lib/src/Planner/EffectPlan.h"
 
 #include "skia/include/effects/SkRuntimeEffect.h"
 #include "./image-processing-lib/src/Effects/effects.h"
@@ -77,14 +78,13 @@ const char* Brightness::GpuShaderSource() const
 }
 
 bool Brightness::SetGpuUniforms(SkRuntimeEffectBuilder& builder, int64_t frame_number,
-								int width, int height) const
+					int width, int height) const
 {
-	const BrightnessUniforms u = brightnessUniforms(
-		static_cast<float>(brightness.GetValue(frame_number)),
-		static_cast<float>(contrast.GetValue(frame_number)));
-	builder.uniform("factor") = u.factor;
-	builder.uniform("shift") = u.shift;
-	return true;
+	// Resolved by the shared planner (image-processing-lib/src/Planner), the same code the editor
+	// runs, so the two cannot disagree about what these values mean. It declines -- and the C++
+	// twin runs -- for every case the fragment does not cover.
+	return BindPlan(builder, Podcastle::Effects::planEffect(
+		"BRIGHTNESS", {{"brightness", brightness.GetValue(frame_number)}, {"contrast", contrast.GetValue(frame_number)}}, width, height));
 }
 
 // This method is required for all derived classes of EffectBase, and returns a

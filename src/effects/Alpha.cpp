@@ -2,6 +2,7 @@
 #include "Exceptions.h"
 
 #include "EffectShaders.h"
+#include "image-processing-lib/src/Planner/EffectPlan.h"
 
 #include "skia/include/effects/SkRuntimeEffect.h"
 #include "./image-processing-lib/src/Effects/effects.h"
@@ -96,17 +97,13 @@ const char* Alpha::GpuShaderSource() const
 }
 
 bool Alpha::SetGpuUniforms(SkRuntimeEffectBuilder& builder, int64_t frame_number,
-						   int width, int height) const
+				int width, int height) const
 {
-	const double alphaValue = alpha.GetValue(frame_number);
-	// The CPU path short-circuits both ends: >= 1.0 returns the frame untouched and
-	// <= 0 memsets it. Neither is worth a shader pass, and reproducing the memset in
-	// SkSL would only be a slower way to write zeroes, so decline and let it run.
-	if (alphaValue >= 1.0 || alphaValue <= 0.0)
-		return false;
-	// float, because applyAlphaPremultiplied narrows to float before multiplying.
-	builder.uniform("k") = static_cast<float>(alphaValue);
-	return true;
+	// Resolved by the shared planner (image-processing-lib/src/Planner), the same code the editor
+	// runs, so the two cannot disagree about what these values mean. It declines -- and the C++
+	// twin runs -- for every case the fragment does not cover.
+	return BindPlan(builder, Podcastle::Effects::planEffect(
+		"ALPHA", {{"alpha", alpha.GetValue(frame_number)}}, width, height));
 }
 
 std::shared_ptr<openshot::Frame> Alpha::GetFrame(std::shared_ptr<openshot::Frame> frame, int64_t frame_number) {

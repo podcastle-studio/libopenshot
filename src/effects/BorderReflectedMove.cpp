@@ -2,6 +2,7 @@
 
 #include "skia/include/core/SkM44.h"
 #include "EffectShaders.h"
+#include "image-processing-lib/src/Planner/EffectPlan.h"
 
 #include "skia/include/effects/SkRuntimeEffect.h"
 #include "Exceptions.h"
@@ -68,15 +69,13 @@ const char* BorderReflectedMove::GpuShaderSource() const
 }
 
 bool BorderReflectedMove::SetGpuUniforms(SkRuntimeEffectBuilder& builder, int64_t frame_number,
-										 int width, int height) const
+							int width, int height) const
 {
-	// dx/dy are fractions of the frame, which is why this effect is resolution-independent and
-	// not caught by the blur radii's missing reference resolution.
-	builder.uniform("size") = SkV2{static_cast<float>(width), static_cast<float>(height)};
-	builder.uniform("shift") =
-		SkV2{static_cast<float>(dx.GetValue(frame_number) * width),
-			 static_cast<float>(dy.GetValue(frame_number) * height)};
-	return true;
+	// Resolved by the shared planner (image-processing-lib/src/Planner), the same code the editor
+	// runs, so the two cannot disagree about what these values mean. It declines -- and the C++
+	// twin runs -- for every case the fragment does not cover.
+	return BindPlan(builder, Podcastle::Effects::planEffect(
+		"BORDER_REFLECTED_MOVE", {{"dx", dx.GetValue(frame_number)}, {"dy", dy.GetValue(frame_number)}}, width, height));
 }
 
 // Generate JSON string of this object

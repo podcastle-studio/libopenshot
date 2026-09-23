@@ -183,6 +183,14 @@ stdin, which is the quick way to find out what SkSL supports: it is the **GLSL E
 set, so there is no `round` and no `trunc`, only `floor`. That is CanvasKit's ceiling too, so the
 prelude's helpers are written within it on purpose.
 
+**Effect parameters are resolved by the shared planner**, not in the effect classes:
+`image-processing-lib/src/Planner/EffectPlan` (`planEffect(name, params, w, h[, ow, oh])` →
+identity / clear / gpu passes / cpu call), which the editor calls through the WASM (`planEffect`,
+`planTexture`) so both sides bind the same uniforms. An effect's `SetGpuUniforms` is
+`BindPlan(builder, planEffect(...))`; a multi-pass effect runs `RunPlannedStep`, which attaches
+nothing unless every pass ran. Change the arithmetic in the planner, never in a host — the
+contract is `shaders/README.md`, the gate is `unit.effect_plan` plus the parity tool.
+
 Rules that are easy to get wrong and crash in the NVIDIA driver rather than anywhere useful:
 
 - **Nothing Graphite hands out may outlive the `Context`.** `GpuDevice::DestroyInstance()` empties

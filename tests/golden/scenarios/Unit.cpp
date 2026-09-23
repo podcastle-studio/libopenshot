@@ -40,6 +40,8 @@ extern "C" {
 #include "gpu/GpuOverlay.h"
 
 #include "effects/image-processing-lib/src/Effects/effects.h"
+#include "effects/image-processing-lib/src/Planner/EffectPlan.h"
+#include "Json.h"
 
 #include "Frame.h"
 
@@ -1019,6 +1021,96 @@ void golden::registerUnitScenarios() {
                 detail = std::to_string(decoded) + " of " + std::to_string(wanted) +
                          " frames decoded with HARDWARE_DECODER=2";
             checks.push_back({"hardware_decode_no_throw", ok, detail});
+        });
+
+    // unit.effect_plan guards the shared effect planner (image-processing-lib/src/Planner), which
+    // the editor calls through the WASM (planEffect) and every GPU effect here calls natively. The
+    // pixels it leads to are held by the effect goldens and openshot-gpu-effect-parity; this holds
+    // what they cannot see: that every name resolves, that the JSON the editor parses is JSON, and
+    // that the three short-circuits -- identity, clear, cpu -- are taken where the C++ takes them.
+    addCustom("unit.effect_plan", {"unit"}, unitScene,
+        [](Scene&, std::vector<Captured>&, std::vector<Check>& checks) {
+            namespace fx = Podcastle::Effects;
+            // Every parameter the planner reads, at a value that takes most effects off their
+            // identity branch, so the JSON below carries uniforms, children and textures.
+            const fx::EffectParams busy = {
+                {"alpha", 0.5}, {"alphaX", 0.1}, {"alphaY", -0.1}, {"anchorX", 0.3}, {"anchorY", 0.6},
+                {"angle", 20}, {"blueX", -0.05}, {"blueY", 0.05}, {"bottom", 0.1}, {"brightness", 0.2},
+                {"circleRadius", 0.5}, {"contrast", 4}, {"diagonalRadius", 12}, {"dx", 0.2}, {"dy", -0.1},
+                {"enabled", 1}, {"exposure", 1.5}, {"greenX", 0.02}, {"greenY", -0.02},
+                {"highPercent", 60}, {"horizontalDisplacement", 0.1}, {"horizontalRadius", 10},
+                {"isHorizontal", 1}, {"left", 0.1}, {"lowPercent", 40}, {"redX", 0.05}, {"redY", 0.0},
+                {"right", 0.1}, {"rotationalRadius", 8}, {"shiftAmount", 0.3}, {"shiftPoint", 0.5},
+                {"top", 0.1}, {"verticalDisplacement", 0.1}, {"verticalRadius", 6},
+                {"zoomBlurRadius", 20}, {"zoomPercent", 130}};
+            constexpr int kW = 320, kH = 180;
+
+            std::string unresolved, malformed;
+            std::size_t plans = 0;
+            for (const std::string& name : fx::plannedEffects()) {
+                for (const fx::EffectParams* params : {&busy, static_cast<const fx::EffectParams*>(nullptr)}) {
+                    const fx::EffectPlan plan =
+                        fx::planEffect(name, params ? *params : fx::EffectParams{}, kW, kH, kW, kH);
+                    ++plans;
+                    if (!plan.known || plan.steps.empty())
+                        unresolved += " " + name;
+                    // Strict: the editor runs JSON.parse, which forgives nothing jsoncpp's
+                    // default reader would.
+                    Json::CharReaderBuilder builder;
+                    Json::CharReaderBuilder::strictMode(&builder.settings_);
+                    std::unique_ptr<Json::CharReader> reader(builder.newCharReader());
+                    const std::string text = plan.toJson();
+                    Json::Value root;
+                    std::string errors;
+                    const bool parsed = reader->parse(text.data(), text.data() + text.size(), &root, &errors);
+                    if (!parsed || root["effect"].asString() != name ||
+                        root["steps"].size() != plan.steps.size() ||
+                        root["textures"].size() != plan.textures.size())
+                        malformed += " " + name + (params ? "(busy)" : "(defaults)");
+                }
+            }
+            checks.push_back({"every_effect_resolves", unresolved.empty(),
+                              unresolved.empty()
+                                  ? std::to_string(fx::plannedEffects().size()) + " effects"
+                                  : "unresolved:" + unresolved});
+            checks.push_back({"json_well_formed", malformed.empty(),
+                              malformed.empty() ? std::to_string(plans) + " plans parse strictly"
+                                                : "malformed:" + malformed});
+
+            // The short-circuits. Each is where the C++ twin returns early or hands off, and a plan
+            // that missed one would draw a pass the export never drew.
+            struct Expect { const char* label; const char* effect; fx::EffectParams params;
+                            fx::PlanStep::Kind kind; };
+            const Expect expects[] = {
+                {"ZOOM 80 -> cpu", "ZOOM", {{"zoomPercent", 80}, {"anchorX", 0.5}, {"anchorY", 0.5}},
+                 fx::PlanStep::Kind::Cpu},
+                {"ZOOM 99.9 -> cpu", "ZOOM", {{"zoomPercent", 99.9}}, fx::PlanStep::Kind::Cpu},
+                {"ALPHA 0 -> clear", "ALPHA", {{"alpha", 0}}, fx::PlanStep::Kind::Clear},
+                {"ALPHA -1 -> clear", "ALPHA", {{"alpha", -1}}, fx::PlanStep::Kind::Clear},
+                {"BLUR zero radii -> identity", "BLUR",
+                 {{"horizontalRadius", 0}, {"verticalRadius", 0}, {"diagonalRadius", 0},
+                  {"zoomBlurRadius", 0}, {"rotationalRadius", 0}},
+                 fx::PlanStep::Kind::Identity},
+                {"BLUR no params -> identity", "BLUR", {}, fx::PlanStep::Kind::Identity},
+                // and the other side of each, so a planner that always short-circuits fails too
+                {"ZOOM 130 -> gpu", "ZOOM", {{"zoomPercent", 130}}, fx::PlanStep::Kind::Gpu},
+                {"ALPHA 0.5 -> gpu", "ALPHA", {{"alpha", 0.5}}, fx::PlanStep::Kind::Gpu},
+                {"BLUR 10 -> gpu", "BLUR", {{"horizontalRadius", 10}}, fx::PlanStep::Kind::Gpu},
+            };
+            std::string wrong;
+            for (const Expect& e : expects) {
+                const fx::EffectPlan plan = fx::planEffect(e.effect, e.params, kW, kH);
+                if (plan.steps.size() != 1 || plan.steps.front().kind != e.kind)
+                    wrong += std::string(wrong.empty() ? "" : "; ") + e.label;
+            }
+            const fx::EffectPlan cpu = fx::planEffect("ZOOM", {{"zoomPercent", 80}}, kW, kH);
+            if (cpu.steps.size() == 1 && cpu.steps.front().cpu.function != "applyZoomEffect")
+                wrong += std::string(wrong.empty() ? "" : "; ") + "ZOOM 80 names " +
+                         cpu.steps.front().cpu.function;
+            checks.push_back({"identity_clear_cpu", wrong.empty(),
+                              wrong.empty() ? std::to_string(sizeof(expects) / sizeof(expects[0])) +
+                                                  " cases as expected"
+                                            : wrong});
         });
 
     addCustom("unit.color", {"unit"}, unitScene,

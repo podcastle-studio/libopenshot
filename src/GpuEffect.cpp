@@ -11,6 +11,8 @@
 
 #include "GpuEffect.h"
 
+#include "effects/image-processing-lib/src/Planner/EffectPlan.h"
+
 #include "Frame.h"
 #include "ZmqLogger.h"
 #include "gpu/GpuDevice.h"
@@ -245,4 +247,63 @@ bool GpuEffect::ApplyOnGpu(std::shared_ptr<openshot::Frame> frame, int64_t frame
 	// that once, whenever the first unported path asks.
 	frame->AttachGpuFrame(std::move(destination));
 	return true;
+}
+
+namespace
+{
+	bool bindUniforms(SkRuntimeEffectBuilder& builder, const Podcastle::Effects::PlanPass& pass)
+	{
+		for (const Podcastle::Effects::PlanUniform& u : pass.uniforms) {
+			// set() checks the byte size against the declaration, so a planner/fragment mismatch
+			// declines here rather than drawing with a half-bound uniform.
+			if (!builder.uniform(u.name.c_str()).set(u.values.data(), static_cast<int>(u.values.size())))
+				return false;
+		}
+		return true;
+	}
+}
+
+bool GpuEffect::BindPlan(SkRuntimeEffectBuilder& builder,
+						 const Podcastle::Effects::EffectPlan& plan) const
+{
+	if (plan.steps.size() != 1)
+		return false;
+	const Podcastle::Effects::PlanStep& step = plan.steps.front();
+	if (step.kind != Podcastle::Effects::PlanStep::Kind::Gpu || step.passes.size() != 1)
+		return false;
+	return bindUniforms(builder, step.passes.front());
+}
+
+bool GpuEffect::RunPlannedStep(std::shared_ptr<openshot::Frame> frame, int64_t frame_number,
+							   const Podcastle::Effects::PlanStep& step)
+{
+	if (!frame || step.kind != Podcastle::Effects::PlanStep::Kind::Gpu || step.passes.empty())
+		return false;
+	if (!GpuDevice::Instance().available())
+		return false;
+	std::shared_ptr<GpuFrame> current = GpuSourceFrame(frame);
+	if (!current)
+		return false;
+	for (const Podcastle::Effects::PlanPass& pass : step.passes) {
+		planned_pass = &pass;
+		current = RunGpuPass(current, pass.width, pass.height, frame_number);
+		planned_pass = nullptr;
+		if (!current)
+			return false;
+	}
+	frame->AttachGpuFrame(std::move(current));
+	return true;
+}
+
+const char* GpuEffect::PlannedShaderSource(const char* fallback) const
+{
+	if (!planned_pass)
+		return fallback;
+	const char* source = openshot::shaders::ByName(planned_pass->shader.c_str());
+	return source ? source : fallback;
+}
+
+bool GpuEffect::BindPlannedPass(SkRuntimeEffectBuilder& builder) const
+{
+	return planned_pass && bindUniforms(builder, *planned_pass);
 }

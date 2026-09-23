@@ -14,6 +14,7 @@
 
 #include "skia/include/core/SkM44.h"
 #include "EffectShaders.h"
+#include "image-processing-lib/src/Planner/EffectPlan.h"
 
 #include "skia/include/effects/SkRuntimeEffect.h"
 
@@ -113,32 +114,13 @@ const char* ColorShift::GpuShaderSource() const
 }
 
 bool ColorShift::SetGpuUniforms(SkRuntimeEffectBuilder& builder, int64_t frame_number,
-								int width, int height) const
+					int width, int height) const
 {
-	// The offsets are resolved here rather than in the fragment so that one place
-	// owns the fmod/round/sign arithmetic. Same expression as applyColorShiftEffect,
-	// including that the magnitude is taken from the absolute value and the sign
-	// applied afterwards -- so a shift of -0.25 is not the same as 0.75.
-	const auto offset = [](double value, int extent) {
-		const double magnitude = std::round(extent * std::fmod(std::abs(value), 1.0));
-		return static_cast<float>(value >= 0 ? magnitude : -magnitude);
-	};
-
-	const float red_x_shift = static_cast<float>(red_x.GetValue(frame_number));
-	const float red_y_shift = static_cast<float>(red_y.GetValue(frame_number));
-	const float green_x_shift = static_cast<float>(green_x.GetValue(frame_number));
-	const float green_y_shift = static_cast<float>(green_y.GetValue(frame_number));
-	const float blue_x_shift = static_cast<float>(blue_x.GetValue(frame_number));
-	const float blue_y_shift = static_cast<float>(blue_y.GetValue(frame_number));
-	const float alpha_x_shift = static_cast<float>(alpha_x.GetValue(frame_number));
-	const float alpha_y_shift = static_cast<float>(alpha_y.GetValue(frame_number));
-
-	builder.uniform("size") = SkV2{static_cast<float>(width), static_cast<float>(height)};
-	builder.uniform("redOff") = SkV2{offset(red_x_shift, width), offset(red_y_shift, height)};
-	builder.uniform("greenOff") = SkV2{offset(green_x_shift, width), offset(green_y_shift, height)};
-	builder.uniform("blueOff") = SkV2{offset(blue_x_shift, width), offset(blue_y_shift, height)};
-	builder.uniform("alphaOff") = SkV2{offset(alpha_x_shift, width), offset(alpha_y_shift, height)};
-	return true;
+	// Resolved by the shared planner (image-processing-lib/src/Planner), the same code the editor
+	// runs, so the two cannot disagree about what these values mean. It declines -- and the C++
+	// twin runs -- for every case the fragment does not cover.
+	return BindPlan(builder, Podcastle::Effects::planEffect(
+		"COLOR_SHIFT", {{"redX", red_x.GetValue(frame_number)}, {"redY", red_y.GetValue(frame_number)}, {"greenX", green_x.GetValue(frame_number)}, {"greenY", green_y.GetValue(frame_number)}, {"blueX", blue_x.GetValue(frame_number)}, {"blueY", blue_y.GetValue(frame_number)}, {"alphaX", alpha_x.GetValue(frame_number)}, {"alphaY", alpha_y.GetValue(frame_number)}}, width, height));
 }
 
 // Generate JSON string of this object

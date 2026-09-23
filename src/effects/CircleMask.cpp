@@ -21,6 +21,7 @@
 #include "skia/include/core/SkShader.h"
 #include "skia/include/core/SkTileMode.h"
 #include "EffectShaders.h"
+#include "image-processing-lib/src/Planner/EffectPlan.h"
 
 #include "skia/include/effects/SkRuntimeEffect.h"
 
@@ -106,49 +107,31 @@ bool CircleMask::SetGpuUniforms(SkRuntimeEffectBuilder& builder, int64_t frame_n
 								int width, int height) const
 {
 	const double radius_value = circleRadius.GetValue(frame_number);
-	// >= 1 never reaches here (GetFrame returns early); <= 0 zeroes the whole frame, which the
-	// C++ does with a Mat::zeros rather than through the coverage path.
-	if (radius_value >= 1.0 || radius_value <= 0.0)
-		return false;
-
 	const unsigned long long generation = GpuDevice::Generation();
-	if (!coverage || coverage->radius != radius_value || coverage->width != width ||
-		coverage->height != height || coverage->generation != generation || !coverage->texture) {
+	const bool cached = coverage && coverage->radius == radius_value && coverage->width == width &&
+						coverage->height == height && coverage->generation == generation &&
+						coverage->texture;
+	if (!cached) {
+		// The coverage comes from the shared planner: OpenCV's antialiased circle, drawn with the
+		// same call and sub-pixel precision as applyCircleMaskEffect -- the same pixels the editor
+		// gets from the WASM planner. >= 1 and <= 0 are an identity and a clear there, which the
+		// C++ twin handles, so the GPU path declines for both.
+		const Podcastle::Effects::EffectPlan plan = Podcastle::Effects::planEffect(
+			"CIRCLE_MASK", {{"circleRadius", radius_value}}, width, height);
+		if (plan.steps.size() != 1 || plan.steps.front().kind != Podcastle::Effects::PlanStep::Kind::Gpu ||
+			plan.textures.size() != 1)
+			return false;
+		const Podcastle::Effects::PlanTexture& texture = plan.textures.front();
+
 		auto cache = std::make_shared<CoverageCache>();
 		cache->radius = radius_value;
 		cache->width = width;
 		cache->height = height;
 		cache->generation = generation;
-
-		// The same call, with the same sub-pixel precision, as applyCircleMaskEffect.
-		const double max_radius =
-			std::sqrt(static_cast<double>(width) * width +
-					  static_cast<double>(height) * height) / 2.0;
-		constexpr int kSubPixelBits = 3;
-		constexpr int kSubPixelScale = 1 << kSubPixelBits;
-		cv::Mat mask = cv::Mat::zeros(height, width, CV_8UC1);
-		cv::circle(mask,
-				   cv::Point(cvRound((width / 2) * kSubPixelScale),
-							 cvRound((height / 2) * kSubPixelScale)),
-				   cvRound(radius_value * max_radius * kSubPixelScale),
-				   cv::Scalar(255), -1, cv::LINE_AA, kSubPixelBits);
-
-		// Upload as RGBA with the coverage in R; a single-channel GPU surface would work too but
-		// the pool speaks kRGBA_8888 and this is 256 KB at 1080p, built once.
-		std::vector<uint8_t> rgba(static_cast<std::size_t>(width) * height * 4, 0);
-		for (int y = 0; y < height; ++y) {
-			const uint8_t* row = mask.ptr<uint8_t>(y);
-			for (int x = 0; x < width; ++x) {
-				const std::size_t i = (static_cast<std::size_t>(y) * width + x) * 4;
-				rgba[i + 0] = row[x];
-				rgba[i + 3] = 255;
-			}
-		}
 		const SkPixmap pixels(
-			SkImageInfo::Make(width, height, kRGBA_8888_SkColorType, kPremul_SkAlphaType),
-			rgba.data(), static_cast<std::size_t>(width) * 4);
-
-		cache->owner = GpuFrame::Create(width, height, kRGBA_8888_SkColorType);
+			SkImageInfo::Make(texture.width, texture.height, kRGBA_8888_SkColorType, kPremul_SkAlphaType),
+			texture.rgba.data(), static_cast<std::size_t>(texture.width) * 4);
+		cache->owner = GpuFrame::Create(texture.width, texture.height, kRGBA_8888_SkColorType);
 		if (!cache->owner || !cache->owner->upload(pixels))
 			return false;
 		cache->texture = cache->owner->snapshot();

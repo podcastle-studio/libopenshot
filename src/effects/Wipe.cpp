@@ -1,6 +1,7 @@
 #include "Wipe.h"
 
 #include "EffectShaders.h"
+#include "image-processing-lib/src/Planner/EffectPlan.h"
 
 #include "skia/include/effects/SkRuntimeEffect.h"
 
@@ -74,16 +75,13 @@ const char* Wipe::GpuShaderSource() const
 }
 
 bool Wipe::SetGpuUniforms(SkRuntimeEffectBuilder& builder, int64_t frame_number,
-						  int width, int height) const
+				int width, int height) const
 {
-	// static_cast<int>, so truncation, and the same swap the C++ applies as a safety net.
-	int low = static_cast<int>(mLevelsLowPercentage.GetValue(frame_number) * 255.0 / 100.0);
-	int high = static_cast<int>(mLevelsHighPercentage.GetValue(frame_number) * 255.0 / 100.0);
-	if (low > high)
-		std::swap(low, high);
-	builder.uniform("lowThreshold") = static_cast<float>(low);
-	builder.uniform("highThreshold") = static_cast<float>(high);
-	return true;
+	// Resolved by the shared planner (image-processing-lib/src/Planner), the same code the editor
+	// runs, so the two cannot disagree about what these values mean. It declines -- and the C++
+	// twin runs -- for every case the fragment does not cover.
+	return BindPlan(builder, Podcastle::Effects::planEffect(
+		"THRESHOLD_WIPE_MASK", {{"lowPercent", mLevelsLowPercentage.GetValue(frame_number)}, {"highPercent", mLevelsHighPercentage.GetValue(frame_number)}}, width, height));
 }
 
 // Generate JSON string of this object

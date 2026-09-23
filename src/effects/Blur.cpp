@@ -15,6 +15,7 @@
 #include "MagickUtilities.h"
 #include "skia/include/core/SkM44.h"
 #include "EffectShaders.h"
+#include "image-processing-lib/src/Planner/EffectPlan.h"
 #include "../gpu/GpuDevice.h"
 
 #include <algorithm>
@@ -183,335 +184,71 @@ std::shared_ptr<openshot::Frame> Blur::GetFrame(std::shared_ptr<openshot::Frame>
 
 /* ---------- GPU ---------- */
 
-// The largest kernel blur.sksl's loop can run. It matches the constant in the fragment, and
-// covers the widest pass this effect's own parameter range can ask for (radius 100 at 4K is 173
-// taps). A frame that somehow asks for more declines rather than blurring by the wrong amount.
-static constexpr int kMaxBlurTaps = 255;
+// Every mode is resolved by the shared planner (image-processing-lib/src/Planner): the box blur's
+// separable half-passes, the diagonal kernel, the rotational blur's thirty inverse matrices, the
+// zoom blur's polar geometry -- and the cases none of the fragments covers, which it returns as a
+// CPU step so the OpenCV twin below runs instead. The editor resolves the same presets through the
+// same code, which is the point: before this the arithmetic lived here and nowhere else.
+bool Blur::ApplyPlannedBlurOnGpu(std::shared_ptr<openshot::Frame> frame, int64_t frame_number,
+                                 const std::map<std::string, double>& params)
+{
+    if (!frame || !GpuDevice::Instance().available())
+        return false;
+    const int width = frame->GetWidth();
+    const int height = frame->GetHeight();
+    if (width <= 0 || height <= 0)
+        return false;
 
-// The same, for diagonal_blur.sksl's loop.
-static constexpr int kMaxDiagonalTaps = 513;
+    const Podcastle::Effects::EffectPlan plan =
+        Podcastle::Effects::planEffect("BLUR", params, width, height);
+    if (plan.steps.size() != 1)
+        return false;
+    const Podcastle::Effects::PlanStep& step = plan.steps.front();
+    if (step.kind == Podcastle::Effects::PlanStep::Kind::Identity)
+        return true;   // the C++ would return the image untouched
+    if (step.kind != Podcastle::Effects::PlanStep::Kind::Gpu)
+        return false;
+    return RunPlannedStep(frame, frame_number, step);
+}
 
-// The box blur as up to six fragment passes.
-//
-// applyBlurEffect is three cv::blur calls, and each of those is itself separable: an exact
-// integer row sum, then an exact integer column sum, then one rounding to the byte. This runs the
-// same two halves as two draws, which is what makes the cost proportional to the kernel width
-// rather than to its square -- the reasoning, and what the extra intermediate rounding costs, is
-// in shaders/blur.sksl.
-//
-// A half whose kernel is one tap is the identity, so it is skipped rather than drawn: round(s/1)
-// is s. That is bit-identical and saves a pass whenever only one axis is blurred, which is what
-// the vocabulary's horizontal-only and vertical-only transitions do.
 bool Blur::ApplyBoxBlurOnGpu(std::shared_ptr<openshot::Frame> frame, int64_t frame_number,
                              int horizontal, int vertical)
 {
-    if (!frame)
-        return false;
-    // Asked before anything is drawn: every reason to decline has to be found up front, because
-    // a pass that has already run left its result as the frame's pixels and the C++ twin would
-    // then blur an already-blurred frame.
-    if (!GpuDevice::Instance().available())
-        return false;
-
-    const int width = frame->GetWidth();
-    const int height = frame->GetHeight();
-    if (width <= 0 || height <= 0)
-        return false;
-
-    // Resolved by the same function the CPU twin calls, so the two cannot disagree about what
-    // this frame's radii mean.
-    const Podcastle::Effects::BlurBoxes boxes =
-        Podcastle::Effects::blurBoxSizes(width, horizontal, vertical);
-    if (boxes.identity)
-        return true;   // applyBlurEffect returns the image untouched, so there is nothing to run
-
-    for (int pass = 0; pass < 3; ++pass)
-        if (boxes.x[pass] > kMaxBlurTaps || boxes.y[pass] > kMaxBlurTaps)
-            return false;
-
-    for (int pass = 0; pass < 3; ++pass) {
-        const int taps[2] = {boxes.x[pass], boxes.y[pass]};
-        for (int axis = 0; axis < 2; ++axis) {
-            if (taps[axis] <= 1)
-                continue;   // the identity half
-            gpu_pass = GpuPass::Box;
-            gpu_dir_x = axis == 0 ? 1.0f : 0.0f;
-            gpu_dir_y = axis == 0 ? 0.0f : 1.0f;
-            gpu_taps = static_cast<float>(taps[axis]);
-            if (!ApplyOnGpu(frame, frame_number))
-                return false;
-        }
-    }
-    return true;
+    return ApplyPlannedBlurOnGpu(frame, frame_number,
+                                 {{"horizontalRadius", horizontal}, {"verticalRadius", vertical}});
 }
 
-// The diagonal blur as one fragment pass.
-//
-// Only for the sizes the C++ does not downscale: above a megapixel it halves the image with
-// INTER_AREA, blurs, rounds to 8 bit and upsamples with INTER_LINEAR, and both the resampling and
-// the change of size are things ApplyOnGpu cannot express. See shaders/diagonal_blur.sksl.
 bool Blur::ApplyDiagonalBlurOnGpu(std::shared_ptr<openshot::Frame> frame, int64_t frame_number,
                                   int authored_radius)
 {
-    if (!frame || !GpuDevice::Instance().available())
-        return false;
-
-    const int width = frame->GetWidth();
-    const int height = frame->GetHeight();
-    if (width <= 0 || height <= 0)
-        return false;
-
-    // applyDiagonalBlurEffect's own threshold, read from the C++ rather than restated: above it
-    // the effect works at half size and this fragment does not apply.
-    constexpr std::size_t kLargeImageThreshold = 1000000;
-    if (static_cast<std::size_t>(width) * static_cast<std::size_t>(height) > kLargeImageThreshold)
-        return false;
-
-    // The same parameter arithmetic the C++ runs, through the same function.
-    const int blur_amount = std::max(1, Podcastle::Effects::scaledLength(width, authored_radius));
-    const int radius = std::max(1, blur_amount / 2);
-    const int kernel_size = radius * 2 + 1;
-    if (kernel_size > kMaxDiagonalTaps)
-        return false;
-
-    gpu_pass = GpuPass::Diagonal;
-    gpu_diag_taps = static_cast<float>(kernel_size);
-    gpu_diag_radius = static_cast<float>(radius);
-    // The C++ multiplies by this float reciprocal rather than dividing, so the host computes it
-    // the same way and in the same precision. Dividing in the fragment would be more accurate and
-    // therefore wrong.
-    gpu_diag_inv_taps = 1.0f / static_cast<float>(kernel_size);
-    return ApplyOnGpu(frame, frame_number);
+    return ApplyPlannedBlurOnGpu(frame, frame_number, {{"diagonalRadius", authored_radius}});
 }
 
-// The rotational blur as one fragment pass.
-//
-// Only for the widths the C++ works at natively: above the reference width it resizes, blurs the
-// copy and resizes back, which is a resample at a different size and ApplyOnGpu cannot express it.
-//
-// Everything the fragment needs is resolved here, including thirty of OpenCV's own inverse affine
-// matrices -- warpAffine inverts the cv::Matx23f it is handed, in double, and re-deriving that
-// from the angle in the shader would be a different matrix in the last bits.
 bool Blur::ApplyRotationalBlurOnGpu(std::shared_ptr<openshot::Frame> frame, int64_t frame_number,
                                     double angle_degrees)
 {
-    if (!frame || !GpuDevice::Instance().available())
-        return false;
-
-    const int width = frame->GetWidth();
-    const int height = frame->GetHeight();
-    if (width <= 0 || height <= 0)
-        return false;
-
-    const double abs_blur = std::abs(angle_degrees);
-    if (abs_blur < 0.1)
-        return true;   // the C++ calls this negligible and returns the frame untouched
-
-    // Above the reference width the effect works on a resized copy. See the shader.
-    if (Podcastle::Effects::referenceWorkingScale(width) != 1.0)
-        return false;
-
-    const int iterations = abs_blur < 15.0
-        ? std::max(8, std::min(25, static_cast<int>(abs_blur * 1.2)))
-        : std::max(3, std::min(30, static_cast<int>(abs_blur * 0.6)));
-    if (iterations > kMaxRotationalIterations)
-        return false;
-
-    const float center_x = static_cast<float>(width) / 2.0f;
-    const float center_y = static_cast<float>(height) / 2.0f;
-    const double max_angle_rad = angle_degrees * CV_PI / 180.0;
-
-    for (int i = 0; i < iterations; ++i) {
-        double angle_rad;
-        if (abs_blur < 15.0) {
-            // The C++'s "avoid exact centre / spokes" nudge, reproduced rather than tidied away.
-            constexpr double offset = 0.01;
-            angle_rad = (((static_cast<double>(i) + offset) / iterations) - 0.5) * max_angle_rad;
-        } else if (iterations == 1) {
-            angle_rad = -max_angle_rad / 2.0;
-        } else {
-            angle_rad = ((static_cast<double>(i) / (iterations - 1)) - 0.5) * max_angle_rad;
-        }
-
-        // Matx23f, not Mat: the C++ stores the matrix as float32 before warpAffine widens it
-        // back to double and inverts it, so the float32 rounding is part of the answer.
-        const cv::Matx23f m = cv::getRotationMatrix2D(cv::Point2f(center_x, center_y),
-                                                      angle_rad * 180.0 / CV_PI, 1.0);
-        cv::Mat m_double;
-        cv::Mat(m).convertTo(m_double, CV_64F);
-        cv::Mat m_inverse;
-        cv::invertAffineTransform(m_double, m_inverse);
-
-        for (int c = 0; c < 3; ++c) {
-            gpu_rot_inv_row0[i * 4 + c] = static_cast<float>(m_inverse.at<double>(0, c));
-            gpu_rot_inv_row1[i * 4 + c] = static_cast<float>(m_inverse.at<double>(1, c));
-        }
-        gpu_rot_inv_row0[i * 4 + 3] = 0.0f;
-        gpu_rot_inv_row1[i * 4 + 3] = 0.0f;
-    }
-    for (int i = iterations; i < kMaxRotationalIterations; ++i)
-        for (int c = 0; c < 4; ++c) {
-            gpu_rot_inv_row0[i * 4 + c] = 0.0f;
-            gpu_rot_inv_row1[i * 4 + c] = 0.0f;
-        }
-
-    gpu_pass = GpuPass::Rotational;
-    gpu_rot_iters = static_cast<float>(iterations);
-    // The C++'s `weight`, in float, because that is the precision it multiplies by.
-    gpu_rot_inv_iters = 1.0f / static_cast<float>(iterations);
-    gpu_rot_use_reflect = abs_blur < 10.0 ? 0.0f : 1.0f;
-    return ApplyOnGpu(frame, frame_number);
+    return ApplyPlannedBlurOnGpu(frame, frame_number, {{"rotationalRadius", angle_degrees}});
 }
 
-// The zoom blur as three passes.
-//
-// applyZoomBlurEffect reflect-pads the frame, converts to polar, box-blurs along rho, converts
-// back and crops. Those are three draws here and not one composed fragment: composing them would
-// cost `taps` source fetches per bilinear corner of the inverse map -- 1216 a pixel at 1080p with
-// a strength-100 parameter -- where three passes cost 4 + taps + 4. It also puts the 8-bit
-// intermediates exactly where the C++ has them, which is what lets each stage be checked against
-// its own cv:: call rather than only the end of the chain.
-//
-// The middle pass is blur.sksl with dir = (1, 0): the polar buffer's x axis IS rho, so
-// cv::blur(Size(blurStrength, 1)) over it is precisely that fragment.
-//
-// The padding is never materialised. The forward fragment reads the frame and applies
-// copyMakeBorder's BORDER_REFLECT itself, so the only thing that ever crosses is the frame.
 bool Blur::ApplyZoomBlurOnGpu(std::shared_ptr<openshot::Frame> frame, int64_t frame_number,
                               int authored_strength, double center_x, double center_y)
 {
-    if (!frame || !GpuDevice::Instance().available())
-        return false;
-
-    const int width = frame->GetWidth();
-    const int height = frame->GetHeight();
-    if (width <= 0 || height <= 0)
-        return false;
-
-    // The same parameter arithmetic the C++ runs, through the same function.
-    int blur_strength = std::max(1, Podcastle::Effects::scaledLength(width, authored_strength));
-    if (blur_strength % 2 == 0)
-        blur_strength += 1;
-    // The polar blur is blur.sksl, so it is bounded by that fragment's loop.
-    if (blur_strength > kMaxBlurTaps)
-        return false;
-
-    const int pad = blur_strength;
-    const int polar_width = width + 2 * pad;
-    const int polar_height = height + 2 * pad;
-
-    // cv::Point2f, not double: the C++ rounds the centre to float32 before adding the padding,
-    // and the map is built from what it rounded to.
-    const float center_px = static_cast<float>(center_x * width) + static_cast<float>(pad);
-    const float center_py = static_cast<float>(center_y * height) + static_cast<float>(pad);
-
-    double max_radius = 0.0;
-    const double corners[4][2] = {{0.0, 0.0},
-                                  {static_cast<double>(polar_width - 1), 0.0},
-                                  {0.0, static_cast<double>(polar_height - 1)},
-                                  {static_cast<double>(polar_width - 1),
-                                   static_cast<double>(polar_height - 1)}};
-    for (const auto& corner : corners) {
-        const double dx = corner[0] - center_px;
-        const double dy = corner[1] - center_py;
-        max_radius = std::max(max_radius, std::sqrt(dx * dx + dy * dy));
-    }
-    if (max_radius <= 0.0)
-        return false;
-
-    gpu_zoom_frame_w = static_cast<float>(width);
-    gpu_zoom_frame_h = static_cast<float>(height);
-    gpu_zoom_polar_w = static_cast<float>(polar_width);
-    gpu_zoom_polar_h = static_cast<float>(polar_height);
-    gpu_zoom_center_x = center_px;
-    gpu_zoom_center_y = center_py;
-    gpu_zoom_pad = static_cast<float>(pad);
-    gpu_zoom_k_angle = static_cast<float>(2.0 * CV_PI / polar_height);
-    gpu_zoom_k_mag = static_cast<float>(max_radius / polar_width);
-
-    // Nothing is attached until the last pass lands, so any decline here leaves the frame
-    // exactly as the C++ twin expects to find it.
-    std::shared_ptr<openshot::GpuFrame> source = GpuSourceFrame(frame);
-    if (!source)
-        return false;
-
-    gpu_pass = GpuPass::ZoomForward;
-    std::shared_ptr<openshot::GpuFrame> polar =
-        RunGpuPass(source, polar_width, polar_height, frame_number);
-    if (!polar)
-        return false;
-
-    gpu_pass = GpuPass::Box;
-    gpu_dir_x = 1.0f;
-    gpu_dir_y = 0.0f;
-    gpu_taps = static_cast<float>(blur_strength);
-    std::shared_ptr<openshot::GpuFrame> blurred =
-        RunGpuPass(polar, polar_width, polar_height, frame_number);
-    if (!blurred)
-        return false;
-
-    gpu_pass = GpuPass::ZoomInverse;
-    std::shared_ptr<openshot::GpuFrame> result =
-        RunGpuPass(blurred, width, height, frame_number);
-    if (!result)
-        return false;
-
-    frame->AttachGpuFrame(std::move(result));
-    return true;
+    return ApplyPlannedBlurOnGpu(frame, frame_number,
+                                 {{"zoomBlurRadius", authored_strength},
+                                  {"anchorX", center_x},
+                                  {"anchorY", center_y}});
 }
 
-// The shared SkSL sources live in image-processing-lib/shaders/ so the editor loads the same
-// bytes through CanvasKit; they are embedded here at build time. Read them there -- including
-// why each is written the way it is.
+// The fragment and uniforms of whichever planned pass is being drawn.
 const char* Blur::GpuShaderSource() const
 {
-	switch (gpu_pass) {
-	case GpuPass::Diagonal:    return openshot::shaders::kDiagonalBlur;
-	case GpuPass::Rotational:  return openshot::shaders::kRotationalBlur;
-	case GpuPass::ZoomForward: return openshot::shaders::kZoomBlurForward;
-	case GpuPass::ZoomInverse: return openshot::shaders::kZoomBlurInverse;
-	case GpuPass::Box:         break;
-	}
-	return openshot::shaders::kBlur;
+	return PlannedShaderSource(openshot::shaders::kBlur);
 }
 
 bool Blur::SetGpuUniforms(SkRuntimeEffectBuilder& builder, int64_t frame_number,
 						  int width, int height) const
 {
-	builder.uniform("size") = SkV2{static_cast<float>(width), static_cast<float>(height)};
-	switch (gpu_pass) {
-	case GpuPass::Box:
-		builder.uniform("dir") = SkV2{gpu_dir_x, gpu_dir_y};
-		builder.uniform("taps") = gpu_taps;
-		break;
-	case GpuPass::Diagonal:
-		builder.uniform("taps") = gpu_diag_taps;
-		builder.uniform("radius") = gpu_diag_radius;
-		builder.uniform("invTaps") = gpu_diag_inv_taps;
-		break;
-	case GpuPass::ZoomForward:
-		builder.uniform("frameSize") = SkV2{gpu_zoom_frame_w, gpu_zoom_frame_h};
-		builder.uniform("paddedCenter") = SkV2{gpu_zoom_center_x, gpu_zoom_center_y};
-		builder.uniform("pad") = gpu_zoom_pad;
-		builder.uniform("kAngle") = gpu_zoom_k_angle;
-		builder.uniform("kMag") = gpu_zoom_k_mag;
-		break;
-	case GpuPass::ZoomInverse:
-		builder.uniform("polarSize") = SkV2{gpu_zoom_polar_w, gpu_zoom_polar_h};
-		builder.uniform("paddedCenter") = SkV2{gpu_zoom_center_x, gpu_zoom_center_y};
-		builder.uniform("pad") = gpu_zoom_pad;
-		builder.uniform("kAngle") = gpu_zoom_k_angle;
-		builder.uniform("kMag") = gpu_zoom_k_mag;
-		break;
-	case GpuPass::Rotational:
-		builder.uniform("iters") = gpu_rot_iters;
-		builder.uniform("invIters") = gpu_rot_inv_iters;
-		builder.uniform("useReflect") = gpu_rot_use_reflect;
-		builder.uniform("invRow0").set(gpu_rot_inv_row0, kMaxRotationalIterations * 4);
-		builder.uniform("invRow1").set(gpu_rot_inv_row1, kMaxRotationalIterations * 4);
-		break;
-	}
-	return true;
+	return BindPlannedPass(builder);
 }
 
 // Generate JSON string of this object

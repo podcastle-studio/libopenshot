@@ -2,6 +2,7 @@
 
 #include "skia/include/core/SkM44.h"
 #include "EffectShaders.h"
+#include "image-processing-lib/src/Planner/EffectPlan.h"
 
 #include "skia/include/effects/SkRuntimeEffect.h"
 
@@ -71,29 +72,13 @@ const char* Zoom::GpuShaderSource() const
 }
 
 bool Zoom::SetGpuUniforms(SkRuntimeEffectBuilder& builder, int64_t frame_number,
-						  int width, int height) const
+				int width, int height) const
 {
-	const double zoom_value = zoomPercent.GetValue(frame_number);
-	if (zoom_value <= 100)
-		return false;   // zoom-out, or no zoom -- see above
-
-	// Every one of these truncates in the C++, including the /2s, which are integer divisions.
-	const int anchor_x = static_cast<int>(anchorX.GetValue(frame_number) * width);
-	const int anchor_y = static_cast<int>(anchorY.GetValue(frame_number) * height);
-	const int new_width = static_cast<int>(width * 100 / zoom_value);
-	const int new_height = static_cast<int>(height * 100 / zoom_value);
-	if (new_width <= 0 || new_height <= 0)
-		return false;
-
-	int x = std::max(anchor_x - new_width / 2, 0);
-	int y = std::max(anchor_y - new_height / 2, 0);
-	x = std::min(x, width - new_width);
-	y = std::min(y, height - new_height);
-
-	builder.uniform("size") = SkV2{static_cast<float>(width), static_cast<float>(height)};
-	builder.uniform("cropOrigin") = SkV2{static_cast<float>(x), static_cast<float>(y)};
-	builder.uniform("cropSize") = SkV2{static_cast<float>(new_width), static_cast<float>(new_height)};
-	return true;
+	// Resolved by the shared planner (image-processing-lib/src/Planner), the same code the editor
+	// runs, so the two cannot disagree about what these values mean. It declines -- and the C++
+	// twin runs -- for every case the fragment does not cover.
+	return BindPlan(builder, Podcastle::Effects::planEffect(
+		"ZOOM", {{"zoomPercent", zoomPercent.GetValue(frame_number)}, {"anchorX", anchorX.GetValue(frame_number)}, {"anchorY", anchorY.GetValue(frame_number)}}, width, height));
 }
 
 // Generate JSON string of this object
