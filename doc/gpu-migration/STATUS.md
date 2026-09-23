@@ -443,8 +443,15 @@ ask it for you) and none reads the environment for itself — the new `control` 
 
 > ## Start here (2026-09-23, end of session)
 >
+> **W29 is done (2026-09-23) — as a GPU `Crop` behind `Settings::GPU_CROP`, off by default; a
+> resuming session starts W30** (density: needs the target GPU SKU, an L4, which this laptop is
+> not). With every GPU flag on, `everything` 1080p is ~135 fps at ~80 % GPU busy. **Four flags now
+> wait on the owner** — `GPU_DECODE`, `GPU_ENCODE`, `GPU_CROP` (each changes pixels, each measured
+> and gated) — plus the NVENC preset and the BT.601-under-BT.709 tag. None is reachable from the
+> service until it passes them through.
+>
 > **W25 is done — Stage 7 is finished. Stage 8 is void (owner, 2026-09-23: Qt is the CPU path
-> that ships; see `GPU-DECISIONS.md`). A resuming session starts W29** (Stage 9, frames in flight). W25 is **flagged off** (`Settings::GPU_ENCODE`) and waits on the owner for three
+> that ships; see `GPU-DECISIONS.md`). W25 is **flagged off** (`Settings::GPU_ENCODE`) and waits on the owner for three
 > things: (1) turning it on (it changes pixels: box vs bicubic chroma); (2) the NVENC preset —
 > the pipeline now reaches 349 fps at 1080p and 123 at 2160p on p3, but the service's p5/hq caps
 > the encoder at ~195 / 54; (3) **the writer encodes BT.601 and the service tags BT.709**, a live
@@ -813,6 +820,11 @@ production corpus) remain open; W05–W10 are the CPU quick wins. W01/W02 stay d
 
 ## Log
 
+- 2026-09-23 — **W29 done differently, by owner decision: `Crop` on the GPU (`GPU_CROP`, off).**
+  The readback in `Crop` was the whole of the idle GPU. With it on (and every other GPU path):
+  `everything` 1080p nvenc 67–70 → **133–137 fps**, GPU busy **76–85 %**, VRAM flat over 10 080
+  frames. Interior pixels identical to QPainter; only the 2 px around the outline differ
+  (`unit.gpu_crop`). The canvas ring and the mutex removal were not needed and not built.
 - 2026-09-23 — **W29 premise measured, no code: blocked on an owner decision.** `everything` 1080p
   nvenc with every GPU path on is already **66–70 fps** (gate 30). The GPU is ~35 % busy because
   the PiP's rounded `Crop` reads the frame back mid-composite (6.3 ms of 14.8); without it the

@@ -117,6 +117,9 @@ int runCase(const Opts& o) {
     // W25: NVENC takes the frame from the GPU (Settings::GPU_ENCODE).
     if (const char* v = std::getenv("OPENSHOT_BENCH_GPU_ENCODE"); v && std::string(v) == "1")
         settings->GPU_ENCODE = true;
+    // W29: Crop on the GPU for GPU-backed frames (Settings::GPU_CROP).
+    if (const char* v = std::getenv("OPENSHOT_BENCH_GPU_CROP"); v && std::string(v) == "1")
+        settings->GPU_CROP = true;
     bench::setBenchMediaDir(o.benchMedia);
 
     golden::Scene scene;
@@ -166,7 +169,13 @@ int runCase(const Opts& o) {
         }
         w.Open();
         const auto loop0 = std::chrono::steady_clock::now();
-        w.WriteFrame(scene.timeline.get(), 1, o.frames);
+        // OPENSHOT_BENCH_REPEAT=N encodes the range N times into the one file, for long-run
+        // checks (W29: no VRAM growth over 10 000 frames) on scenarios only 6 s long.
+        int repeat = 1;
+        if (const char* v = std::getenv("OPENSHOT_BENCH_REPEAT"); v && *v)
+            repeat = std::max(1, std::atoi(v));
+        for (int pass = 0; pass < repeat; ++pass)
+            w.WriteFrame(scene.timeline.get(), 1, o.frames);
         loopMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - loop0).count();
         w.Close();
     }

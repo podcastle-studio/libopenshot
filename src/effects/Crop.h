@@ -37,6 +37,10 @@ namespace openshot
 	class Crop : public EffectBase
 	{
 	private:
+		/// The GPU twin of GetFrame for a frame already on the GPU (Settings::GPU_CROP, W29).
+		std::shared_ptr<openshot::Frame> GetFrameOnGpu(std::shared_ptr<openshot::Frame> frame,
+													   int64_t frame_number);
+
 		/// Init effect settings
 		void init_effect_details();
 

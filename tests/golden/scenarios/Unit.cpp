@@ -30,6 +30,7 @@ extern "C" {
 #include "Timeline.h"
 #include "effects/Blur.h"
 #include "effects/Brightness.h"
+#include "effects/Crop.h"
 #include "effects/ColorMap.h"
 #include "gpu/CudaInterop.h"
 #include "gpu/GpuDevice.h"
@@ -44,6 +45,8 @@ extern "C" {
 
 #include <memory>
 #include <string>
+#include <cmath>
+#include <algorithm>
 #include <chrono>
 #include <thread>
 #include <vector>
@@ -865,6 +868,87 @@ void golden::registerUnitScenarios() {
                           "ideal); swscale: luma %d, chroma FAST_BILINEAR %d, BICUBIC %d",
                           vs_exact, round_trip, luma, chroma_box, chroma_bicubic);
             checks.push_back({"gpu_encode_nv12", vs_exact <= 1 && round_trip <= 2, detail});
+        });
+
+    // Crop on the GPU (W29, Settings::GPU_CROP) against the QPainter path, on the same frame.
+    //
+    // The two rasterisers antialias the rounded corners and the fractional edges differently --
+    // that is why the flag is off by default -- so the comparison is split: pixels within 2 px
+    // of the crop's outline are reported, pixels further inside or outside are gated. There the
+    // two must agree: the interior is the same bilinear copy, the outside is transparent.
+    // The frame must also stay on the GPU: a crop that read it back would pass on pixels.
+    addCustom("unit.gpu_crop", {"unit", "gpu"}, unitScene,
+        [](Scene&, std::vector<Captured>&, std::vector<Check>& checks) {
+            if (!openshot::GpuDevice::Instance().available()) {
+                checks.push_back({"gpu_crop", true, "no GPU: the QPainter path runs (declines)"});
+                return;
+            }
+            const int W = 320, H = 200;
+            auto image = std::make_shared<QImage>(W, H, QImage::Format_RGBA8888_Premultiplied);
+            for (int y = 0; y < H; ++y)
+                for (int x = 0; x < W; ++x) {
+                    uint8_t* p = image->scanLine(y) + x * 4;
+                    p[0] = uint8_t(x * 255 / W); p[1] = uint8_t(y * 255 / H);
+                    p[2] = uint8_t((x ^ y) & 255); p[3] = 255;
+                }
+            struct Case { double l, t, r, b, radius, sx, sy; const char* name; };
+            const Case cases[] = {
+                {0.0, 0.0, 0.0, 0.0, 0.3, 0.0, 0.0, "radius only"},
+                {0.1, 0.05, 0.2, 0.1, 0.0, 0.0, 0.0, "fractional rect"},
+                {0.13, 0.07, 0.11, 0.21, 0.5, 0.0, 0.0, "fractional + radius"},
+                {0.1, 0.1, 0.1, 0.1, 0.2, 0.05, -0.03, "shifted"},
+            };
+            openshot::Settings* settings = openshot::Settings::Instance();
+            const bool previous = settings->GPU_CROP;
+            int worst_inside = 0, band_worst = 0;
+            bool stayed_on_gpu = true;
+            for (const Case& c : cases) {
+                const auto run = [&](bool on_gpu) {
+                    settings->GPU_CROP = on_gpu;
+                    openshot::Crop crop(openshot::Keyframe(c.l), openshot::Keyframe(c.t),
+                                        openshot::Keyframe(c.r), openshot::Keyframe(c.b),
+                                        openshot::Keyframe(c.radius));
+                    crop.resize = false;
+                    crop.x = openshot::Keyframe(c.sx);
+                    crop.y = openshot::Keyframe(c.sy);
+                    auto frame = std::make_shared<openshot::Frame>(1, W, H, "#000000");
+                    auto gpu = openshot::GpuFrame::Create(W, H);
+                    gpu->upload(SkPixmap(SkImageInfo::Make(W, H, kRGBA_8888_SkColorType, kPremul_SkAlphaType),
+                                         image->constBits(), image->bytesPerLine()));
+                    frame->AttachGpuFrame(gpu);
+                    crop.GetFrame(frame, 1);
+                    if (on_gpu && !frame->IsGpuBacked()) stayed_on_gpu = false;
+                    return std::make_shared<QImage>(frame->GetImage()->copy());
+                };
+                const auto cpu = run(false), gpu = run(true);
+                // The outline, in pixels, as both paths compute it.
+                const double pl = c.l * W, pt = c.t * H;
+                const double pr = pl + (1 - c.l - c.r) * W, pb = pt + (1 - c.t - c.b) * H;
+                const double r = std::clamp(c.radius, 0.0, 1.0) * std::min(pr - pl, pb - pt) * 0.5;
+                const auto near_outline = [&](int x, int y) {
+                    const double fx = x + 0.5, fy = y + 0.5;
+                    const double cx = std::clamp(fx, pl + r, pr - r), cy = std::clamp(fy, pt + r, pb - r);
+                    const double d = std::hypot(fx - cx, fy - cy) - r;          // outside the rounded rect
+                    const double inside = std::min({fx - pl, pr - fx, fy - pt, pb - fy});
+                    return std::abs(d) <= 2.0 || (d <= 0 && inside <= 2.0);
+                };
+                for (int y = 0; y < H; ++y)
+                    for (int x = 0; x < W; ++x) {
+                        const uint8_t* a = cpu->constScanLine(y) + x * 4;
+                        const uint8_t* b = gpu->constScanLine(y) + x * 4;
+                        int d = 0;
+                        for (int k = 0; k < 4; ++k) d = std::max(d, std::abs(int(a[k]) - int(b[k])));
+                        (near_outline(x, y) ? band_worst : worst_inside) =
+                            std::max(near_outline(x, y) ? band_worst : worst_inside, d);
+                    }
+            }
+            settings->GPU_CROP = previous;
+            char detail[192];
+            std::snprintf(detail, sizeof(detail),
+                          "away from the outline: max delta %d (gate 2); within 2 px of it: %d "
+                          "(rasteriser, not gated); stayed on the GPU: %s",
+                          worst_inside, band_worst, stayed_on_gpu ? "yes" : "no");
+            checks.push_back({"gpu_crop", worst_inside <= 2 && stayed_on_gpu, detail});
         });
 
     // Hardware decode must not take the process with it.

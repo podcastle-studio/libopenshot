@@ -126,6 +126,20 @@ namespace openshot {
 		 */
 		bool GPU_ENCODE = false;
 
+		/**
+		 * @brief Crop a GPU-backed frame on the GPU instead of reading it back (W29).
+		 *
+		 * The Crop effect is QPainter with antialiasing: a rounded-rect clip and a draw between
+		 * fractional rects. On a frame that is already on the GPU (GPU decode, text) that meant
+		 * one readback per clip per frame, which measured as half of `everything`'s frame time
+		 * and left the GPU ~35 % busy. With this on, the same geometry is drawn with Skia.
+		 *
+		 * **Off by default because it changes pixels:** Skia's antialiasing of the rounded
+		 * corners and fractional edges is not QPainter's (W19: a redefine-class change). The
+		 * interior is the same bilinear draw. CPU frames always take the QPainter path.
+		 */
+		bool GPU_CROP = false;
+
 		/// Number of OpenMP threads
 		int OMP_THREADS = 2;
 

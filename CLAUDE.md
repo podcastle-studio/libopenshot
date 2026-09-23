@@ -272,6 +272,11 @@ GPU to take over. Earlier, lower figures in the docs were measured on an Intel i
   Graphite render targets need `VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT`. Bench:
   `OPENSHOT_BENCH_GPU_ENCODE=1`, `OPENSHOT_BENCH_PIPELINE=1` (the service's mode),
   `OPENSHOT_BENCH_NVENC_PRESET`; read the `LOOP` line, since `fps=` includes NVENC init.
+- **`Crop` on a GPU-backed frame reads it back** unless `Settings::GPU_CROP` (W29, off: the
+  rounded corners antialias differently from QPainter). That one readback was half of
+  `everything`'s frame and kept the GPU ~35 % busy; with it on, ~135 fps at ~80 %. The service
+  puts a `Crop` on every clip with a crop or rounded corners. Bench `OPENSHOT_BENCH_GPU_CROP=1`,
+  `OPENSHOT_BENCH_REPEAT=N` for long runs; harness `OPENSHOT_GOLDEN_GPU_CROP=1`.
 - **The writer encodes BT.601 while the service tags exports BT.709** (swscale is never given a
   matrix). Found in W25, not fixed — the owner's call; every GPU pass keeps BT.601 to match.
 - **`FrameMapper` must not `GetImage()` a GPU-backed frame.** It did, for every frame it rebuilt

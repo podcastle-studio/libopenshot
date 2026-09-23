@@ -122,6 +122,12 @@ RunSummary runAll(const Options& opts) {
     // And NVDEC (HARDWARE_DECODER=2): with GPU decode on as well, its frames never leave the
     // device. The suite then has to match the GPU-decode arm exactly, since the two decoders agree
     // in YUV and share the conversion. Test-side only, as above.
+    if (const char* on = std::getenv("OPENSHOT_GOLDEN_GPU_CROP")) {
+        if (std::string(on) == "1" || std::string(on) == "true") {
+            settings->GPU_CROP = true;
+            std::printf("GPU crop ON — Crop draws GPU-backed frames with Skia\n");
+        }
+    }
     if (const char* on = std::getenv("OPENSHOT_GOLDEN_GPU_ENCODE")) {
         if (std::string(on) == "1" || std::string(on) == "true") {
             settings->GPU_ENCODE = true;

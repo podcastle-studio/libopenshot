@@ -47,7 +47,8 @@ at 0.166 ms against 0.300 for a 4K frame, exact and clean under `compute-sanitiz
 (2026-09-23), gate met: `source_4k` 78–82 → 126–133 fps at 0.6 cores. W24 is done (2026-09-23),
 gate restated — its 90 fps is W25's to reach. W25 is done (2026-09-23), flagged off, gate
 restated: NVENC's p5 preset is now the ceiling. Stage 7 is finished. Stage 8 is void (owner,
-2026-09-23: Qt is the CPU path that ships). W29 is next.**
+2026-09-23: Qt is the CPU path that ships). W29 done (2026-09-23) as a GPU `Crop`, flagged off:
+`everything` 67 → 135 fps. W30 is next.**
 
 > **2026-09-18, project owner — finish Stages 2 and 3 before the effects work.** Stage 5 is done and
 > Stage 6 (effects and transitions as shaders) is the obvious next thing, but the safety net (Stage
@@ -1491,7 +1492,7 @@ with **zero** pixel change versus R4; the service builds on a machine with no Qt
 
 ## Stage 9 — Depth and density (R6)
 
-### W29 — Frames in flight · legacy `6.1`
+### W29 — Frames in flight · legacy `6.1` · **DONE 2026-09-23 differently: GPU `Crop`, flagged off (`GPU_CROP`)**
 
 **This is the "frames are rendered one by one" item.**
 **Read this first.** Rendering frames N and N+1 on two CPU threads was **considered and rejected**:
@@ -1518,11 +1519,20 @@ does.
 >    `GPU-DECISIONS.md`): its rounded corners are QPainter antialiasing, a Skia port changes those
 >    pixels (redefine class), and the service puts a `Crop` on every clip with a crop or rounded
 >    corners — the normal case, so this readback is in most production exports.
-> Waiting on the owner. The ring and the mutex removal below are not started.
+> **Owner, 2026-09-23: port `Crop`, flagged.** Done — `Crop::GetFrameOnGpu`, behind
+> `Settings::GPU_CROP` (off): a GPU-backed frame is cropped with the same rects and radius as the
+> QPainter path (antialiased `clipRRect` + bilinear `drawImageRect`); CPU frames, `resize`, and the
+> flag off all keep QPainter. `unit.gpu_crop`: **0** delta away from the outline, up to 102 within
+> 2 px of it (the rasteriser difference that keeps it off), and the frame stays on the GPU.
 
-- [ ] A ring of four pooled canvases with a fence each: record frame n+2 while n+1 executes and n
-      encodes.
-- [ ] Remove `Timeline::getFrameMutex` from the read path. Keep it for edits.
+- [ ] ~~A ring of four pooled canvases with a fence each~~ — **not needed, measured**: with the
+      readback gone the GPU is 76–85 % busy already. Not built.
+- [ ] ~~Remove `Timeline::getFrameMutex` from the read path~~ — not needed for the gate; not done.
+
+**Gate result, 2026-09-23 — met with `GPU_CROP` on** (every GPU path on, pipeline mode, 1080p,
+interleaved ×3): `everything` nvenc loop **67–70 → 133–137 fps** (gate 30), render 67–71 →
+123–126; GPU busy **76–85 %** (gate 70; nvidia-smi, one short run sampled lower); VRAM **flat at
+1372 MiB over 10 080 frames** (56 passes, `OPENSHOT_BENCH_REPEAT`), peak RSS 1.0 GB.
 
 **Gate.** `everything` 1080p ≥ **30 fps**; GPU busy ≥ **70 %** during a 1080p export (NVML); no VRAM
 growth over 10 000 frames.

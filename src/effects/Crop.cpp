@@ -14,6 +14,13 @@
 #include "Exceptions.h"
 #include "KeyFrame.h"
 #include "Settings.h"
+#include "gpu/GpuFrame.h"
+#include "skia/include/core/SkCanvas.h"
+#include "skia/include/core/SkImage.h"
+#include "skia/include/core/SkPaint.h"
+#include "skia/include/core/SkRRect.h"
+#include "skia/include/core/SkRect.h"
+#include "skia/include/core/SkSamplingOptions.h"
 
 #include <QImage>
 #include <QPainter>
@@ -61,6 +68,14 @@ void Crop::init_effect_details()
 
 std::shared_ptr<openshot::Frame> Crop::GetFrame(std::shared_ptr<openshot::Frame> frame, int64_t frame_number)
 {
+    // A frame already on the GPU is cropped there (Settings::GPU_CROP, W29), with the same
+    // geometry as below; GetImage() would read it back, and did, once per clip per frame.
+    if (!resize && Settings::Instance()->GPU_CROP && frame->IsGpuBacked() &&
+        frame->GpuBacking()->ownedByThisThread()) {
+        if (std::shared_ptr<openshot::Frame> done = GetFrameOnGpu(frame, frame_number))
+            return done;
+    }
+
     // Get the frame's image
     std::shared_ptr<QImage> frame_image = frame->GetImage();
 
@@ -144,6 +159,67 @@ std::shared_ptr<openshot::Frame> Crop::GetFrame(std::shared_ptr<openshot::Frame>
         frame->AddImage(std::make_shared<QImage>(cropped.copy()));
     }
 
+    return frame;
+}
+
+// The QPainter path above, in Skia, on the frame's own GPU surface. Same rects, same clamping,
+// same radius; an antialiased rounded-rect clip and a bilinear draw between fractional rects,
+// which is what QPainter's Antialiasing + SmoothPixmapTransform do. Only the rasteriser differs.
+// Null means "use the QPainter path".
+std::shared_ptr<openshot::Frame> Crop::GetFrameOnGpu(std::shared_ptr<openshot::Frame> frame,
+                                                     int64_t frame_number)
+{
+    const std::shared_ptr<openshot::GpuFrame>& source = frame->GpuBacking();
+    const int w = source->width();
+    const int h = source->height();
+
+    const double left_value   = left.GetValue(frame_number);
+    const double top_value    = top.GetValue(frame_number);
+    const double right_value  = right.GetValue(frame_number);
+    const double bottom_value = bottom.GetValue(frame_number);
+    const double radius_value = radius.GetValue(frame_number);
+    const double x_shift = x.GetValue(frame_number);
+    const double y_shift = y.GetValue(frame_number);
+
+    double pl = left_value * w, pt = top_value * h;
+    double pr = pl + std::max(0.0, 1.0 - left_value - right_value) * w;
+    double pb = pt + std::max(0.0, 1.0 - top_value - bottom_value) * h;
+
+    std::shared_ptr<openshot::GpuFrame> out = openshot::GpuFrame::Create(w, h);
+    if (!out)
+        return nullptr;
+    SkCanvas* canvas = out->canvas();
+    canvas->clear(SK_ColorTRANSPARENT);   // a pooled surface still holds its last frame
+
+    if (pr - pl > 0.0 && pb - pt > 0.0) {
+        double cl = pl + x_shift * w, ct = pt + y_shift * h;
+        double cr = pr + x_shift * w, cb = pb + y_shift * h;
+        if (cl < 0) { pl -= cl; cl = 0; }
+        if (cr > w) { pr -= cr - w; cr = w; }
+        if (ct < 0) { pt -= ct; ct = 0; }
+        if (cb > h) { pb -= cb - h; cb = h; }
+
+        const SkRect paint_r = SkRect::MakeLTRB(float(pl), float(pt), float(pr), float(pb));
+        const SkRect copy_r = SkRect::MakeLTRB(float(cl), float(ct), float(cr), float(cb));
+        const double min_dim = std::min(pr - pl, pb - pt);
+        const double r_px = std::clamp(radius_value, 0.0, 1.0) * (min_dim * 0.5);
+
+        sk_sp<SkImage> image = source->snapshot();
+        if (!image)
+            return nullptr;
+        canvas->save();
+        if (r_px > 0.0)
+            canvas->clipRRect(SkRRect::MakeRectXY(paint_r, float(r_px), float(r_px)), true);
+        SkPaint paint;
+        paint.setAntiAlias(true);
+        canvas->drawImageRect(image, copy_r, paint_r,
+                              SkSamplingOptions(SkFilterMode::kLinear, SkMipmapMode::kNone),
+                              &paint, SkCanvas::kStrict_SrcRectConstraint);
+        canvas->restore();
+    }
+    // else fully cropped: the transparent frame, as the QPainter path emits.
+
+    frame->AttachGpuFrame(out);
     return frame;
 }
 
