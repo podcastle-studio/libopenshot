@@ -1499,6 +1499,27 @@ Graphite uses one `Context` per process and gets parallelism from pipeline depth
 machinery would be thrown away here. Width is left to the process manager, which the service already
 does.
 
+> **Premise measured 2026-09-23, before any code — the fps clause is already met, and the thing
+> holding the GPU idle is not frame depth but one CPU readback.** `everything` 1080p nvenc, all GPU
+> paths on (NVDEC, `GPU_DECODE`, `GPU_ENCODE`, pipeline mode), mains power:
+>
+> | | loop fps | GPU busy (nvidia-smi) |
+> |---|---|---|
+> | as shipped — the PiP carries a rounded `Crop` | **66–70** | ~35 % |
+> | same scene, `Crop` removed (throwaway) | **134–140** | **83–95 %** |
+>
+> 1. **"≥ 30 fps" is met twice over without this item** (Vulkan alone: 48; all GPU paths: 66–70).
+>    The CPU-only arm is 5–6.
+> 2. **The serialisation is `Crop::GetFrame` calling `GetImage()` on a GPU frame**: one readback
+>    per frame, 6.3 ms of a 14.8 ms frame, with the CPU waiting on the whole queue and the GPU then
+>    waiting on the CPU. Take it away and the GPU is 83–95 % busy — the ≥ 70 % clause — with no ring
+>    at all. A ring cannot remove a readback that sits in the middle of the frame.
+> 3. **So the lever is porting `Crop`, and that is a product decision already on file** (W19,
+>    `GPU-DECISIONS.md`): its rounded corners are QPainter antialiasing, a Skia port changes those
+>    pixels (redefine class), and the service puts a `Crop` on every clip with a crop or rounded
+>    corners — the normal case, so this readback is in most production exports.
+> Waiting on the owner. The ring and the mutex removal below are not started.
+
 - [ ] A ring of four pooled canvases with a fence each: record frame n+2 while n+1 executes and n
       encodes.
 - [ ] Remove `Timeline::getFrameMutex` from the read path. Keep it for edits.

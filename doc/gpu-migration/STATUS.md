@@ -813,6 +813,11 @@ production corpus) remain open; W05–W10 are the CPU quick wins. W01/W02 stay d
 
 ## Log
 
+- 2026-09-23 — **W29 premise measured, no code: blocked on an owner decision.** `everything` 1080p
+  nvenc with every GPU path on is already **66–70 fps** (gate 30). The GPU is ~35 % busy because
+  the PiP's rounded `Crop` reads the frame back mid-composite (6.3 ms of 14.8); without it the
+  same scene runs **134–140 fps at 83–95 % GPU busy**, no ring needed. Porting `Crop` changes its
+  corner pixels (W19: redefine class) and the service uses it on most clips — the owner's call.
 - 2026-09-23 — **Stage 8 (W26–W28) voided by the project owner**, no code change. Removing Qt
   would remove the CPU path that ships (QImage/QPainter/BlendModes/CPU effect twins/Qt readers),
   against the standing constraint and Stage 8's own zero-pixel gate. Qt, ImageMagick and babl stay
