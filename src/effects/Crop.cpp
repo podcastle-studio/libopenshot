@@ -15,6 +15,7 @@
 #include "KeyFrame.h"
 #include "Settings.h"
 #include "gpu/GpuFrame.h"
+#include "gpu/GpuTelemetry.h"
 #include "skia/include/core/SkCanvas.h"
 #include "skia/include/core/SkImage.h"
 #include "skia/include/core/SkPaint.h"
@@ -72,9 +73,13 @@ std::shared_ptr<openshot::Frame> Crop::GetFrame(std::shared_ptr<openshot::Frame>
     // geometry as below; GetImage() would read it back, and did, once per clip per frame.
     if (!resize && Settings::Instance()->GPU_CROP && frame->IsGpuBacked() &&
         frame->GpuBacking()->ownedByThisThread()) {
-        if (std::shared_ptr<openshot::Frame> done = GetFrameOnGpu(frame, frame_number))
+        if (std::shared_ptr<openshot::Frame> done = GetFrameOnGpu(frame, frame_number)) {
+            openshot::GpuCounters::Add(openshot::GpuCounters::CropOnGpu);
             return done;
+        }
     }
+    if (frame->IsGpuBacked())
+        openshot::GpuCounters::Add(openshot::GpuCounters::CropReadback);   // GetImage() below
 
     // Get the frame's image
     std::shared_ptr<QImage> frame_image = frame->GetImage();

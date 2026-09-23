@@ -283,6 +283,10 @@ GPU to take over. Earlier, lower figures in the docs were measured on an Intel i
   matrix/range to swscale. Untagged stays BT.601 on both sides. Never fix one side alone: until
   this, BT.601-in/BT.601-out under a BT.709 tag cancelled for video and shifted everything drawn.
   Gate: `export.bt709_bars`. NVENC preset is **p4** (same VMAF as p5, twice the speed).
+- **Per-export telemetry** (W31, `src/gpu/GpuTelemetry`): `GpuCounters` are bumped on the render
+  path (add one when you add a GPU path or a fallback), `ExportTelemetry` samples NVML (dlopen'd,
+  `_v2` memory info — v1 counts the driver's reservation) and the service logs one line per export.
+  Utilisation is device-wide. NVML needs the CUDA headers at build time (`NvmlBuiltIn()`).
 - **`FrameMapper` must not `GetImage()` a GPU-backed frame.** It did, for every frame it rebuilt
   (any clip whose audio mapping differs, i.e. most video), which read every GPU-decoded frame back
   and made GPU decode look worthless. It shares the surface now, as `Frame`'s copy constructor

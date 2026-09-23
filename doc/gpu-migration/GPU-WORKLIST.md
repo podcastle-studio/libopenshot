@@ -49,7 +49,8 @@ gate restated — its 90 fps is W25's to reach. W25 is done (2026-09-23), flagge
 restated: NVENC's p5 preset is now the ceiling. Stage 7 is finished. Stage 8 is void (owner,
 2026-09-23: Qt is the CPU path that ships). W29 done (2026-09-23) as a GPU `Crop`, flagged off:
 `everything` 67 → 135 fps. W30 measured on the laptop (GPU-bound exports do not densify; the L4
-run is owed); W31 is next.**
+run is owed). W31 done (2026-09-23): one telemetry line per export. The worklist is finished apart
+from the L4 work (W30) and Stage 10.**
 
 > **2026-09-18, project owner — finish Stages 2 and 3 before the effects work.** Stage 5 is done and
 > Stage 6 (effects and transitions as shaders) is the obvious next thing, but the safety net (Stage
@@ -1580,9 +1581,27 @@ growth over 10 000 frames.
 export.
 **Size.** ~3 days.
 
-### W31 — Observability · legacy `6.3`
+### W31 — Observability · legacy `6.3` · **DONE 2026-09-23**
 
-- [ ] Per export: frames, wall time, GPU busy %, NVENC/NVDEC utilisation, VRAM peak, fallback events.
+- [x] **Per export: frames, wall time, GPU busy %, NVENC/NVDEC utilisation, VRAM peak, fallback
+      events** (2026-09-23). Library: `src/gpu/GpuTelemetry` — `GpuCounters` (readbacks, frames
+      encoded on the device / from host, decode on device / on GPU / on CPU, crop on GPU / by
+      readback, NVDEC fallbacks), and `ExportTelemetry`, an NVML sampler (dlopen'd, 250 ms, the
+      device matched to the Vulkan one). Service: `renderVideo` logs one `ExportTelemetry` line per
+      export. `unit.telemetry` guards it.
+
+**Gate result, 2026-09-23** — the production payload (`prod-2026-09-16-pip-lut-whoosh`, 750 frames,
+every GPU flag on), telemetry against an independent `nvidia-smi` sampler over the same window:
+device VRAM peak **1457.8 vs 1458 MiB**, NVENC **3.4 vs 3.6 %**, NVDEC **5.2 vs 5.3 %** — within
+10 %; GPU busy **9.1 vs 10.7 %**, 1.6 points apart, which is 15 % relative on an export whose GPU is
+mostly idle between 91 % spikes, so the two samplers' phase decides it. Two errors found by the
+comparison and fixed: `nvmlDeviceGetMemoryInfo` (v1) counts the driver's ~350 MB reservation as
+used — `_v2` is what nvidia-smi reports — and a process using Vulkan and CUDA appears in both of
+NVML's process lists with the same total, so the two are max'd, not summed.
+**What the same line says about this payload:** 750/750 frames encoded on the device, 1633 NVDEC
+conversions, 240 crops on the GPU — but **251 readbacks and 144 CPU decodes** (the ProRes
+watermark), and the GPU ~10 % busy: this export is not GPU-bound, and the readbacks are where to
+look next.
 
 **Gate.** The numbers appear for a production export and match `nvidia-smi` within 10 %.
 **Size.** ~2 days.

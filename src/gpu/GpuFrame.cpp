@@ -1,6 +1,7 @@
 // One texture-backed drawing surface with CPU transfers both ways. See GpuFrame.h.
 
 #include "GpuFrame.h"
+#include "GpuTelemetry.h"
 
 #include "GpuDevice.h"
 #include "GpuSurfacePool.h"
@@ -171,6 +172,8 @@ bool GpuFrame::readback(const SkPixmap& dst)
 
 	const SkPixmap source(dst.info(), state.result->data(0), state.result->rowBytes(0));
 	const bool copied = source.readPixels(dst);
+	if (copied)
+		GpuCounters::Add(GpuCounters::Readback);
 
 	// The result's pixels belong to the context and are invalidated when it goes
 	// away; drop them here rather than letting them outlive this call.

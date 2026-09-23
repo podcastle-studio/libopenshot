@@ -31,6 +31,7 @@
 #include "gpu/CudaInterop.h"
 #include "gpu/GpuDevice.h"
 #include "gpu/GpuFrame.h"
+#include "gpu/GpuTelemetry.h"
 #include "gpu/GpuYuv.h"
 #include "Timeline.h"
 #include "skia/include/gpu/graphite/Surface.h"
@@ -2582,6 +2583,7 @@ std::shared_ptr<void> FFmpegWriter::EncodeOnDevice(openshot::GpuFrame& gpu) {
 		return nullptr;
 	if (!interop.copyToNV12(*encode_packed, out, &encoded->copied))
 		return nullptr;
+	openshot::GpuCounters::Add(openshot::GpuCounters::EncodedOnDevice);
 	return encoded;
 #else
 	(void) gpu;
@@ -2722,6 +2724,8 @@ void FFmpegWriter::process_video_packet(std::shared_ptr<Frame> frame) {
 									 coefficients, 0, 0, 1 << 16, 1 << 16);
 		}
 	}
+
+	openshot::GpuCounters::Add(openshot::GpuCounters::EncodedFromHost);
 
 	// Scale RGBA → dst_fmt into persistent_dst_buffer
 	sws_scale(

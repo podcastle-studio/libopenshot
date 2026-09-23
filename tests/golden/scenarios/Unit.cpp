@@ -17,6 +17,8 @@
 // the results back here.
 
 #include "Recipes.h"
+#include <fstream>
+#include "gpu/GpuTelemetry.h"
 extern "C" {
 #include <libswscale/swscale.h>
 }
@@ -949,6 +951,29 @@ void golden::registerUnitScenarios() {
                           "(rasteriser, not gated); stayed on the GPU: %s",
                           worst_inside, band_worst, stayed_on_gpu ? "yes" : "no");
             checks.push_back({"gpu_crop", worst_inside <= 2 && stayed_on_gpu, detail});
+        });
+
+    // Per-export telemetry (W31): the counters move with the work, and the report carries the
+    // GPU figures where there is an NVIDIA driver and says so where there is not.
+    addCustom("unit.telemetry", {"unit"}, unitScene,
+        [](Scene& s, std::vector<Captured>&, std::vector<Check>& checks) {
+            openshot::ExportTelemetry telemetry;
+            telemetry.Start();
+            openshot::FFmpegReader reader(s.media("clip_a_640x360_30.mp4"));
+            reader.Open();
+            for (int i = 1; i <= 10; ++i) reader.GetFrame(i)->GetImage();
+            reader.Close();
+            std::this_thread::sleep_for(std::chrono::milliseconds(600));   // a couple of samples
+            telemetry.SetFrames(10);
+            const openshot::ExportTelemetry::Report r = telemetry.Stop();
+            const unsigned long long decoded = r.counters[openshot::GpuCounters::DecodedOnCpu] +
+                                               r.counters[openshot::GpuCounters::DecodedOnGpu] +
+                                               r.counters[openshot::GpuCounters::DecodedOnDevice];
+            const bool driver = openshot::ExportTelemetry::NvmlBuiltIn() &&
+                                std::ifstream("/proc/driver/nvidia/version").good();
+            const bool ok = decoded >= 10 && r.frames == 10 && r.seconds > 0.5 &&
+                            (!driver || (r.nvml && r.samples >= 2));
+            checks.push_back({"telemetry_report", ok, r.Summary()});
         });
 
     // Hardware decode must not take the process with it.

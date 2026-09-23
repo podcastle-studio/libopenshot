@@ -35,6 +35,7 @@
 #include "gpu/CudaInterop.h"
 #include "gpu/GpuDevice.h"
 #include "gpu/GpuFrame.h"
+#include "gpu/GpuTelemetry.h"
 #include "gpu/GpuYuv.h"
 #include "Timeline.h"
 #include "ZmqLogger.h"
@@ -2039,6 +2040,7 @@ bool FFmpegReader::ReopenWithoutHardwareDecode(int64_t requested_frame) {
 		"video_packets_decoded", packet_status.video_decoded,
 		"hw_decode_error_count", hw_decode_error_count);
 
+	openshot::GpuCounters::Add(openshot::GpuCounters::HardwareDecodeFallback);
 	force_sw_decode = true;
 	hw_decode_failed = false;
 	hw_decode_error_count = 0;
@@ -2157,6 +2159,8 @@ std::shared_ptr<openshot::GpuFrame> FFmpegReader::ConvertOnDevice(int out_width,
 	// the RGBA frame it drew -- so this is the submit prepareForCopy() has to follow. Re-arming
 	// them now takes the Vulkan-to-CUDA handshake off the next frame's critical path.
 	interop.prepareForCopy(*device_luma, *device_chroma);
+	if (converted)
+		openshot::GpuCounters::Add(openshot::GpuCounters::DecodedOnDevice);
 	return converted;
 #else
 	(void) out_width;
@@ -2322,6 +2326,8 @@ void FFmpegReader::ProcessVideoPacket(int64_t requested_frame) {
     }
 
     if (gpu_converted) {
+        if (src_pix_fmt != AV_PIX_FMT_CUDA)
+            openshot::GpuCounters::Add(openshot::GpuCounters::DecodedOnGpu);
         f->AttachGpuFrame(gpu_converted);
         working_cache.Add(f);
         last_video_frame = f;
@@ -2411,6 +2417,7 @@ void FFmpegReader::ProcessVideoPacket(int64_t requested_frame) {
         }
     }
 
+    openshot::GpuCounters::Add(openshot::GpuCounters::DecodedOnCpu);
     sws_scale(img_convert_ctx, pFrame->data, pFrame->linesize, 0, src_h,
               pFrameRGB->data, pFrameRGB->linesize);
 

@@ -443,6 +443,14 @@ ask it for you) and none reads the environment for itself — the new `control` 
 
 > ## Start here (2026-09-23, end of session)
 >
+> **W31 is done; the worklist is finished except the L4 half of W30 and Stage 10 (W01/W02,
+> owner-gated).** The service now sets the GPU flags from env (`OPENSHOT_GPU_DECODE`,
+> `OPENSHOT_GPU_ENCODE`, `OPENSHOT_GPU_CROP`, all default off), tags BT.709 on both encoders, and
+> logs one `ExportTelemetry` line per export; the vendored library is refreshed. Committed in all
+> three repos, nothing pushed. The next lever the telemetry points at: the production payload
+> still does 251 readbacks per 750 frames with the GPU ~10 % busy (and `transitions_chain`'s overlay
+> clip, W30).
+>
 > **Service integration of the GPU flags (owner will do it):** set, once, before any reader or
 > writer is opened: `Settings::GPU_DECODE`, `HARDWARE_DECODER = 2` (NVDEC; needed for frames to
 > stay on the GPU, otherwise GPU_DECODE converts software-decoded frames), `GPU_ENCODE`,
@@ -827,6 +835,14 @@ production corpus) remain open; W05–W10 are the CPU quick wins. W01/W02 stay d
 
 ## Log
 
+- 2026-09-23 — **W31 done: per-export telemetry**, and the service wired to everything. Library:
+  `GpuTelemetry` (counters + NVML sampler). Service: env-driven `GPU_DECODE`/`GPU_ENCODE`/`GPU_CROP`
+  (`RenderBackend::applyLibrarySettings`, also in `render-payload`), BT.709 on the codec context
+  for x264 as well, one `ExportTelemetry` log line per export; library re-vendored. Production
+  payload with every flag on: 750/750 frames encoded on the device, output tagged BT.709; telemetry
+  matches nvidia-smi on VRAM/NVENC/NVDEC within 10 %, GPU busy within 1.6 points. Corpus hash
+  re-recorded for the BT.709 change (the difference is confined to the untagged PiP source, which
+  the old pipeline shifted). Four-way 307/307, 36 checks.
 - 2026-09-23 — **W30 measured on the laptop (A2000), L4 owed.** With every GPU path on, a
   GPU-bound export does not densify: `everything` 1080p aggregates 97 / 99 / 104 fps at ×1/×2/×4
   (one export already ~85 % GPU busy). `transitions_chain` scales (32 → 78) only because the
