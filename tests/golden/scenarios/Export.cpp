@@ -1,6 +1,10 @@
 // Export: FFmpegWriter configured exactly like the service (libx264, silent audio, pipeline mode),
 // decoded back with FFmpegReader and compared to the live timeline frames; plus an audio smoke test.
 #include "Recipes.h"
+#include "Settings.h"
+#include "gpu/GpuDevice.h"
+#include "gpu/CudaInterop.h"
+#include "gpu/GpuYuv.h"
 
 #include "FFmpegReader.h"
 #include "Frame.h"
@@ -73,6 +77,65 @@ void golden::registerExportScenarios() {
             }
             r.Close();
         }, Tolerance::Codec());
+
+    // NVENC fed straight from the GPU (W25, Settings::GPU_ENCODE) must be as faithful an export
+    // as the readback path: every frame there, none shifted, none black, and on every frame no
+    // further from the live timeline than the readback export is (0.5 dB of slack). The two
+    // exports are not compared to each other directly: they use different chroma filters (box
+    // against swscale's bicubic) under lossy encoding, measured at ~37.5 dB apart with the GPU
+    // export marginally the *closer* of the two to the timeline. The counter proves the GPU arm
+    // did not quietly read back. Declines -- and passes -- where there is no NVENC, no GPU
+    // compositor or no CUDA interop: every one of those is a supported configuration.
+    addCustom("export.nvenc_on_device", {"export", "gpu"}, exportScene,
+        [](Scene& s, std::vector<Captured>&, std::vector<Check>& checks) {
+            const int64_t last = 30;
+            openshot::Settings* settings = openshot::Settings::Instance();
+            const bool previous = settings->GPU_ENCODE;
+            const auto encode = [&](bool on_device, const std::string& path) {
+                settings->GPU_ENCODE = on_device;
+                openshot::FFmpegWriter w(path);
+                configureWriter(w, s.width, s.height, s.fps, 4000000, "h264_nvenc");
+                w.SetPipelineMode(true);   // as the service runs it: the frame crosses threads
+                w.SetPipelineQueueCapacity(16);
+                w.Open();
+                w.WriteFrame(s.timeline.get(), 1, last);
+                w.Close();
+            };
+            unsigned long long ran = 0;
+            try {
+                encode(false, s.workDir + "nvenc_readback.mp4");
+                s.timeline->ClearAllCache();   // or its last frame comes back from the first arm
+                const unsigned long long before = openshot::GpuYuv::Encodes();
+                encode(true, s.workDir + "nvenc_device.mp4");
+                ran = openshot::GpuYuv::Encodes() - before;
+            } catch (const std::exception& e) {
+                settings->GPU_ENCODE = previous;
+                checks.push_back({"nvenc_on_device", true, std::string("no NVENC here, declined: ") + e.what()});
+                return;
+            }
+            settings->GPU_ENCODE = previous;
+
+            const bool expected = openshot::GpuDevice::Instance().available() &&
+                                  openshot::CudaInterop::Instance().available();
+            openshot::FFmpegReader a(s.workDir + "nvenc_readback.mp4"), b(s.workDir + "nvenc_device.mp4");
+            a.Open(); b.Open();
+            double worst = 1e9;   // (live vs device) - (live vs readback), worst frame
+            for (int64_t k = 1; k <= last; ++k) {
+                const Image live = fromFrame(s.timeline->GetFrame(k));
+                const double readback = compare(live, fromFrame(a.GetFrame(k))).psnr;
+                const double device = compare(live, fromFrame(b.GetFrame(k))).psnr;
+                worst = std::min(worst, device - readback);
+            }
+            const bool same_length = a.info.video_length == b.info.video_length;
+            a.Close(); b.Close();
+            const bool ok = same_length && worst >= -0.5 &&
+                            (expected ? ran >= static_cast<unsigned long long>(last) : ran == 0);
+            checks.push_back({"nvenc_on_device", ok,
+                              std::to_string(ran) + " frames encoded on the device (" +
+                                  (expected ? "expected" : "declined") + "); worst frame " + fmt(worst) +
+                                  " dB closer to the timeline than the readback export (gate -0.5); lengths " +
+                                  (same_length ? "match" : "differ")});
+        });
 
     addCustom("export.silent_audio_smoke", {"export", "audio"}, exportScene,
         [](Scene& s, std::vector<Captured>&, std::vector<Check>& checks) {

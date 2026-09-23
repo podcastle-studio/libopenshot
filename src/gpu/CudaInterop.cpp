@@ -28,6 +28,8 @@
 #include "skia/include/gpu/graphite/BackendTexture.h"
 #include "skia/include/gpu/graphite/Image.h"
 #include "skia/include/gpu/graphite/Recorder.h"
+#include "skia/include/gpu/graphite/Surface.h"
+#include "skia/include/core/SkSurface.h"
 #include "skia/include/gpu/graphite/TextureInfo.h"
 #include "skia/include/gpu/graphite/vk/VulkanGraphiteTypes.h"
 #include "skia/include/gpu/vk/VulkanTypes.h"
@@ -74,6 +76,10 @@ struct CudaApi
 	decltype(&cuStreamCreate) StreamCreate = nullptr;
 	decltype(&cuStreamDestroy) StreamDestroy = nullptr;
 	decltype(&cuStreamSynchronize) StreamSynchronize = nullptr;
+	decltype(&cuEventCreate) EventCreate = nullptr;
+	decltype(&cuEventRecord) EventRecord = nullptr;
+	decltype(&cuEventDestroy) EventDestroy = nullptr;
+	decltype(&cuStreamWaitEvent) StreamWaitEvent = nullptr;
 	decltype(&cuImportExternalMemory) ImportExternalMemory = nullptr;
 	decltype(&cuDestroyExternalMemory) DestroyExternalMemory = nullptr;
 	decltype(&cuExternalMemoryGetMappedMipmappedArray) GetMappedMipmappedArray = nullptr;
@@ -133,6 +139,10 @@ bool loadCuda(CudaApi& api, std::string& error)
 	OPENSHOT_CU_LOAD(StreamCreate, cuStreamCreate);
 	OPENSHOT_CU_LOAD(StreamDestroy, cuStreamDestroy);
 	OPENSHOT_CU_LOAD(StreamSynchronize, cuStreamSynchronize);
+	OPENSHOT_CU_LOAD(EventCreate, cuEventCreate);
+	OPENSHOT_CU_LOAD(EventRecord, cuEventRecord);
+	OPENSHOT_CU_LOAD(EventDestroy, cuEventDestroy);
+	OPENSHOT_CU_LOAD(StreamWaitEvent, cuStreamWaitEvent);
 	OPENSHOT_CU_LOAD(ImportExternalMemory, cuImportExternalMemory);
 	OPENSHOT_CU_LOAD(DestroyExternalMemory, cuDestroyExternalMemory);
 	OPENSHOT_CU_LOAD(GetMappedMipmappedArray, cuExternalMemoryGetMappedMipmappedArray);
@@ -192,6 +202,9 @@ struct ImageState
 	/// Binary semaphores take one signal per wait.
 	bool ready_signalled = false;
 	const ImageState* ready_uv = nullptr;
+	/// The writer's direction (W25): CUDA has copied this image out and signalled
+	/// done, which the next draw into it must wait on.
+	bool done_signalled = false;
 
 	bool valid() const { return owner != nullptr; }
 
@@ -229,6 +242,11 @@ struct InteropState
 	CUdevice cuda_device = 0;
 	CUcontext context = nullptr;
 	CUstream stream = nullptr;
+	/// The encoder's copies (copyToNV12) run here, not on `stream`: `stream` is the one NVENC
+	/// reads its input on, and a producer running frames ahead would otherwise queue every
+	/// later frame's copy -- each waiting on its own draw -- in front of NVENC's work for this
+	/// one. An event per frame orders exactly the copy NVENC needs (W25).
+	CUstream encode_stream = nullptr;
 
 	VkCommandPool command_pool = VK_NULL_HANDLE;
 
@@ -243,6 +261,7 @@ struct InteropState
 	bool createImage(ImageState& state, int width, int height, GpuImage::Format format);
 	void releaseImage(ImageState& state);
 	bool copyNV12(const AVFrame* frame, ImageState& y, ImageState& uv, CUstream stream);
+	bool copyToNV12(ImageState& packed, AVFrame* frame, CUstream stream);
 	bool submitBarriers(ImageState& y, ImageState& uv);
 
 	bool createSemaphore(VkSemaphore& semaphore, CUexternalSemaphore& imported);
@@ -397,6 +416,12 @@ bool InteropState::setup()
 			stream = nullptr;
 			return false;
 		}
+		result = cu.StreamCreate(&encode_stream, CU_STREAM_NON_BLOCKING);
+		if (result != CUDA_SUCCESS) {
+			error = cu.message("cuStreamCreate (encode)", result);
+			encode_stream = nullptr;
+			return false;
+		}
 	}
 
 	VkCommandPoolCreateInfo pool_info{};
@@ -535,7 +560,8 @@ bool InteropState::createImage(ImageState& state, int width, int height,
 	image_info.samples = VK_SAMPLE_COUNT_1_BIT;
 	image_info.tiling = VK_IMAGE_TILING_OPTIMAL;
 	image_info.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
-					   VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+					   VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
+					   VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT;
 	image_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 	image_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 	if (vkCreateImage(device, &image_info, nullptr, &state.image) != VK_SUCCESS) {
@@ -643,6 +669,8 @@ void InteropState::releaseImage(ImageState& state)
 	}
 	if (state.external && stream && cu.StreamSynchronize)
 		cu.StreamSynchronize(stream);
+	if (state.external && encode_stream && cu.StreamSynchronize)
+		cu.StreamSynchronize(encode_stream);
 	if (state.ready_cu && cu.DestroyExternalSemaphore)
 		cu.DestroyExternalSemaphore(state.ready_cu);
 	if (state.done_cu && cu.DestroyExternalSemaphore)
@@ -709,6 +737,9 @@ void InteropState::release()
 		if (stream && cu.StreamDestroy)
 			cu.StreamDestroy(stream);
 		stream = nullptr;
+		if (encode_stream && cu.StreamDestroy)
+			cu.StreamDestroy(encode_stream);
+		encode_stream = nullptr;
 	}
 
 	if (context && cu.PrimaryCtxRelease)
@@ -858,6 +889,67 @@ bool InteropState::copyNV12(const AVFrame* frame, ImageState& y, ImageState& uv,
 	return true;
 }
 
+bool InteropState::copyToNV12(ImageState& packed, AVFrame* frame, CUstream on_stream)
+{
+	if (!frame || frame->format != AV_PIX_FMT_CUDA || !frame->data[0] || !frame->data[1]) {
+		error = "copyToNV12 wants an AV_PIX_FMT_CUDA frame with two planes";
+		return false;
+	}
+	if (!packed.valid() || packed.format != GpuImage::Format::R8 || packed.ready_cu == nullptr) {
+		error = "copyToNV12 wants a live R8 image";
+		return false;
+	}
+	const int luma_height = frame->height;
+	const int chroma_height = (frame->height + 1) / 2;
+	if (packed.width != frame->width || packed.height != luma_height + chroma_height) {
+		error = "copyToNV12's image is not this frame's packed NV12 size";
+		return false;
+	}
+
+	ContextGuard guard(cu, context);
+	if (!guard.ok()) {
+		error = "cuCtxPushCurrent failed";
+		return false;
+	}
+	// The drawing's submit signalled ready; this consumes it.
+	CUDA_EXTERNAL_SEMAPHORE_WAIT_PARAMS wait{};
+	CUresult result = cu.WaitExternalSemaphores(&packed.ready_cu, &wait, 1, on_stream);
+	if (result != CUDA_SUCCESS) {
+		error = cu.message("cuWaitExternalSemaphoresAsync", result);
+		return false;
+	}
+
+	// Y is rows [0, h) of the packed image and interleaved UV rows [h, h + h/2), each a
+	// frame's width of bytes -- exactly NV12's two planes.
+	const struct { int y0, rows; } planes[2] = {{0, luma_height}, {luma_height, chroma_height}};
+	for (int i = 0; i < 2; ++i) {
+		CUDA_MEMCPY2D copy{};
+		copy.srcMemoryType = CU_MEMORYTYPE_ARRAY;
+		copy.srcArray = packed.array;
+		copy.srcY = static_cast<size_t>(planes[i].y0);
+		copy.dstMemoryType = CU_MEMORYTYPE_DEVICE;
+		copy.dstDevice = reinterpret_cast<CUdeviceptr>(frame->data[i]);
+		copy.dstPitch = static_cast<size_t>(frame->linesize[i]);
+		copy.WidthInBytes = static_cast<size_t>(frame->width);
+		copy.Height = static_cast<size_t>(planes[i].rows);
+		result = cu.Memcpy2DAsync(&copy, on_stream);
+		if (result != CUDA_SUCCESS) {
+			error = cu.message("cuMemcpy2DAsync", result);
+			return false;
+		}
+	}
+
+	// The next draw into this image waits on done, so it cannot overwrite what is being read.
+	CUDA_EXTERNAL_SEMAPHORE_SIGNAL_PARAMS signal{};
+	result = cu.SignalExternalSemaphores(&packed.done_cu, &signal, 1, on_stream);
+	if (result != CUDA_SUCCESS) {
+		error = cu.message("cuSignalExternalSemaphoresAsync", result);
+		return false;
+	}
+	packed.done_signalled = true;
+	return true;
+}
+
 }   // namespace cuda_detail
 }   // namespace openshot
 
@@ -900,34 +992,51 @@ int GpuImage::height() const { return impl->height; }
 GpuImage::Format GpuImage::format() const { return impl->format; }
 bool GpuImage::valid() const { return impl->valid(); }
 
+namespace
+{
+	// The one description of an interop image Graphite needs, for both directions.
+	skgpu::graphite::BackendTexture backendTexture(const ImageState& state)
+	{
+		skgpu::graphite::VulkanTextureInfo info(
+			VK_SAMPLE_COUNT_1_BIT, skgpu::Mipmapped::kNo, 0, state.vkFormat(),
+			VK_IMAGE_TILING_OPTIMAL,
+			VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
+				VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
+				VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT,
+			VK_SHARING_MODE_EXCLUSIVE, VK_IMAGE_ASPECT_COLOR_BIT, {});
+
+		skgpu::VulkanAlloc alloc;
+		alloc.fMemory = state.memory;
+		alloc.fOffset = 0;
+		alloc.fSize = state.memory_size;
+
+		// GENERAL: CUDA's layout, which both directions leave the image in between uses.
+		return skgpu::graphite::BackendTextures::MakeVulkan(
+			SkISize::Make(state.width, state.height), info, VK_IMAGE_LAYOUT_GENERAL,
+			state.owner->queue_family, state.image, alloc);
+	}
+}
+
 sk_sp<SkImage> GpuImage::image() const
 {
-	InteropState* owner = impl->owner;
-	if (!owner)
+	if (!impl->owner)
 		return nullptr;
 	skgpu::graphite::Recorder* recorder = GpuDevice::Instance().recorder();
 	if (!recorder)
 		return nullptr;
+	return SkImages::WrapTexture(recorder, backendTexture(*impl), impl->colorType(),
+								 kOpaque_SkAlphaType, nullptr);
+}
 
-	skgpu::graphite::VulkanTextureInfo info(
-		VK_SAMPLE_COUNT_1_BIT, skgpu::Mipmapped::kNo, 0, impl->vkFormat(),
-		VK_IMAGE_TILING_OPTIMAL,
-		VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
-			VK_IMAGE_USAGE_TRANSFER_DST_BIT,
-		VK_SHARING_MODE_EXCLUSIVE, VK_IMAGE_ASPECT_COLOR_BIT, {});
-
-	skgpu::VulkanAlloc alloc;
-	alloc.fMemory = impl->memory;
-	alloc.fOffset = 0;
-	alloc.fSize = impl->memory_size;
-
-	// GENERAL, because copyNV12 puts the image back into it before every write.
-	const skgpu::graphite::BackendTexture texture = skgpu::graphite::BackendTextures::MakeVulkan(
-		SkISize::Make(impl->width, impl->height), info, VK_IMAGE_LAYOUT_GENERAL,
-		owner->queue_family, impl->image, alloc);
-
-	return SkImages::WrapTexture(recorder, texture, impl->colorType(), kOpaque_SkAlphaType,
-								 nullptr);
+sk_sp<SkSurface> GpuImage::surface() const
+{
+	if (!impl->owner)
+		return nullptr;
+	skgpu::graphite::Recorder* recorder = GpuDevice::Instance().recorder();
+	if (!recorder)
+		return nullptr;
+	return SkSurfaces::WrapBackendTexture(recorder, backendTexture(*impl), impl->colorType(),
+										  nullptr, nullptr);
 }
 
 // --- CudaInterop ------------------------------------------------------------
@@ -1028,6 +1137,72 @@ bool CudaInterop::copyNV12(const AVFrame* cuda_frame, GpuImage& y, GpuImage& uv,
 								stream ? static_cast<CUstream>(stream) : impl->state.stream);
 }
 
+unsigned long long CudaInterop::drawnSemaphore(const GpuImage& packed) const
+{
+	unsigned long long handle = 0;
+	std::memcpy(&handle, &packed.impl->ready, sizeof(packed.impl->ready));
+	return handle;
+}
+
+bool CudaInterop::takeDrawWait(GpuImage& packed, unsigned long long* wait)
+{
+	std::lock_guard<std::mutex> lock(impl->state.mutex);
+	if (!packed.impl->done_signalled)
+		return false;
+	packed.impl->done_signalled = false;
+	std::memcpy(wait, &packed.impl->done, sizeof(packed.impl->done));
+	return true;
+}
+
+bool CudaInterop::copyToNV12(GpuImage& packed, AVFrame* cuda_frame, void** copied)
+{
+	std::lock_guard<std::mutex> lock(impl->state.mutex);
+	if (copied)
+		*copied = nullptr;
+	if (!impl->state.initialise())
+		return false;
+	InteropState& state = impl->state;
+	if (!state.copyToNV12(*packed.impl, cuda_frame, state.encode_stream))
+		return false;
+	if (copied) {
+		cuda_detail::ContextGuard guard(state.cu, state.context);
+		CUevent event = nullptr;
+		if (state.cu.EventCreate(&event, CU_EVENT_DISABLE_TIMING) != CUDA_SUCCESS)
+			return false;
+		if (state.cu.EventRecord(event, state.encode_stream) != CUDA_SUCCESS) {
+			state.cu.EventDestroy(event);
+			return false;
+		}
+		*copied = event;
+	}
+	return true;
+}
+
+bool CudaInterop::waitForCopy(void* copied)
+{
+	if (!copied)
+		return false;
+	std::lock_guard<std::mutex> lock(impl->state.mutex);
+	InteropState& state = impl->state;
+	CUevent event = static_cast<CUevent>(copied);
+	bool ok = false;
+	if (state.initialise()) {
+		cuda_detail::ContextGuard guard(state.cu, state.context);
+		ok = state.cu.StreamWaitEvent(state.stream, event, 0) == CUDA_SUCCESS;
+	}
+	releaseCopy(copied);
+	return ok;
+}
+
+void CudaInterop::releaseCopy(void* copied)
+{
+	if (!copied)
+		return;
+	InteropState& state = impl->state;
+	if (state.cu.EventDestroy)
+		state.cu.EventDestroy(static_cast<CUevent>(copied));   // safe while still pending
+}
+
 bool CudaInterop::prepareForCopy(GpuImage& y, GpuImage& uv)
 {
 	std::lock_guard<std::mutex> lock(impl->state.mutex);
@@ -1064,6 +1239,7 @@ int GpuImage::height() const { return 0; }
 GpuImage::Format GpuImage::format() const { return Format::R8; }
 bool GpuImage::valid() const { return false; }
 sk_sp<SkImage> GpuImage::image() const { return nullptr; }
+sk_sp<SkSurface> GpuImage::surface() const { return nullptr; }
 
 CudaInterop::CudaInterop() : impl(new Impl) {}
 CudaInterop::~CudaInterop() = default;
@@ -1096,5 +1272,11 @@ bool CudaInterop::prepareForCopy(GpuImage&, GpuImage&)
 {
 	return false;
 }
+
+unsigned long long CudaInterop::drawnSemaphore(const GpuImage&) const { return 0; }
+bool CudaInterop::takeDrawWait(GpuImage&, unsigned long long*) { return false; }
+bool CudaInterop::copyToNV12(GpuImage&, AVFrame*, void**) { return false; }
+bool CudaInterop::waitForCopy(void*) { return false; }
+void CudaInterop::releaseCopy(void*) {}
 
 #endif  // OPENSHOT_CUDA_INTEROP

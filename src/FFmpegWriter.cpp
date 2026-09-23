@@ -28,12 +28,24 @@
 #include "FFmpegUtilities.h"
 
 #include "FFmpegWriter.h"
+#include "gpu/CudaInterop.h"
+#include "gpu/GpuDevice.h"
+#include "gpu/GpuFrame.h"
+#include "gpu/GpuYuv.h"
+#include "Timeline.h"
+#include "skia/include/gpu/graphite/Surface.h"
 #include "Exceptions.h"
 #include "Frame.h"
 #include "OpenMPUtilities.h"
 #include "Settings.h"
 #include "Timeline.h"
 #include "ZmqLogger.h"
+
+#if USE_HW_ACCEL && defined(OPENSHOT_HAVE_SKIA_GPU) && defined(OPENSHOT_HAVE_CUDA)
+extern "C" {
+#include <libavutil/hwcontext_cuda.h>
+}
+#endif
 
 using namespace openshot;
 
@@ -875,9 +887,15 @@ void FFmpegWriter::write_frame(std::shared_ptr<Frame> frame) {
 				has_error_encoding_video = true;
 			}
 
-			// Deallocate buffer and AVFrame
-			av_freep(&(frame_final->data[0]));
-			AV_FREE_FRAME(&frame_final);
+			// Deallocate buffer and AVFrame. A device frame's data is a reference into the
+			// encoder's CUDA pool, which av_frame_free returns; av_freep would free a device
+			// pointer on the host heap.
+			if (device_frames.erase(frame_final)) {
+				av_frame_free(&frame_final);
+			} else {
+				av_freep(&(frame_final->data[0]));
+				AV_FREE_FRAME(&frame_final);
+			}
 			av_frames.erase(frame);
 		}
 	}
@@ -914,6 +932,18 @@ void FFmpegWriter::WriteFrame(ReaderBase *reader, int64_t start, int64_t length)
 	Timeline* timeline = dynamic_cast<Timeline*>(reader);
 	if (timeline)
 		timeline->SetRenderingAudio(skip_clip_audio_processing ? false : info.has_audio);
+
+	// NVENC on the interop's device: the Timeline converts each frame where it is instead of
+	// reading it back (W25). For this call only -- the hook captures this writer.
+	struct HookScope {
+		Timeline* timeline;
+		~HookScope() { if (timeline) timeline->SetGpuEncodeHook(nullptr); }
+	} hook_scope{nullptr};
+	if (timeline && encode_on_device && info.has_video && video_codec_ctx &&
+		video_codec_ctx->hw_frames_ctx) {
+		timeline->SetGpuEncodeHook([this](openshot::GpuFrame& gpu) { return EncodeOnDevice(gpu); });
+		hook_scope.timeline = timeline;
+	}
 
 	ZmqLogger::Instance()->AppendDebugMethod(
 		"FFmpegWriter::WriteFrame (from Reader)",
@@ -1771,7 +1801,34 @@ void FFmpegWriter::open_video(AVFormatContext *oc, AVStream *st) {
 			ZmqLogger::Instance()->AppendDebugMethod(
 				"Encode Device not present, using default");
 		}
-		if (av_hwdevice_ctx_create(&hw_device_ctx,
+		encode_on_device = false;
+#if defined(OPENSHOT_HAVE_SKIA_GPU) && defined(OPENSHOT_HAVE_CUDA)
+		// NVENC in the CUDA context and stream that share memory with the Vulkan device, so
+		// the compositor's frame can be converted and copied into its input without leaving
+		// the GPU (W25). The stream matters: the copy into the frame and NVENC's read of it are
+		// then queued in order on one stream. Anything short of this is the ordinary device
+		// below and the readback path.
+		if (hw_en_av_device_type == AV_HWDEVICE_TYPE_CUDA &&
+			openshot::Settings::Instance()->GPU_ENCODE &&
+			openshot::GpuDevice::Instance().available() &&
+			openshot::CudaInterop::Instance().available()) {
+			AVBufferRef *device = av_hwdevice_ctx_alloc(AV_HWDEVICE_TYPE_CUDA);
+			if (device) {
+				auto *cuda = static_cast<AVCUDADeviceContext *>(
+					reinterpret_cast<AVHWDeviceContext *>(device->data)->hwctx);
+				openshot::CudaInterop &interop = openshot::CudaInterop::Instance();
+				cuda->cuda_ctx = static_cast<CUcontext>(interop.cudaContext());
+				cuda->stream = static_cast<CUstream>(interop.cudaStream());
+				if (av_hwdevice_ctx_init(device) >= 0) {
+					hw_device_ctx = device;
+					encode_on_device = true;
+				} else {
+					av_buffer_unref(&device);
+				}
+			}
+		}
+#endif
+		if (!hw_device_ctx && av_hwdevice_ctx_create(&hw_device_ctx,
 				hw_en_av_device_type, adapter_ptr, NULL, 0) < 0)
 		{
 			ZmqLogger::Instance()->AppendDebugMethod(
@@ -2457,8 +2514,95 @@ AVFrame *FFmpegWriter::allocate_avframe(PixelFormat pix_fmt, int width, int heig
 	return new_av_frame;
 }
 
+// What EncodeOnDevice hands the Timeline to attach: the NVENC input frame, and the event its copy
+// completes on (CudaInterop::copyToNV12), which the encoding thread waits on before sending it.
+struct FFmpegWriter::DeviceFrame {
+	AVFrame *frame = nullptr;
+	void *copied = nullptr;
+	~DeviceFrame() {
+		av_frame_free(&frame);
+#if defined(OPENSHOT_HAVE_SKIA_GPU) && defined(OPENSHOT_HAVE_CUDA)
+		openshot::CudaInterop::Instance().releaseCopy(copied);
+#endif
+	}
+};
+
+// The compositor's frame -> an NVENC input frame, on the GPU (W25). Runs on the Timeline's thread,
+// the only one the surface is usable on; what it returns is a CUDA frame, which is not bound to a
+// thread, so the pipeline's encoding thread can take it. Null means "read it back as before".
+std::shared_ptr<void> FFmpegWriter::EncodeOnDevice(openshot::GpuFrame& gpu) {
+#if defined(OPENSHOT_HAVE_SKIA_GPU) && defined(OPENSHOT_HAVE_CUDA)
+	if (!encode_on_device || !video_codec_ctx || !video_codec_ctx->hw_frames_ctx)
+		return nullptr;
+	// The readback path scales to the output size with swscale; this one does not scale.
+	if (gpu.width() != info.width || gpu.height() != info.height || (info.width & 1) ||
+		(info.height & 1))
+		return nullptr;
+	openshot::CudaInterop &interop = openshot::CudaInterop::Instance();
+	if (!interop.available())
+		return nullptr;
+
+	const int packed_height = info.height + info.height / 2;
+	if (!encode_packed || !encode_packed->valid() || encode_packed->width() != info.width ||
+		encode_packed->height() != packed_height) {
+		encode_packed = interop.createImage(info.width, packed_height, openshot::GpuImage::Format::R8);
+		if (!encode_packed)
+			return nullptr;
+	}
+
+	auto encoded = std::make_shared<DeviceFrame>();
+	encoded->frame = av_frame_alloc();
+	AVFrame *out = encoded->frame;
+	if (!out || av_hwframe_get_buffer(video_codec_ctx->hw_frames_ctx, out, 0) < 0)
+		return nullptr;
+
+	sk_sp<SkSurface> target = encode_packed->surface();
+	// AsImage, not a snapshot: the frame's surface is not drawn to again before this is
+	// submitted, so a copy of it would be a full-frame GPU copy for nothing.
+	sk_sp<SkImage> source = gpu.surface() ? SkSurfaces::AsImage(gpu.surface()) : nullptr;
+	if (!target || !source)
+		return nullptr;
+	// BT.601, as swscale here has always encoded (it is never given another matrix), so this
+	// path changes speed and not colour. The file is tagged by the caller; see GPU-WORKLIST W25
+	// for the mismatch between the two.
+	if (!openshot::GpuYuv::EncodeNV12(source, target->getCanvas(), info.width, info.height,
+									  openshot::GpuYuv::Matrix::BT601))
+		return nullptr;
+
+	unsigned long long wait = 0;
+	const bool must_wait = interop.takeDrawWait(*encode_packed, &wait);
+	const unsigned long long drawn = interop.drawnSemaphore(*encode_packed);
+	if (!openshot::GpuDevice::Instance().submit(false, must_wait ? &wait : nullptr,
+												must_wait ? 1 : 0, &drawn, 1, target.get()))
+		return nullptr;
+	if (!interop.copyToNV12(*encode_packed, out, &encoded->copied))
+		return nullptr;
+	return encoded;
+#else
+	(void) gpu;
+	return nullptr;
+#endif
+}
+
 // process video frame
 void FFmpegWriter::process_video_packet(std::shared_ptr<Frame> frame) {
+	// Already converted and on the encoder's device (EncodeOnDevice, W25): nothing to do but
+	// queue it. The clone takes its own reference to the CUDA buffer.
+	if (frame->EncoderFrame()) {
+		auto *device = static_cast<DeviceFrame *>(frame->EncoderFrame().get());
+		// NVENC reads on the interop's stream; order it after this frame's copy, on the GPU.
+#if defined(OPENSHOT_HAVE_SKIA_GPU) && defined(OPENSHOT_HAVE_CUDA)
+		openshot::CudaInterop::Instance().waitForCopy(device->copied);
+		device->copied = nullptr;
+#endif
+		AVFrame *encoded = av_frame_clone(device->frame);
+		if (!encoded)
+			throw OutOfMemory("Could not reference an encoder-ready frame", path);
+		device_frames.insert(encoded);
+		add_avframe(frame, encoded);
+		return;
+	}
+
 	// Source dimensions (RGBA)
 	int src_w = frame->GetWidth();
 	int src_h = frame->GetHeight();
@@ -2652,7 +2796,10 @@ bool FFmpegWriter::write_video_packet(std::shared_ptr<Frame> frame, AVFrame *fra
 		// Assign the initial AVFrame PTS from the frame counter
 		frame_final->pts = video_timestamp;
 #if USE_HW_ACCEL
-		if (hw_en_on && hw_en_supported) {
+		if (hw_en_on && hw_en_supported && device_frames.count(frame_final)) {
+			// Already a CUDA frame from the encoder's own pool: send it as it is.
+			hw_frame = av_frame_clone(frame_final);
+		} else if (hw_en_on && hw_en_supported) {
 			if (!(hw_frame = av_frame_alloc())) {
 				std::clog << "Error code: av_hwframe_alloc\n";
 			}

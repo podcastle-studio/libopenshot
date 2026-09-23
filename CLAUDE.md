@@ -263,6 +263,17 @@ GPU to take over. Earlier, lower figures in the docs were measured on an Intel i
   `GPU_DECODE` on and a GPU present it is off. `Close()` stops the worker *before* taking the
   mutex, and the worker only ever `try_lock`s it: the hardware-decode fallback calls `Close()`
   with the mutex held. The bench switch is `OPENSHOT_BENCH_READ_AHEAD`.
+- **NVENC can take the frame from the GPU** (W25, `Settings::GPU_ENCODE`, **off**: box vs
+  bicubic chroma). The conversion runs in `Timeline::GetFrame` through `SetGpuEncodeHook`,
+  **on the compositing thread**, because the service's writer encodes on another thread and a
+  Graphite surface cannot follow it; the CUDA frame can. A frame carrying an encoder payload has
+  no picture for anyone else and is never cached. Copies run on the interop's *encode* stream and
+  NVENC's stream waits on a per-frame event — never queue them on the stream NVENC reads.
+  Graphite render targets need `VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT`. Bench:
+  `OPENSHOT_BENCH_GPU_ENCODE=1`, `OPENSHOT_BENCH_PIPELINE=1` (the service's mode),
+  `OPENSHOT_BENCH_NVENC_PRESET`; read the `LOOP` line, since `fps=` includes NVENC init.
+- **The writer encodes BT.601 while the service tags exports BT.709** (swscale is never given a
+  matrix). Found in W25, not fixed — the owner's call; every GPU pass keeps BT.601 to match.
 - **`FrameMapper` must not `GetImage()` a GPU-backed frame.** It did, for every frame it rebuilt
   (any clip whose audio mapping differs, i.e. most video), which read every GPU-decoded frame back
   and made GPU decode look worthless. It shares the surface now, as `Frame`'s copy constructor

@@ -933,6 +933,21 @@ void Frame::AttachGpuFrame(std::shared_ptr<openshot::GpuFrame> gpu)
 	}
 }
 
+void Frame::AttachEncoderFrame(std::shared_ptr<void> encoded, int w, int h)
+{
+	const std::lock_guard<std::recursive_mutex> lock(addingImageMutex);
+	encoder_frame = std::move(encoded);
+	width = w;
+	height = h;
+	has_image_data = true;
+}
+
+void Frame::DropGpuFrame()
+{
+	const std::lock_guard<std::recursive_mutex> lock(addingImageMutex);
+	gpu_frame.reset();
+}
+
 void Frame::FlattenGpuFrame()
 {
 	const std::lock_guard<std::recursive_mutex> lock(addingImageMutex);

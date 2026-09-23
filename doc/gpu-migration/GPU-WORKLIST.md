@@ -45,7 +45,8 @@ then Stage 6 (W19–W21, effects) · W01/W02 are now **Stage 10**, at the end.
 **Stage 6 is finished (2026-09-22)** and **Stage 7 has started: W22 is done (2026-09-22), gate met
 at 0.166 ms against 0.300 for a 4K frame, exact and clean under `compute-sanitizer`. W23 is done
 (2026-09-23), gate met: `source_4k` 78–82 → 126–133 fps at 0.6 cores. W24 is done (2026-09-23),
-gate restated — its 90 fps is W25's to reach. W25 is next.**
+gate restated — its 90 fps is W25's to reach. W25 is done (2026-09-23), flagged off, gate
+restated: NVENC's p5 preset is now the ceiling. Stage 7 is finished; Stage 8 (W26) is next.**
 
 > **2026-09-18, project owner — finish Stages 2 and 3 before the effects work.** Stage 5 is done and
 > Stage 6 (effects and transitions as shaders) is the obvious next thing, but the safety net (Stage
@@ -1371,16 +1372,61 @@ the 90 fps now belongs. **Restated and met:** the caller's time in the reader fa
 
 **Size.** ~3 days.
 
-### W25 — Writer consumes textures · legacy `4.4`
+### W25 — Writer consumes textures · legacy `4.4` · **DONE 2026-09-23, flagged off (`GPU_ENCODE`), gate restated**
 
 **Depends on.** W12, W22.
 
-- [ ] Allocate `hw_frames_ctx` (NV12, or P010 for 10-bit).
-- [ ] RGBA→NV12 as an SkSL pass into a CUDA-mapped buffer.
-- [ ] Send `AV_PIX_FMT_CUDA` frames; keep the encoder queue four deep.
-- [ ] Software encoders keep the readback path.
+> **Measured before building, 2026-09-23** (`single_video`, NVDEC + GPU decode, Vulkan): at 1080p
+> the writer's RGBA→NV12 swscale was 4.0 ms a frame, the readback 2.8 and the upload 0.5; at 2160p
+> 16.1, 9.0 and 2.2 — nearly the whole frame. **But the service runs the writer in pipeline mode**
+> (`VideoRenderingImpl`: producer thread composites, consumer thread encodes), and a Graphite
+> surface cannot cross threads. So the conversion runs on the *Timeline's* thread, where it used
+> to read back, and what crosses to the encoding thread is a CUDA frame, which can.
 
-**Gate.** `single_video` 1080p nvenc ≥ **250 fps**; 2160p ≥ **60 fps**; CPU per export < **2 cores**;
+- [x] `hw_frames_ctx` NV12 — already there. P010 not needed: every export here is 8-bit.
+- [x] **RGBA→NV12 as an SkSL pass** (`GpuYuv::EncodeNV12`) into one exportable R8 interop image
+      packed as FFmpeg lays NV12 out, then `CudaInterop::copyToNV12` device to device into a
+      frame from the encoder's own pool. Graphite hands the image over in GENERAL through
+      `InsertRecordingInfo::fTargetTextureState` (new `GpuDevice::submit` overload with signal
+      semaphores); a render target needs `VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT` or
+      `WrapBackendTexture` returns null.
+- [x] **Send `AV_PIX_FMT_CUDA` frames.** `Timeline::SetGpuEncodeHook` — set by
+      `FFmpegWriter::WriteFrame(reader, …)` for the call — replaces the flatten; the frame carries
+      the CUDA frame (`Frame::AttachEncoderFrame`) and is never cached. The copies run on an
+      encode stream of their own; the encoding thread orders NVENC's stream after exactly that
+      frame's copy with an event (`waitForCopy`). The service's queue of 16 is the depth.
+- [x] Software encoders keep the readback path (the hook is only set for NVENC on the interop).
+
+**Gate result — the pipeline met it; NVENC's p5 preset is now the ceiling.** Pipeline mode as the
+service runs it, NVDEC + GPU decode, the encode loop timed without the writer's Open/Close
+(`openshot-bench` `LOOP` line), interleaved:
+
+| `single_video` nvenc | readback path | `GPU_ENCODE` |
+|---|---|---|
+| 1080p, p5 (the service's preset) | 165–178 fps | **193–195** |
+| 1080p, p3 / p1 | 156 / 152 | **349 / 372** |
+| 2160p, p5 | 48 | **54** |
+| 2160p, p3 / p1 | 46 / 47 | **123 / 148** |
+| CPU, 2160p p5, 180 frames | 5.3 s | **2.0 s** (0.6 cores) |
+
+At p5/hq the encoding thread is 96 % inside `avcodec_send_frame`: NVENC itself. The readback path
+cannot use a faster preset (it stays at ~150 / 47 whatever the preset); this one is bound only by
+the encoder. **250 / 60 are met at p3 and not at p5** — that trade is W09's quality decision,
+the owner's to revisit. CPU per export < 2 cores: **met** (0.6 at 2160p, 1.2 at 1080p).
+**"Round trip within 1 LSB" is unreachable as written:** exact 8-bit limited-range BT.601 already
+round-trips to within 2 (e.g. 247,36,40). Restated and met: the pass is within **1 code value of
+exact BT.601** and the round trip at the ideal **2** (`unit.gpu_encode_nv12`), and an NVENC export
+through it is on every frame **no less faithful to the timeline than the readback export**
+(−0.01 dB worst, `export.nvenc_on_device`, which also asserts all frames took the device path).
+
+**Flagged off** (`Settings::GPU_ENCODE`), like `GPU_DECODE`, because it changes pixels: its chroma
+is a 2×2 box where the readback path's swscale (`HIGH_QUALITY_SCALING`) is bicubic.
+**Found on the way, not fixed — owner's call:** the writer never gives swscale a matrix, so it
+encodes **BT.601** while the service tags every export **BT.709**. That is the systematic
+−1.8/−3.6/+0.6 bias `export.roundtrip_x264` shows under a decoder that honours the tag, and it is
+in production today. The GPU pass keeps BT.601 so that it changes speed, not colour.
+
+**Original gate.** `single_video` 1080p nvenc ≥ **250 fps**; 2160p ≥ **60 fps**; CPU per export < **2 cores**;
 RGBA→NV12→RGBA round trip within 1 LSB.
 **Size.** ~1.5 weeks.
 

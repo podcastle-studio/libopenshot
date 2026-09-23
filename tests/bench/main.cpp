@@ -114,6 +114,9 @@ int runCase(const Opts& o) {
     // W24: frames each reader decodes ahead (Settings::READ_AHEAD_FRAMES; 0 = off).
     if (const char* v = std::getenv("OPENSHOT_BENCH_READ_AHEAD"); v && *v)
         settings->READ_AHEAD_FRAMES = std::atoi(v);
+    // W25: NVENC takes the frame from the GPU (Settings::GPU_ENCODE).
+    if (const char* v = std::getenv("OPENSHOT_BENCH_GPU_ENCODE"); v && std::string(v) == "1")
+        settings->GPU_ENCODE = true;
     bench::setBenchMediaDir(o.benchMedia);
 
     golden::Scene scene;
@@ -128,6 +131,7 @@ int runCase(const Opts& o) {
 
     std::vector<double> perFrameMs;
     double wall = 0.0;
+    double loopMs = 0.0;   // encode modes: the WriteFrame loop alone, without Open/Close
     const auto t0 = std::chrono::steady_clock::now();
     if (mode == "render") {
         perFrameMs.reserve(o.frames);
@@ -150,8 +154,20 @@ int runCase(const Opts& o) {
             w.SetOption(openshot::VIDEO_STREAM, "preset", "ultrafast");
             w.SetOption(openshot::VIDEO_STREAM, "x264-params", "qp=0");
         }
+        // The service overlaps compositing with encoding (VideoRenderingImpl: pipeline mode,
+        // queue 16); OPENSHOT_BENCH_PIPELINE=1 measures that way (W25).
+        // A different NVENC preset than the service's p5, to find where the encoder itself is
+        // the ceiling (W25).
+        if (const char* v = std::getenv("OPENSHOT_BENCH_NVENC_PRESET"); v && *v && codec == "h264_nvenc")
+            w.SetOption(openshot::VIDEO_STREAM, "preset", v);
+        if (const char* v = std::getenv("OPENSHOT_BENCH_PIPELINE"); v && std::string(v) == "1") {
+            w.SetPipelineMode(true);
+            w.SetPipelineQueueCapacity(16);
+        }
         w.Open();
+        const auto loop0 = std::chrono::steady_clock::now();
         w.WriteFrame(scene.timeline.get(), 1, o.frames);
+        loopMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - loop0).count();
         w.Close();
     }
     wall = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
@@ -164,6 +180,8 @@ int runCase(const Opts& o) {
     } else { avg = 1000.0 * wall / o.frames; }
     std::printf("RESULT frames=%d wall=%.4f fps=%.3f avg_ms=%.3f p50_ms=%.3f p95_ms=%.3f max_ms=%.3f build_ms=%.1f\n",
                 o.frames, wall, o.frames / wall, avg, p50, p95, mx, buildMs);
+    if (loopMs > 0)
+        std::printf("LOOP frames=%d loop_ms=%.1f loop_fps=%.1f\n", o.frames, loopMs, 1000.0 * o.frames / loopMs);
     std::fflush(stdout);
     return 0;
 }

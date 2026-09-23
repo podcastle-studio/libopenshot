@@ -104,6 +104,7 @@ namespace openshot
 		/// the other. Drawing into GpuBacking()->canvas() directly is the exception, and
 		/// only the Timeline does that, to a canvas it made itself.
 		std::shared_ptr<openshot::GpuFrame> gpu_frame;
+		std::shared_ptr<void> encoder_frame;
 
 		/// Deliberately NOT behind USE_QT_PLAYER. Only Display()/DisplayWaveform() use it, but this
 		/// is a private data member of a public class: guarding it would make sizeof(Frame) depend
@@ -255,6 +256,19 @@ namespace openshot
 		/// GetImage(); call it directly to release the surface at a chosen point — in
 		/// particular on the thread that created it.
 		void FlattenGpuFrame();
+
+		/// An encoder-ready copy of this frame's picture, made by the writer on the
+		/// thread that composited it (W25): an @c AVFrame in the encoder's own
+		/// hardware format, held opaquely so this header stays FFmpeg-free. A frame
+		/// carrying one has **no CPU image and no GPU surface** -- it exists to be
+		/// encoded -- so only the writer that asked for it may consume it.
+		void AttachEncoderFrame(std::shared_ptr<void> encoded, int width, int height);
+
+		/// The encoder-ready copy, or null.
+		const std::shared_ptr<void>& EncoderFrame() const { return encoder_frame; }
+
+		/// Drop the GPU surface without reading it back.
+		void DropGpuFrame();
 
 		/// Set Pixel Aspect Ratio
 		openshot::Fraction GetPixelRatio() { return pixel_ratio; };

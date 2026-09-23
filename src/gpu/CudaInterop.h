@@ -25,6 +25,7 @@
 #include <string>
 
 #include "skia/include/core/SkImage.h"
+#include "skia/include/core/SkSurface.h"
 #include "skia/include/core/SkRefCnt.h"
 
 struct AVFrame;
@@ -72,6 +73,12 @@ namespace openshot
 		/// across frames would barrier from a layout the image is no longer in.
 		/// Ask for one per frame, use it, drop it.
 		sk_sp<SkImage> image() const;
+
+		/// The same pixels as a Graphite surface to draw into on this thread's
+		/// recorder, or null. Fresh every call, for the reason image() is. The
+		/// writer's direction (W25): draw, submit signalling drawnSemaphore() and
+		/// handing this surface to CUDA, then CudaInterop::copyToNV12.
+		sk_sp<SkSurface> surface() const;
 
 		GpuImage(const GpuImage&) = delete;
 		GpuImage& operator=(const GpuImage&) = delete;
@@ -167,6 +174,41 @@ namespace openshot
 		/// at once. Skipping it is correct but costs the cross-API handshake on
 		/// the critical path — 0.40 ms against 0.21 ms a 4K frame, measured.
 		bool prepareForCopy(GpuImage& y, GpuImage& uv);
+
+		// --- The writer's direction (W25): Vulkan draws, CUDA reads. ---------
+		//
+		// One R8 image, @c width x (height + height/2), holding NV12 packed the way
+		// FFmpeg lays it out: Y rows, then interleaved UV rows. Per frame:
+		//   1. takeDrawWait(): if CUDA's last copy out of the image is still
+		//      pending, the semaphore the drawing's submit must wait on.
+		//   2. draw into image.surface(), then GpuDevice::submit(..., waits,
+		//      signal drawnSemaphore(image), hand_to_cuda = that surface).
+		//   3. copyToNV12(image, cuda_frame, &copied): CUDA waits for the draw,
+		//      copies both planes into the frame on a stream of its own, signals the
+		//      wait that step 1 will hand the next draw, and hands back an event.
+		//   4. On whichever thread encodes: waitForCopy(copied) just before sending
+		//      the frame. It orders the encoder's stream (cudaStream(), which the
+		//      encoder must have been given) after exactly this copy -- not after
+		//      every copy a producer running ahead has queued since.
+
+		/// Vulkan -> CUDA: the semaphore the drawing's submit must signal.
+		unsigned long long drawnSemaphore(const GpuImage& packed) const;
+
+		/// CUDA -> Vulkan: true, and the semaphore in @a wait, when the previous
+		/// copy out of @a packed has not been waited on yet. Consumes it.
+		bool takeDrawWait(GpuImage& packed, unsigned long long* wait);
+
+		/// Copy @a packed into the two planes of an @c AV_PIX_FMT_CUDA NV12 frame,
+		/// device to device. Async. @a copied, if given, receives an event for
+		/// waitForCopy(), which must be passed there or to releaseCopy() once.
+		bool copyToNV12(GpuImage& packed, AVFrame* cuda_frame, void** copied = nullptr);
+
+		/// Make cudaStream() wait, on the GPU, for the copy behind @a copied, and
+		/// release it. Any thread.
+		bool waitForCopy(void* copied);
+
+		/// Release an event from copyToNV12 that will not be waited on.
+		void releaseCopy(void* copied);
 
 		CudaInterop(const CudaInterop&) = delete;
 		CudaInterop& operator=(const CudaInterop&) = delete;

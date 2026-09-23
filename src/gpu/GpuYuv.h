@@ -16,6 +16,11 @@
 #include <cstdint>
 #include <memory>
 
+#include "skia/include/core/SkRefCnt.h"
+
+class SkCanvas;
+class SkImage;
+
 namespace openshot
 {
 	class GpuFrame;
@@ -85,6 +90,19 @@ namespace openshot
 		static std::shared_ptr<GpuFrame> Convert(const GpuImage& luma, const GpuImage& chroma,
 												 Matrix matrix, bool full_range,
 												 int out_width, int out_height);
+
+		/// The other direction, for the encoder (W25): draw @a rgba (width x
+		/// height, premultiplied, as the compositor leaves it) into @a packed as
+		/// NV12 laid out the way FFmpeg lays it out -- Y in rows [0, height), then
+		/// interleaved UV in rows [height, height + height/2) -- on a single R8
+		/// surface of width x (height + height/2). Limited range. Chroma is the
+		/// 2x2 box average of the four pixels it covers, which is swscale's
+		/// RGB->YUV420 with SWS_FAST_BILINEAR to within a code value.
+		static bool EncodeNV12(const sk_sp<SkImage>& rgba, SkCanvas* packed, int width,
+							   int height, Matrix matrix);
+
+		/// How many frames EncodeNV12 has drawn. The harness asserts on it.
+		static unsigned long long Encodes();
 
 		/// How many frames have been converted here. The golden harness reads this
 		/// to know whether a scenario actually went through the GPU: a scenario

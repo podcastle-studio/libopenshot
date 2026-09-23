@@ -17,6 +17,11 @@
 // the results back here.
 
 #include "Recipes.h"
+extern "C" {
+#include <libswscale/swscale.h>
+}
+#include "gpu/GpuFrame.h"
+#include "skia/include/core/SkPixmap.h"
 
 #include "Color.h"
 #include "FFmpegReader.h"
@@ -750,6 +755,116 @@ void golden::registerUnitScenarios() {
                               std::to_string(differ) + " of " + std::to_string(plain.size()) +
                                   " frames differ across walks and seeks; worker decoded ahead: " +
                                   (went_ahead ? "yes" : "no") + (applies ? "" : " (off: GPU decode)")});
+        });
+
+    // The encoder's RGBA -> NV12 pass (W25) against swscale, and back again.
+    //
+    // Gated against exact BT.601 limited-range maths, within a code value (the GPU's float
+    // rounding at ties). swscale is reported, not gated: its FAST_BILINEAR chroma is the same
+    // 2x2 box but is itself a code value off exact, and the writer's BICUBIC is a different
+    // filter. And the round trip through GpuYuv on flat 2x2 blocks, where subsampling loses
+    // nothing: gated at 2, because 8-bit limited range cannot do better -- an exact
+    // RGB -> Y'CbCr -> RGB round trip is already 2 off on e.g. (247, 36, 40). W25's "within
+    // 1 LSB" is unreachable as written.
+    addCustom("unit.gpu_encode_nv12", {"unit", "gpu"}, unitScene,
+        [](Scene&, std::vector<Captured>&, std::vector<Check>& checks) {
+            if (!openshot::GpuDevice::Instance().available()) {
+                checks.push_back({"gpu_encode_nv12", true, "no GPU: nothing to compare (declines)"});
+                return;
+            }
+            const int W = 64, H = 48;
+            std::vector<uint8_t> rgba(W * H * 4);
+            uint32_t seed = 12345;
+            const auto next = [&] { seed = seed * 1664525u + 1013904223u; return uint8_t(seed >> 24); };
+            for (int by = 0; by < H; by += 2)
+                for (int bx = 0; bx < W; bx += 2) {
+                    const uint8_t c[3] = {next(), next(), next()};
+                    for (int dy = 0; dy < 2; ++dy)
+                        for (int dx = 0; dx < 2; ++dx) {
+                            uint8_t* p = &rgba[((by + dy) * W + bx + dx) * 4];
+                            p[0] = c[0]; p[1] = c[1]; p[2] = c[2]; p[3] = 255;
+                        }
+                }
+
+            // GPU: upload, encode into a packed R8 target, read the packed NV12 back.
+            const SkImageInfo rgba_info = SkImageInfo::Make(W, H, kRGBA_8888_SkColorType, kPremul_SkAlphaType);
+            auto source = openshot::GpuFrame::Create(W, H);
+            auto packed = openshot::GpuFrame::Create(W, H + H / 2, kR8_unorm_SkColorType);
+            std::vector<uint8_t> nv12(W * (H + H / 2));
+            const bool drawn = source && packed &&
+                source->upload(SkPixmap(rgba_info, rgba.data(), W * 4)) &&
+                openshot::GpuYuv::EncodeNV12(source->snapshot(), packed->canvas(), W, H,
+                                             openshot::GpuYuv::Matrix::BT601) &&
+                packed->readback(SkPixmap(SkImageInfo::Make(W, H + H / 2, kR8_unorm_SkColorType,
+                                                            kOpaque_SkAlphaType), nv12.data(), W));
+            if (!drawn) {
+                checks.push_back({"gpu_encode_nv12", false, "the GPU pass did not run"});
+                return;
+            }
+
+            // swscale, both ways the writer can be configured.
+            const auto sws = [&](int flags) {
+                std::vector<uint8_t> out(W * (H + H / 2));
+                SwsContext* ctx = sws_getContext(W, H, AV_PIX_FMT_RGBA, W, H, AV_PIX_FMT_NV12,
+                                                 flags, nullptr, nullptr, nullptr);
+                const uint8_t* src[1] = {rgba.data()};
+                const int src_stride[1] = {W * 4};
+                uint8_t* dst[2] = {out.data(), out.data() + W * H};
+                const int dst_stride[2] = {W, W};
+                sws_scale(ctx, src, src_stride, 0, H, dst, dst_stride);
+                sws_freeContext(ctx);
+                return out;
+            };
+            const auto worst = [&](const std::vector<uint8_t>& a, int from, int to) {
+                int m = 0;
+                for (int i = from; i < to; ++i) m = std::max(m, std::abs(int(a[i]) - int(nv12[i])));
+                return m;
+            };
+            // Exact reference: BT.601 limited, 2x2 box chroma, rounded.
+            std::vector<uint8_t> exact(W * (H + H / 2));
+            const double kr = 0.299, kb = 0.114, kg = 1.0 - kr - kb;
+            const auto px = [&](int x, int y, int c) { return rgba[(y * W + x) * 4 + c] / 255.0; };
+            for (int y = 0; y < H; ++y)
+                for (int x = 0; x < W; ++x)
+                    exact[y * W + x] = uint8_t(std::lround(16 + 219 * (kr * px(x, y, 0) + kg * px(x, y, 1) + kb * px(x, y, 2))));
+            for (int cy = 0; cy < H / 2; ++cy)
+                for (int cx = 0; cx < W / 2; ++cx) {
+                    double r = 0, g = 0, b = 0;
+                    for (int d = 0; d < 4; ++d) {
+                        r += px(2 * cx + d % 2, 2 * cy + d / 2, 0) / 4;
+                        g += px(2 * cx + d % 2, 2 * cy + d / 2, 1) / 4;
+                        b += px(2 * cx + d % 2, 2 * cy + d / 2, 2) / 4;
+                    }
+                    const double yy = kr * r + kg * g + kb * b;
+                    exact[W * H + cy * W + 2 * cx] = uint8_t(std::lround(128 + 224 * (b - yy) / (2 * (1 - kb))));
+                    exact[W * H + cy * W + 2 * cx + 1] = uint8_t(std::lround(128 + 224 * (r - yy) / (2 * (1 - kr))));
+                }
+            const auto bicubic = sws(SWS_BICUBIC), fast = sws(SWS_FAST_BILINEAR);
+            const int vs_exact = worst(exact, 0, W * (H + H / 2));
+            const int luma = worst(bicubic, 0, W * H);
+            const int chroma_box = worst(fast, W * H, W * (H + H / 2));
+            const int chroma_bicubic = worst(bicubic, W * H, W * (H + H / 2));
+
+            // Round trip through the decoder's conversion.
+            openshot::GpuYuvPlane planes[2];
+            planes[0] = {nv12.data(), W, W, H};
+            planes[1] = {nv12.data() + W * H, W, W / 2, H / 2};
+            auto back = openshot::GpuYuv::Convert(openshot::GpuYuv::Layout::NV12,
+                                                  openshot::GpuYuv::Matrix::BT601, false, planes, 2, W, H);
+            std::vector<uint8_t> again(W * H * 4);
+            int round_trip = 255;
+            if (back && back->readback(SkPixmap(rgba_info, again.data(), W * 4))) {
+                round_trip = 0;
+                for (int i = 0; i < W * H * 4; ++i)
+                    if (i % 4 != 3) round_trip = std::max(round_trip, std::abs(int(again[i]) - int(rgba[i])));
+            }
+
+            char detail[256];
+            std::snprintf(detail, sizeof(detail),
+                          "vs exact BT.601 %d (gate 1); RGBA->NV12->RGBA %d (gate 2, the 8-bit "
+                          "ideal); swscale: luma %d, chroma FAST_BILINEAR %d, BICUBIC %d",
+                          vs_exact, round_trip, luma, chroma_box, chroma_bicubic);
+            checks.push_back({"gpu_encode_nv12", vs_exact <= 1 && round_trip <= 2, detail});
         });
 
     // Hardware decode must not take the process with it.

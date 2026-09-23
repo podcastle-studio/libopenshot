@@ -1237,13 +1237,26 @@ std::shared_ptr<Frame> Timeline::GetFrame(int64_t requested_frame)
 			// surface belongs to the recorder that made it, so a frame must not still be
 			// GPU-backed when it is cached or handed to the writer -- both reach it from
 			// other threads. This is the one readback per frame that W25 removes.
+			if (gpu_encode_hook && new_frame->IsGpuBacked()) {
+				// The writer converts it where it is instead (W25). The hook returns null if
+				// it cannot, and the readback below is the fallback.
+				std::shared_ptr<void> encoded = gpu_encode_hook(*new_frame->GpuBacking());
+				if (encoded) {
+					new_frame->AttachEncoderFrame(std::move(encoded), new_frame->GetWidth(),
+												  new_frame->GetHeight());
+					new_frame->DropGpuFrame();
+				}
+			}
 			new_frame->FlattenGpuFrame();
 
 			// Set frame # on mapped frame
 			new_frame->SetFrameNumber(requested_frame);
 
 			// Add final frame to cache
-			final_cache->Add(new_frame);
+			// Not a frame the writer converted on the GPU: it has no picture anyone but that
+			// writer can use, and a later GetFrame from the cache would come back black.
+			if (!new_frame->EncoderFrame())
+				final_cache->Add(new_frame);
 
 			// Return frame (or blank frame)
 			return new_frame;

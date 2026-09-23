@@ -22,6 +22,7 @@
 // Include FFmpeg headers and macros
 #include "FFmpegUtilities.h"
 #include <functional>
+#include <set>
 
 namespace openshot {
 
@@ -114,6 +115,9 @@ namespace openshot {
 	 * r.Close();
 	 * @endcode
 	 */
+	class GpuFrame;
+	class GpuImage;
+
 	class FFmpegWriter : public WriterBase {
 	private:
 		std::string path;
@@ -198,6 +202,15 @@ namespace openshot {
 
 		/// process video frame
 		void process_video_packet(std::shared_ptr<openshot::Frame> frame);
+
+		// W25: NVENC takes the composited frame straight from the GPU. encode_on_device is set
+		// when the encoder's CUDA device is CudaInterop's context and stream; the Timeline then
+		// hands each GPU frame to EncodeOnDevice (on its own thread) instead of reading it back.
+		bool encode_on_device = false;
+		std::shared_ptr<openshot::GpuImage> encode_packed;   ///< NV12, packed; see CudaInterop
+		std::set<AVFrame *> device_frames;                    ///< av_frames that are CUDA frames
+		std::shared_ptr<void> EncodeOnDevice(openshot::GpuFrame& gpu);
+		struct DeviceFrame;
 
 		/// write all queued frames' audio to the video file
 		void write_audio_packets(bool is_final, std::shared_ptr<openshot::Frame> frame);

@@ -443,6 +443,14 @@ ask it for you) and none reads the environment for itself — the new `control` 
 
 > ## Start here (2026-09-23, end of session)
 >
+> **W25 is done — Stage 7 is finished; a resuming session starts W26** (Stage 8, `Frame` drops
+> `QImage`). W25 is **flagged off** (`Settings::GPU_ENCODE`) and waits on the owner for three
+> things: (1) turning it on (it changes pixels: box vs bicubic chroma); (2) the NVENC preset —
+> the pipeline now reaches 349 fps at 1080p and 123 at 2160p on p3, but the service's p5/hq caps
+> the encoder at ~195 / 54; (3) **the writer encodes BT.601 and the service tags BT.709**, a live
+> colour shift in today's exports, found here and not fixed. As with GPU decode, the service
+> cannot reach `GPU_ENCODE` until it passes it through.
+>
 > **W24 is done too (gate restated, see its item); a resuming session starts W25** (the writer
 > consumes textures — the readback and the writer's swscale are now the whole remaining cost of
 > `source_4k`, and W24's 90 fps belongs there). `READ_AHEAD_FRAMES` defaults to 2 and changes no
@@ -805,6 +813,17 @@ production corpus) remain open; W05–W10 are the CPU quick wins. W01/W02 stay d
 
 ## Log
 
+- 2026-09-23 — **W25 done, flagged off (`GPU_ENCODE`), gate restated: NVENC takes the frame
+  from the GPU.** The Timeline's thread draws RGBA→NV12 (SkSL) into an exportable interop image
+  and CUDA copies it into the encoder's own frame; the encoding thread gets a CUDA frame, which,
+  unlike a Graphite surface, may cross threads (the service's pipeline mode). Loop fps,
+  `single_video` nvenc, pipeline mode, NVDEC + GPU decode: 1080p p5 **165–178 → 193–195**, p3
+  **156 → 349**; 2160p p5 **48 → 54**, p3 **46 → 123**; CPU at 2160p 5.3 → 2.0 s per 180 frames.
+  At p5 NVENC itself is the ceiling (encoding thread 96 % in `send_frame`); the 250 / 60 gate is
+  met at p3. Round trip "within 1 LSB" is unreachable — exact 8-bit limited range is 2 — and the
+  pass is within 1 of exact BT.601. Found: the writer encodes BT.601 under a BT.709 tag (owner).
+  Along the way: Graphite render targets need `INPUT_ATTACHMENT` usage; frames holding an
+  encoder payload must not enter the Timeline cache (they came back black).
 - 2026-09-23 — **W24 done, gate restated: decode read-ahead.** One worker per `FFmpegReader`
   decodes the next `READ_AHEAD_FRAMES` (default **2**) into `final_cache`; host-memory frames only
   (a GPU frame is bound to its thread's recorder). CPU only, 1080p, interleaved: `source_4k`

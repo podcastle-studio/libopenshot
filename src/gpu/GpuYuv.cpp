@@ -50,6 +50,49 @@ namespace
 		return count;
 	}
 
+	std::atomic<unsigned long long>& encodeCount()
+	{
+		static std::atomic<unsigned long long> count{0};
+		return count;
+	}
+
+	// RGBA -> NV12, packed into one R8 target (see GpuYuv::EncodeNV12). Pixel centres
+	// arrive as (x + 0.5, y + 0.5), so floor() recovers integer rows and columns.
+	// float, not half: the coefficients need more than half's 11 bits to land on the
+	// right code value.
+	const char* kRgbaToNv12 = R"(
+uniform shader rgba;
+uniform float2 size;       // the RGBA frame, in pixels
+uniform float3 rowY;       // already scaled to the limited range
+uniform float3 rowU;
+uniform float3 rowV;
+
+half4 main(float2 p) {
+    float value;
+    if (p.y < size.y) {
+        value = dot(rowY, float3(rgba.eval(p).rgb)) + 16.0 / 255.0;
+    } else {
+        float cy = floor(p.y - size.y);
+        float cx = floor(p.x * 0.5);
+        float2 base = float2(2.0 * cx, 2.0 * cy);
+        float3 c = (float3(rgba.eval(base + float2(0.5, 0.5)).rgb) +
+                    float3(rgba.eval(base + float2(1.5, 0.5)).rgb) +
+                    float3(rgba.eval(base + float2(0.5, 1.5)).rgb) +
+                    float3(rgba.eval(base + float2(1.5, 1.5)).rgb)) * 0.25;
+        bool is_v = (p.x - 2.0 * cx) > 1.0;
+        value = dot(is_v ? rowV : rowU, c) + 128.0 / 255.0;
+    }
+    return half4(half(clamp(value, 0.0, 1.0)), 0.0, 0.0, 1.0);
+}
+)";
+
+	sk_sp<SkRuntimeEffect> nv12Effect()
+	{
+		static SkRuntimeEffect::Result result =
+			SkRuntimeEffect::MakeForShader(SkString(kRgbaToNv12));
+		return result.effect;
+	}
+
 	// One shader for both layouts. The branch is on a uniform, so it costs nothing
 	// that matters and it keeps a single compiled effect in the cache; splitting it
 	// in two would double the pipeline warm-up for no measurable gain.
@@ -243,6 +286,57 @@ unsigned long long GpuYuv::ScaledConversions()
 unsigned long long GpuYuv::DeviceConversions()
 {
 	return deviceCount().load();
+}
+
+unsigned long long GpuYuv::Encodes()
+{
+	return encodeCount().load();
+}
+
+bool GpuYuv::EncodeNV12(const sk_sp<SkImage>& rgba, SkCanvas* packed, int width, int height,
+						Matrix matrix)
+{
+	if (!rgba || !packed || width <= 0 || height <= 0)
+		return false;
+	sk_sp<SkRuntimeEffect> effect = nv12Effect();
+	if (!effect)
+		return false;
+
+	float kr = 0.299f, kb = 0.114f;
+	if (matrix == Matrix::BT709) {
+		kr = 0.2126f;
+		kb = 0.0722f;
+	} else if (matrix == Matrix::BT2020) {
+		kr = 0.2627f;
+		kb = 0.0593f;
+	}
+	const float kg = 1.0f - kr - kb;
+	const float y_scale = 219.0f / 255.0f;
+	const float c_scale = 224.0f / 255.0f;
+	const float cb = 2.0f * (1.0f - kb);
+	const float cr = 2.0f * (1.0f - kr);
+
+	SkRuntimeShaderBuilder builder(effect);
+	// Nearest: every sample above lands on a texel centre, and clamp repeats the last row and
+	// column for an odd-sized frame, as swscale does.
+	builder.child("rgba") = rgba->makeShader(SkTileMode::kClamp, SkTileMode::kClamp,
+											 SkSamplingOptions(SkFilterMode::kNearest));
+	builder.uniform("size") = SkV2{static_cast<float>(width), static_cast<float>(height)};
+	builder.uniform("rowY") = SkV3{y_scale * kr, y_scale * kg, y_scale * kb};
+	builder.uniform("rowU") = SkV3{-c_scale * kr / cb, -c_scale * kg / cb, c_scale * 0.5f};
+	builder.uniform("rowV") = SkV3{c_scale * 0.5f, -c_scale * kg / cr, -c_scale * kb / cr};
+	sk_sp<SkShader> shader = builder.makeShader();
+	if (!shader)
+		return false;
+
+	SkPaint paint;
+	paint.setShader(shader);
+	paint.setBlendMode(SkBlendMode::kSrc);
+	packed->drawRect(SkRect::MakeWH(static_cast<float>(width),
+									static_cast<float>(height + (height + 1) / 2)),
+					 paint);
+	encodeCount()++;
+	return true;
 }
 
 namespace

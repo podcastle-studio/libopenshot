@@ -13,6 +13,7 @@
 #ifndef OPENSHOT_TIMELINE_H
 #define OPENSHOT_TIMELINE_H
 
+#include <functional>
 #include <list>
 #include <memory>
 #include <set>
@@ -176,6 +177,8 @@ namespace openshot {
 		std::map<std::string, std::shared_ptr<openshot::TrackedObjectBase>> tracked_objects; ///< map of TrackedObjectBBoxes and their IDs
 
 		bool rendering_audio; ///< If false, clips skip expensive audio time-mapping (set by writer when exporting without audio)
+
+		std::function<std::shared_ptr<void>(openshot::GpuFrame&)> gpu_encode_hook;   ///< see SetGpuEncodeHook
 
 		/// Process a new layer of video or audio
 		void add_layer(std::shared_ptr<openshot::Frame> new_frame, openshot::Clip* source_clip, int64_t clip_frame_number, bool is_top_clip, float max_volume);
@@ -392,6 +395,16 @@ namespace openshot {
 		/// writer still works: the file can have an audio stream (silent). Call before WriteFrame(reader, ...).
 		/// The writer sets this to false when SetSkipClipAudioProcessing(true) or when it has no audio stream.
 		void SetRenderingAudio(bool need_audio) { rendering_audio = need_audio; }
+
+		/// Replace the one readback per frame with the writer's own GPU conversion (W25).
+		///
+		/// When set, a frame that finished compositing on the GPU is handed to @a hook
+		/// on this thread -- the only thread its surface is usable on -- instead of
+		/// being read back. A non-null result is attached with Frame::AttachEncoderFrame
+		/// and the surface is dropped; null means "read it back as usual". The writer
+		/// sets it for the length of one WriteFrame(reader, ...) and clears it after.
+		using GpuEncodeHook = std::function<std::shared_ptr<void>(openshot::GpuFrame&)>;
+		void SetGpuEncodeHook(GpuEncodeHook hook) { gpu_encode_hook = std::move(hook); }
 	};
 
 }

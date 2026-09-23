@@ -111,6 +111,21 @@ namespace openshot {
 		 */
 		int READ_AHEAD_FRAMES = 2;
 
+		/**
+		 * @brief Hand NVENC the compositor's frame on the GPU instead of reading it back (W25).
+		 *
+		 * With h264_nvenc/hevc_nvenc, a GPU compositor and CudaInterop available, each frame is
+		 * converted to NV12 by an SkSL pass and copied device to device into the encoder's
+		 * input; the readback, the writer's swscale and the upload all go. Anything short of
+		 * that falls back to the readback path.
+		 *
+		 * **Off by default because it changes pixels:** the chroma is a 2x2 box average where
+		 * the readback path's swscale (HIGH_QUALITY_SCALING) uses a bicubic, and the luma
+		 * rounds exactly where swscale's does not quite. Same matrix (BT.601) either way.
+		 * Turning it on is the project owner's call, like GPU_DECODE.
+		 */
+		bool GPU_ENCODE = false;
+
 		/// Number of OpenMP threads
 		int OMP_THREADS = 2;
 

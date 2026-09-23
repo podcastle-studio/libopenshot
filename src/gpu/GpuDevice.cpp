@@ -29,6 +29,8 @@
 #include "skia/include/gpu/graphite/vk/VulkanGraphiteTypes.h"
 #include "skia/include/gpu/vk/VulkanBackendContext.h"
 #include "skia/include/gpu/vk/VulkanExtensions.h"
+#include "skia/include/gpu/vk/VulkanMutableTextureState.h"
+#include "skia/include/gpu/MutableTextureState.h"
 #include "skia/include/gpu/vk/VulkanPreferredFeatures.h"
 // Private, but the symbols are in libskia.a and install_skia_gpu.sh ships these
 // two self-contained headers. Graphite makes the caller supply the memory
@@ -560,6 +562,13 @@ bool GpuDevice::submit(bool syncToCpu)
 bool GpuDevice::submit(bool syncToCpu, const unsigned long long* wait_semaphores,
 					   unsigned int wait_count)
 {
+	return submit(syncToCpu, wait_semaphores, wait_count, nullptr, 0, nullptr);
+}
+
+bool GpuDevice::submit(bool syncToCpu, const unsigned long long* wait_semaphores,
+					   unsigned int wait_count, const unsigned long long* signal_semaphores,
+					   unsigned int signal_count, SkSurface* hand_to_cuda)
+{
 	skgpu::graphite::Recorder* rec = recorder();
 	if (!rec)
 		return false;
@@ -580,6 +589,17 @@ bool GpuDevice::submit(bool syncToCpu, const unsigned long long* wait_semaphores
 		std::memcpy(&semaphore, &wait_semaphores[i], sizeof(semaphore));
 		waits.push_back(skgpu::graphite::BackendSemaphores::MakeVulkan(semaphore));
 	}
+	std::vector<skgpu::graphite::BackendSemaphore> signals;
+	signals.reserve(signal_count);
+	for (unsigned int i = 0; i < signal_count; ++i) {
+		VkSemaphore semaphore = VK_NULL_HANDLE;
+		std::memcpy(&semaphore, &signal_semaphores[i], sizeof(semaphore));
+		signals.push_back(skgpu::graphite::BackendSemaphores::MakeVulkan(semaphore));
+	}
+	// GENERAL for CUDA, and the same queue family: CUDA is not a Vulkan queue, and W22's
+	// sampling side works the same way without an ownership transfer.
+	skgpu::MutableTextureState to_general =
+		skgpu::MutableTextureStates::MakeVulkan(VK_IMAGE_LAYOUT_GENERAL, impl->handles.queue_family);
 
 	// insertRecording and submit both touch the single Context, which recorders
 	// on other threads share.
@@ -588,6 +608,12 @@ bool GpuDevice::submit(bool syncToCpu, const unsigned long long* wait_semaphores
 	info.fRecording = recording.get();
 	info.fNumWaitSemaphores = waits.size();
 	info.fWaitSemaphores = waits.empty() ? nullptr : waits.data();
+	info.fNumSignalSemaphores = signals.size();
+	info.fSignalSemaphores = signals.empty() ? nullptr : signals.data();
+	if (hand_to_cuda) {
+		info.fTargetSurface = hand_to_cuda;
+		info.fTargetTextureState = &to_general;
+	}
 	if (impl->context->insertRecording(info) != skgpu::graphite::InsertStatus::kSuccess)
 		return false;
 	return impl->context->submit(syncToCpu ? skgpu::graphite::SyncToCpu::kYes
@@ -633,6 +659,12 @@ bool GpuDevice::submit(bool)
 }
 
 bool GpuDevice::submit(bool, const unsigned long long*, unsigned int)
+{
+	return false;
+}
+
+bool GpuDevice::submit(bool, const unsigned long long*, unsigned int, const unsigned long long*,
+					   unsigned int, SkSurface*)
 {
 	return false;
 }

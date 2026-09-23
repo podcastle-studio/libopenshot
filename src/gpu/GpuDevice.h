@@ -18,6 +18,7 @@
 // a Graphite type by value and the class is pimpl'd: the layout is identical
 // whether or not libopenshot was built against a Graphite-capable Skia.
 namespace skgpu { namespace graphite { class Context; class Recorder; } }
+class SkSurface;
 
 namespace openshot
 {
@@ -125,6 +126,14 @@ namespace openshot
 		/// ordered before the drawing that samples it, with no CPU sync.
 		bool submit(bool syncToCpu, const unsigned long long* wait_semaphores,
 					unsigned int wait_count);
+
+		/// As above, and also signal @a signal_semaphores once this work is done,
+		/// and leave @a hand_to_cuda (if any) in @c VK_IMAGE_LAYOUT_GENERAL -- the
+		/// layout CUDA reads an imported image in. The writer's side of CudaInterop
+		/// (W25): draw into an interop image, signal, and CUDA copies it out.
+		bool submit(bool syncToCpu, const unsigned long long* wait_semaphores,
+					unsigned int wait_count, const unsigned long long* signal_semaphores,
+					unsigned int signal_count, SkSurface* hand_to_cuda);
 
 		/// The raw Vulkan handles behind the Graphite context, or null when the
 		/// device is unavailable or this build has no GPU Skia.
