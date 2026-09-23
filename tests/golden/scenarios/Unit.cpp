@@ -39,6 +39,8 @@
 
 #include <memory>
 #include <string>
+#include <chrono>
+#include <thread>
 #include <vector>
 
 using namespace golden;
@@ -702,6 +704,52 @@ void golden::registerUnitScenarios() {
                           have_gpu ? std::to_string(gpu).c_str() : "n/a",
                           interop ? std::to_string(nvdec).c_str() : "n/a", cpu);
             checks.push_back({"bt709_chart_srgb", ok, detail});
+        });
+
+    // Read-ahead (W24) is a speed change: the frames must be the ones decoding on the caller's
+    // thread gives, through forward walks, seeks back and seeks forward, and the worker must
+    // actually have decoded ahead -- a read-ahead that never ran would pass the first half.
+    addCustom("unit.read_ahead", {"unit"}, unitScene,
+        [](Scene& s, std::vector<Captured>&, std::vector<Check>& checks) {
+            openshot::Settings* settings = openshot::Settings::Instance();
+            const int previous = settings->READ_AHEAD_FRAMES;
+            const std::vector<int> order = {1, 2, 3, 4, 5, 6, 40, 41, 42, 10, 11, 12, 13, 150, 151, 2};
+            const auto decode = [&](int depth, bool* went_ahead) {
+                settings->READ_AHEAD_FRAMES = depth;
+                std::vector<std::vector<uint8_t>> frames;
+                openshot::FFmpegReader reader(s.media("clip_a_640x360_30.mp4"));
+                reader.Open();
+                for (int n : order) {
+                    auto image = reader.GetFrame(n)->GetImage();
+                    frames.emplace_back(image->bits(), image->bits() + image->sizeInBytes());
+                }
+                if (went_ahead) {
+                    // After frame 20, the worker should put 21 in the cache on its own.
+                    reader.GetFrame(20);
+                    bool seen = false;
+                    for (int i = 0; i < 200 && !seen; ++i) {
+                        seen = reader.final_cache.GetFrame(21) != nullptr;
+                        if (!seen) std::this_thread::sleep_for(std::chrono::milliseconds(5));
+                    }
+                    *went_ahead = seen;
+                }
+                reader.Close();
+                return frames;
+            };
+            bool went_ahead = false;
+            const auto plain = decode(0, nullptr);
+            const auto ahead = decode(2, &went_ahead);
+            settings->READ_AHEAD_FRAMES = previous;
+
+            int differ = 0;
+            for (std::size_t i = 0; i < plain.size(); ++i) differ += plain[i] != ahead[i];
+            // With GPU decode on and a GPU present, read-ahead is off by design.
+            const bool applies = !(settings->GPU_DECODE && openshot::GpuDevice::Instance().available());
+            const bool ok = differ == 0 && went_ahead == applies;
+            checks.push_back({"read_ahead_same_frames", ok,
+                              std::to_string(differ) + " of " + std::to_string(plain.size()) +
+                                  " frames differ across walks and seeks; worker decoded ahead: " +
+                                  (went_ahead ? "yes" : "no") + (applies ? "" : " (off: GPU decode)")});
         });
 
     // Hardware decode must not take the process with it.

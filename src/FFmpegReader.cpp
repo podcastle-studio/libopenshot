@@ -864,7 +864,10 @@ void FFmpegReader::Open() {
 		// Adjust cache size based on size of frame and audio
 		const auto cacheFramesNum = Settings::Instance()->DISABLE_CACHING ? 1 : OPEN_MP_NUM_PROCESSORS;
 		working_cache.SetMaxBytesFromInfo(cacheFramesNum * info.fps.ToDouble() * 2, info.width, info.height, info.sample_rate, info.channels);
-		final_cache.SetMaxBytesFromInfo(cacheFramesNum * 2, info.width, info.height, info.sample_rate, info.channels);
+		// Room for the read-ahead window too, or the worker's frames are evicted before they are
+		// asked for and every one of them is decoded twice.
+		const int read_ahead = std::max(0, Settings::Instance()->READ_AHEAD_FRAMES);
+		final_cache.SetMaxBytesFromInfo(std::max(cacheFramesNum * 2, read_ahead + 2), info.width, info.height, info.sample_rate, info.channels);
 
 		// Scan PTS for any offsets (i.e. non-zero starting streams). At least 1 stream must start at zero timestamp.
 		// This method allows us to shift timestamps to ensure at least 1 stream is starting at zero.
@@ -888,6 +891,9 @@ void FFmpegReader::Open() {
 }
 
 void FFmpegReader::Close() {
+	// The worker first, and outside getFrameMutex: it may be waiting on that mutex to decode.
+	StopReadAhead();
+
 	// Close all objects, if reader is 'open'
 	if (is_open) {
 		// Prevent async calls to the following code
@@ -1380,6 +1386,125 @@ bool cachedFrameIsUsable(const std::shared_ptr<openshot::Frame>& frame) {
 }   // namespace
 
 std::shared_ptr<Frame> FFmpegReader::GetFrame(int64_t requested_frame) {
+	// The window follows the caller: record where it is before decoding, so a worker that is
+	// about to start on a frame behind a seek can see that it no longer wants it.
+	{
+		const std::lock_guard<std::mutex> lock(read_ahead_mutex);
+		read_ahead_requested = requested_frame;
+	}
+	std::shared_ptr<Frame> frame = DecodeFrame(requested_frame);
+	ScheduleReadAhead(requested_frame);
+	return frame;
+}
+
+// Frames that live in host memory only: a GPU-decoded frame belongs to the recorder of the thread
+// that made it, so one decoded on the worker would be unusable on the caller's thread and
+// cachedFrameIsUsable() would throw it away.
+bool FFmpegReader::ReadAheadApplies() const {
+	if (Settings::Instance()->READ_AHEAD_FRAMES <= 0 || !info.has_video)
+		return false;
+	return !(Settings::Instance()->GPU_DECODE && openshot::GpuDevice::Instance().available());
+}
+
+void FFmpegReader::ScheduleReadAhead(int64_t requested_frame) {
+	if (!is_open || !ReadAheadApplies())
+		return;
+	{
+		const std::lock_guard<std::mutex> lock(read_ahead_mutex);
+		read_ahead_requested = requested_frame;
+		read_ahead_depth = Settings::Instance()->READ_AHEAD_FRAMES;
+		read_ahead_stop = false;
+	}
+	if (read_ahead_thread.joinable() && !read_ahead_running) {
+		read_ahead_thread.join();   // one that stopped itself (it reached Close(); see below)
+	}
+	if (!read_ahead_thread.joinable()) {
+		read_ahead_running = true;
+		read_ahead_thread = std::thread(&FFmpegReader::ReadAheadLoop, this);
+	}
+	read_ahead_wake.notify_one();
+}
+
+void FFmpegReader::StopReadAhead() {
+	{
+		const std::lock_guard<std::mutex> lock(read_ahead_mutex);
+		read_ahead_stop = true;
+	}
+	read_ahead_wake.notify_one();
+	// The worker itself can get here -- a decode failure reopens the reader through Close() --
+	// and cannot join itself. It sees the flag and exits; ScheduleReadAhead reaps it.
+	if (read_ahead_thread.joinable() && read_ahead_thread.get_id() != std::this_thread::get_id()) {
+		read_ahead_thread.join();
+		read_ahead_stop = false;
+	}
+}
+
+void FFmpegReader::ReadAheadLoop() {
+	int64_t done_through = 0;   // the last frame this worker made sure of
+	struct Running {
+		std::atomic<bool>& flag;
+		~Running() { flag = false; }
+	} running{read_ahead_running};
+	std::unique_lock<std::mutex> lock(read_ahead_mutex);
+	while (true) {
+		// Next frame the window wants: after the caller, after what is already done.
+		const auto wanted = [&]() -> int64_t {
+			const int64_t first = std::max(read_ahead_requested, done_through) + 1;
+			const int64_t last = std::min<int64_t>(read_ahead_requested + read_ahead_depth,
+												   info.video_length);
+			return first <= last ? first : 0;
+		};
+		read_ahead_wake.wait(lock, [&] { return read_ahead_stop || wanted() != 0; });
+		if (read_ahead_stop)
+			return;
+		const int64_t frame_number = wanted();
+		lock.unlock();
+
+		// getFrameMutex without blocking on it: Close() can be called with it held (the
+		// hardware-decode fallback reopens the reader from inside a decode) and then joins this
+		// thread, which must not be parked on that very mutex.
+		bool locked = false;
+		while (!(locked = getFrameMutex.try_lock())) {
+			{
+				const std::lock_guard<std::mutex> check(read_ahead_mutex);
+				if (read_ahead_stop)
+					break;
+			}
+			std::this_thread::sleep_for(std::chrono::microseconds(200));
+		}
+		if (!locked) {
+			lock.lock();
+			continue;   // stopping; the wait at the top returns
+		}
+		{
+			const std::lock_guard<std::recursive_mutex> held(getFrameMutex, std::adopt_lock);
+			// Re-checked under the lock: the caller may have seeked while we waited for it,
+			// and decoding a frame behind it would seek the stream back.
+			int64_t caller = 0;
+			{
+				const std::lock_guard<std::mutex> check(read_ahead_mutex);
+				caller = read_ahead_requested;
+			}
+			if (is_open && frame_number > caller && !final_cache.GetFrame(frame_number)) {
+				try {
+					DecodeFrame(frame_number);
+				} catch (...) {
+					// Nothing may escape a thread. The caller asks for this frame itself in a
+					// moment and gets the same error where it can handle it.
+					ZmqLogger::Instance()->AppendDebugMethod(
+						"FFmpegReader::ReadAheadLoop (decode failed; the caller will retry)",
+						"frame", (float) frame_number);
+				}
+			}
+		}
+
+		lock.lock();
+		// A seek backwards leaves done_through ahead of the caller; start again from it.
+		done_through = frame_number < read_ahead_requested ? read_ahead_requested : frame_number;
+	}
+}
+
+std::shared_ptr<Frame> FFmpegReader::DecodeFrame(int64_t requested_frame) {
 	// Check for open reader (or throw exception)
 	if (!is_open)
 		throw ReaderClosed("The FFmpegReader is closed.  Call Open() before calling this method.", path);

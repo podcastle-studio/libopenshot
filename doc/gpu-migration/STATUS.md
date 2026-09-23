@@ -443,6 +443,12 @@ ask it for you) and none reads the environment for itself — the new `control` 
 
 > ## Start here (2026-09-23, end of session)
 >
+> **W24 is done too (gate restated, see its item); a resuming session starts W25** (the writer
+> consumes textures — the readback and the writer's swscale are now the whole remaining cost of
+> `source_4k`, and W24's 90 fps belongs there). `READ_AHEAD_FRAMES` defaults to 2 and changes no
+> pixels; set it to 0 to turn read-ahead off if the ~8 MB per open reader per frame matters for
+> N parallel exports.
+>
 > **W23 is done; a resuming session starts W24** (decode read-ahead). What W23 landed and what it
 > found is in its worklist item and the top of the log. Two things are waiting on the project
 > owner and are **not** a session's to take: (1) whether `Settings::GPU_DECODE` becomes the
@@ -799,6 +805,14 @@ production corpus) remain open; W05–W10 are the CPU quick wins. W01/W02 stay d
 
 ## Log
 
+- 2026-09-23 — **W24 done, gate restated: decode read-ahead.** One worker per `FFmpegReader`
+  decodes the next `READ_AHEAD_FRAMES` (default **2**) into `final_cache`; host-memory frames only
+  (a GPU frame is bound to its thread's recorder). CPU only, 1080p, interleaved: `source_4k`
+  x264 52–56 → **61–66 fps**, `grid_3x3` 22 → **25–26**, `source_4k` render on the Vulkan
+  compositor 72 → **100–106**; the caller's time in the reader 7.9 → 2.9 ms a frame. Bit-identical
+  (four-way 307/307, 30 checks; `unit.read_ahead`). The written gate (x264 ≥ 90) is out of reach:
+  after W23 the remaining cost is the writer on both paths — that is W25. Depth 2 not 4: same
+  speed, a third of the memory (4 cost `grid_3x3` 270 MB).
 - 2026-09-23 — **W23 done: NVDEC's frames never leave the device.** 4K → 1080p `source_4k` on
   Vulkan, interleaved, mains power: `render` **78–82 → 126–133 fps at 0.6 cores** (was 1.9);
   `x264` **58–59 → 87–96 fps**. Reader CPU per frame 7.2 → 2.8 ms. Gate met on every clause:

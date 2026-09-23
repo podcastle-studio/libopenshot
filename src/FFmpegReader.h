@@ -32,7 +32,11 @@
 #include "Clip.h"
 #include "OpenMPUtilities.h"
 #include "Settings.h"
+#include <atomic>
+#include <condition_variable>
 #include <cstdlib>
+#include <mutex>
+#include <thread>
 
 
 namespace openshot {
@@ -182,6 +186,21 @@ namespace openshot {
 		std::shared_ptr<openshot::GpuImage> device_luma;
 		std::shared_ptr<openshot::GpuImage> device_chroma;
 		std::shared_ptr<openshot::GpuFrame> ConvertOnDevice(int out_width, int out_height);
+
+		// Read-ahead (W24): one worker per reader decodes the frames after the last one asked
+		// for into final_cache, through DecodeFrame, while the caller composites.
+		std::shared_ptr<openshot::Frame> DecodeFrame(int64_t requested_frame);
+		bool ReadAheadApplies() const;
+		void ScheduleReadAhead(int64_t requested_frame);
+		void StopReadAhead();
+		void ReadAheadLoop();
+		std::thread read_ahead_thread;
+		std::mutex read_ahead_mutex;
+		std::condition_variable read_ahead_wake;
+		int64_t read_ahead_requested = 0;   ///< the caller's latest frame; the window follows it
+		int read_ahead_depth = 0;
+		bool read_ahead_stop = false;
+		std::atomic<bool> read_ahead_running{false};
 #if USE_HW_ACCEL
 		AVPixelFormat hw_de_av_pix_fmt = AV_PIX_FMT_NONE;
 		AVHWDeviceType hw_de_av_device_type = AV_HWDEVICE_TYPE_NONE;

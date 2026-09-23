@@ -44,7 +44,8 @@ payload is green, but the corpus needs five more captures and W03's workflow has
 then Stage 6 (W19–W21, effects) · W01/W02 are now **Stage 10**, at the end.
 **Stage 6 is finished (2026-09-22)** and **Stage 7 has started: W22 is done (2026-09-22), gate met
 at 0.166 ms against 0.300 for a 4K frame, exact and clean under `compute-sanitizer`. W23 is done
-(2026-09-23), gate met: `source_4k` 78–82 → 126–133 fps at 0.6 cores. W24 is next.**
+(2026-09-23), gate met: `source_4k` 78–82 → 126–133 fps at 0.6 cores. W24 is done (2026-09-23),
+gate restated — its 90 fps is W25's to reach. W25 is next.**
 
 > **2026-09-18, project owner — finish Stages 2 and 3 before the effects work.** Stage 5 is done and
 > Stage 6 (effects and transitions as shaders) is the obvious next thing, but the safety net (Stage
@@ -1332,14 +1333,42 @@ owner's decision**, and it re-baselines every golden that decodes video. Until t
 built, tested by `unit.gpu_decode` on both backends, and off.
 **Size.** ~1.5 weeks.
 
-### W24 — Decode read-ahead · legacy `4.3`
+### W24 — Decode read-ahead · legacy `4.3` · **DONE 2026-09-23, gate restated**
 
 **Depends on.** W23.
 
-- [ ] One thread per reader keeps four decoded surfaces ahead for sequential access; seeks flush it.
+- [x] **One thread per reader decodes ahead for sequential access; seeks retarget it
+      (2026-09-23).** `FFmpegReader::GetFrame` records the caller's position, decodes, and wakes a
+      worker that fills the next `Settings::READ_AHEAD_FRAMES` frames into `final_cache` through
+      the same locked path (`DecodeFrame`). **Two deviations from the line above, both measured:**
+      - **Frames in host memory only.** A GPU-decoded frame belongs to the recorder of the thread
+        that made it; one decoded on the worker would be thrown away by `cachedFrameIsUsable` on
+        the caller's thread. With `GPU_DECODE` on and a GPU present the reader decodes on the
+        caller's thread as before — where, after W23, decode is 1.6 ms of an 11 ms frame anyway.
+        Prefetching *AVFrames* there instead is possible but buys at most that 1.6 ms.
+      - **Two frames, not four.** 2 is as fast as 4 within noise and each extra frame is a full
+        frame per open reader (4 cost `grid_3x3`'s nine readers 270 MB; 2 costs ~70 MB).
+      Guarded by `unit.read_ahead` (same frames through walks and seeks, and the worker really
+      decoded ahead). No pixel changes: four-way 307/307; NVDEC arms identical with it on or off.
 
-**Gate.** Decode no longer appears in an `nsys`/gdb profile of `source_4k`; `source_4k` x264 ≥
+**Gate as written — not reachable by this item, measured 2026-09-23.** "`source_4k` x264 ≥ 90 fps"
+assumed decode was the bottleneck; after W23 it is not, on either path. Per frame of `source_4k`
+x264: on the **CPU path** the x264 encode (~6 cores) and the writer's own RGBA→YUV swscale
+(~7 ms) remain; on the **GPU path** (89.5 fps before this item, and read-ahead does not apply)
+the readback (3.9 ms) and the writer's swscale (6.1 ms) remain. Both are **W25**, which is where
+the 90 fps now belongs. **Restated and met:** the caller's time in the reader falls (7.9 →
+**2.9 ms** a frame, CPU path), no pixel changes, bounded memory, and the CPU path gets faster:
+
+| 1080p, CPU only (`OPENSHOT_GPU=off`) | read-ahead off | on (2) |
+|---|---|---|
+| `source_4k` x264 | 52–56 | **61–66** |
+| `grid_3x3` x264 | 22.2–22.4 | **24.9–26.0** |
+| `single_video` x264 | 79–80 | 80–83 |
+| `source_4k` render (Vulkan compositor) | 72–73 | **100–106** |
+
+**Original gate.** Decode no longer appears in an `nsys`/gdb profile of `source_4k`; `source_4k` x264 ≥
 **90 fps** (47.5).
+
 **Size.** ~3 days.
 
 ### W25 — Writer consumes textures · legacy `4.4`

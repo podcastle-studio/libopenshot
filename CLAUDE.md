@@ -257,6 +257,12 @@ GPU to take over. Earlier, lower figures in the docs were measured on an Intel i
   the paths with `OPENSHOT_GOLDEN_GPU_DECODE=1` / `OPENSHOT_GOLDEN_HW_DECODE=1`, the bench with
   `OPENSHOT_BENCH_GPU_DECODE=1` / `OPENSHOT_BENCH_HW_DECODE=2`. Neutral chroma is **128/255, not
   0.5** — taking 0.5 was a ~1-code bias on R and B that the chart found.
+- **Every `FFmpegReader` decodes ahead on a thread of its own** (W24, `READ_AHEAD_FRAMES`,
+  default 2, 0 = off), into `final_cache`, through the same `getFrameMutex` path as the caller.
+  **Host-memory frames only** — a GPU frame is bound to its thread's recorder, so with
+  `GPU_DECODE` on and a GPU present it is off. `Close()` stops the worker *before* taking the
+  mutex, and the worker only ever `try_lock`s it: the hardware-decode fallback calls `Close()`
+  with the mutex held. The bench switch is `OPENSHOT_BENCH_READ_AHEAD`.
 - **`FrameMapper` must not `GetImage()` a GPU-backed frame.** It did, for every frame it rebuilt
   (any clip whose audio mapping differs, i.e. most video), which read every GPU-decoded frame back
   and made GPU decode look worthless. It shares the surface now, as `Frame`'s copy constructor

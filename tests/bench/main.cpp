@@ -111,6 +111,9 @@ int runCase(const Opts& o) {
         settings->GPU_DECODE = true;
     if (const char* v = std::getenv("OPENSHOT_BENCH_HW_DECODE"); v && *v)
         settings->HARDWARE_DECODER = std::atoi(v);
+    // W24: frames each reader decodes ahead (Settings::READ_AHEAD_FRAMES; 0 = off).
+    if (const char* v = std::getenv("OPENSHOT_BENCH_READ_AHEAD"); v && *v)
+        settings->READ_AHEAD_FRAMES = std::atoi(v);
     bench::setBenchMediaDir(o.benchMedia);
 
     golden::Scene scene;

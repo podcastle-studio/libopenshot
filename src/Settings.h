@@ -96,6 +96,21 @@ namespace openshot {
 		 */
 		bool GPU_DECODE = false;
 
+		/**
+		 * @brief How many frames each FFmpegReader decodes ahead, on a thread of its own.
+		 *
+		 * An export reads every clip front to back, so while the timeline composites frame N
+		 * the reader can already be decoding N+1..N+this. 0 turns it off. A seek retargets it.
+		 * Only frames that live in host memory are decoded ahead: a GPU-decoded frame belongs
+		 * to the thread whose recorder made it, so with GPU_DECODE on and a GPU present the
+		 * reader decodes on the caller's thread as before (W24).
+		 *
+		 * 2, not the 4 first planned: measured on the CPU path, 2 is as fast as 4 within noise
+		 * (source_4k x264 +20-25 %, grid_3x3 +12 %) and each extra frame is a full frame of
+		 * host memory per open reader -- 4 cost grid_3x3's nine readers 270 MB.
+		 */
+		int READ_AHEAD_FRAMES = 2;
+
 		/// Number of OpenMP threads
 		int OMP_THREADS = 2;
 
