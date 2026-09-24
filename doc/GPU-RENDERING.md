@@ -30,7 +30,7 @@ its requirement is missing. `false` from `available()` is a normal answer, not a
 |---|---|---|
 | decode | NVDEC, frames stay on the device through `CudaInterop` into `GpuYuv` (YUV→RGBA on the GPU) | software decode + swscale; a stream NVDEC refuses (10-bit, > 4096 wide) reopens in software |
 | read-ahead | one decode worker per `FFmpegReader` (`READ_AHEAD_FRAMES`, default 2) | host-memory frames only; off for GPU frames (bound to their thread's recorder) |
-| compositing | `Timeline::GetFrame` on a pooled Graphite surface; `Clip::draw_to_canvas` in one transformed draw; all 16 blend modes; clip shadow, blur, flip on the paint | a frame composites on **one** path: any clip that reads the backdrop on the CPU (overlay clip, frame-number overlay, waveform, an effect after keyframes) puts the whole frame on QPainter |
+| compositing | `Timeline::GetFrame` on a pooled Graphite surface; `Clip::draw_to_canvas` in one transformed draw; all 16 blend modes; clip shadow, blur, flip on the paint | a clip that cannot draw on the GPU (overlay clip, frame-number overlay, waveform, an effect after keyframes) puts the whole frame on QPainter only if its blend mode is not `NORMAL` (`Timeline.cpp:1099`); a `NORMAL` one reads the canvas back mid-frame in `apply_background`, and everything after it in that frame is on the host |
 | text, subtitles | the whole Skia text engine incl. the glow ray-march; subtitles draw on whatever canvas they are given | raster Skia |
 | effects | `GpuEffect` + SkSL twins: 11 per-clip/per-pixel effects and all 10 transition variants, overlay composites (additive, displacement) | the C++ twin runs whenever a fragment declines |
 | crop | `Crop` on GPU frames behind `GPU_CROP` | QPainter (reads the frame back) |
@@ -48,7 +48,12 @@ untouched.
 resampling — a rasteriser difference, not an arithmetic one, so porting them redefines pixels);
 ChromaKey's non-YCbCr methods (babl colour science; the service only uses YCbCr); ColorMap's
 colour-match mode (re-bakes the cube from the frame, i.e. a readback). Enhancement's grain *is* on
-the GPU (since 2026-09-24), but not as a parity fragment — see "Parity".
+the GPU (since 2026-09-24), but not as a parity fragment — see "Parity". Also CPU by nature and
+out of scope: **audio** — the service mutes every clip (`volume = 0`, `SetSilentAudioMode`), mixes
+the real audio outside libopenshot (`AudioExportHelper`, then an `ffmpeg amix` mux), so libopenshot
+only decodes the clips' audio streams and encodes a silent AAC track. Overlay clips are on the CPU
+too, listed under "Known issues". The 2026-09-24 audit (see "What is left", 5) found that these are
+the only deliberate CPU paths the service reaches; everything else it found is under 5.
 
 ### The switches
 
@@ -213,8 +218,8 @@ editor has a shared planner and a published WASM (`dist/image_processing_lib_v2.
 parity. Headline numbers (RTX A2000, 1080p) are in `doc/PERFORMANCE-BASELINE.md`, "End of the
 migration".
 
-**What is left is decisions, infrastructure and final checks — no planned code.** In the order
-they should happen:
+**What is left is decisions, infrastructure and final checks**, plus the CPU work the 2026-09-24
+audit found (5), which is measured but not yet planned. In the order they should happen:
 
 ### 1. Owner decisions
 
@@ -285,6 +290,9 @@ they should happen:
   effect on one clip for a third of the export (`doc/PERFORMANCE-BASELINE.md`, 2026-09-24). The
   telemetry's `readbacks` counter is how to find the next one: every new payload in the corpus
   should be run full-GPU and any readback count much above its clip-transition count explained.
+  The corpus payload's remaining 11 readbacks are the WHOOSH out-clip's `Alpha` at 0 (5, row A5).
+  `readbacks` does not see uploads (`GpuFrame::ToTexture`/`upload` have no counter), and uploads are
+  the biggest item in 5.
 - Overlay clips on the GPU (`isOverlay` frames composite on QPainter; `transitions_chain`).
 - Thread budgets from the cgroup (`FF_THREADS`/`OMP_THREADS` from `cpu.max` ÷ instances; W06) —
   needs a container to validate; check what the upstream merge's thread settings already do first.
@@ -292,3 +300,84 @@ they should happen:
   built but untested here, and unused by the service.
 - From the upstream merge: port `apply_keyframes`' corner radius and painter opacity if wanted;
   collapse `BlendMode` and `CompositeType`; send the `lerp` rename upstream.
+
+### 5. CPU work left with every GPU path on (audit, 2026-09-24)
+
+**Scope.** Everything `../video-rendering-service` constructs, traced with `OPENSHOT_GPU=vulkan`,
+`ENCODER=h264_nvenc`, `GPU_DECODE` + NVDEC, `GPU_ENCODE` and `GPU_CROP` on. Nothing was changed to
+measure it.
+
+**How it was measured:**
+
+- **Attribution.** A gdb script (no code changes) counts every `GpuFrame::readback`,
+  `GpuFrame::upload`, `SkImages::TextureFromImage`, `sws_scale` and `QPainter::begin` by call
+  stack, and puts a hardware watchpoint on `GpuEffect`'s CPU-fallback counter. It was run over:
+  - all 119 golden scenarios;
+  - the 13 bench scenarios, run in-process with `--case`;
+  - the corpus payload through `render-payload`;
+  - five payload variants: the corpus payload with its transition swapped for a production preset
+    from `firebase-configs`, and/or rendered at 1080p.
+- **Cost.** A scratch A/B program times `Timeline::GetFrame` for one feature added to one 1080p
+  H.264 clip (NVDEC, on the device). It uses 120 frames, three interleaved rounds and median ms per
+  frame, on mains power. The base arm is 2.22 ms at 1080p and 1.77 ms at 720p, and includes one
+  final readback that the `GPU_ENCODE` export does not pay.
+
+**The production payload, full-GPU (750 frames, 720p):**
+
+| counter | count | what it is |
+|---|---:|---|
+| readbacks | 11 | row A5 |
+| CPU swscale | 144 | the watermark, row A6 |
+| CPU → GPU uploads in `Clip::draw_to_canvas` | 1,511 | two per frame, row A1 |
+| encoder-side `sws_scale` | 0 | every frame reached NVENC on the device |
+
+(a) = deliberate and already recorded; (b) = CPU for a reason in the code but not in this doc;
+(c) = CPU for no recorded reason, and probably portable. Ranked by production impact, which is how
+often the service hits the feature times its cost:
+
+| # | feature | service → libopenshot | where it goes CPU | class | measured | cost (+ms per frame, 1080p / 720p) |
+|---|---|---|---|---|---|---|
+| A1 | **still-image sources: the background, image clips, shapes, the watermark's held frame** | background PNG on **every export** (`VideoRenderingImpl.cpp:412`), `QtImageReader` | `Clip::draw_to_canvas` uploads every host-memory source **on every frame**, with no texture cache (`Clip.cpp:1782-1796`) | (c) | 60/60 frames in every bench scenario; 1,511 of 750 frames in the payload | **+1.65 / +0.28**, every frame of every export |
+| A2 | **SplitShift at rest** (SPLIT_HORIZONTAL/VERTICAL) | `Transition.cpp:365` | no early-out at shift 0. The planner says identity, `BindPlan` declines it, and `GetImageCV()` reads the frame back and converts it for a no-op (`SplitShift.cpp:64-71`, `EffectPlan.cpp:203`). The in-clip ends at 0 and the out-clip starts at 0, so this hits every frame of both clips outside the window | (c) | split variant: **482 readbacks + 482 fallbacks + 471 extra uploads in 750 frames** | **+6.33 / +2.88** on ~⅔ of the export |
+| A3 | **rotational blur above 1280 px wide** (ROTATE_LEFT/RIGHT) | `Blur.cpp:150` | the planner sends it to the CPU whenever `referenceWorkingScale(width) != 1`, i.e. at 1080p and 4K (`EffectPlan.cpp:372`) | (b) | rotate@1080 variant: 25 readbacks in `Blur::GetFrame` | **+52.4** (on the GPU at 720p: +1.15) over the window |
+| A4 | **diagonal blur above 1 MP** (PAN_DIAGONAL) | `Blur.cpp:141` | the C++ blurs a half-size copy, so the planner puts it on the CPU (`EffectPlan.cpp:343`). "Known issues" records the halving, but not that it is CPU | (b) | 2 readbacks per frame in the A/B | **+14.7** (on the GPU at 720p: +0.05) over the window |
+| A5 | **Alpha at 0 / CircleMask radius 0** (the ALPHA out-effect of almost every preset; CIRCLE_MASK) | `Transition.cpp:186, 344` | the plan is a *clear*, `BindPlan` declines, and the C++ memsets after a readback (`EffectPlan.cpp:91, 263`; `Alpha.cpp:115-119`) | (c) | payload: **all 11 readbacks**; 11 frames per transition | +3.17 / +0.73 |
+| A6 | **CircleMask while animating** | `Transition.cpp:344` | its coverage is OpenCV's antialiased circle, drawn on the CPU and uploaded whenever the radius changes, i.e. every frame of the window (`CircleMask.cpp:111-143`) | (b) | no readback; A/B only | +7.38 / +0.47 (static radius: +0.37 / 0) |
+| A7 | **the ProRes 4444 watermark** (`yuva444p12le`, 400x300; on every export that has `watermarkUrl`) | `ExportData.cpp:133` → `FFmpegReader` | NVDEC only takes H.264/MPEG-2/VC-1/WMV (`FFmpegReader.cpp:367`), and `GpuYuv` only 4:2:0/NV12 (`GpuYuv.cpp:230`), so it goes through swscale. It decodes synchronously, because `GPU_DECODE` turns read-ahead off for **every** reader, host-frame ones included (`FFmpegReader.cpp:1404`). After 4.8 s the held frame is re-uploaded per A1 | (c) | 144 `sws_scale` calls = its 144 frames | +0.35 / ~0 |
+| A8 | **video mask matte** | `VideoRenderingImpl.cpp:300` | the matte frame (GPU-decoded) is read back, rescaled with Qt `SmoothTransformation` and re-uploaded on every frame (`Mask.cpp:116`) | (c) | golden `mask_video_clip_synced_2x`: 1 readback + 1 upload per frame | +6.26 / +3.78 (no mask in any sample payload) |
+| A9 | **resting text frames** | `TextClipReader` | the resting frame is rendered on the GPU and read back once, then copied (`TextClipReader.cpp:767`) and uploaded on every frame | (c) | `text_static_4`: 4 uploads per frame | **~0**: the frame is the text's bounding box, not the canvas (4 captions at 1080p: +0.1) |
+| A10 | **codecs NVDEC is not given** (HEVC, VP9, AV1, ProRes, MJPEG) and 4:2:2/4:4:4/10-bit | `FFmpegReader` | software decode (whitelist above); `GpuYuv` still converts 8-bit 4:2:0 on the GPU after a host upload, and anything else goes through swscale | (b)/(c) | not measured: the corpus has only H.264 | not measured |
+
+Portable, with pixels unchanged (the uploaded or cleared bytes stay the same):
+
+- **A1**: a per-thread texture cache for host sources in `draw_to_canvas`, keyed on the QImage's
+  `cacheKey()` and `GpuDevice::Generation()`. `QtImageReader` already returns the same cached
+  image every frame.
+- **A2**: treat an identity plan as "done" in the GPU path (the frame untouched) instead of
+  declining. That leaves the CPU branch as it is. An early return in `SplitShift::GetFrame`, as
+  the other transition effects have, would also speed up the CPU path, but it is bit-exact only if
+  `GetImageCV`→`SetImageCV` is a lossless round trip. The golden suite answers that.
+- **A5**: run the clear on the GPU, i.e. clear the surface to transparent (all zeros, which is
+  what the memset writes).
+- **A7**: allow read-ahead for readers whose frames stay in host memory, and add counters for
+  uploads.
+- **A9**: keep the resting image as a texture.
+
+**Owner's decision — porting would change pixels:**
+
+- **A3, A4**: a down/blur/up chain of GPU passes; the resize would be Skia's, not `cv::resize`'s.
+- **A6**: the coverage as an SkSL distance function instead of OpenCV's antialiased circle.
+- **A8**: the matte rescaled on the GPU instead of by Qt's `SmoothTransformation`.
+- **A7/A10**: 4:4:4 and alpha conversion in `GpuYuv`; HEVC through NVDEC. The latter is probably
+  bit-exact, as `unit.nvdec_on_device` shows for H.264, but needs the same gate.
+
+**Other observations:**
+
+- **Heap corruption.** Under gdb, `podcast_pip`, `everything` and `transitions_chain` (bench,
+  every flag on) aborted with glibc heap-corruption errors (`corrupted size vs. prev_size`,
+  `free(): invalid size`). Without gdb they run cleanly. A timing-sensitive memory bug is a lead
+  to chase before the soak (3, 11).
+- **`render-payload` stops logging mid-render.** It renders all 750 frames and exits 0, but prints
+  neither `ExportTelemetry` nor its summary. This is probably the garbled topic string under "Known
+  issues" corrupting `std::cout`. Every run of the variants did this, so their export times were
+  not usable and the costs above come from the A/B program.
