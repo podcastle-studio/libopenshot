@@ -177,7 +177,7 @@ std::shared_ptr<Frame> QtImageReader::GetFrame(int64_t requested_frame)
     QSize current_max_size = calculate_max_size();
 
     // Scale image smaller (or use a previous scaled image)
-    if (!cached_image || max_size != current_max_size) {
+    if (!cached_image || cached_for_size != current_max_size) {
         // Check for SVG files and rasterize them to QImages
         if (path.toLower().endsWith(".svg") || path.toLower().endsWith(".svgz")) {
             load_svg_path(path);
@@ -203,8 +203,9 @@ std::shared_ptr<Frame> QtImageReader::GetFrame(int64_t requested_frame)
             cached_image = image;
         }
 
-        // Track the actual cached size for invalidation
+        // Track the actual cached size, and the box it was made for (the cache key)
         max_size = cached_image->size();
+        cached_for_size = current_max_size;
     }
 
     auto sample_count = Frame::GetSamplesPerFrame(

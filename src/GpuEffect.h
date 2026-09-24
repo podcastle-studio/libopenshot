@@ -177,6 +177,11 @@ namespace openshot
 
 		/// The pass RunPlannedStep is drawing; null outside it.
 		const Podcastle::Effects::PlanPass* planned_pass = nullptr;
+
+		/// A host-memory frame's last upload, kept while the same QImage keeps arriving -- a still
+		/// image clip under this effect -- so it is uploaded once, not every frame.
+		struct HostSourceCache;
+		std::shared_ptr<HostSourceCache> host_source;
 	};
 }
 

@@ -143,7 +143,7 @@ namespace
 }
 #endif
 
-bool GpuFrame::readback(const SkPixmap& dst)
+bool GpuFrame::readback(const SkPixmap& dst, bool count)
 {
 #ifdef OPENSHOT_HAVE_SKIA_GPU
 	if (!frame_surface || !dst.writable_addr() || dst.width() <= 0 || dst.height() <= 0)
@@ -175,7 +175,8 @@ bool GpuFrame::readback(const SkPixmap& dst)
 	const SkPixmap source(dst.info(), state.result->data(0), state.result->rowBytes(0));
 	const bool copied = source.readPixels(dst);
 	if (copied)
-		GpuCounters::Add(GpuCounters::Readback);
+		if (count)
+			GpuCounters::Add(GpuCounters::Readback);
 
 	// The result's pixels belong to the context and are invalidated when it goes
 	// away; drop them here rather than letting them outlive this call.

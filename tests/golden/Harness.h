@@ -157,6 +157,7 @@ void registerSubtitleScenarios();
 void registerTimeScenarios();
 void registerExportScenarios();
 void registerUnitScenarios();
+void registerResidentScenarios();
 
 struct Options {
     bool update = false;

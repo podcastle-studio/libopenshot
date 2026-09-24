@@ -70,6 +70,7 @@ int main(int argc, char** argv) {
     golden::registerCompositingScenarios();
     golden::registerClipFxScenarios();
     golden::registerEffectScenarios();
+    golden::registerResidentScenarios();
     golden::registerTransitionScenarios();
     golden::registerTextScenarios();
     golden::registerSubtitleScenarios();

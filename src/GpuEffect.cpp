@@ -17,6 +17,7 @@
 #include "ZmqLogger.h"
 #include "gpu/GpuDevice.h"
 #include "gpu/GpuFrame.h"
+#include "gpu/GpuTelemetry.h"
 
 #include <atomic>
 #include <mutex>
@@ -158,7 +159,7 @@ namespace
 		std::vector<uint8_t> out(256 * 256 * 4);
 		const SkPixmap readback(SkImageInfo::Make(256, 256, kRGBA_8888_SkColorType, kPremul_SkAlphaType),
 								out.data(), 256 * 4);
-		if (!result->readback(readback))
+		if (!result->readback(readback, /*count=*/false))   // a probe, not a frame
 			return false;
 		for (int i = 0; i < 256 * 256; ++i)
 			if (out[i * 4] != 128)
@@ -167,6 +168,13 @@ namespace
 		return true;
 	}
 }
+
+struct GpuEffect::HostSourceCache
+{
+	qint64 key = 0;
+	unsigned long long generation = 0;
+	std::shared_ptr<GpuFrame> staging;
+};
 
 GpuEffect::GpuEffect() = default;
 GpuEffect::~GpuEffect() = default;
@@ -207,6 +215,14 @@ std::shared_ptr<GpuFrame> GpuEffect::GpuSourceFrame(std::shared_ptr<openshot::Fr
 	// Frame::FlattenGpuFrame in the other direction.
 	if (image->format() != QImage::Format_RGBA8888_Premultiplied)
 		return nullptr;
+	// A still hands over the same QImage every frame: upload it once. The staging surface is only
+	// ever read (every pass draws into a new one), so it can be handed out again.
+	const unsigned long long generation = GpuDevice::Generation();
+	if (host_source && host_source->staging && host_source->key == image->cacheKey() &&
+		host_source->generation == generation && host_source->staging->ownedByThisThread()) {
+		GpuCounters::Add(GpuCounters::UploadCached);
+		return host_source->staging;
+	}
 	const SkPixmap pixels(
 		SkImageInfo::Make(image->width(), image->height(), kRGBA_8888_SkColorType,
 						  kPremul_SkAlphaType),
@@ -215,6 +231,11 @@ std::shared_ptr<GpuFrame> GpuEffect::GpuSourceFrame(std::shared_ptr<openshot::Fr
 		GpuFrame::Create(image->width(), image->height(), kRGBA_8888_SkColorType);
 	if (!staging || !staging->upload(pixels))
 		return nullptr;
+	auto cache = std::make_shared<HostSourceCache>();
+	cache->key = image->cacheKey();
+	cache->generation = generation;
+	cache->staging = staging;
+	host_source = std::move(cache);
 	return staging;
 }
 

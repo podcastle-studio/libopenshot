@@ -19,6 +19,7 @@ add_executable(openshot-golden
   scenarios/Time.cpp
   scenarios/Export.cpp
   scenarios/Unit.cpp
+  scenarios/Resident.cpp
 )
 target_include_directories(openshot-golden PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(openshot-golden PRIVATE openshot Qt5::Gui)

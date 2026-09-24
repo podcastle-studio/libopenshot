@@ -83,8 +83,9 @@ namespace openshot
 		bool upload(const SkPixmap& src);
 
 		/// Copy this frame's pixels into @a dst, converting to its colour type.
-		/// Blocks until the GPU has finished. @a dst must own writable memory.
-		bool readback(const SkPixmap& dst);
+		/// Blocks until the GPU has finished. @a dst must own writable memory. @a count false
+		/// keeps a probe (not a frame) out of GpuCounters::Readback.
+		bool readback(const SkPixmap& dst, bool count = true);
 
 		GpuFrame(const GpuFrame&) = delete;
 		GpuFrame& operator=(const GpuFrame&) = delete;
