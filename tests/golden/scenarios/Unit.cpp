@@ -35,6 +35,7 @@ extern "C" {
 #include "effects/Crop.h"
 #include "effects/Enhancement.h"
 #include "effects/ColorMap.h"
+#include "effects/Mask.h"
 #include "gpu/CudaInterop.h"
 #include "gpu/GpuDevice.h"
 #include "gpu/GpuYuv.h"
@@ -426,6 +427,56 @@ void golden::registerUnitScenarios() {
             const std::string counts = "uploads=" + std::to_string(uploads) +
                                        " cached=" + std::to_string(cached);
             checks.push_back({"stills_uploaded_once", uploads == 0 && cached == 8, counts});
+        });
+
+    // A GPU-decoded video matte is used on the GPU (Mask::PrepareGpuMask): its own texture when it
+    // is the frame's size -- bit-exact -- and a bilinear resample otherwise, where Qt's
+    // SmoothTransformation box-averages a shrink (owner's decision, 2026-09-24). Before, the matte
+    // was read back, scaled by Qt and uploaded every frame. Asserts no readback happens inside the
+    // effect, and the result against the CPU at both sizes.
+    addCustom("unit.gpu_mask_matte", {"unit", "gpu"}, unitScene,
+        [](Scene& s, std::vector<Captured>&, std::vector<Check>& checks) {
+            using openshot::GpuCounters;
+            if (!openshot::GpuDevice::Instance().available()) {
+                checks.push_back({"no_gpu", true, "the matte is prepared by Qt without a GPU"});
+                return;
+            }
+            openshot::Settings* settings = openshot::Settings::Instance();
+            const QImage background(QString::fromStdString(s.media("background_960x540.png")));
+            auto run = [&](int w, int h, unsigned long long* readbacks) {
+                const bool previous = settings->GPU_DECODE;
+                settings->GPU_DECODE = true;
+                openshot::FFmpegReader matte(s.media("matte_wipe_640x360_30.mp4"));
+                matte.Open();
+                openshot::Mask mask(&matte, openshot::Keyframe(0.0), openshot::Keyframe(3.0));
+                mask.invert = true;
+                auto frame = std::make_shared<openshot::Frame>(1, w, h, "#000000");
+                frame->AddImage(std::make_shared<QImage>(
+                    background.scaled(w, h).convertToFormat(QImage::Format_RGBA8888_Premultiplied)));
+                const auto before = GpuCounters::Get(GpuCounters::Readback);
+                auto out = mask.GetFrame(frame, 60);
+                if (readbacks) *readbacks = GpuCounters::Get(GpuCounters::Readback) - before;
+                const golden::Image result = golden::fromFrame(out);
+                matte.Close();
+                settings->GPU_DECODE = previous;
+                return result;
+            };
+            for (const auto& [w, h] : std::vector<std::pair<int, int>>{{640, 360}, {480, 270}}) {
+                unsigned long long readbacks = 0;
+                const golden::Image gpu = run(w, h, &readbacks);
+                const openshot::GpuDevice::Backend backend = openshot::GpuDevice::RequestedBackend();
+                openshot::GpuDevice::SetBackend(openshot::GpuDevice::Backend::Off);
+                const golden::Image cpu = run(w, h, nullptr);
+                openshot::GpuDevice::SetBackend(backend);
+                const golden::Metrics m = golden::compare(cpu, gpu);
+                const bool same_size = w == 640;
+                char buf[160];
+                std::snprintf(buf, sizeof buf, "%dx%d: readbacks in the effect %llu, psnr vs CPU %.2f, max %d",
+                              w, h, readbacks, m.psnr, m.maxAbs);
+                // Same size: the only difference left is GPU decode's own rounding, a few LSB.
+                const bool ok = readbacks == 0 && (same_size ? m.maxAbs <= 4 : m.psnr >= 40.0);
+                checks.push_back({same_size ? "matte_same_size" : "matte_resampled", ok, buf});
+            }
         });
 
     // Blur is four effects in one class and three of them are now shaders, each declining

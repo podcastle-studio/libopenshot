@@ -62,6 +62,23 @@ namespace openshot
 		struct MaskTextureCache;
 		mutable std::shared_ptr<MaskTextureCache> mask_texture;
 
+		/// True when mask_texture was built on the GPU for the current frame, from a matte frame
+		/// that was already on the GPU (a GPU-decoded video matte), with no original_mask behind
+		/// it. See PrepareGpuMask.
+		bool gpu_mask_current = false;
+
+		/// Build mask_texture on the GPU from a GPU-backed matte frame, scaled to the frame's
+		/// size: the matte's own texture when the sizes match, a linear resample otherwise. False
+		/// (and nothing changed) when the matte cannot be used from this thread.
+		bool PrepareGpuMask(const std::shared_ptr<Frame>& matte, int width, int height);
+
+		/// The matte frame behind a GPU-prepared mask, kept for the CPU path if the shader
+		/// declines (it is read back only then).
+		std::shared_ptr<Frame> gpu_matte;
+
+		/// Bind mask_texture and the controls; shared by the QImage and the GPU-prepared mask.
+		bool BindMaskUniforms(SkRuntimeEffectBuilder& builder, int64_t frame_number) const;
+
 	protected:
 		bool HandlesMaskInternally() const override { return true; }
 

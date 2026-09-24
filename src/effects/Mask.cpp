@@ -15,7 +15,12 @@
 #include "../gpu/GpuDevice.h"
 #include "../gpu/GpuFrame.h"
 
+#include "skia/include/core/SkBlendMode.h"
+#include "skia/include/core/SkCanvas.h"
+#include "skia/include/core/SkImage.h"
 #include "skia/include/core/SkImageInfo.h"
+#include "skia/include/core/SkPaint.h"
+#include "skia/include/core/SkRect.h"
 #include "skia/include/core/SkPixmap.h"
 #include "skia/include/core/SkSamplingOptions.h"
 #include "skia/include/core/SkShader.h"
@@ -107,18 +112,30 @@ std::shared_ptr<openshot::Frame> Mask::GetFrame(std::shared_ptr<openshot::Frame>
 		if (!reader) return frame;
 
 		// Get mask image (if missing or different size than frame image)
+		gpu_mask_current = false;
 		#pragma omp critical (open_mask_reader)
 		{
 			if (!original_mask || !reader->info.has_single_image || needs_refresh ||
 				(original_mask && original_mask->size() != QSize(frame_width, frame_height))) {
 
 				// Only get mask if needed
-				const auto mask_without_sizing = std::make_shared<QImage>(*reader->GetFrame(frame_number)->GetImage());
+				const std::shared_ptr<Frame> matte = reader->GetFrame(frame_number);
 
-				// Resize mask image to match frame size
-				original_mask = std::make_shared<QImage>(mask_without_sizing->scaled(
-								frame_width, frame_height,
-								Qt::IgnoreAspectRatio, Qt::SmoothTransformation));
+				// A video matte decoded on the GPU is used where it is: reading it back, scaling
+				// it with Qt and uploading it again was 6.3 ms a frame at 1080p. The CPU path
+				// below still gets its QImage if the shader declines (see after ApplyOnGpu).
+				if (matte && matte->IsGpuBacked() && PrepareGpuMask(matte, frame_width, frame_height)) {
+					original_mask.reset();
+					gpu_matte = matte;
+				} else {
+					gpu_matte.reset();
+					const auto mask_without_sizing = std::make_shared<QImage>(*matte->GetImage());
+
+					// Resize mask image to match frame size
+					original_mask = std::make_shared<QImage>(mask_without_sizing->scaled(
+									frame_width, frame_height,
+									Qt::IgnoreAspectRatio, Qt::SmoothTransformation));
+				}
 			}
 		}
 	} else if (maskType == ROUNDED_CORNERS) {
@@ -143,6 +160,18 @@ std::shared_ptr<openshot::Frame> Mask::GetFrame(std::shared_ptr<openshot::Frame>
 	// been prepared -- that work is CPU-side either way, and the fragment takes the result as a
 	// texture -- but before GetImage(), which on a GPU-backed frame is the one readback.
 	if (ApplyOnGpu(frame, frame_number))
+		return frame;
+
+	// The shader declined after the mask was prepared on the GPU: bring the matte across the way
+	// the CPU path always has.
+	if (!original_mask && gpu_matte) {
+		const auto mask_without_sizing = std::make_shared<QImage>(*gpu_matte->GetImage());
+		original_mask = std::make_shared<QImage>(mask_without_sizing->scaled(
+						frame_width, frame_height, Qt::IgnoreAspectRatio, Qt::SmoothTransformation));
+		gpu_matte.reset();
+		gpu_mask_current = false;
+	}
+	if (!original_mask)
 		return frame;
 
 	// Get pixel arrays
@@ -218,6 +247,12 @@ const char* Mask::GpuShaderSource() const
 bool Mask::SetGpuUniforms(SkRuntimeEffectBuilder& builder, int64_t frame_number,
 						  int width, int height) const
 {
+	// A mask prepared on the GPU for this frame (PrepareGpuMask) has no QImage behind it.
+	if (gpu_mask_current && mask_texture && mask_texture->texture &&
+		mask_texture->texture->width() == width && mask_texture->texture->height() == height &&
+		mask_texture->generation == GpuDevice::Generation())
+		return BindMaskUniforms(builder, frame_number);
+
 	// GetFrame prepares original_mask before calling ApplyOnGpu; without one there is nothing to
 	// apply and the CPU path bails out the same way.
 	if (!original_mask || original_mask->isNull())
@@ -252,6 +287,11 @@ bool Mask::SetGpuUniforms(SkRuntimeEffectBuilder& builder, int64_t frame_number,
 		mask_texture = std::move(cache);
 	}
 
+	return BindMaskUniforms(builder, frame_number);
+}
+
+bool Mask::BindMaskUniforms(SkRuntimeEffectBuilder& builder, int64_t frame_number) const
+{
 	// Nearest and no local matrix: the mask is the frame's size, so eval(p) is the same texel the
 	// C++ indexes by the same loop counter.
 	builder.child("maskImage") = mask_texture->texture->makeShader(
@@ -264,6 +304,43 @@ bool Mask::SetGpuUniforms(SkRuntimeEffectBuilder& builder, int64_t frame_number,
 		static_cast<float>(20 / std::fmax(0.00001, 20.0 - contrast_value));
 	builder.uniform("invertMask") = invert ? 1.0f : 0.0f;
 	builder.uniform("replaceImage") = replace_image ? 1.0f : 0.0f;
+	return true;
+}
+
+bool Mask::PrepareGpuMask(const std::shared_ptr<Frame>& matte, int width, int height)
+{
+	if (!GpuDevice::Instance().available())
+		return false;
+	const std::shared_ptr<GpuFrame>& source = matte->GpuBacking();
+	if (!source || !source->ownedByThisThread())
+		return false;
+	sk_sp<SkImage> snapshot = source->snapshot();
+	if (!snapshot)
+		return false;
+
+	auto cache = std::make_shared<MaskTextureCache>();
+	cache->generation = GpuDevice::Generation();
+	if (source->width() == width && source->height() == height) {
+		// Same size: QImage::scaled() would return the image as it is, so this is bit-exact.
+		cache->texture = std::move(snapshot);
+	} else {
+		// A resample on the GPU instead of Qt's SmoothTransformation: bilinear, which is what Qt
+		// does upscaling; downscaling Qt box-averages, so a shrunk matte differs by a few LSB
+		// at its edges (owner's decision, 2026-09-24).
+		cache->owner = GpuFrame::Create(width, height, kRGBA_8888_SkColorType);
+		SkCanvas* canvas = cache->owner ? cache->owner->canvas() : nullptr;
+		if (!canvas)
+			return false;
+		SkPaint paint;
+		paint.setBlendMode(SkBlendMode::kSrc);
+		canvas->drawImageRect(snapshot, SkRect::MakeWH(float(width), float(height)),
+							  SkSamplingOptions(SkFilterMode::kLinear), &paint);
+		cache->texture = cache->owner->snapshot();
+		if (!cache->texture)
+			return false;
+	}
+	mask_texture = std::move(cache);
+	gpu_mask_current = true;
 	return true;
 }
 
