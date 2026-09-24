@@ -1,8 +1,8 @@
 # Performance baseline and history
 
-Measurements of the render pipeline taken with `openshot-bench` (`tests/bench`), to be repeated after
-every optimisation phase of `doc/gpu-migration/GPU-RENDER-PLAN.md` so the gain of each step is visible against the
-same scenarios, resolutions and machine.
+Measurements of the render pipeline taken with `openshot-bench` (`tests/bench`), repeated after
+every optimisation step so the gain of each is visible against the same scenarios, resolutions and
+machine. What each GPU path is and which switch turns it on: `doc/GPU-RENDERING.md`.
 
 ## How to reproduce
 
@@ -307,7 +307,7 @@ thousands of frames and sees the steady-state rate, so **the 150-frame fps under
 scenario in this document** — by about 90 % for `subtitles_words`. The steady-state GPU win is 16 %,
 against the 22 % the 150-frame window suggests.
 
-Worth remembering when reading any gate in `GPU-WORKLIST.md`: the numbers are a 150-frame window on
+Worth remembering when reading any gate: the numbers are a 150-frame window on
 a laptop, and they are conservative for throughput and noisy on a loaded host.
 
 ## 2026-09-18 — W09: the NVENC rate-control comparison, on mains power
@@ -388,7 +388,7 @@ inside half a VMAF point.
 ## 2026-09-22 — W20: the box blur as a shader unsplits `{Zoom, Blur, Alpha}`
 
 Measured on mains power on a settled machine, **interleaved with both libraries built up front and
-swapped in place** — the method `GPU-DECISIONS.md` records after a sequential A/B on this laptop
+swapped in place** — the method adopted after a sequential A/B on this laptop
 once read +55 % where the truth was 0 %. Three repeats of each of the four arms, medians below.
 1080p, `render`, 150 frames, `transitions_chain`.
 
@@ -416,3 +416,68 @@ cost three sweeps whatever the radius. The fragment cannot be O(1), so at 1080p 
 parameter it is six draws of up to 35 taps — 206 fetches a pixel. That is why this is +24 % and not
 a multiple: the blur is the one effect in the vocabulary whose CPU twin is already asymptotically
 better, and the win here is the crossing it stops forcing, not the arithmetic.
+
+## 2026-09-23 — End of the migration: where each GPU path landed
+
+The headline results of W22–W31, each measured when it landed (RTX A2000 laptop GPU, mains power,
+interleaved arms). What each switch does is in `doc/GPU-RENDERING.md`. None of these has been
+re-run as one matrix — that full-GPU baseline is still owed (`GPU-RENDERING.md`, "What is left", 9).
+
+| step | scenario (1080p unless stated) | before → after |
+|---|---|---|
+| NVDEC frames stay on the device (W23) | `source_4k` render, 4K → 1080p | 78–82 → **126–133 fps**, 1.9 → 0.6 cores |
+| | `source_4k` x264 | 58–59 → **87–96 fps** |
+| decode read-ahead, CPU (W24) | `source_4k` x264 · `grid_3x3` · `source_4k` render on the Vulkan compositor | 52–56 → **61–66** · 22 → **25–26** · 72 → **100–106 fps** |
+| NVENC from the GPU (W25), `single_video`, pipeline mode, NVDEC + GPU decode | 1080p p5 · p3 | 165–178 → **193–195** · 156 → **349 fps** |
+| | 2160p p5 · p3 | 48 → **54** · 46 → **123 fps**; CPU 5.3 → 2.0 s per 180 frames |
+| GPU `Crop` (W29), every GPU path on | `everything` nvenc | 67–70 → **133–137 fps**, GPU busy 76–85 %, VRAM flat over 10,080 frames |
+
+Earlier headline results, for the whole picture: `text_animated_glow_3` 4.3 → **52 fps** and
+`everything` 5.4 → 8.8 with the text engine on the GPU (2026-09-15); `subtitles_words` 56 → **113**
+(W17); `chroma_key_green` 6.9 → **43.6** and `blend_stack_5` 16.6 → **41.3** (W19, W13).
+
+### Density on the laptop (W30 — indicative only; the gate is on an L4)
+
+1080p nvenc, every GPU path on, p4, 900 frames per process:
+
+| scenario | ×1 fps/export | ×2 fps/export (aggregate) | ×4 fps/export (aggregate) | cores/export at ×4 | RSS/export |
+|---|---:|---:|---:|---:|---:|
+| `podcast_pip` | 190 | 82 (163) | 47 (179) | 1.3 | 0.6 GB |
+| `everything` | 97 | 50 (99) | 27 (104) | 1.2 | 0.9 GB |
+| `transitions_chain` | 32 | 27 (53) | 20 (78) | 2.7 | 0.9 GB |
+
+A GPU-bound export does not densify — one already keeps the GPU ~85 % busy, so the unit of density
+on a GPU node is the GPU. `transitions_chain` scales only because its overlay clip keeps 135 of 180
+frames on the CPU path. Raw results: `tests/bench/results/parallel-*.json`.
+
+## 2026-09-24 — The production payload, CPU vs every GPU path
+
+`tests/payloads/prod-2026-09-16-pip-lut-whoosh.json` (720p, 25 s: PiP, LUT, stacked colour/light/
+enhancement filters, crop with rounded corners, WHOOSH transition, `.mov` alpha watermark) through
+the service's `render-payload`, media from the archive. RTX A2000, mains power.
+
+| configuration | render time | output |
+|---|---:|---|
+| CPU, libx264 (production default) | ~31 s | **identical to the corpus's recorded hash** |
+| CPU, NVENC | ~29 s | |
+| every GPU path on (`OPENSHOT_GPU=vulkan`, NVENC, `GPU_DECODE` + NVDEC, `GPU_ENCODE`, `GPU_CROP`) | **~26 s** | 750/750 frames, H.264 BT.709 |
+
+Render time is from the last media fetch to the MP4 being finalised, read off the log timestamps
+(so ±1 s). `render-payload` points Pub/Sub at a dead address and each progress publish during
+preparation blocks ~65 s, so its wall clock (~8.5 min) is not the render's.
+
+**The GPU buys only ~15 % on this payload** (≈ 24 → 29 fps), against 2–4× on the bench scenarios,
+and the per-export telemetry agrees that the GPU is mostly idle (~251 readbacks per 750 frames,
+GPU ~10 % busy). **The cause is not measured yet.** Candidates, none confirmed: the grain clip
+(Enhancement with `noise` runs wholly on the CPU, so its first 8 s read back every frame), the
+WHOOSH transition's overlay clip (an `isOverlay` clip puts the frames it covers on the CPU
+compositing path), and fixed per-export costs (reader open, prescale, encoder start) weighing more
+on a short 720p export. This is the one production payload measured, so it is the number that
+matters — see `doc/GPU-RENDERING.md`, "Worth doing".
+
+**CPU vs full-GPU, encoder-matched** (the CPU path re-rendered with NVENC, so both sides share an
+encoder; against x264 the figure mostly measures the encoders): Y PSNR **~42 dB on frames
+250–750**, and **~33 dB on frames 1–230**. The low stretch is one clip: its `ADJUSTMENT` filter asks
+for film grain (`noise 0.67`), which seeds its hash from the pixel's colour, so the 1 LSB that
+`GPU_DECODE` changes by design re-rolls the grain (23 dB on that clip alone, the rest of the frame
+at 37–42). Not a defect — see `doc/GPU-RENDERING.md`, "Known issues".

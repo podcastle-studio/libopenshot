@@ -1,0 +1,103 @@
+// color_map.sksl
+//
+// The SkSL twin of ColorMap's LUT mode: a 3-D .cube applied by trilinear interpolation.
+//
+// **The cube arrives as a texture, not as uniforms**, following the rule that has held for every
+// effect in this vocabulary: whatever a table or a transcendental decides stays on the host and
+// arrives as an image; the fragment does arithmetic. A 33³ cube is 36k entries, which no uniform
+// block will hold.
+//
+// **The packing is the editor's**, so the two stacks read the same table the same way: the cube
+// is flattened into a 2-D atlas of width `lutSize` (the R axis) and height `lutSize * lutSize`,
+// whose row is `b * lutSize + g`. It must be sampled NEAREST -- bilinear would bleed one blue
+// slice into the next at every tile boundary -- and the interpolation is done by hand below.
+//
+// **Trilinear at the cube's native size, and that is a decision rather than an accident.** The
+// export used to resample every cube above 17³ down to 17³ "for L1 cache friendliness", which on
+// the production 25³ LUT cost max 9.95 LSB against the editor; the interpolation choice either
+// side of it costs 6.32. The editor samples the cube at its own size, so this does too.
+//
+// **The domain is honoured.** A .cube may declare DOMAIN_MIN/DOMAIN_MAX, and the editor
+// normalises by them; the export's parser dropped them until 2026-09-22, which made any non-0..1
+// cube grade differently in the two. `domainSpan` arrives already collapsed to 1 where the cube
+// declares a degenerate one.
+//
+// **Alpha.** The frame is premultiplied and a .cube is defined on straight RGB, so this
+// unpremultiplies, grades, blends by intensity on straight RGB, and premultiplies again -- which
+// is what the C++ does and what the editor's filter does. The C++ reaches the same place by two
+// different routes for opaque and semi-transparent pixels, and both are reproduced exactly,
+// including that the opaque one skips the divide.
+uniform shader lut;          // the atlas: lutSize wide, lutSize*lutSize high, NEAREST
+uniform float  lutSize;
+uniform float3 domainMin;
+uniform float3 domainSpan;
+uniform float3 intensity;    // per-channel strength, already multiplied by the overall one
+uniform float  fullIntensity; // 1 when all three are >= 0.999, which is the C++'s own fast path
+
+// One cube entry. The +0.5 lands on the texel centre so NEAREST reads exactly this cell.
+float3 lutTexel(float r, float g, float b) {
+	return float3(lut.eval(float2(r + 0.5, b * lutSize + g + 0.5)).rgb);
+}
+
+// The C++'s 256-entry coordinate table, evaluated rather than tabulated: the byte normalised into
+// the domain, clamped, and placed on the cube. Returns (i0, i1, frac).
+float3 lutCoord(float byte_value, float dmin, float dspan) {
+	float t = clamp((byte_value / 255.0 - dmin) / dspan, 0.0, 1.0);
+	float f = t * (lutSize - 1.0);
+	float i0 = min(floor(f), lutSize - 1.0);   // (int)f, and f is never negative here
+	return float3(i0, min(i0 + 1.0, lutSize - 1.0), f - i0);
+}
+
+float3 sampleLut(float3 bytes) {
+	float3 cr = lutCoord(bytes.r, domainMin.r, domainSpan.r);
+	float3 cg = lutCoord(bytes.g, domainMin.g, domainSpan.g);
+	float3 cb = lutCoord(bytes.b, domainMin.b, domainSpan.b);
+
+	float3 c000 = lutTexel(cr.x, cg.x, cb.x);
+	float3 c100 = lutTexel(cr.y, cg.x, cb.x);
+	float3 c010 = lutTexel(cr.x, cg.y, cb.x);
+	float3 c110 = lutTexel(cr.y, cg.y, cb.x);
+	float3 c001 = lutTexel(cr.x, cg.x, cb.y);
+	float3 c101 = lutTexel(cr.y, cg.x, cb.y);
+	float3 c011 = lutTexel(cr.x, cg.y, cb.y);
+	float3 c111 = lutTexel(cr.y, cg.y, cb.y);
+
+	// The C++'s association, not a mix() chain: R inside, then G, then B. Reassociating a float
+	// expression is how a port that looks identical stops being identical.
+	float3 c0 = (c000 * (1.0 - cr.z) + c100 * cr.z) * (1.0 - cg.z)
+			  + (c010 * (1.0 - cr.z) + c110 * cr.z) * cg.z;
+	float3 c1 = (c001 * (1.0 - cr.z) + c101 * cr.z) * (1.0 - cg.z)
+			  + (c011 * (1.0 - cr.z) + c111 * cr.z) * cg.z;
+	return c0 * (1.0 - cb.z) + c1 * cb.z;
+}
+
+float4 main(float2 p) {
+	float4 src = osBytes(floor(p) + 0.5);
+
+	// A == 0: the C++ skips the pixel entirely, so this must not touch it either. A fully
+	// transparent premultiplied pixel can still carry non-zero bytes and they have to survive.
+	if (src.a == 0.0)
+		return src / 255.0;
+
+	if (src.a == 255.0) {
+		// The opaque path: the bytes are already straight, so no divide and no multiply back.
+		float3 graded = sampleLut(src.rgb);
+		if (fullIntensity > 0.5)
+			return float4(osConstrain3(floor(graded * 255.0 + 0.5)), 255.0) / 255.0;
+		float3 straight = src.rgb / 255.0;
+		float3 outv = graded * intensity + straight * (1.0 - intensity);
+		return float4(osConstrain3(floor(outv * 255.0 + 0.5)), 255.0) / 255.0;
+	}
+
+	// The semi-transparent path. The C++ demultiplies with min((int)(b * invAlpha + 0.5), 255) --
+	// a truncation of a rounded value, and a clamp on only one side -- and then works from those
+	// integers, so the coordinate table is indexed by a byte here too.
+	float alpha = src.a / 255.0;
+	float invAlpha = 1.0 / alpha;
+	float3 trueBytes = min(floor(src.rgb * invAlpha + 0.5), 255.0);
+
+	float3 graded = sampleLut(trueBytes);
+	float3 straight = trueBytes / 255.0;
+	float3 outv = (graded * intensity + straight * (1.0 - intensity)) * alpha;
+	return float4(osConstrain3(floor(outv * 255.0 + 0.5)), src.a) / 255.0;
+}

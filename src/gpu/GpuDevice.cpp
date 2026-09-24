@@ -35,7 +35,7 @@
 // Private, but the symbols are in libskia.a and install_skia_gpu.sh ships these
 // two self-contained headers. Graphite makes the caller supply the memory
 // allocator and Skia's VMA-backed one has no public factory. See
-// doc/gpu-migration/GPU-DECISIONS.md, 2026-09-14.
+// CLAUDE.md, "Skia" (install_skia_gpu.sh), 2026-09-14.
 #include "skia/src/gpu/GpuTypesPriv.h"
 #include "skia/src/gpu/vk/vulkanmemoryallocator/VulkanMemoryAllocatorPriv.h"
 #endif

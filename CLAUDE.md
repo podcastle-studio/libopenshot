@@ -13,31 +13,19 @@ Other project commands: `/check` (golden suite + visual diff), `/bench` (perform
 
 ## Read first
 
-> Everything under `doc/gpu-migration/` is scaffolding for the GPU migration and is deleted when
-> that work lands. Permanent documentation stays directly in `doc/`.
+1. `doc/GPU-RENDERING.md` — **the GPU work in one place**: what runs where, every switch and
+   whether it changes pixels, how to validate, the decisions that constrain the code (do not
+   re-litigate them), known issues, and — at the end — **what is left**. Update its "Status and
+   what is left" section at the end of any session that changed code, plans or decisions.
+2. `tests/golden/README.md` — the regression suite that gates every change.
+3. `doc/PERFORMANCE-BASELINE.md` — benchmark history (`tests/bench`, `openshot-bench`). Re-run at the
+   end of every optimisation step, commit the JSON under `tests/bench/results/`, append the table.
+4. `src/effects/image-processing-lib/shaders/README.md` — the shader and planner contract; and
+   `src/effects/image-processing-lib/doc/FRONTEND-INTEGRATION.md` — how the editor uses it.
 
-1. `doc/gpu-migration/STATUS.md` — where the work is right now and what the next step is. **Read it
-   before doing anything, and update it at the end of any session that changed code, plans or
-   decisions.**
-2. `doc/gpu-migration/GPU-WORKLIST.md` — **the work itself**, in strict execution order as
-   W01…W31, one item to a session, each with sub-tasks, dependencies and a numeric gate. Read only
-   the item you are doing. It opens with the protocol for running one item and clearing the context
-   afterwards.
-3. `doc/gpu-migration/STAGE6-EFFECTS.md` — **the map of the effects work (Stage 6)**: every effect
-   the service uses, from all three call sites, marked done / partial (with what was excluded) /
-   ruled out (with the reason) / blocked (on whom), and what is left in order. Read this before
-   touching W19, W20 or W21 instead of reconstructing it from the worklist.
-4. `doc/gpu-migration/GPU-RENDER-PLAN.md` — the reasoning behind the worklist, not a step list:
-   measurements (§0), the GPU primer and why Skia/Graphite/Vulkan (§1), the Qt inventory (§2),
-   sizing for N parallel exports (§4), the parity policy (§5), standing gotchas (§6).
-5. `tests/golden/README.md` — the regression suite that gates every change.
-6. `doc/PERFORMANCE-BASELINE.md` — benchmark history (`tests/bench`, `openshot-bench`). Re-run at the
-   end of every optimisation phase, commit the JSON under `tests/bench/results/`, append the table.
-7. `doc/gpu-migration/GPU-DECISIONS.md` — decisions already taken (do not re-litigate) and the ones
-   still open.
-8. `doc/gpu-migration/TRANSITION-PARITY.md` — **read before W20.** How the editor (PixiJS + the
-   OpenCV WASM) and the export stay visually identical once transitions move to shaders, and the
-   measured parameter-resolution bug that already breaks them today.
+The migration's working folder (`doc/gpu-migration/`: status log, W01–W31 worklist, plan, decisions
+log, spikes) was retired on 2026-09-24; `git show 628a53d5:doc/gpu-migration/<file>` recovers any of
+it when a commit message's W-number needs its context.
 
 ## Repo map
 
@@ -47,22 +35,22 @@ Other project commands: `/check` (golden suite + visual diff), `/bench` (perform
 | `src/gpu/` | **fork**: Vulkan device + Skia Graphite context, surface pool, GPU frame, CUDA interop (off unless `OPENSHOT_GPU` is set) |
 | `src/text/` | **fork**: Skia text engine (layout, animation, glow, 3D tilt, curved text) |
 | `src/subtitle/` | **fork**: Skia subtitle renderer driven by JSON |
-| `src/effects/` | effect classes; the ones the service uses are listed in plan section 2.4 |
-| `src/effects/image-processing-lib/` | **submodule**, shared with the web front end through WASM: transition algorithms and colour grading |
+| `src/effects/` | effect classes; the 20 the service constructs are named in `doc/GPU-RENDERING.md` |
+| `src/effects/image-processing-lib/` | **submodule**, shared with the web front end through WASM: the transition effects (C++), their SkSL, and the planner |
+| `src/shaders/` | **fork**: SkSL of the per-clip effects only the export runs on the GPU (embedded with the submodule's) |
 | `src/BlendModes.cpp`, `Clip.cpp` | **fork**: W3C blend modes, clip shadow/blur/flip, overlay clips |
 | `src/FFmpegReader/Writer.cpp` | demux, decode, scale, encode, mux |
 | `tests/golden/` | the regression suite and its committed reference frames |
 | `tests/bench/` | the performance benchmark and its recorded results |
 | `tools/golden.sh` | build + run + report wrapper |
-| `doc/` | permanent documentation: install guides, hardware acceleration, the benchmark history |
-| `doc/gpu-migration/` | **temporary**: the plan, the decisions log, session status — deleted when the migration lands |
+| `doc/` | `GPU-RENDERING.md`, the benchmark history, upstream's install and hardware-acceleration guides |
 | `skia_build_script.sh` | out-of-tree Skia build (see below) |
 | `../video-rendering-service` | the only consumer: JSON payload in, MP4 out |
 
 ## How to communicate
 
 - Keep replies short. Lead with the result, a few bullets at most, tables only when numbers matter.
-  Details belong in the docs (`doc/gpu-migration/STATUS.md`, `doc/*.md`), not in chat.
+  Details belong in the docs (`doc/GPU-RENDERING.md`, `doc/*.md`), not in chat.
 
 ## Non-negotiable workflow
 
@@ -111,8 +99,8 @@ Rules: **never edit `skia_build_script.sh` to add GPU support** — the CPU buil
 reproducible as the no-GPU fallback. The two scripts share everything except the output directory,
 the GPU GN args and the install prefix; keep the rest byte-identical so text rendering does not
 drift. Both pin `SKIA_MILESTONE=m147` to match the front end's CanvasKit. Select a build at
-configure time with `-DSkia_ROOT=/usr/local/skia-gpu` (or leave it unset for the CPU one) and record
-which one a build used in `doc/gpu-migration/GPU-DECISIONS.md`.
+configure time with `-DSkia_ROOT=/usr/local/skia-gpu` (or leave it unset for the CPU one) and say
+which one a measurement used wherever it is recorded.
 
 The GPU script differs from the CPU one in four ways only, and nothing else may diverge: output
 directory, the GPU GN args, the install prefix, and that it **reuses** `~/skia-stable/skia` instead

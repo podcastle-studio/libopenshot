@@ -12,7 +12,7 @@
 //   - GetColorHex() is "#rrggbb" and drops alpha, which is why Timeline's GPU background
 //     clear forces alpha to 255 rather than reading the alpha curve.
 //
-// To regenerate after an intentional change, see doc/gpu-migration/GPU-WORKLIST.md W18: build
+// To regenerate after an intentional change, see W18 in `git show 628a53d5:doc/gpu-migration/GPU-WORKLIST.md`: build
 // a small program that links Qt, run the recorded inputs through the old parser, and paste
 // the results back here.
 

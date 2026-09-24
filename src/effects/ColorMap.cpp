@@ -12,7 +12,7 @@
 
 #include "ColorMap.h"
 #include "Exceptions.h"
-#include "image-processing-lib/src/ColorGrading/ColorGradingCore.h"
+#include "ColorGradingCore.h"
 
 #include <omp.h>
 #include "EffectShaders.h"
@@ -482,8 +482,8 @@ ColorMap::GetFrame(std::shared_ptr<openshot::Frame> frame, int64_t frame_number)
 // GPU
 // ═══════════════════════════════════════════════════════════════════════════════
 
-// The shared SkSL source lives in image-processing-lib/shaders/color_map.sksl; it is embedded
-// here at build time so the export has no runtime data-path dependency.
+// The SkSL source lives in src/shaders/color_map.sksl; it is embedded here at build time so
+// the export has no runtime data-path dependency.
 const char* ColorMap::GpuShaderSource() const
 {
     return openshot::shaders::kColorMap;

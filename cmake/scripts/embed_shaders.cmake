@@ -1,16 +1,32 @@
-# Turn src/effects/image-processing-lib/shaders/*.sksl into a C++ header of string constants.
+# Turn the .sksl files of one or more directories into a C++ header of string constants.
 #
-# The .sksl files are the single source: the editor loads them directly through
-# CanvasKit, and this embeds the same bytes into libopenshot so the export has no
-# runtime data-path dependency. Nothing edits the generated header; edit the shader.
+# Two directories today: src/effects/image-processing-lib/shaders/ (the prelude and the transition
+# fragments, which the editor loads unchanged through CanvasKit) and src/shaders/ (the per-clip
+# effects only the export runs). The .sksl files are the source; this embeds their bytes so the
+# export has no runtime data-path dependency. Nothing edits the generated header; edit the shader.
 #
-# Invoked at build time (not configure time) with -DSHADER_DIR and -DOUTPUT so the
-# header regenerates whenever a shader changes.
+# Invoked at build time (not configure time) with -DSHADER_DIRS (directories separated by "|")
+# and -DOUTPUT, so the header regenerates whenever a shader changes.
 
-file(GLOB SHADER_FILES "${SHADER_DIR}/*.sksl")
-list(SORT SHADER_FILES)
+cmake_policy(SET CMP0057 NEW)   # if(IN_LIST), which -P script mode does not enable by default
+string(REPLACE "|" ";" SHADER_DIR_LIST "${SHADER_DIRS}")
+set(SHADER_FILES "")
+set(SEEN_STEMS "")
+foreach(DIR ${SHADER_DIR_LIST})
+  file(GLOB DIR_FILES "${DIR}/*.sksl")
+  list(SORT DIR_FILES)
+  foreach(SHADER ${DIR_FILES})
+    get_filename_component(STEM "${SHADER}" NAME_WE)
+    # One namespace for every stem: the planner and ByName() look fragments up by stem alone.
+    if(STEM IN_LIST SEEN_STEMS)
+      message(FATAL_ERROR "embed_shaders: ${STEM}.sksl exists in more than one of ${SHADER_DIRS}")
+    endif()
+    list(APPEND SEEN_STEMS "${STEM}")
+    list(APPEND SHADER_FILES "${SHADER}")
+  endforeach()
+endforeach()
 
-set(GENERATED "// GENERATED FROM ${SHADER_DIR} -- DO NOT EDIT.\n")
+set(GENERATED "// GENERATED FROM ${SHADER_DIRS} -- DO NOT EDIT.\n")
 string(APPEND GENERATED "// Edit the .sksl files; this header is rebuilt from them.\n\n")
 string(APPEND GENERATED "#pragma once\n\n#include <cstring>\n\nnamespace openshot {\nnamespace shaders {\n\n")
 set(LOOKUP "")
@@ -46,5 +62,5 @@ if(EXISTS "${OUTPUT}")
 endif()
 if(NOT EXISTING STREQUAL GENERATED)
   file(WRITE "${OUTPUT}" "${GENERATED}")
-  message(STATUS "Embedded ${SHADER_DIR} -> ${OUTPUT}")
+  message(STATUS "Embedded ${SHADER_DIRS} -> ${OUTPUT}")
 endif()

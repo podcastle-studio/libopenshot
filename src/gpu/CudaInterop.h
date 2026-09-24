@@ -4,7 +4,8 @@
 // device, and that Skia can then sample, with no trip through host memory.
 //
 // Read this before changing anything here, because the shape of the code is
-// forced by two facts measured on 2026-09-22 (doc/gpu-migration/STATUS.md):
+// forced by two facts measured on 2026-09-22 (W22; the migration log is in
+// `git show 628a53d5:doc/gpu-migration/STATUS.md`):
 //
 //  1. Skia enables no external-memory extensions off Android. GpuDevice adds
 //     VK_KHR_external_memory_fd and VK_KHR_external_semaphore_fd itself, and

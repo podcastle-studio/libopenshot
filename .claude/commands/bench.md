@@ -15,8 +15,8 @@ Measure the render pipeline and compare against `tests/bench/results/baseline-cp
 Then run `openshot-bench compare tests/bench/results/baseline-cpu.json <new>.json` and report:
 
 1. The three biggest speedups and any regression worse than 5 %.
-2. Whether the numeric gate for the current phase in `doc/gpu-migration/GPU-RENDER-PLAN.md` section 3.1 is met.
+2. Whether any gate named in `doc/GPU-RENDERING.md` ("What is left") is met or moved.
 3. Peak RSS, since memory is a first-class constraint in this work.
 
 For a full run at a phase gate, also append the Markdown table to `doc/PERFORMANCE-BASELINE.md`,
-commit the JSON under `tests/bench/results/`, and update `doc/gpu-migration/STATUS.md`.
+commit the JSON under `tests/bench/results/`, and update `doc/GPU-RENDERING.md` if it changes what is left.

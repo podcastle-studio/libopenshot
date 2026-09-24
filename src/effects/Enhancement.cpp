@@ -357,9 +357,8 @@ Enhancement::GetFrame(std::shared_ptr<openshot::Frame> frame, int64_t frame_numb
 
 /* ---------- GPU ---------- */
 
-// The shared SkSL source lives in image-processing-lib/shaders/ so the editor loads the
-// same bytes through CanvasKit; it is embedded here at build time. Read it there --
-// including why it is written the way it is.
+// The SkSL source lives in src/shaders/ (per-clip effects run only by the export) and is
+// embedded here at build time. Read it there -- including why it is written the way it is.
 const char* Enhancement::GpuShaderSource() const
 {
 	return openshot::shaders::kEnhancement;

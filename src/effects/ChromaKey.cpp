@@ -642,9 +642,8 @@ std::shared_ptr<openshot::Frame> ChromaKey::GetFrame(std::shared_ptr<openshot::F
 	return frame;
 }
 
-// The shared SkSL source lives in image-processing-lib/shaders/ so the editor loads the
-// same bytes through CanvasKit; it is embedded here at build time. Read it there --
-// including why it is written the way it is.
+// The SkSL source lives in src/shaders/ (per-clip effects run only by the export) and is
+// embedded here at build time. Read it there -- including why it is written the way it is.
 const char* ChromaKey::GpuShaderSource() const
 {
 	return openshot::shaders::kChromaKey;

@@ -3,7 +3,7 @@
  * @brief Proves a Graphite/Vulkan Skia build works: device -> Context -> 64x64
  *        gradient -> readback -> PNG.
  *
- * This is the acceptance check for plan step 2.1 (doc/gpu-migration/GPU-RENDER-PLAN.md).
+ * This was the acceptance check for plan step 2.1 and still checks a GPU Skia prefix.
  * It is deliberately standalone and links Skia directly, NOT libopenshot: in a
  * normal build libopenshot is compiled against the CPU Skia in /usr/local, and
  * pulling both static archives into one binary would be a mess.

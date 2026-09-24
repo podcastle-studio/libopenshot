@@ -5,7 +5,7 @@
 # pinned FFmpeg, so they cannot gate this fork's render path.
 #
 # READ BEFORE ENABLING — two things are not settled, and both are recorded in
-# doc/gpu-migration/STATUS.md under W03:
+# doc/GPU-RENDERING.md ("What is left", 7):
 #
 #  1. FFmpeg. The dev box and the service's runtime image both use an FFmpeg 6.1 built
 #     --enable-nvenc that lives in /usr/local, from the private base image

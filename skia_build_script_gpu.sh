@@ -26,7 +26,7 @@ set -e
 # front end's canvaskit-wasm milestone so CPU/version-driven differences vanish.
 SKIA_MILESTONE="${SKIA_MILESTONE:-m147}"
 
-# Graphite is the backend this fork targets (see doc/gpu-migration/GPU-DECISIONS.md).
+# Graphite is the backend this fork targets (see doc/GPU-RENDERING.md, "Decisions").
 # Ganesh is kept behind a knob because the decisions log wants both available
 # before the phase-3 feature checks; the plan's default for step 2.1 is false.
 SKIA_ENABLE_GANESH="${SKIA_ENABLE_GANESH:-false}"

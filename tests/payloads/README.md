@@ -1,7 +1,7 @@
 # Real production payloads
 
-Real export payloads captured from the `async-video-export.prod.0-sub` Pub/Sub subscription, kept
-for **W04 — production payload corpus** in `doc/gpu-migration/GPU-WORKLIST.md`: they catch
+Real export payloads captured from the `async-video-export.prod.0-sub` Pub/Sub subscription, kept as
+the production payload corpus (`doc/GPU-RENDERING.md`, "What is left", 10): they catch
 JSON→timeline regressions the golden suite structurally cannot see, because `tests/golden` drives
 the library directly and never parses a payload.
 
@@ -78,7 +78,7 @@ app and capture the fresh message.
 and W19–W21's effect on a real job. Its prod-rendered reference is
 `tmp/payloads/prod-2026-09-16/` → `Untitled video - Sep 16, 2026, 15_40PM.mp4` (kept in `tmp/`).
 
-**Still wanted** (W04 asks for six): text animations, subtitles, a transition-heavy timeline, a
+**Still wanted** (the corpus should be six): text animations, subtitles, a transition-heavy timeline, a
 chroma-key job, and a 4K source. The three shapes this capture exercises that `tests/golden` does
-*not* cover are noted in `doc/gpu-migration/STATUS.md` — a clip rotated and split across a trim
+*not* cover: a clip rotated and split across a trim
 boundary, an overlapping transition, and a `.mov` alpha watermark across the whole timeline.

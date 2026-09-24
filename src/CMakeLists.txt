@@ -156,7 +156,6 @@ set(OPENSHOT_CV_SOURCES
 set(EFFECTS_SOURCES
   effects/image-processing-lib/src/Effects/effects.cpp
   effects/image-processing-lib/src/Planner/EffectPlan.cpp
-  effects/image-processing-lib/src/ColorGrading/ColorGradingCore.cpp
   effects/Alpha.cpp
   effects/CameraMovement.cpp
   effects/BorderReflectedRotation.cpp
@@ -178,6 +177,7 @@ set(EFFECTS_SOURCES
   effects/ChromaKey.cpp
   effects/ColorGrade.cpp
   effects/ColorMap.cpp
+  effects/ColorGradingCore.cpp
   effects/ColorShift.cpp
   effects/Crop.cpp
   effects/CropHelpers.cpp
@@ -251,7 +251,6 @@ target_include_directories(openshot
   PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_BINARY_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/effects/image-processing-lib/src/ColorGrading
   PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
     $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}>
@@ -599,22 +598,30 @@ endif()
 ### Babl
 ###
 
-################## SHARED EFFECT SHADERS ###################
-# The .sksl sources in the image-processing-lib submodule are shared verbatim with the web front
-# end, which loads them through CanvasKit. Embedding them here keeps one source of truth without
-# giving the export a runtime data-path dependency. See that directory's README.
-set(OPENSHOT_SHADER_DIR "${CMAKE_CURRENT_SOURCE_DIR}/effects/image-processing-lib/shaders")
+################## EFFECT SHADERS ###################
+# Two sources, one embedded header. image-processing-lib/shaders/ holds the prelude and the
+# transition fragments, shared verbatim with the web editor (CanvasKit) -- see that directory's
+# README. src/shaders/ holds the per-clip effects only the export runs. Embedding keeps the .sksl
+# files the single source without giving the export a runtime data-path dependency.
+set(OPENSHOT_SHADER_DIRS
+    "${CMAKE_CURRENT_SOURCE_DIR}/effects/image-processing-lib/shaders"
+    "${CMAKE_CURRENT_SOURCE_DIR}/shaders")
 set(OPENSHOT_SHADER_HEADER "${CMAKE_CURRENT_BINARY_DIR}/EffectShaders.h")
-file(GLOB OPENSHOT_SHADER_SOURCES "${OPENSHOT_SHADER_DIR}/*.sksl")
+set(OPENSHOT_SHADER_SOURCES "")
+foreach(dir ${OPENSHOT_SHADER_DIRS})
+  file(GLOB dir_sources "${dir}/*.sksl")
+  list(APPEND OPENSHOT_SHADER_SOURCES ${dir_sources})
+endforeach()
+string(REPLACE ";" "|" OPENSHOT_SHADER_DIRS_ARG "${OPENSHOT_SHADER_DIRS}")
 
 add_custom_command(
   OUTPUT "${OPENSHOT_SHADER_HEADER}"
   COMMAND ${CMAKE_COMMAND}
-          -DSHADER_DIR=${OPENSHOT_SHADER_DIR}
+          "-DSHADER_DIRS=${OPENSHOT_SHADER_DIRS_ARG}"
           -DOUTPUT=${OPENSHOT_SHADER_HEADER}
           -P ${PROJECT_SOURCE_DIR}/cmake/scripts/embed_shaders.cmake
   DEPENDS ${OPENSHOT_SHADER_SOURCES} ${PROJECT_SOURCE_DIR}/cmake/scripts/embed_shaders.cmake
-  COMMENT "Embedding shared effect shaders"
+  COMMENT "Embedding effect shaders"
   VERBATIM)
 add_custom_target(openshot_shaders DEPENDS "${OPENSHOT_SHADER_HEADER}")
 add_dependencies(openshot openshot_shaders)
