@@ -56,6 +56,10 @@
 #include "skia/include/core/SkRect.h"
 #include "skia/include/core/SkTileMode.h"
 #include "skia/include/effects/SkImageFilters.h"
+#include "skia/include/effects/SkRuntimeEffect.h"
+#include "skia/include/core/SkString.h"
+
+#include <mutex>
 
 #ifdef USE_IMAGEMAGICK
 	#include "MagickUtilities.h"
@@ -1802,14 +1806,14 @@ bool Clip::draw_to_canvas(std::shared_ptr<openshot::Frame> frame,
 		return false;
 
 	// A source that is already on the GPU -- a text clip since W17 -- is taken as a
-	// texture and never crosses to the CPU at all. get_transform() cannot apply the
-	// opacity curve to its pixels in that case, so it hands the value back and it goes
-	// on the paint below; on every CPU-backed source it still writes the pixels in
-	// place, exactly as it always has, which is why that path moves no goldens.
+	// texture and never crosses to the CPU at all. The opacity curve goes on the paint below
+	// rather than into the pixels, for a host-memory source too since 2026-09-24: the CPU loop
+	// over the image cost a full pass every faded frame and, by rewriting the QImage, defeated
+	// the upload-once cache for a fading still. The paint's float alpha rounds differently from
+	// the loop's truncation by at most an LSB (owner's decision); the CPU path keeps the loop.
 	const std::shared_ptr<openshot::GpuFrame>& source_gpu = frame->GpuBacking();
 	float deferred_alpha = 1.0f;
-	const QTransform t = get_transform(frame, gpu->width(), gpu->height(),
-									   source_gpu ? &deferred_alpha : nullptr);
+	const QTransform t = get_transform(frame, gpu->width(), gpu->height(), &deferred_alpha);
 
 	sk_sp<SkImage> texture;
 	int source_w = 0, source_h = 0;
@@ -1860,6 +1864,44 @@ bool Clip::draw_to_canvas(std::shared_ptr<openshot::Frame> frame,
 	if (!texture)
 		return false;   // caller falls back; the canvas has not been touched
 
+	// The opacity curve, applied to the source's pixels on the GPU exactly as get_transform's CPU
+	// loop applies it -- `pixel *= alpha` on every premultiplied byte, a float multiply truncated
+	// to the byte -- and before the transform, as there. Paint alpha instead rounds, which was an
+	// LSB off on every faded pixel. One small pass per faded frame; the result is this draw's only.
+	std::shared_ptr<openshot::GpuFrame> faded;
+	if (deferred_alpha != 1.0f) {
+		static std::mutex fade_mutex;
+		static sk_sp<SkRuntimeEffect> fade_effect;
+		{
+			std::lock_guard<std::mutex> lock(fade_mutex);
+			if (!fade_effect) {
+				auto [effect, error] = SkRuntimeEffect::MakeForShader(SkString(
+					"uniform shader src;\n"
+					"uniform float alpha;\n"
+					"half4 main(float2 p) {\n"
+					"  float4 bytes = floor(float4(src.eval(p)) * 255.0 + 0.5);\n"
+					"  return half4(floor(bytes * alpha) / 255.0);\n"
+					"}\n"));
+				fade_effect = effect;
+			}
+		}
+		faded = fade_effect ? openshot::GpuFrame::Create(source_w, source_h, kRGBA_8888_SkColorType) : nullptr;
+		SkCanvas* fade_canvas = faded ? faded->canvas() : nullptr;
+		if (!fade_canvas)
+			return false;
+		SkRuntimeEffectBuilder builder(fade_effect);
+		builder.child("src") = texture->makeShader(SkTileMode::kClamp, SkTileMode::kClamp, SkSamplingOptions());
+		builder.uniform("alpha") = deferred_alpha;
+		SkPaint fade_paint;
+		fade_paint.setShader(builder.makeShader());
+		fade_paint.setBlendMode(SkBlendMode::kSrc);
+		fade_canvas->drawRect(SkRect::MakeIWH(source_w, source_h), fade_paint);
+		texture = faded->snapshot();
+		if (!texture)
+			return false;
+		deferred_alpha = 1.0f;
+	}
+
 	// Qt stores an affine transform row-vector style (x' = m11*x + m21*y + m31), Skia
 	// column-vector style, so the six coefficients transpose across directly and the
 	// mapping is exact rather than approximate.
@@ -1871,9 +1913,6 @@ bool Clip::draw_to_canvas(std::shared_ptr<openshot::Frame> frame,
 	SkCanvas* canvas = gpu->canvas();
 	SkPaint paint;
 	paint.setBlendMode(ToSkBlendMode(blend_mode));
-	// Only ever anything but 1.0 for a GPU-backed source; see get_transform above.
-	if (deferred_alpha != 1.0f)
-		paint.setAlphaf(deferred_alpha);
 
 	// W14: the clip blur and the drop shadow become one SkImageFilter chain on the paint,
 	// so a clip carrying either still composites in this single transformed draw. Both are
@@ -2262,7 +2301,7 @@ QTransform Clip::get_transform(std::shared_ptr<Frame> frame, int width, int heig
 		*deferred_alpha = 1.0f;
 	std::shared_ptr<QImage> source_image;
 	QSize image_size;
-	if (defer && frame->IsGpuBacked()) {
+	if (defer) {
 		image_size = QSize(frame->GetWidth(), frame->GetHeight());
 	} else {
 		// Get image from clip

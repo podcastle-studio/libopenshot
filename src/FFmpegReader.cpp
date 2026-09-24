@@ -1399,6 +1399,21 @@ namespace {
 /// caller decodes it again rather than reading a surface it does not own. Costs a re-decode in a
 /// case the render path does not hit -- Timeline -> Clip -> reader is one thread -- and is what
 /// makes handing out GPU frames safe for the callers that are not.
+// A frame the stream has no picture for (a gap, a variable-frame-rate webm) repeats the previous
+// one. A GPU-backed previous frame shares its surface, as Frame's copy constructor and FrameMapper
+// do -- nothing draws into a frame's backing after the fact -- instead of being read back for a
+// copy (which also flattened the cached frame it came from).
+void copyPicture(openshot::Frame& to, openshot::Frame& from) {
+	if (from.IsGpuBacked()) {
+		const std::shared_ptr<openshot::GpuFrame>& gpu = from.GpuBacking();
+		if (gpu && gpu->ownedByThisThread()) {
+			to.AttachGpuFrame(gpu);
+			return;
+		}
+	}
+	to.AddImage(std::make_shared<QImage>(from.GetImage()->copy()));
+}
+
 bool cachedFrameIsUsable(const std::shared_ptr<openshot::Frame>& frame) {
 	if (!frame || !frame->IsGpuBacked())
 		return true;
@@ -3144,14 +3159,14 @@ void FFmpegReader::CheckWorkingFrames(int64_t requested_frame) {
 					std::shared_ptr<Frame> previous_frame_instance = final_cache.GetFrame(previous_frame);
 					if (previous_frame_instance && previous_frame_instance->has_image_data) {
 						// Copy image from last decoded frame
-						f->AddImage(std::make_shared<QImage>(previous_frame_instance->GetImage()->copy()));
+						copyPicture(*f, *previous_frame_instance);
 						break;
 					}
 				}
 
 				if (last_video_frame && !f->has_image_data) {
 					// Copy image from last decoded frame
-					f->AddImage(std::make_shared<QImage>(last_video_frame->GetImage()->copy()));
+					copyPicture(*f, *last_video_frame);
 				} else if (!f->has_image_data) {
 					f->AddColor("#000000");
 				}

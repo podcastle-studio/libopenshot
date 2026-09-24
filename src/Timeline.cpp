@@ -1071,8 +1071,6 @@ std::shared_ptr<Frame> Timeline::GetFrame(int64_t requested_frame)
 				(color.red.GetCount() > 1 || color.green.GetCount() > 1 || color.blue.GetCount() > 1) ||
 				(color.red.GetValue(requested_frame) != 0.0 || color.green.GetValue(requested_frame) != 0.0 ||
 				 color.blue.GetValue(requested_frame) != 0.0);
-			if (has_background_color)
-				new_frame->AddColor(preview_width, preview_height, color.GetColorHex(requested_frame));
 
 			// Put this frame's canvas on the GPU when one is available, so clips that
 			// qualify can composite straight onto it (Clip::draw_to_canvas). Everything
@@ -1122,6 +1120,11 @@ std::shared_ptr<Frame> Timeline::GetFrame(int64_t requested_frame)
 					new_frame->AttachGpuFrame(std::move(gpu_canvas));
 				}
 			}
+			// The CPU canvas's colour fill, only when there is no GPU canvas: the clear above is the
+			// GPU's, and filling a full-frame QImage first -- which AttachGpuFrame then discards --
+			// was a CPU pass over the whole frame on every GPU frame.
+			if (has_background_color && !new_frame->IsGpuBacked())
+				new_frame->AddColor(preview_width, preview_height, color.GetColorHex(requested_frame));
 
 			// Debug output
 			ZmqLogger::Instance()->AppendDebugMethod(
