@@ -79,6 +79,21 @@ void golden::registerEffectScenarios() {
         s.timeline->Open();
     });
 
+    // A still image clip with a crop and rounded corners, the way the service builds one (an IMAGE
+    // clip, or a shape/line reveal): the frame arrives in host memory and, with GPU_CROP, is
+    // uploaded once and cropped on the GPU (2026-09-24) instead of through QPainter.
+    add("effects.crop_radius_image", {"effects", "crop", "exact", "gpu-composite"}, {1, 45, 89}, [](Scene& s) {
+        auto& tl = s.makeTimeline();
+        using namespace golden::recipes;
+        tl.AddClip(backgroundClip(s, s.media("background_960x540.png")));
+        MediaSpec m; m.path = s.media("image_rgb_400x300.jpg"); m.isImage = true; m.end = 3.0;
+        m.transform = Transform{BBox{0.5f, 0.5f, 0.7f, 0.7f}};
+        auto* c = mediaClip(s, m);
+        c->AddEffect(cropEffect(ramp(0, 0.25), openshot::Keyframe(0.1), openshot::Keyframe(0.1), ramp(0, 0.25), ramp(0.05, 0.45)));
+        tl.AddClip(c);
+        tl.Open();
+    });
+
     add("effects.chromakey_ycbcr", {"effects", "chromakey", "exact", "gpu-composite"}, F, [](Scene& s) {
         auto* c = baseScene(s, "clip_green_640x360_30.mp4");
         c->AddEffect(new openshot::ChromaKey(openshot::Color(0, 255, 0, 0), 70, 20, openshot::CHROMAKEY_YCBCR));

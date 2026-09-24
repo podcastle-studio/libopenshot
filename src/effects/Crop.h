@@ -39,7 +39,14 @@ namespace openshot
 	private:
 		/// The GPU twin of GetFrame for a frame already on the GPU (Settings::GPU_CROP, W29).
 		std::shared_ptr<openshot::Frame> GetFrameOnGpu(std::shared_ptr<openshot::Frame> frame,
-													   int64_t frame_number);
+		                                              const std::shared_ptr<openshot::GpuFrame>& source,
+		                                              int64_t frame_number);
+
+		/// A host-memory frame's pixels on the GPU: one upload, kept while the same QImage keeps
+		/// arriving (a still image clip, a shape). Null when it cannot be made.
+		std::shared_ptr<openshot::GpuFrame> HostSource(const std::shared_ptr<openshot::Frame>& frame);
+		struct HostSourceCache;
+		std::shared_ptr<HostSourceCache> host_source;
 
 		/// Init effect settings
 		void init_effect_details();

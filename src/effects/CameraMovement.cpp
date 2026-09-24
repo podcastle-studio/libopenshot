@@ -1,4 +1,14 @@
 #include <QPainter>
+#include "../gpu/GpuDevice.h"
+#include "../gpu/GpuFrame.h"
+#include "skia/include/core/SkCanvas.h"
+#include "skia/include/core/SkColor.h"
+#include "skia/include/core/SkImage.h"
+#include "skia/include/core/SkImageInfo.h"
+#include "skia/include/core/SkMatrix.h"
+#include "skia/include/core/SkPaint.h"
+#include "skia/include/core/SkPixmap.h"
+#include "skia/include/core/SkSamplingOptions.h"
 
 #include "CameraMovement.h"
 #include "Exceptions.h"
@@ -44,6 +54,12 @@ std::shared_ptr<Frame> CameraMovement::GetFrame(std::shared_ptr<Frame> frame, in
 
     if (qFuzzyCompare(z, 1.0) && qFuzzyIsNull(mx) && qFuzzyIsNull(my) && qFuzzyIsNull(a))
         return frame;                                                  // nothing to do
+
+    // On the GPU when there is one (2026-09-24): the same transform drawn into a pooled surface,
+    // so a GPU-decoded frame is not read back and the result stays on the device. Owner's
+    // decision: Skia's bilinear where QPainter smooth-transforms, as in the compositor.
+    if (ApplyOnGpu(frame, z, mx, my, a))
+        return frame;
 
     //------------------------------------------------------------------
     // 2. Borrow the source pixels (no deep copy)
@@ -101,6 +117,78 @@ std::shared_ptr<Frame> CameraMovement::GetFrame(std::shared_ptr<Frame> frame, in
     //------------------------------------------------------------------
     frame->AddImage(std::make_shared<QImage>(scratch.copy()));
     return frame;
+}
+
+bool CameraMovement::ApplyOnGpu(const std::shared_ptr<Frame>& frame, double z, double mx, double my,
+								double a)
+{
+	if (!GpuDevice::Instance().available())
+		return false;
+	const int W = frame->GetWidth();
+	const int H = frame->GetHeight();
+	if (W <= 0 || H <= 0)
+		return false;
+
+	// The frame's pixels as a texture: its own GPU backing, or one upload of a host image.
+	sk_sp<SkImage> source;
+	std::shared_ptr<GpuFrame> staging;
+	if (frame->IsGpuBacked()) {
+		const std::shared_ptr<GpuFrame>& gpu = frame->GpuBacking();
+		if (!gpu || !gpu->ownedByThisThread())
+			return false;
+		source = gpu->snapshot();
+	} else {
+		std::shared_ptr<QImage> image = frame->GetImage();
+		if (!image || image->isNull() || image->format() != QImage::Format_RGBA8888_Premultiplied)
+			return false;
+		staging = GpuFrame::Create(image->width(), image->height(), kRGBA_8888_SkColorType);
+		const SkPixmap pixels(SkImageInfo::Make(image->width(), image->height(), kRGBA_8888_SkColorType,
+												kPremul_SkAlphaType),
+							  image->constBits(), image->bytesPerLine());
+		if (!staging || !staging->upload(pixels))
+			return false;
+		source = staging->snapshot();
+	}
+	if (!source)
+		return false;
+
+	std::shared_ptr<GpuFrame> destination = GpuFrame::Create(W, H, kRGBA_8888_SkColorType);
+	SkCanvas* canvas = destination ? destination->canvas() : nullptr;
+	if (!canvas)
+		return false;
+	canvas->clear(SK_ColorTRANSPARENT);
+
+	// The CPU branch's transform, built the same way (see GetFrame).
+	QTransform T;
+	T.translate(W * 0.5, H * 0.5);
+	T.scale(z, z);
+	T.translate(-W * 0.5, -H * 0.5);
+	const double dx = -(mx / 100.0) * W;
+	const double dy = -(my / 100.0) * H;
+	T.translate(dx, dy);
+	const double cx = W * 0.5 - dx;
+	const double cy = H * 0.5 - dy;
+	T.translate(cx, cy);
+	T.rotate(a);
+	T.translate(-cx, -cy);
+
+	const bool smooth = !qFuzzyCompare(z, 1.0) || !qFuzzyIsNull(a);
+	SkMatrix m;
+	if (smooth) {
+		// Qt stores the matrix row-vector style, Skia column-vector style: a transpose.
+		m.setAll((SkScalar) T.m11(), (SkScalar) T.m21(), (SkScalar) T.m31(),
+				 (SkScalar) T.m12(), (SkScalar) T.m22(), (SkScalar) T.m32(),
+				 (SkScalar) T.m13(), (SkScalar) T.m23(), (SkScalar) T.m33());
+	} else {
+		// Translate only, no smoothing: QPainter snaps the image to whole pixels, so does this.
+		m.setTranslate((SkScalar) qRound(T.dx()), (SkScalar) qRound(T.dy()));
+	}
+	canvas->concat(m);
+	SkPaint paint;
+	canvas->drawImage(source, 0, 0,
+					  smooth ? SkSamplingOptions(SkFilterMode::kLinear) : SkSamplingOptions(), &paint);
+	frame->AttachGpuFrame(std::move(destination));
+	return true;
 }
 
 // Generate JSON string of this object

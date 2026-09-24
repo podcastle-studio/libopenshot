@@ -14,7 +14,10 @@
 #include "Exceptions.h"
 #include "KeyFrame.h"
 #include "Settings.h"
+#include "gpu/GpuDevice.h"
 #include "gpu/GpuFrame.h"
+#include "skia/include/core/SkImageInfo.h"
+#include "skia/include/core/SkPixmap.h"
 #include "gpu/GpuTelemetry.h"
 #include "skia/include/core/SkCanvas.h"
 #include "skia/include/core/SkImage.h"
@@ -73,9 +76,21 @@ std::shared_ptr<openshot::Frame> Crop::GetFrame(std::shared_ptr<openshot::Frame>
     // geometry as below; GetImage() would read it back, and did, once per clip per frame.
     if (!resize && Settings::Instance()->GPU_CROP && frame->IsGpuBacked() &&
         frame->GpuBacking()->ownedByThisThread()) {
-        if (std::shared_ptr<openshot::Frame> done = GetFrameOnGpu(frame, frame_number)) {
+        if (std::shared_ptr<openshot::Frame> done = GetFrameOnGpu(frame, frame->GpuBacking(), frame_number)) {
             openshot::GpuCounters::Add(openshot::GpuCounters::CropOnGpu);
             return done;
+        }
+    }
+    // A host-memory frame -- an image clip or a shape with a crop or rounded corners -- goes onto
+    // the GPU here rather than through QPainter (2026-09-24), so it composites without leaving it.
+    // A still hands over the same QImage every frame, and is uploaded once.
+    if (!resize && Settings::Instance()->GPU_CROP && !frame->IsGpuBacked() &&
+        openshot::GpuDevice::Instance().available()) {
+        if (std::shared_ptr<openshot::GpuFrame> uploaded = HostSource(frame)) {
+            if (std::shared_ptr<openshot::Frame> done = GetFrameOnGpu(frame, uploaded, frame_number)) {
+                openshot::GpuCounters::Add(openshot::GpuCounters::CropOnGpu);
+                return done;
+            }
         }
     }
     if (frame->IsGpuBacked())
@@ -171,10 +186,41 @@ std::shared_ptr<openshot::Frame> Crop::GetFrame(std::shared_ptr<openshot::Frame>
 // same radius; an antialiased rounded-rect clip and a bilinear draw between fractional rects,
 // which is what QPainter's Antialiasing + SmoothPixmapTransform do. Only the rasteriser differs.
 // Null means "use the QPainter path".
+struct Crop::HostSourceCache
+{
+    qint64 key = 0;
+    unsigned long long generation = 0;
+    std::shared_ptr<openshot::GpuFrame> surface;
+};
+
+std::shared_ptr<openshot::GpuFrame> Crop::HostSource(const std::shared_ptr<openshot::Frame>& frame)
+{
+    std::shared_ptr<QImage> image = frame->GetImage();
+    if (!image || image->isNull() || image->format() != QImage::Format_RGBA8888_Premultiplied)
+        return nullptr;
+    const unsigned long long generation = openshot::GpuDevice::Generation();
+    if (host_source && host_source->surface && host_source->key == image->cacheKey() &&
+        host_source->generation == generation && host_source->surface->ownedByThisThread()) {
+        openshot::GpuCounters::Add(openshot::GpuCounters::UploadCached);
+        return host_source->surface;
+    }
+    auto cache = std::make_shared<HostSourceCache>();
+    cache->key = image->cacheKey();
+    cache->generation = generation;
+    cache->surface = openshot::GpuFrame::Create(image->width(), image->height(), kRGBA_8888_SkColorType);
+    const SkPixmap pixels(SkImageInfo::Make(image->width(), image->height(), kRGBA_8888_SkColorType,
+                                            kPremul_SkAlphaType),
+                          image->constBits(), image->bytesPerLine());
+    if (!cache->surface || !cache->surface->upload(pixels))
+        return nullptr;
+    host_source = cache;
+    return cache->surface;
+}
+
 std::shared_ptr<openshot::Frame> Crop::GetFrameOnGpu(std::shared_ptr<openshot::Frame> frame,
+                                                     const std::shared_ptr<openshot::GpuFrame>& source,
                                                      int64_t frame_number)
 {
-    const std::shared_ptr<openshot::GpuFrame>& source = frame->GpuBacking();
     const int w = source->width();
     const int h = source->height();
 
