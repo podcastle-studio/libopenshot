@@ -88,8 +88,17 @@ bool SplitShift::SetGpuUniforms(SkRuntimeEffectBuilder& builder, int64_t frame_n
 	// Resolved by the shared planner (image-processing-lib/src/Planner), the same code the editor
 	// runs, so the two cannot disagree about what these values mean. It declines -- and the C++
 	// twin runs -- for every case the fragment does not cover.
-	return BindPlan(builder, Podcastle::Effects::planEffect(
-		"SPLIT_SHIFT", {{"shiftAmount", shiftAmount.GetValue(frame_number)}, {"shiftPoint", splitPoint.GetValue(frame_number)}, {"isHorizontal", isHorizontal ? 1.0 : 0.0}}, width, height));
+	Podcastle::Effects::EffectPlan plan;
+	PlanForFrame(frame_number, width, height, plan);
+	return BindPlan(builder, plan);
+}
+
+bool SplitShift::PlanForFrame(int64_t frame_number, int width, int height,
+							  Podcastle::Effects::EffectPlan& plan) const
+{
+	plan = Podcastle::Effects::planEffect(
+		"SPLIT_SHIFT", {{"shiftAmount", shiftAmount.GetValue(frame_number)}, {"shiftPoint", splitPoint.GetValue(frame_number)}, {"isHorizontal", isHorizontal ? 1.0 : 0.0}}, width, height);
+	return true;
 }
 
 // Generate JSON string of this object

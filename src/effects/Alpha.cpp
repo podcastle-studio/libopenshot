@@ -102,8 +102,16 @@ bool Alpha::SetGpuUniforms(SkRuntimeEffectBuilder& builder, int64_t frame_number
 	// Resolved by the shared planner (image-processing-lib/src/Planner), the same code the editor
 	// runs, so the two cannot disagree about what these values mean. It declines -- and the C++
 	// twin runs -- for every case the fragment does not cover.
-	return BindPlan(builder, Podcastle::Effects::planEffect(
-		"ALPHA", {{"alpha", alpha.GetValue(frame_number)}}, width, height));
+	Podcastle::Effects::EffectPlan plan;
+	PlanForFrame(frame_number, width, height, plan);
+	return BindPlan(builder, plan);
+}
+
+bool Alpha::PlanForFrame(int64_t frame_number, int width, int height,
+						 Podcastle::Effects::EffectPlan& plan) const
+{
+	plan = Podcastle::Effects::planEffect("ALPHA", {{"alpha", alpha.GetValue(frame_number)}}, width, height);
+	return true;
 }
 
 std::shared_ptr<openshot::Frame> Alpha::GetFrame(std::shared_ptr<openshot::Frame> frame, int64_t frame_number) {

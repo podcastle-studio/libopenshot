@@ -29,6 +29,11 @@ protected:
 	bool SetGpuUniforms(SkRuntimeEffectBuilder& builder, int64_t frame_number,
 						int width, int height) const override;
 
+	/// The planner's answer, so a shift of 0 -- every frame of a SPLIT transition's clips
+	/// outside its window -- stays on the GPU untouched instead of being read back.
+	bool PlanForFrame(int64_t frame_number, int width, int height,
+					  Podcastle::Effects::EffectPlan& plan) const override;
+
 
 public:
 	Keyframe shiftAmount;

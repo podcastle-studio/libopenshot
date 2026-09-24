@@ -122,6 +122,14 @@ namespace openshot
 		virtual bool SetGpuUniforms(SkRuntimeEffectBuilder& builder, int64_t frame_number,
 									int width, int height) const = 0;
 
+		/// What the shared planner says this frame needs, for the answers that are not a
+		/// pass: an effect whose C++ twin reaches an identity or a clear by reading the frame
+		/// back (SplitShift at rest, Alpha at 0) fills @a plan and returns true, and
+		/// ApplyOnGpu then leaves the frame untouched or clears it on the GPU instead of
+		/// declining. The default, false, means "only SetGpuUniforms knows".
+		virtual bool PlanForFrame(int64_t frame_number, int width, int height,
+								  Podcastle::Effects::EffectPlan& plan) const;
+
 		/// Run GpuShaderSource() over @a frame's pixels, leaving the result as the
 		/// frame's GPU backing. False means nothing was touched and the caller must
 		/// run its CPU path; that is a normal answer, not an error.

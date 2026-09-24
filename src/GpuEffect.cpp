@@ -234,6 +234,29 @@ bool GpuEffect::ApplyOnGpu(std::shared_ptr<openshot::Frame> frame, int64_t frame
 	const int width = frame->GetWidth();
 	const int height = frame->GetHeight();
 
+	// An identity or a clear is not a pass, and BindPlan declines both -- but declining sends the
+	// C++ twin a GPU frame, which it reads back for a no-op or a memset. SplitShift at rest did
+	// that on every frame of both clips of a SPLIT transition. Neither needs the pixels.
+	Podcastle::Effects::EffectPlan plan;
+	if (PlanForFrame(frame_number, width, height, plan) && plan.steps.size() == 1) {
+		const auto kind = plan.steps.front().kind;
+		if (kind == Podcastle::Effects::PlanStep::Kind::Identity)
+			return true;   // the frame, untouched, is exactly what the C++ returns
+		if (kind == Podcastle::Effects::PlanStep::Kind::Clear && frame->IsGpuBacked()) {
+			// A fresh surface rather than clearing the backing in place: a GPU backing can be
+			// shared with a cached frame (FrameMapper, Frame's copy constructor). All-zero
+			// premultiplied pixels are what the C++'s memset writes. A host frame keeps its
+			// memset -- there is no readback to save there.
+			if (std::shared_ptr<GpuFrame> cleared = GpuFrame::Create(width, height, kRGBA_8888_SkColorType)) {
+				if (SkCanvas* canvas = cleared->canvas()) {
+					canvas->clear(SK_ColorTRANSPARENT);
+					frame->AttachGpuFrame(std::move(cleared));
+					return true;
+				}
+			}
+		}
+	}
+
 	// `source` has to outlive the draw: it owns the surface the snapshot came from.
 	std::shared_ptr<GpuFrame> source = GpuSourceFrame(frame);
 	if (!source)
@@ -261,6 +284,11 @@ namespace
 		}
 		return true;
 	}
+}
+
+bool GpuEffect::PlanForFrame(int64_t, int, int, Podcastle::Effects::EffectPlan&) const
+{
+	return false;
 }
 
 bool GpuEffect::BindPlan(SkRuntimeEffectBuilder& builder,
