@@ -19,6 +19,7 @@
 #include "gpu/GpuFrame.h"
 
 #include <atomic>
+#include <mutex>
 #include <utility>
 #include <vector>
 
@@ -87,6 +88,86 @@ namespace
 	}
 }
 
+namespace
+{
+	// Does this device's LINEAR filter return exactly (a + b) / 2 at the boundary between two
+	// 8-bit texels, for every a and b? blur_pairs.sksl relies on it to read two taps per fetch. The
+	// weights are 0.5 and 0.5 there, which every fixed-point filter holds exactly, but not every
+	// filter keeps the sum's low bit: NVIDIA does, Mesa's llvmpipe does not (1 LSB). Measured once
+	// per device on all 65,536 pairs -- one 512x256 upload, one draw and one readback -- and a device
+	// that fails runs plain blur.sksl for those passes, which gives the same bytes either way.
+	bool linearMidpointIsExact()
+	{
+		static std::mutex mutex;
+		static unsigned long long measured_generation = 0;
+		static bool exact = false;
+		const std::lock_guard<std::mutex> lock(mutex);
+		const unsigned long long generation = GpuDevice::Generation();
+		if (measured_generation == generation + 1)
+			return exact;
+		exact = false;
+		measured_generation = generation + 1;
+
+		// Row b, columns 2a and 2a + 1 hold a and b in every channel.
+		std::vector<uint8_t> pairs(512 * 256 * 4);
+		for (int b = 0; b < 256; ++b)
+			for (int a = 0; a < 256; ++a)
+				for (int k = 0; k < 4; ++k) {
+					pairs[(b * 512 + 2 * a) * 4 + k] = static_cast<uint8_t>(a);
+					pairs[(b * 512 + 2 * a + 1) * 4 + k] = static_cast<uint8_t>(b);
+				}
+		// Opaque: kRGBA_8888 premultiplied, so colour must not exceed alpha. Put a+b checks in RGB
+		// against an alpha of 255 by forcing alpha, and check alpha separately via a == b rows.
+		for (int b = 0; b < 256; ++b)
+			for (int a = 0; a < 512; ++a)
+				pairs[(b * 512 + a) * 4 + 3] = 255;
+		std::shared_ptr<GpuFrame> source = GpuFrame::Create(512, 256, kRGBA_8888_SkColorType);
+		std::shared_ptr<GpuFrame> result = GpuFrame::Create(256, 256, kRGBA_8888_SkColorType);
+		if (!source || !result)
+			return false;
+		const SkPixmap pixels(SkImageInfo::Make(512, 256, kRGBA_8888_SkColorType, kPremul_SkAlphaType),
+							  pairs.data(), 512 * 4);
+		if (!source->upload(pixels))
+			return false;
+		sk_sp<SkImage> image = source->snapshot();
+		if (!image)
+			return false;
+		// out = (sample * 510 - (a + b)) + 128 -- 128 when exact.
+		static const char* kProbe =
+			"uniform shader src;\n"
+			"half4 main(float2 p) {\n"
+			"  float2 q = floor(p);\n"
+			"  float s = float(src.eval(float2(2.0 * q.x + 1.0, q.y + 0.5)).r);\n"
+			"  float d = floor(s * 510.0 + 0.5) - (q.x + q.y);\n"
+			"  return half4(half((d + 128.0) / 255.0), 0.0, 0.0, 1.0);\n"
+			"}\n";
+		auto [effect, error] = SkRuntimeEffect::MakeForShader(SkString(kProbe));
+		if (!effect)
+			return false;
+		SkRuntimeEffectBuilder builder(effect);
+		builder.child("src") = image->makeShader(SkTileMode::kClamp, SkTileMode::kClamp,
+												 SkSamplingOptions(SkFilterMode::kLinear));
+		sk_sp<SkShader> shader = builder.makeShader();
+		SkCanvas* canvas = result->canvas();
+		if (!shader || !canvas)
+			return false;
+		SkPaint paint;
+		paint.setShader(std::move(shader));
+		paint.setBlendMode(SkBlendMode::kSrc);
+		canvas->drawRect(SkRect::MakeIWH(256, 256), paint);
+		std::vector<uint8_t> out(256 * 256 * 4);
+		const SkPixmap readback(SkImageInfo::Make(256, 256, kRGBA_8888_SkColorType, kPremul_SkAlphaType),
+								out.data(), 256 * 4);
+		if (!result->readback(readback))
+			return false;
+		for (int i = 0; i < 256 * 256; ++i)
+			if (out[i * 4] != 128)
+				return false;
+		exact = true;
+		return true;
+	}
+}
+
 GpuEffect::GpuEffect() = default;
 GpuEffect::~GpuEffect() = default;
 
@@ -145,7 +226,16 @@ std::shared_ptr<GpuFrame> GpuEffect::RunGpuPass(const std::shared_ptr<GpuFrame>&
 	if (!GpuDevice::Instance().available())
 		return nullptr;
 
-	const char* fragment = GpuShaderSource();
+	// Inside a planned step (RunPlannedStep) the pass names its own fragment and uniforms, so an
+	// effect with a multi-pass plan needs no override of its own to run it.
+	const char* fragment = planned_pass ? PlannedShaderSource(GpuShaderSource()) : GpuShaderSource();
+	// A pass that reads texel pairs through the linear filter, on a device whose filter does not
+	// keep their sum exact: the plain twin, same uniforms, same bytes (see linearMidpointIsExact).
+	bool linear = planned_pass && planned_pass->linearSource;
+	if (linear && planned_pass->shader == "blur_pairs" && !linearMidpointIsExact()) {
+		fragment = openshot::shaders::kBlur;
+		linear = false;
+	}
 	if (!fragment)
 		return nullptr;
 	if (!programs)
@@ -190,9 +280,12 @@ std::shared_ptr<GpuFrame> GpuEffect::RunGpuPass(const std::shared_ptr<GpuFrame>&
 	// texel and osBytes() recovers the source byte exactly. Linear filtering would
 	// blend neighbours and no amount of care in the fragment would then match the
 	// C++ — this one line is load-bearing for the parity gate.
+	// ...except a pass the planner marks linearSource (blur_pairs), which reads two texels per fetch
+	// on their shared boundary; its texel-centre reads are still exact under linear filtering.
 	builder.child("osSrc") = image->makeShader(SkTileMode::kClamp, SkTileMode::kClamp,
-											   SkSamplingOptions());
-	if (!SetGpuUniforms(builder, frame_number, width, height))
+											   linear ? SkSamplingOptions(SkFilterMode::kLinear)
+													  : SkSamplingOptions());
+	if (planned_pass ? !BindPlannedPass(builder) : !SetGpuUniforms(builder, frame_number, width, height))
 		return nullptr;
 
 	sk_sp<SkShader> shader = builder.makeShader();
@@ -254,6 +347,16 @@ bool GpuEffect::ApplyOnGpu(std::shared_ptr<openshot::Frame> frame, int64_t frame
 					return true;
 				}
 			}
+		}
+		// A GPU step of several passes, or of one whose size is not the frame's (a resize, a
+		// zoom-out that pads to a new size): run the chain, which attaches its last pass's
+		// output -- at that pass's size, as the C++ assigns a resized image back.
+		if (kind == Podcastle::Effects::PlanStep::Kind::Gpu) {
+			const Podcastle::Effects::PlanStep& step = plan.steps.front();
+			const bool plain = step.passes.size() == 1 && step.passes.front().width == width &&
+							   step.passes.front().height == height;
+			if (!plain)
+				return RunPlannedStep(frame, frame_number, step) ? true : declined();
 		}
 	}
 

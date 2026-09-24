@@ -36,6 +36,7 @@ extern "C" {
 #include "effects/Enhancement.h"
 #include "effects/ColorMap.h"
 #include "effects/Mask.h"
+#include "effects/Zoom.h"
 #include "gpu/CudaInterop.h"
 #include "gpu/GpuDevice.h"
 #include "gpu/GpuYuv.h"
@@ -312,6 +313,24 @@ void unitScene(Scene& s) {
     s.makeTimeline().Open();
 }
 
+
+// Runs one planned step directly, for checks that compare two plans of the same effect.
+class PlanRunner : public openshot::GpuEffect {
+public:
+    bool run(std::shared_ptr<openshot::Frame> frame, const Podcastle::Effects::PlanStep& step) {
+        return RunPlannedStep(std::move(frame), 1, step);
+    }
+    std::shared_ptr<openshot::Frame> GetFrame(int64_t) override { return nullptr; }
+    std::shared_ptr<openshot::Frame> GetFrame(std::shared_ptr<openshot::Frame> f, int64_t) override { return f; }
+    std::string Json() const override { return "{}"; }
+    void SetJson(const std::string) override {}
+    Json::Value JsonValue() const override { return Json::Value(); }
+    void SetJsonValue(const Json::Value) override {}
+    std::string PropertiesJSON(int64_t) const override { return "{}"; }
+protected:
+    const char* GpuShaderSource() const override { return PlannedShaderSource(nullptr); }
+    bool SetGpuUniforms(SkRuntimeEffectBuilder& b, int64_t, int, int) const override { return BindPlannedPass(b); }
+};
 } // namespace
 
 void golden::registerUnitScenarios() {
@@ -477,6 +496,105 @@ void golden::registerUnitScenarios() {
                 char buf[160];
                 std::snprintf(buf, sizeof buf, "%s: gpu_passes=%lld psnr vs CPU %.2f max %d", c.label, passes, m.psnr, m.maxAbs);
                 checks.push_back({c.label, passes == 3 && m.psnr >= 45.0, buf});
+            }
+        });
+
+    // blur_pairs.sksl reads a wide box's taps two per fetch through the linear filter, and must give
+    // blur.sksl's bytes exactly: the same planned blur is run twice on the GPU, as planned and with
+    // every blur_pairs pass rewritten to plain blur, over noise (where a wrong tap cannot hide) and
+    // at frame sizes where the window reflects at one end, both ends, and not at all.
+    addCustom("unit.gpu_blur_pairs", {"unit", "gpu"}, unitScene,
+        [](Scene&, std::vector<Captured>&, std::vector<Check>& checks) {
+            namespace fx = Podcastle::Effects;
+            if (!openshot::GpuDevice::Instance().available()) {
+                checks.push_back({"no_gpu", true, "no GPU passes to compare"});
+                return;
+            }
+            struct Case { int w, h, hr, vr; };
+            const Case cases[] = {{640, 360, 60, 60}, {1920, 1080, 230, 0}, {1920, 1080, 0, 360},
+                                  {1280, 720, 150, 150}, {320, 180, 360, 360}};
+            for (const Case& c : cases) {
+                QImage noise(c.w, c.h, QImage::Format_RGBA8888_Premultiplied);
+                uint32_t seed = 12345u + c.w + c.hr;
+                for (int y = 0; y < c.h; ++y) {
+                    uint8_t* row = noise.scanLine(y);
+                    for (int x = 0; x < c.w; ++x) {
+                        seed = seed * 1664525u + 1013904223u;
+                        const uint8_t a = 128 + ((seed >> 24) & 127);
+                        for (int k = 0; k < 3; ++k) row[x * 4 + k] = static_cast<uint8_t>(((seed >> (k * 8)) & 255) * a / 255);
+                        row[x * 4 + 3] = a;
+                    }
+                }
+                const fx::EffectPlan planned = fx::planEffect(
+                    "BLUR", {{"horizontalRadius", double(c.hr)}, {"verticalRadius", double(c.vr)}}, c.w, c.h);
+                if (planned.steps.size() != 1 || planned.steps.front().kind != fx::PlanStep::Kind::Gpu) {
+                    checks.push_back({"blur_pairs_planned", false, "the blur did not plan a GPU step"});
+                    return;
+                }
+                fx::PlanStep plain = planned.steps.front();
+                int paired = 0;
+                for (auto& pass : plain.passes)
+                    if (pass.shader == "blur_pairs") { pass.shader = "blur"; pass.linearSource = false; ++paired; }
+                auto run = [&](const fx::PlanStep& step) {
+                    PlanRunner runner;
+                    auto frame = std::make_shared<openshot::Frame>(1, c.w, c.h, "#000000");
+                    frame->AddImage(std::make_shared<QImage>(noise.copy()));
+                    const bool ok = runner.run(frame, step);
+                    return std::make_pair(ok, golden::fromFrame(frame));
+                };
+                const auto a = run(planned.steps.front());
+                const auto b = run(plain);
+                const golden::Metrics m = golden::compare(b.second, a.second);
+                char label[64], buf[200];
+                std::snprintf(label, sizeof label, "blur_pairs %dx%d h%d v%d", c.w, c.h, c.hr, c.vr);
+                std::snprintf(buf, sizeof buf, "%s: %d of %zu half-passes paired; ran %s/%s; vs plain blur max %d",
+                              label, paired, plain.passes.size(), a.first ? "yes" : "no", b.first ? "yes" : "no", m.maxAbs);
+                checks.push_back({label, a.first && b.first && paired > 0 && m.maxAbs == 0, buf});
+            }
+        });
+
+    // Zoom below 100 % (ZOOM_IN's in-clip, ZOOM_OUT's out-clip) was a readback and OpenCV every
+    // frame; it is resample_linear + zoom_out_pad now, the last one sized as the C++'s result is
+    // (which is not always the frame's size -- its four paddings are clamped on their own). Held
+    // against the C++ at production zooms and at the anchors that make the paddings clamp.
+    addCustom("unit.gpu_zoom_out", {"unit", "gpu"}, unitScene,
+        [](Scene& s, std::vector<Captured>&, std::vector<Check>& checks) {
+            if (!openshot::GpuDevice::Instance().available()) {
+                checks.push_back({"no_gpu", true, "the OpenCV zoom runs without a GPU"});
+                return;
+            }
+            const QImage background(QString::fromStdString(s.media("background_960x540.png")));
+            const QImage pattern(QString::fromStdString(s.media("image_rgb_400x300.jpg")));
+            struct Case { double zoom, ax, ay; int w, h; };
+            const Case cases[] = {{66, 0.5, 0.5, 1920, 1080}, {34, 0.5, 0.5, 1920, 1080},
+                                  {80, 0.0, 0.0, 640, 360}, {50, 1.0, 1.0, 640, 360},
+                                  {99.9, 0.3, 0.7, 1280, 720}};
+            for (const Case& c : cases) {
+                QImage source = background.scaled(c.w, c.h).convertToFormat(QImage::Format_RGBA8888_Premultiplied);
+                {
+                    QPainter painter(&source);
+                    painter.drawImage(QRect(c.w / 4, c.h / 4, c.w / 2, c.h / 2), pattern);
+                }
+                auto run = [&]() {
+                    openshot::Zoom zoom(openshot::Keyframe(c.zoom), openshot::Keyframe(c.ax), openshot::Keyframe(c.ay));
+                    auto frame = std::make_shared<openshot::Frame>(1, c.w, c.h, "#000000");
+                    frame->AddImage(std::make_shared<QImage>(source.copy()));
+                    return golden::fromFrame(zoom.GetFrame(frame, 1));
+                };
+                openshot::GpuEffect::ResetCounters();
+                const golden::Image gpu = run();
+                const long long passes = openshot::GpuEffect::GpuPasses();
+                const openshot::GpuDevice::Backend backend = openshot::GpuDevice::RequestedBackend();
+                openshot::GpuDevice::SetBackend(openshot::GpuDevice::Backend::Off);
+                const golden::Image cpu = run();
+                openshot::GpuDevice::SetBackend(backend);
+                const bool same_size = gpu.w == cpu.w && gpu.h == cpu.h;
+                const golden::Metrics m = same_size ? golden::compare(cpu, gpu) : golden::Metrics{};
+                char label[64], buf[200];
+                std::snprintf(label, sizeof label, "zoom(%.1f, %.1f,%.1f) %dx%d", c.zoom, c.ax, c.ay, c.w, c.h);
+                std::snprintf(buf, sizeof buf, "%s: gpu_passes=%lld, out %dx%d vs CPU %dx%d, psnr %.2f max %d",
+                              label, passes, gpu.w, gpu.h, cpu.w, cpu.h, m.psnr, m.maxAbs);
+                checks.push_back({label, passes == 2 && same_size && m.maxAbs <= 1, buf});
             }
         });
 
@@ -1345,9 +1463,10 @@ void golden::registerUnitScenarios() {
             struct Expect { const char* label; const char* effect; fx::EffectParams params;
                             fx::PlanStep::Kind kind; };
             const Expect expects[] = {
-                {"ZOOM 80 -> cpu", "ZOOM", {{"zoomPercent", 80}, {"anchorX", 0.5}, {"anchorY", 0.5}},
-                 fx::PlanStep::Kind::Cpu},
-                {"ZOOM 99.9 -> cpu", "ZOOM", {{"zoomPercent", 99.9}}, fx::PlanStep::Kind::Cpu},
+                // Zoom-out is two GPU passes since 2026-09-24 (resample_linear + zoom_out_pad).
+                {"ZOOM 80 -> gpu", "ZOOM", {{"zoomPercent", 80}, {"anchorX", 0.5}, {"anchorY", 0.5}},
+                 fx::PlanStep::Kind::Gpu},
+                {"ZOOM 99.9 -> gpu", "ZOOM", {{"zoomPercent", 99.9}}, fx::PlanStep::Kind::Gpu},
                 {"ALPHA 0 -> clear", "ALPHA", {{"alpha", 0}}, fx::PlanStep::Kind::Clear},
                 {"ALPHA -1 -> clear", "ALPHA", {{"alpha", -1}}, fx::PlanStep::Kind::Clear},
                 {"BLUR zero radii -> identity", "BLUR",
@@ -1366,10 +1485,13 @@ void golden::registerUnitScenarios() {
                 if (plan.steps.size() != 1 || plan.steps.front().kind != e.kind)
                     wrong += std::string(wrong.empty() ? "" : "; ") + e.label;
             }
-            const fx::EffectPlan cpu = fx::planEffect("ZOOM", {{"zoomPercent", 80}}, kW, kH);
-            if (cpu.steps.size() == 1 && cpu.steps.front().cpu.function != "applyZoomEffect")
-                wrong += std::string(wrong.empty() ? "" : "; ") + "ZOOM 80 names " +
-                         cpu.steps.front().cpu.function;
+            // A cpu step names the C++ function the host must call. (Zoom-out was the example
+            // until it moved to the GPU; the full-turn rotation is still a cpu step.)
+            const fx::EffectPlan cpu = fx::planEffect("BORDER_REFLECTED_ROTATION", {{"angle", 360}}, kW, kH);
+            if (cpu.steps.size() != 1 || cpu.steps.front().kind != fx::PlanStep::Kind::Cpu ||
+                cpu.steps.front().cpu.function != "applyBorderReflectedRotationEffect")
+                wrong += std::string(wrong.empty() ? "" : "; ") + "BORDER_REFLECTED_ROTATION 360 names '" +
+                         (cpu.steps.empty() ? std::string() : cpu.steps.front().cpu.function) + "'";
             checks.push_back({"identity_clear_cpu", wrong.empty(),
                               wrong.empty() ? std::to_string(sizeof(expects) / sizeof(expects[0])) +
                                                   " cases as expected"

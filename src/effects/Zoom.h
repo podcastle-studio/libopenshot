@@ -36,6 +36,11 @@ namespace openshot
 		bool SetGpuUniforms(SkRuntimeEffectBuilder& builder, int64_t frame_number,
 							int width, int height) const override;
 
+		/// The planner's answer, so a zoom-out (resize + reflected border, two passes) runs on the
+		/// GPU instead of declining.
+		bool PlanForFrame(int64_t frame_number, int width, int height,
+						  Podcastle::Effects::EffectPlan& plan) const override;
+
 
 	public:
 		Keyframe zoomPercent;

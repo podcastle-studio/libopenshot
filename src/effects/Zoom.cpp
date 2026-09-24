@@ -77,8 +77,18 @@ bool Zoom::SetGpuUniforms(SkRuntimeEffectBuilder& builder, int64_t frame_number,
 	// Resolved by the shared planner (image-processing-lib/src/Planner), the same code the editor
 	// runs, so the two cannot disagree about what these values mean. It declines -- and the C++
 	// twin runs -- for every case the fragment does not cover.
-	return BindPlan(builder, Podcastle::Effects::planEffect(
-		"ZOOM", {{"zoomPercent", zoomPercent.GetValue(frame_number)}, {"anchorX", anchorX.GetValue(frame_number)}, {"anchorY", anchorY.GetValue(frame_number)}}, width, height));
+	Podcastle::Effects::EffectPlan plan;
+	PlanForFrame(frame_number, width, height, plan);
+	return BindPlan(builder, plan);
+}
+
+bool Zoom::PlanForFrame(int64_t frame_number, int width, int height,
+						Podcastle::Effects::EffectPlan& plan) const
+{
+	// Zoom-out is two passes and can change the frame's size; ApplyOnGpu runs such a plan.
+	plan = Podcastle::Effects::planEffect(
+		"ZOOM", {{"zoomPercent", zoomPercent.GetValue(frame_number)}, {"anchorX", anchorX.GetValue(frame_number)}, {"anchorY", anchorY.GetValue(frame_number)}}, width, height);
+	return true;
 }
 
 // Generate JSON string of this object
