@@ -1401,10 +1401,23 @@ std::shared_ptr<Frame> FFmpegReader::GetFrame(int64_t requested_frame) {
 // Frames that live in host memory only: a GPU-decoded frame belongs to the recorder of the thread
 // that made it, so one decoded on the worker would be unusable on the caller's thread and
 // cachedFrameIsUsable() would throw it away.
+//
+// With GPU decode on that is still most streams, but not all: one NVDEC is not asked to decode and
+// whose layout GpuYuv does not convert -- the ProRes 4444 watermark every export carries, say --
+// goes through swscale into host memory whatever the switch says, and used to decode on the
+// compositing thread for nothing. Conservative on purpose: any stream that could reach the GPU
+// (NVDEC, or a layout GpuYuv::Supports) keeps read-ahead off, and if one ever did, the frame
+// would only be dropped and decoded again by cachedFrameIsUsable().
 bool FFmpegReader::ReadAheadApplies() const {
 	if (Settings::Instance()->READ_AHEAD_FRAMES <= 0 || !info.has_video)
 		return false;
-	return !(Settings::Instance()->GPU_DECODE && openshot::GpuDevice::Instance().available());
+	if (!(Settings::Instance()->GPU_DECODE && openshot::GpuDevice::Instance().available()))
+		return true;
+#if USE_HW_ACCEL
+	if (hw_de_on && hw_de_supported)
+		return false;
+#endif
+	return !openshot::GpuYuv::Supports(info.pixel_format);
 }
 
 void FFmpegReader::ScheduleReadAhead(int64_t requested_frame) {

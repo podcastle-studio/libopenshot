@@ -38,6 +38,22 @@ void golden::registerReaderScenarios() {
             tl.Open();
         });
 
+    // The service's watermark: a ProRes 4444 .mov with alpha on its own top track for the whole
+    // export (ExportData.cpp builds it as an IMAGE clip; QtImageReader cannot open it, so it falls
+    // back to FFmpegReader). The source is 1 s long and the clip 2 s, so frame 45 is the held last
+    // frame -- the case the host texture cache and read-ahead with GPU decode (A7) are about.
+    add("readers.watermark_prores4444", {"readers", "alpha", "exact", "gpu-composite"}, {1, 15, 45},
+        [](Scene& s) {
+            auto& tl = s.makeTimeline();
+            MediaSpec v; v.path = s.media("clip_a_640x360_30.mp4"); v.end = 2.0;
+            v.transform = Transform{BBox{0.5f, 0.5f, 1.f, 1.f}};
+            tl.AddClip(mediaClip(s, v));
+            MediaSpec w; w.path = s.media("watermark_prores4444_160x120_30.mov"); w.end = 2.0; w.track = 9;
+            w.transform = Transform{BBox{0.82f, 0.18f, 0.25f, 0.25f}};
+            tl.AddClip(mediaClip(s, w));
+            tl.Open();
+        });
+
     add("readers.image_jpg", {"readers", "exact", "gpu-composite"}, {1},
         [](Scene& s) {
             auto& tl = s.makeTimeline();

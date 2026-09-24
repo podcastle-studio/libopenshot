@@ -794,6 +794,30 @@ void golden::registerUnitScenarios() {
                               std::to_string(differ) + " of " + std::to_string(plain.size()) +
                                   " frames differ across walks and seeks; worker decoded ahead: " +
                                   (went_ahead ? "yes" : "no") + (applies ? "" : " (off: GPU decode)")});
+
+            // A stream that can never reach the GPU -- ProRes 4444, which NVDEC is not asked to
+            // decode and GpuYuv does not convert, like the service's watermark -- decodes ahead
+            // even with GPU decode on, and its frames stay in host memory.
+            const bool previous_decode = settings->GPU_DECODE;
+            settings->GPU_DECODE = true;
+            settings->READ_AHEAD_FRAMES = 2;
+            bool host_ahead = false, host_frames = true;
+            {
+                openshot::FFmpegReader reader(s.media("watermark_prores4444_160x120_30.mov"));
+                reader.Open();
+                host_frames = !reader.GetFrame(1)->IsGpuBacked() && !reader.GetFrame(5)->IsGpuBacked();
+                for (int i = 0; i < 200 && !host_ahead; ++i) {
+                    host_ahead = reader.final_cache.GetFrame(6) != nullptr;
+                    if (!host_ahead) std::this_thread::sleep_for(std::chrono::milliseconds(5));
+                }
+                reader.Close();
+            }
+            settings->GPU_DECODE = previous_decode;
+            settings->READ_AHEAD_FRAMES = previous;
+            checks.push_back({"read_ahead_host_stream_with_gpu_decode", host_ahead && host_frames,
+                              std::string("ProRes 4444 with GPU decode on: worker decoded ahead: ") +
+                                  (host_ahead ? "yes" : "no") + ", frames in host memory: " +
+                                  (host_frames ? "yes" : "no")});
         });
 
     // The encoder's RGBA -> NV12 pass (W25) against swscale, and back again.

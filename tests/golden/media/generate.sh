@@ -37,6 +37,12 @@ r='if(between(X,60,259)*between(Y,60,139),255,if(between(X,20,299)*between(Y,20,
 g='if(between(X,60,259)*between(Y,60,139),208,if(between(X,20,299)*between(Y,20,179),96,0))':\
 b='if(between(X,60,259)*between(Y,60,139),64,if(between(X,20,299)*between(Y,20,179),255,0))':\
 a='if(between(X,60,259)*between(Y,60,139),255,if(between(X,20,299)*between(Y,20,179),217,0))'" -frames:v 1 image_alpha_320x200.png
+# ProRes 4444 with alpha, like the service's watermark (async_watermark.mov: prores_ks 4444,
+# yuva444p12le, 400x300): NVDEC does not decode ProRes and GpuYuv does not convert 4:4:4, so this
+# is the stream that stays in host memory with every GPU path on. A soft-edged moving disc.
+ffmpeg -y -hide_banner -v error -f lavfi -i "nullsrc=size=160x120:rate=30,format=rgba,geq=\
+r='128+100*sin(X/9+T*3)':g='96+80*cos(Y/7)':b='200':\
+a='255*clip((40-hypot(X-80-30*sin(T*2),Y-60))/8,0,1)',format=yuva444p12le" -t 1 -c:v prores_ks -profile:v 4444 watermark_prores4444_160x120_30.mov
 # opaque JPEG
 ffmpeg -y -hide_banner -v error -f lavfi -i "rgbtestsrc=size=400x300" -frames:v 1 -q:v 2 image_rgb_400x300.jpg
 # static luminance matte image
