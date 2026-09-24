@@ -129,6 +129,9 @@ private:
     void initInfo();
     void buildPlan();      ///< (Re)compute paint/layout/background/frame-size from data.
     void renderToImage();  ///< Render the static (non-animated) frame into rendered_image.
+    /// The animation frame the resting render is drawn with: the static 3D tilt, and the confined
+    /// block-texture path for a clip that ever animates (see renderToImage). nullopt = flat.
+    std::optional<text::TextClipAnimationFrame> restingFrame() const;
 
     /// The per-frame render inputs: cached plan for static/animation, or resolved from the style
     /// keyframe overlay. Layout is always the cached plan_layout (only curveAngle varies geometry,
@@ -183,6 +186,14 @@ private:
     double frame_center_project_y{0.0};
     text::TextClipData data;
     std::shared_ptr<QImage> rendered_image;
+
+    /// The resting frame kept on the GPU, for the compositor to draw as a texture every resting
+    /// frame -- instead of a readback into rendered_image, a copy of it per frame and an upload of
+    /// that copy. Every resting Frame shares this one surface, which nothing draws into once it is
+    /// rendered: effects write new frames and draw_to_canvas only snapshots it. Only usable on the
+    /// thread that made it, and dropped with the device (rendered_gpu_generation).
+    std::shared_ptr<openshot::GpuFrame> rendered_gpu;
+    unsigned long long rendered_gpu_generation{0};
 
     /// One composited glow image reused across frames of a block-mode animation, where the glow is
     /// marched in block-local space and so does not depend on the frame (see text::GlowFrameCache).

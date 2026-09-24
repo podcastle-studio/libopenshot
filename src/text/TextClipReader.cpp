@@ -646,6 +646,10 @@ std::shared_ptr<QImage> TextClipReader::renderToQImage(
 }
 
 void TextClipReader::renderToImage() {
+    rendered_image = renderToQImage(cachedPlan(), restingFrame());
+}
+
+std::optional<text::TextClipAnimationFrame> TextClipReader::restingFrame() const {
     // A resting frame carrying only the static 3D tilt (if any) — constant across frames, so the
     // single-image cache still holds. Without tilt this is a plain static render (std::nullopt).
     std::optional<text::TextClipAnimationFrame> frame;
@@ -660,7 +664,7 @@ void TextClipReader::renderToImage() {
         if (!frame) frame = text::buildStatic3DFrame(0.0, 0.0);
         frame->forceBlockTexture = true;
     }
-    rendered_image = renderToQImage(cachedPlan(), frame);
+    return frame;
 }
 
 // ---------------------------------------------------------------------------
@@ -675,6 +679,7 @@ std::shared_ptr<Frame> TextClipReader::GetFrame(int64_t requested_frame) {
         buildPlan();
         initInfo();
         rendered_image.reset();
+        rendered_gpu.reset();
         glow_cache.reset();
         dirty = false;
     }
@@ -702,6 +707,24 @@ std::shared_ptr<Frame> TextClipReader::GetFrame(int64_t requested_frame) {
         // Static / resting phase: the frame is pixel-identical every frame (incl. any static 3D
         // tilt). Render ONCE and reuse the cache — this skips recomputing the (expensive) glow for
         // every resting frame. For a 5s clip with a 1.5s IN that's ~70% of frames served from cache.
+        //
+        // With a GPU the cache is a surface, drawn by the compositor as a texture: no readback,
+        // no per-frame copy of the image and no upload of it. Rendered as the per-frame branch
+        // below renders on the GPU, so a clip's resting and animated frames come from one path.
+        if (!plan_empty && GpuDevice::Instance().available()) {
+            const unsigned long long generation = GpuDevice::Generation();
+            if (!rendered_gpu || rendered_gpu_generation != generation || !rendered_gpu->ownedByThisThread()) {
+                rendered_gpu = renderToGpuFrame(cachedPlan(), restingFrame());
+                rendered_gpu_generation = generation;
+            }
+            if (rendered_gpu) {
+                auto gpu_frame = std::make_shared<Frame>(
+                    requested_frame, rendered_gpu->width(), rendered_gpu->height(),
+                    "#00000000", sample_count, info.channels);
+                gpu_frame->AttachGpuFrame(rendered_gpu);
+                return gpu_frame;
+            }
+        }
         if (!rendered_image) renderToImage();
         image = rendered_image;
         image_is_cached = true;
