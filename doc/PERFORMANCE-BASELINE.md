@@ -483,3 +483,50 @@ encoder; against x264 the figure mostly measures the encoders): Y PSNR **~42 dB 
 for film grain (`noise 0.67`), which seeds its hash from the pixel's colour, so the 1 LSB that
 `GPU_DECODE` changes by design re-rolls the grain (23 dB on that clip alone, the rest of the frame
 at 37–42). Not a defect — see `doc/GPU-RENDERING.md`, "Known issues". The figures are the same after grain moved to the GPU: the grain was already a different random phase.
+
+## 2026-09-24 — The audit's CPU work moved to the GPU (A1–A9)
+
+What still ran on the CPU with every GPU path on, per `doc/GPU-RENDERING.md` "What is left", 5,
+before (`fa626a41`) and after (`5646ee9e`). RTX A2000 laptop GPU, mains power, GPU Skia,
+`OPENSHOT_GPU=vulkan`; JSON: `tests/bench/results/20260924-cpu-work-audit-ab.json`.
+
+**Per feature.** A scratch A/B times `Timeline::GetFrame` over 120 frames (after 10 warm-up) for one
+1080p H.264 clip — NVDEC + GPU decode, `GPU_CROP` — plus one feature; three interleaved rounds,
+median. Each arm includes one final readback that a `GPU_ENCODE` export does not pay. Base arm:
+2.22 / 1.77 ms before, 2.28 / 1.74 ms after (1080p / 720p). Added cost in ms a frame:
+
+| feature | 1080p before → after | 720p before → after | readbacks a frame before → after |
+|---|---:|---:|---:|
+| background still (QtImageReader) | +1.65 → +0.02 | +0.28 → 0 | 1 → 1 |
+| ProRes 4444 watermark | +0.35 → ~0 | ~0 → ~0 | 1 → 1 |
+| SplitShift at shift 0 | +6.33 → 0 | +2.88 → 0 | 2 → 1 |
+| Alpha at 0 | +3.17 → 0 | +0.73 → 0 | 2 → 1 |
+| rotational blur 10° | +52.4 → +2.03 | +1.15 → +1.24 | 2 → 1 |
+| diagonal blur 20 | +14.7 → +0.75 | +0.05 → +0.14 | 2 → 1 |
+| CircleMask animating | +7.38 → +0.04 | +0.47 → 0 | 1 → 1 |
+| video mask matte | +6.26 → +0.60 | +3.78 → +0.38 | 2 → 1 |
+| box blur 20 (unchanged, on the GPU already) | +6.55 → +6.47 | +1.75 → +1.72 | 1 → 1 |
+
+**Through the service.** `tests/payloads/prod-2026-09-16-pip-lut-whoosh.json` through
+`render-payload`, every GPU path on, and variants with its transition swapped for a production
+preset (`firebase-configs`) and/or rendered at 1920x1080. 750 frames each; one run each, starts
+staggered 75 s. Time is the export file's birth → last write, i.e. render + encode:
+`render-payload` printed no `ExportTelemetry` line on any run (see "Known issues" in
+`GPU-RENDERING.md`), so these are single-run wall figures, not interleaved.
+
+| payload | before | after |
+|---|---:|---:|
+| corpus payload, 720p (WHOOSH) | 10.6 s | 9.9 s |
+| WHOOSH, 1080p | 10.4 s | 9.1 s |
+| SPLIT_HORIZONTAL, 720p | 8.1 s | 7.6 s |
+| SPLIT_HORIZONTAL, 1080p | 10.8 s | 7.7 s |
+| ROTATE_LEFT, 1080p | 11.8 s | 7.6 s |
+| PAN_DIAGONAL, 1080p | 9.6 s | 8.2 s |
+
+Before, traced (gdb, counts only) through the service: the split variant made 482 readbacks + 482
+CPU fallbacks in 750 frames, rotate@1080 25 readbacks in `Blur::GetFrame`, the corpus payload 11
+readbacks (Alpha at 0) and 1,511 uploads. The payloads were not re-traced after; the A/B above shows
+each of those readbacks gone, and the golden gates (`unit.host_texture_cache`,
+`unit.gpu_blur_large`, `unit.gpu_mask_matte`) hold the counts.
+The CPU path is unchanged by construction (every change is behind `GpuDevice::available()`) and
+bit-identical in the golden suite; the full CPU benchmark (`GPU-RENDERING.md`, 8) was not re-run.

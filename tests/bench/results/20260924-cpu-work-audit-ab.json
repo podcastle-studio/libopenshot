@@ -1,0 +1,353 @@
+{
+ "date": "2026-09-24",
+ "machine": "RTX A2000 8GB Laptop GPU, mains power",
+ "skia": "GPU (/usr/local/skia-gpu), OPENSHOT_GPU=vulkan",
+ "method": "scratch A/B: Timeline::GetFrame over 120 frames after 10 warm-up, one 1080p H.264 clip (NVDEC + GPU decode, GPU_CROP on) plus one feature; 3 interleaved rounds, median; each arm includes one final readback the GPU_ENCODE export does not pay",
+ "before_commit": "fa626a41",
+ "after_commit": "5646ee9e",
+ "ab": [
+  {
+   "res": "1920x1080",
+   "arm": "alpha0",
+   "before_ms": 5.39,
+   "before_delta_ms": 3.17,
+   "before_readbacks_per_frame": 2.0,
+   "after_ms": 2.23,
+   "after_delta_ms": -0.05,
+   "after_readbacks_per_frame": 1.0
+  },
+  {
+   "res": "1920x1080",
+   "arm": "alpha05",
+   "before_ms": 2.46,
+   "before_delta_ms": 0.24,
+   "before_readbacks_per_frame": 1.0,
+   "after_ms": 2.42,
+   "after_delta_ms": 0.15,
+   "after_readbacks_per_frame": 1.0
+  },
+  {
+   "res": "1920x1080",
+   "arm": "base",
+   "before_ms": 2.22,
+   "before_delta_ms": 0.0,
+   "before_readbacks_per_frame": 1.0,
+   "after_ms": 2.28,
+   "after_delta_ms": 0.0,
+   "after_readbacks_per_frame": 1.0
+  },
+  {
+   "res": "1920x1080",
+   "arm": "bg",
+   "before_ms": 3.87,
+   "before_delta_ms": 1.65,
+   "before_readbacks_per_frame": 1.0,
+   "after_ms": 2.29,
+   "after_delta_ms": 0.02,
+   "after_readbacks_per_frame": 1.0
+  },
+  {
+   "res": "1920x1080",
+   "arm": "bg+wm",
+   "before_ms": 3.92,
+   "before_delta_ms": 1.71,
+   "before_readbacks_per_frame": 1.0,
+   "after_ms": 2.29,
+   "after_delta_ms": 0.02,
+   "after_readbacks_per_frame": 1.0
+  },
+  {
+   "res": "1920x1080",
+   "arm": "boxblur",
+   "before_ms": 8.77,
+   "before_delta_ms": 6.55,
+   "before_readbacks_per_frame": 1.0,
+   "after_ms": 8.74,
+   "after_delta_ms": 6.47,
+   "after_readbacks_per_frame": 1.0
+  },
+  {
+   "res": "1920x1080",
+   "arm": "circle",
+   "before_ms": 9.6,
+   "before_delta_ms": 7.38,
+   "before_readbacks_per_frame": 1.0,
+   "after_ms": 2.31,
+   "after_delta_ms": 0.04,
+   "after_readbacks_per_frame": 1.0
+  },
+  {
+   "res": "1920x1080",
+   "arm": "circle_static",
+   "before_ms": 2.58,
+   "before_delta_ms": 0.37,
+   "before_readbacks_per_frame": 1.0,
+   "after_ms": 2.4,
+   "after_delta_ms": 0.13,
+   "after_readbacks_per_frame": 1.0
+  },
+  {
+   "res": "1920x1080",
+   "arm": "diagblur",
+   "before_ms": 16.95,
+   "before_delta_ms": 14.74,
+   "before_readbacks_per_frame": 2.0,
+   "after_ms": 3.03,
+   "after_delta_ms": 0.75,
+   "after_readbacks_per_frame": 1.0
+  },
+  {
+   "res": "1920x1080",
+   "arm": "maskvideo",
+   "before_ms": 8.48,
+   "before_delta_ms": 6.26,
+   "before_readbacks_per_frame": 2.0,
+   "after_ms": 2.88,
+   "after_delta_ms": 0.6,
+   "after_readbacks_per_frame": 1.0
+  },
+  {
+   "res": "1920x1080",
+   "arm": "rotblur",
+   "before_ms": 54.65,
+   "before_delta_ms": 52.43,
+   "before_readbacks_per_frame": 2.0,
+   "after_ms": 4.31,
+   "after_delta_ms": 2.03,
+   "after_readbacks_per_frame": 1.0
+  },
+  {
+   "res": "1920x1080",
+   "arm": "split",
+   "before_ms": 2.51,
+   "before_delta_ms": 0.3,
+   "before_readbacks_per_frame": 1.0,
+   "after_ms": 2.53,
+   "after_delta_ms": 0.25,
+   "after_readbacks_per_frame": 1.0
+  },
+  {
+   "res": "1920x1080",
+   "arm": "split0",
+   "before_ms": 8.55,
+   "before_delta_ms": 6.33,
+   "before_readbacks_per_frame": 2.0,
+   "after_ms": 2.21,
+   "after_delta_ms": -0.07,
+   "after_readbacks_per_frame": 1.0
+  },
+  {
+   "res": "1920x1080",
+   "arm": "text",
+   "after_ms": 2.24,
+   "after_delta_ms": -0.03,
+   "after_readbacks_per_frame": 1.0
+  },
+  {
+   "res": "1920x1080",
+   "arm": "text4",
+   "after_ms": 2.23,
+   "after_delta_ms": -0.05,
+   "after_readbacks_per_frame": 1.0
+  },
+  {
+   "res": "1920x1080",
+   "arm": "wm",
+   "before_ms": 2.57,
+   "before_delta_ms": 0.35,
+   "before_readbacks_per_frame": 1.0,
+   "after_ms": 2.25,
+   "after_delta_ms": -0.02,
+   "after_readbacks_per_frame": 1.0
+  },
+  {
+   "res": "1280x720",
+   "arm": "alpha0",
+   "before_ms": 2.51,
+   "before_delta_ms": 0.73,
+   "before_readbacks_per_frame": 2.0,
+   "after_ms": 1.75,
+   "after_delta_ms": 0.01,
+   "after_readbacks_per_frame": 1.0
+  },
+  {
+   "res": "1280x720",
+   "arm": "alpha05",
+   "before_ms": 1.76,
+   "before_delta_ms": -0.01,
+   "before_readbacks_per_frame": 1.0,
+   "after_ms": 1.77,
+   "after_delta_ms": 0.03,
+   "after_readbacks_per_frame": 1.0
+  },
+  {
+   "res": "1280x720",
+   "arm": "base",
+   "before_ms": 1.77,
+   "before_delta_ms": 0.0,
+   "before_readbacks_per_frame": 1.0,
+   "after_ms": 1.74,
+   "after_delta_ms": 0.0,
+   "after_readbacks_per_frame": 1.0
+  },
+  {
+   "res": "1280x720",
+   "arm": "bg",
+   "before_ms": 2.05,
+   "before_delta_ms": 0.28,
+   "before_readbacks_per_frame": 1.0,
+   "after_ms": 1.73,
+   "after_delta_ms": -0.0,
+   "after_readbacks_per_frame": 1.0
+  },
+  {
+   "res": "1280x720",
+   "arm": "bg+wm",
+   "before_ms": 1.95,
+   "before_delta_ms": 0.18,
+   "before_readbacks_per_frame": 1.0,
+   "after_ms": 1.73,
+   "after_delta_ms": -0.0,
+   "after_readbacks_per_frame": 1.0
+  },
+  {
+   "res": "1280x720",
+   "arm": "boxblur",
+   "before_ms": 3.52,
+   "before_delta_ms": 1.75,
+   "before_readbacks_per_frame": 1.0,
+   "after_ms": 3.46,
+   "after_delta_ms": 1.72,
+   "after_readbacks_per_frame": 1.0
+  },
+  {
+   "res": "1280x720",
+   "arm": "circle",
+   "before_ms": 2.25,
+   "before_delta_ms": 0.47,
+   "before_readbacks_per_frame": 1.0,
+   "after_ms": 1.74,
+   "after_delta_ms": 0.0,
+   "after_readbacks_per_frame": 1.0
+  },
+  {
+   "res": "1280x720",
+   "arm": "circle_static",
+   "before_ms": 1.77,
+   "before_delta_ms": 0.0,
+   "before_readbacks_per_frame": 1.0,
+   "after_ms": 1.74,
+   "after_delta_ms": 0.01,
+   "after_readbacks_per_frame": 1.0
+  },
+  {
+   "res": "1280x720",
+   "arm": "diagblur",
+   "before_ms": 1.82,
+   "before_delta_ms": 0.05,
+   "before_readbacks_per_frame": 1.0,
+   "after_ms": 1.88,
+   "after_delta_ms": 0.14,
+   "after_readbacks_per_frame": 1.0
+  },
+  {
+   "res": "1280x720",
+   "arm": "maskvideo",
+   "before_ms": 5.55,
+   "before_delta_ms": 3.78,
+   "before_readbacks_per_frame": 2.0,
+   "after_ms": 2.12,
+   "after_delta_ms": 0.38,
+   "after_readbacks_per_frame": 1.0
+  },
+  {
+   "res": "1280x720",
+   "arm": "rotblur",
+   "before_ms": 2.92,
+   "before_delta_ms": 1.15,
+   "before_readbacks_per_frame": 1.0,
+   "after_ms": 2.97,
+   "after_delta_ms": 1.24,
+   "after_readbacks_per_frame": 1.0
+  },
+  {
+   "res": "1280x720",
+   "arm": "split",
+   "before_ms": 1.76,
+   "before_delta_ms": -0.01,
+   "before_readbacks_per_frame": 1.0,
+   "after_ms": 1.73,
+   "after_delta_ms": -0.0,
+   "after_readbacks_per_frame": 1.0
+  },
+  {
+   "res": "1280x720",
+   "arm": "split0",
+   "before_ms": 4.65,
+   "before_delta_ms": 2.88,
+   "before_readbacks_per_frame": 2.0,
+   "after_ms": 1.73,
+   "after_delta_ms": -0.0,
+   "after_readbacks_per_frame": 1.0
+  },
+  {
+   "res": "1280x720",
+   "arm": "text",
+   "after_ms": 1.73,
+   "after_delta_ms": -0.0,
+   "after_readbacks_per_frame": 1.0
+  },
+  {
+   "res": "1280x720",
+   "arm": "text4",
+   "after_ms": 1.73,
+   "after_delta_ms": -0.01,
+   "after_readbacks_per_frame": 1.0
+  },
+  {
+   "res": "1280x720",
+   "arm": "wm",
+   "before_ms": 1.77,
+   "before_delta_ms": 0.0,
+   "before_readbacks_per_frame": 1.0,
+   "after_ms": 1.73,
+   "after_delta_ms": -0.01,
+   "after_readbacks_per_frame": 1.0
+  }
+ ],
+ "payload": {
+  "method": "tests/payloads/prod-2026-09-16-pip-lut-whoosh.json through render-payload with every GPU path on; variants swap its transition for a production preset (firebase-configs) and/or render at 1920x1080. Time = export file birth -> last write (render+encode; render-payload printed no ExportTelemetry line). One run each, staggered 75 s.",
+  "runs": [
+   {
+    "variant": "whoosh720",
+    "before_s": 10.64,
+    "after_s": 9.94
+   },
+   {
+    "variant": "whoosh1080",
+    "before_s": 10.4,
+    "after_s": 9.09
+   },
+   {
+    "variant": "split720",
+    "before_s": 8.09,
+    "after_s": 7.59
+   },
+   {
+    "variant": "split1080",
+    "before_s": 10.76,
+    "after_s": 7.65
+   },
+   {
+    "variant": "rotate1080",
+    "before_s": 11.83,
+    "after_s": 7.62
+   },
+   {
+    "variant": "pandiag1080",
+    "before_s": 9.62,
+    "after_s": 8.21
+   }
+  ]
+ }
+}

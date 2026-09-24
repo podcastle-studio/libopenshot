@@ -29,10 +29,10 @@ its requirement is missing. `false` from `available()` is a normal answer, not a
 | stage | on the GPU | CPU fallback / notes |
 |---|---|---|
 | decode | NVDEC, frames stay on the device through `CudaInterop` into `GpuYuv` (YUV→RGBA on the GPU) | software decode + swscale; a stream NVDEC refuses (10-bit, > 4096 wide) reopens in software |
-| read-ahead | one decode worker per `FFmpegReader` (`READ_AHEAD_FRAMES`, default 2) | host-memory frames only; off for GPU frames (bound to their thread's recorder) |
-| compositing | `Timeline::GetFrame` on a pooled Graphite surface; `Clip::draw_to_canvas` in one transformed draw; all 16 blend modes; clip shadow, blur, flip on the paint | a clip that cannot draw on the GPU (overlay clip, frame-number overlay, waveform, an effect after keyframes) puts the whole frame on QPainter only if its blend mode is not `NORMAL` (`Timeline.cpp:1099`); a `NORMAL` one reads the canvas back mid-frame in `apply_background`, and everything after it in that frame is on the host |
-| text, subtitles | the whole Skia text engine incl. the glow ray-march; subtitles draw on whatever canvas they are given | raster Skia |
-| effects | `GpuEffect` + SkSL twins: 11 per-clip/per-pixel effects and all 10 transition variants, overlay composites (additive, displacement) | the C++ twin runs whenever a fragment declines |
+| read-ahead | one decode worker per `FFmpegReader` (`READ_AHEAD_FRAMES`, default 2) | host-memory frames only: with `GPU_DECODE` on, only for a stream that can never reach the GPU (no NVDEC, a layout `GpuYuv` does not convert — the ProRes 4444 watermark), since 2026-09-24 |
+| compositing | `Timeline::GetFrame` on a pooled Graphite surface; `Clip::draw_to_canvas` in one transformed draw; all 16 blend modes; clip shadow, blur, flip on the paint; a host-memory source (still image, held last frame) uploaded once, not per frame (`Clip::HostTextureCache`) | a clip that cannot draw on the GPU (overlay clip, frame-number overlay, waveform, an effect after keyframes) puts the whole frame on QPainter only if its blend mode is not `NORMAL` (`Timeline.cpp:1099`); a `NORMAL` one reads the canvas back mid-frame in `apply_background`, and everything after it in that frame is on the host |
+| text, subtitles | the whole Skia text engine incl. the glow ray-march; the resting text frame is kept on the GPU; subtitles draw on whatever canvas they are given | raster Skia |
+| effects | `GpuEffect` + SkSL twins: 11 per-clip/per-pixel effects and all 10 transition variants at every frame size (the rotational and diagonal blurs above the reference size as resample chains), overlay composites (additive, displacement); the planner's identity and clear run on the GPU too; a GPU-decoded mask matte is prepared on the GPU | the C++ twin runs whenever a fragment declines |
 | crop | `Crop` on GPU frames behind `GPU_CROP` | QPainter (reads the frame back) |
 | encode | NVENC takes the composited frame from the GPU (`GPU_ENCODE`) | readback + swscale + libx264 / NVENC |
 | telemetry | `GpuCounters` on every GPU path and fallback; `ExportTelemetry` (NVML) — the service logs one line per export | — |
@@ -53,13 +53,14 @@ out of scope: **audio** — the service mutes every clip (`volume = 0`, `SetSile
 the real audio outside libopenshot (`AudioExportHelper`, then an `ffmpeg amix` mux), so libopenshot
 only decodes the clips' audio streams and encodes a silent AAC track. Overlay clips are on the CPU
 too, listed under "Known issues". The 2026-09-24 audit (see "What is left", 5) found that these are
-the only deliberate CPU paths the service reaches; everything else it found is under 5.
+the only deliberate CPU paths the service reaches; everything else it found is under 5, and all of
+it but A10 (codecs NVDEC is not given) was moved to the GPU the same day.
 
 ### The switches
 
 | switch | set by | default | what it does | changes pixels? |
 |---|---|---|---|---|
-| `OPENSHOT_GPU` | env, or `GpuDevice::SetBackend()` (overrides) | `off` | `vulkan` / `lavapipe` enable every GPU path at all | slightly — the four-way sweep is bit-exact except text (PSNR ≥ 38), three blend modes, and film grain (same grain, different random phase) |
+| `OPENSHOT_GPU` | env, or `GpuDevice::SetBackend()` (overrides) | `off` | `vulkan` / `lavapipe` enable every GPU path at all | slightly — the four-way sweep is bit-exact except text (PSNR ≥ 38), three blend modes, film grain (same grain, different random phase), the circle mask's edge ring (analytic, not OpenCV's; ≥ 40 dB), a rotational blur above 1280 px (≤ 1 LSB) and a mask matte of another size (bilinear, not Qt's box; ~58 dB) |
 | `ENCODER` | service env | `libx264` | `h264_nvenc` (probed once; falls back) | encoder output only |
 | `GPU_DECODE` (+ `HARDWARE_DECODER=2`) | service env `OPENSHOT_GPU_DECODE` | off | NVDEC + GPU YUV→RGBA, frames never leave the device | **yes**: GPU rounding; honours a `bt709` tag swscale never did (12 frames + 3 checks of 307 move on Vulkan) |
 | `GPU_ENCODE` | service env `OPENSHOT_GPU_ENCODE` (needs `ENCODER=h264_nvenc`) | off | NVENC reads the GPU frame | **yes**: box vs bicubic chroma |
@@ -125,6 +126,13 @@ parity tool's `enhance(grain)` / `enhance(all, prod)` cases. `effects.enhancemen
 is held on the GPU arms only to `Tolerance::GpuGrain()` (not a gate); `effects.enhancement_no_grain`
 holds the GPU's clarity and sharpness to `GpuClose`.
 
+**Also not bit-exact, by decision (owner, 2026-09-24):** the circle mask's edge (analytic on the
+GPU, OpenCV's rasterised polygon in the C++: interior and exterior exact, the one-pixel ring
+37–50 dB, `Tolerance::GpuEdge` / the parity tool's `kCircleEdgeGate`); the rotational blur above
+the reference width (62 dB, 1 LSB: the chain's intermediate is 8-bit where the C++'s is float);
+a video mask matte resampled to another size (bilinear where Qt box-averages a shrink, ~58 dB,
+2 LSB). The diagonal blur's chain above a megapixel is bit-exact.
+
 **Editor vs export.** The transitions are one source on both sides: the C++ in
 `src/effects/image-processing-lib` (compiled natively here, to WASM for the editor), the SkSL in its
 `shaders/`, and the **planner** (`src/Planner/EffectPlan`) that turns a preset's parameters into
@@ -167,6 +175,19 @@ without the "revisit if" condition being true.
   grain on, the service's ADJUSTMENT filter read the frame back and ran clarity, sharpen and grain
   in OpenMP at source resolution. *Revisit if* grain must be reproducible across paths — then the
   hash has to change on both sides to one exact in `float`.
+- **The circle mask's edge is analytic on the GPU** (owner, 2026-09-24): a ramp on the distance to
+  the centre fitted to OpenCV's coverage (0.4 px inside, 1.2 px wide), with OpenCV's own centre and
+  1/8-px radius, instead of OpenCV's circle rasterised on the CPU and uploaded every animated frame
+  (+7.4 ms at 1080p). The C++ is unchanged, so CPU and GPU differ on the ring. *Revisit if* the edge
+  must match across paths — then both sides take one analytic circle.
+- **Resizes inside an effect are passes** (2026-09-24): `resample_linear` (INTER_LINEAR) and
+  `resample_area2` (INTER_AREA at half size) reproduce OpenCV's fixed point — the SIMD vertical
+  kernel, 11-bit weights — so the diagonal blur's chain is bit-exact and the rotational one within a
+  code value. The planner, not a host, decides the chain. *Revisit if* OpenCV's resize arithmetic
+  changes (a new OpenCV, or an IPP-enabled build): re-measure against `cv::resize`.
+- **A GPU-decoded mask matte is resampled on the GPU with Skia's bilinear** (owner, 2026-09-24),
+  not Qt's `SmoothTransformation`; bit-exact when the matte is the frame's size. *Revisit if* mattes
+  are routinely much larger than the clip (a box filter would then be the right one).
 - **Glow quality is fixed**: in-motion glow matches resting glow; speed comes from the GPU and the
   composited-glow cache, never from fewer steps or a lower resolution.
 - **No CPU frame-level parallelism**: Graphite parallelises through pipeline depth (decode-ahead,
@@ -195,7 +216,7 @@ without the "revisit if" condition being true.
   run, and between two 4-thread runs. Nothing is red — the affected scenarios were rebuilt on 1:1
   clips — but the instability is real. Start with whether anything caches a scaled image per path
   rather than per reader.
-- **Diagonal blur still halves above one megapixel** — the one downscale threshold the reference
+- **Diagonal blur still halves above one megapixel** (on the GPU too since 2026-09-24, as the same chain) — the one downscale threshold the reference
   decision did not retire, so the same radius renders at full scale from 720p and at half from 1080p.
 - **The editor leaves some LUTs ungraded** (1-D-only cubes, a 3-D cube with a 1-D shaper, any
   non-WebGL2 renderer) where the export grades them.
@@ -206,7 +227,15 @@ without the "revisit if" condition being true.
   stacked); baselined as-is.
 - **`render-payload` prints a garbled Pub/Sub topic name** in its progress messages once rendering
   starts (it reads like a string outliving its owner in the offline tool's publisher; not yet
-  investigated). The video is unaffected.
+  investigated). The video is unaffected, but on 2026-09-24 every run also **stopped logging
+  mid-render** — no `ExportTelemetry` line, no summary, exit 0, all 750 frames written — which
+  looks like the same corruption leaving `std::cout` failed. Until fixed, time a run by the export
+  file's birth → last write.
+- **Heap corruption under gdb** (2026-09-24): bench `podcast_pip`, `everything` and
+  `transitions_chain`, every flag on, aborted in glibc (`corrupted size vs. prev_size`,
+  `free(): invalid size`) under a gdb breakpoint tracer; they run cleanly without it. A
+  timing-sensitive memory bug is the likeliest reading; chase it before the soak (11). ASan on the
+  GPU build is the first thing to try.
 
 ## Status (2026-09-24) and what is left
 
@@ -218,8 +247,12 @@ editor has a shared planner and a published WASM (`dist/image_processing_lib_v2.
 parity. Headline numbers (RTX A2000, 1080p) are in `doc/PERFORMANCE-BASELINE.md`, "End of the
 migration".
 
-**What is left is decisions, infrastructure and final checks**, plus the CPU work the 2026-09-24
-audit found (5), which is measured but not yet planned. In the order they should happen:
+**Also done 2026-09-24: the CPU work the audit found** (5 below; A1–A9 moved to the GPU, A10 left).
+Consumers must rebuild against the new headers — `Clip`, `Mask`, `CircleMask`, `GpuEffect`,
+`TextClipReader` and `GpuCounters` changed layout; `../video-rendering-service`'s `cpp-third-party`
+was refreshed.
+
+**What is left is decisions, infrastructure and final checks.** In the order they should happen:
 
 ### 1. Owner decisions
 
@@ -282,7 +315,10 @@ audit found (5), which is measured but not yet planned. In the order they should
     submodule's `main`, lacks the 2026-09-22 blur and zoom-blur changes, so preview and export
     already disagree on blurs), then integrates the shaders per `FRONTEND-INTEGRATION.md` and runs
     its checks. The submodule's `main` should take `feature/gpu-rendering` when this ships, or the
-    editor's line and the export's keep diverging.
+    editor's line and the export's keep diverging. **Since 2026-09-24 the planner emits two new
+    fragments (`resample_linear`, `resample_area2`) and `CIRCLE_MASK` no longer has a texture**, so
+    the editor needs a WASM built after `bb7ad18` (`dist/` has not been republished) and the new
+    shaders; `wasm/test/plan-check.mjs` passes against it.
 
 ### 4. Worth doing, not blocking
 
@@ -301,7 +337,36 @@ audit found (5), which is measured but not yet planned. In the order they should
 - From the upstream merge: port `apply_keyframes`' corner radius and painter opacity if wanted;
   collapse `BlendMode` and `CompositeType`; send the `lerp` rename upstream.
 
-### 5. CPU work left with every GPU path on (audit, 2026-09-24)
+### 5. CPU work left with every GPU path on (audit, 2026-09-24) — A1–A9 done the same day
+
+**Outcome.** Every row but A10 was moved to the GPU and committed (`98c182e9` A1 + upload counters,
+`95d6af64` A2/A5, `e869e5b4` A7, `37ea01d9` A9, `181689e3` A8, `5646ee9e` + submodule `bb7ad18`
+A3/A4/A6 and CircleMask's clear). The same A/B afterwards — every per-frame readback gone, cost at
+1080p / 720p in ms a frame (JSON: `tests/bench/results/20260924-cpu-work-audit-ab.json`):
+
+| # | before | after | pixels |
+|---|---|---|---|
+| A1 background still | +1.65 / +0.28 | +0.02 / 0 | unchanged |
+| A2 SplitShift at rest | +6.33 / +2.88 | 0 / 0 | unchanged |
+| A3 rotational blur | +52.4 / (GPU) +1.15 | +2.03 / +1.24 | ≤ 1 LSB (owner) |
+| A4 diagonal blur | +14.7 / (GPU) +0.05 | +0.75 / +0.14 | unchanged (bit-exact chain) |
+| A5 Alpha at 0 | +3.17 / +0.73 | 0 / 0 | unchanged |
+| A6 CircleMask animating | +7.38 / +0.47 | +0.04 / 0 | edge ring differs (owner) |
+| A7 watermark decode | +0.35 / ~0 | ~0 / ~0 | unchanged |
+| A8 video mask matte | +6.26 / +3.78 | +0.60 / +0.38 | resampled matte ~58 dB (owner) |
+| A9 resting text | ~0 | ~0 (300 → 1 uploads per 60 frames in `text_static_4`) | resting frame under a fade: paint alpha, 46.75 → 46.64 dB |
+
+The production payload and its variants, full-GPU through the rebuilt service (render+encode, one
+run each; `doc/PERFORMANCE-BASELINE.md`): split@1080 10.8 → 7.7 s, rotate@1080 11.8 → 7.6 s,
+pan-diagonal@1080 9.6 → 8.2 s, whoosh@1080 10.4 → 9.1 s, the corpus payload (720p) 10.6 → 9.9 s.
+New gates: `unit.host_texture_cache`, `unit.gpu_blur_large`, `unit.gpu_mask_matte`, a second
+`unit.read_ahead` check, `readers.watermark_prores4444` (new ProRes 4444 golden media).
+
+**Left from this audit:** A10 (HEVC/VP9/AV1/ProRes through NVDEC; 4:4:4 and alpha in `GpuYuv`) —
+not measured, needs HEVC media in the corpus first. The box blur is on the GPU but still +6.5 ms at
+1080p (206 fetches a pixel; "What is left", 4 in 1).
+
+The audit as it was written:
 
 **Scope.** Everything `../video-rendering-service` constructs, traced with `OPENSHOT_GPU=vulkan`,
 `ENCODER=h264_nvenc`, `GPU_DECODE` + NVDEC, `GPU_ENCODE` and `GPU_CROP` on. Nothing was changed to
