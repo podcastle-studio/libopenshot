@@ -65,6 +65,7 @@ sk_sp<SkImage> GpuFrame::ToTexture(const sk_sp<SkImage>& image)
 	skgpu::graphite::Recorder* recorder = GpuDevice::Instance().recorder();
 	if (!recorder)
 		return nullptr;
+	GpuCounters::Add(GpuCounters::Upload);
 	return SkImages::TextureFromImage(recorder, image.get(), {});
 #else
 	(void)image;
@@ -99,6 +100,7 @@ bool GpuFrame::upload(const SkPixmap& src)
 	sk_sp<SkImage> raster = SkImages::RasterFromPixmapCopy(src);
 	if (!raster)
 		return false;
+	GpuCounters::Add(GpuCounters::Upload);
 	sk_sp<SkImage> texture = SkImages::TextureFromImage(recorder, raster.get(), {});
 	if (!texture)
 		return false;

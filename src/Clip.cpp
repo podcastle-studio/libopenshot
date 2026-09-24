@@ -37,6 +37,9 @@
 
 #include "gpu/GpuDevice.h"
 #include "gpu/GpuFrame.h"
+#include "gpu/GpuTelemetry.h"
+
+#include <thread>
 
 #include "skia/include/core/SkImage.h"
 #include "skia/include/core/SkMatrix.h"
@@ -1722,6 +1725,17 @@ SkBlendMode ToSkBlendMode(openshot::BlendMode mode)
 
 } // namespace
 
+// A texture is only reusable on the thread whose recorder made it and while the device that
+// made it is alive, and only for the very pixels it was made from. QImage::cacheKey() moves on
+// every detach, so a source rewritten in place -- get_transform()'s CPU alpha, say -- misses.
+struct Clip::HostTextureCache
+{
+	qint64 key = 0;
+	unsigned long long generation = 0;
+	std::thread::id thread;
+	sk_sp<SkImage> texture;
+};
+
 bool Clip::can_draw_to_canvas() const
 {
 	// Every blend mode qualifies since W13: BlendImages() and SkBlendMode implement the
@@ -1785,15 +1799,35 @@ bool Clip::draw_to_canvas(std::shared_ptr<openshot::Frame> frame,
 		source_w = source_image->width();
 		source_h = source_image->height();
 
-		// Format_RGBA8888_Premultiplied is byte-for-byte kRGBA_8888 premultiplied.
-		const SkPixmap src(SkImageInfo::Make(source_w, source_h,
-											 kRGBA_8888_SkColorType, kPremul_SkAlphaType),
-						   source_image->constBits(), source_image->bytesPerLine());
-		// Wrap the QImage's pixels rather than copying them: the upload below is
-		// synchronous and source_image outlives it, so the extra full-frame CPU copy
-		// RasterFromPixmapCopy would make is pure cost on a path whose whole expense is
-		// moving the image.
-		texture = openshot::GpuFrame::ToTexture(SkImages::RasterFromPixmap(src, nullptr, nullptr));
+		// A still image, or a reader holding its last frame, hands back the same QImage
+		// every frame; upload it once. At 1080p the upload was 1.65 ms a frame for the
+		// background PNG every export carries.
+		const qint64 key = source_image->cacheKey();
+		const unsigned long long generation = GpuDevice::Generation();
+		if (host_texture && host_texture->texture && host_texture->key == key &&
+			host_texture->generation == generation &&
+			host_texture->thread == std::this_thread::get_id()) {
+			texture = host_texture->texture;
+			openshot::GpuCounters::Add(openshot::GpuCounters::UploadCached);
+		} else {
+			// Format_RGBA8888_Premultiplied is byte-for-byte kRGBA_8888 premultiplied.
+			const SkPixmap src(SkImageInfo::Make(source_w, source_h,
+												 kRGBA_8888_SkColorType, kPremul_SkAlphaType),
+							   source_image->constBits(), source_image->bytesPerLine());
+			// Wrap the QImage's pixels rather than copying them: the upload below is
+			// synchronous and source_image outlives it, so the extra full-frame CPU copy
+			// RasterFromPixmapCopy would make is pure cost on a path whose whole expense is
+			// moving the image.
+			texture = openshot::GpuFrame::ToTexture(SkImages::RasterFromPixmap(src, nullptr, nullptr));
+			if (texture) {
+				auto cache = std::make_shared<HostTextureCache>();
+				cache->key = key;
+				cache->generation = generation;
+				cache->thread = std::this_thread::get_id();
+				cache->texture = texture;
+				host_texture = std::move(cache);
+			}
+		}
 	}
 	if (!texture)
 		return false;   // caller falls back; the canvas has not been touched

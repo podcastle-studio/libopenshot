@@ -35,6 +35,8 @@ namespace openshot
 			CropOnGpu,           ///< Crop drew a GPU frame on the GPU (GPU_CROP)
 			CropReadback,        ///< Crop read a GPU frame back to run on the CPU
 			HardwareDecodeFallback, ///< NVDEC refused a stream; the reader reopened in software
+			Upload,              ///< host pixels copied to the GPU (GpuFrame::ToTexture / upload)
+			UploadCached,        ///< a host source drawn from a texture kept from an earlier frame
 			Count
 		};
 

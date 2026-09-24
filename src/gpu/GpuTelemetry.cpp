@@ -57,6 +57,8 @@ const char* GpuCounters::Name(Counter counter)
 	case CropOnGpu: return "crop_on_gpu";
 	case CropReadback: return "crop_readback";
 	case HardwareDecodeFallback: return "nvdec_fallbacks";
+	case Upload: return "uploads";
+	case UploadCached: return "uploads_cached";
 	default: return "?";
 	}
 }

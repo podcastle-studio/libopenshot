@@ -397,6 +397,37 @@ void golden::registerUnitScenarios() {
                                       : "no GPU, so every effect should have fallen back: " + counts});
         });
 
+    // A still image hands draw_to_canvas the same QImage every frame, and it is uploaded once
+    // (Clip::HostTextureCache). Uploading it every frame was 1.65 ms a frame at 1080p for the
+    // background PNG every export carries, and looks exactly the same in the goldens -- so this
+    // asserts the count. Two stills over five frames: two uploads, eight reuses.
+    addCustom("unit.host_texture_cache", {"unit", "gpu"},
+        [](Scene& s) {
+            auto& tl = s.makeTimeline();
+            using namespace golden::recipes;
+            tl.AddClip(backgroundClip(s, s.media("background_960x540.png")));
+            MediaSpec m; m.path = s.media("image_alpha_320x200.png"); m.isImage = true; m.end = 1.0;
+            tl.AddClip(mediaClip(s, m));
+            tl.Open();
+        },
+        [](Scene& s, std::vector<Captured>&, std::vector<Check>& checks) {
+            using openshot::GpuCounters;
+            if (!openshot::GpuDevice::Instance().available()) {
+                checks.push_back({"no_gpu", true, "nothing is uploaded without a GPU"});
+                return;
+            }
+            s.timeline->GetFrame(1);   // opens the readers and fills the cache
+            const auto uploads0 = GpuCounters::Get(GpuCounters::Upload);
+            const auto cached0 = GpuCounters::Get(GpuCounters::UploadCached);
+            for (int f = 2; f <= 5; ++f)
+                s.timeline->GetFrame(f);
+            const auto uploads = GpuCounters::Get(GpuCounters::Upload) - uploads0;
+            const auto cached = GpuCounters::Get(GpuCounters::UploadCached) - cached0;
+            const std::string counts = "uploads=" + std::to_string(uploads) +
+                                       " cached=" + std::to_string(cached);
+            checks.push_back({"stills_uploaded_once", uploads == 0 && cached == 8, counts});
+        });
+
     // Blur is four effects in one class and three of them are now shaders, each declining
     // silently -- and a decline produces exactly the golden frame, so transitions.blur passing on
     // Vulkan says nothing about which path drew it. This asserts the path, per mode.

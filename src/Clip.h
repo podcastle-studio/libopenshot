@@ -183,6 +183,12 @@ namespace openshot {
 		bool draw_to_canvas(std::shared_ptr<openshot::Frame> frame,
 							std::shared_ptr<openshot::Frame> background_frame);
 
+		/// The last host-memory source draw_to_canvas uploaded, kept while the same QImage
+		/// keeps arriving -- a still image, a held last frame -- so it is uploaded once
+		/// rather than every frame. Defined in Clip.cpp: public headers name no Skia type.
+		struct HostTextureCache;
+		std::shared_ptr<HostTextureCache> host_texture;
+
         void apply_scale_options(std::shared_ptr<Frame> frame, std::shared_ptr<openshot::Frame> background_frame);
 
 		/// Apply waveform image to an openshot::Frame and use an existing background frame (if any)
