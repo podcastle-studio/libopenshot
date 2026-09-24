@@ -530,3 +530,26 @@ each of those readbacks gone, and the golden gates (`unit.host_texture_cache`,
 `unit.gpu_blur_large`, `unit.gpu_mask_matte`) hold the counts.
 The CPU path is unchanged by construction (every change is behind `GpuDevice::available()`) and
 bit-identical in the golden suite; the full CPU benchmark (`GPU-RENDERING.md`, 8) was not re-run.
+
+## 2026-09-24 — Every production feature on the GPU
+
+The remaining CPU paths moved (`doc/GPU-RENDERING.md`, "What is left", 6). Same scratch A/B as the
+section above (RTX A2000, mains power, `Timeline::GetFrame`, 120 frames, three interleaved rounds,
+median, added ms a frame over one NVDEC 1080p clip); JSON `tests/bench/results/20260924-gpu-resident.json`.
+
+| feature | 1080p before → after | 720p before → after |
+|---|---:|---:|
+| zoom-out 66 % (ZOOM_OUT) | +11.0 → +0.2 | +4.3 → 0 |
+| zoom-out 34 % (ZOOM_IN) | +11.0 → +0.1 | +4.3 → 0 |
+| box blur, vertical radius 360 (BLUR_VERTICAL): CPU before | +26.2 → +16.7 | (GPU) +13.3 → +5.0 |
+| box blur, horizontal radius 230 (PAN_*): one fetch a tap before | +27.6 → +10.4 | +8.7 → +2.9 |
+| box blur, radius 20 | +6.4 → +2.7 | +1.7 → +0.9 |
+
+The blur figures are byte-identical outputs (`blur_pairs`, `unit.gpu_blur_pairs`).
+
+**Through the service**, the corpus payload with its transition swapped for each of 15 production
+presets at 1080p, the service's defaults (nothing set), counted with gdb: 750 frames each, 0
+readbacks (1 — the filter probe — where a wide blur runs), 0 QPainter draws, 0 CPU effect
+fallbacks; 144 swscale conversions and ~149 uploads, all of them the ProRes watermark's frames plus
+the background and two tables once. Wall times were not recorded: `render-payload` prints no
+`ExportTelemetry` line (see `GPU-RENDERING.md`, "Known issues").

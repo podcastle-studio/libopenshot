@@ -296,6 +296,18 @@ GPU to take over. Earlier, lower figures in the docs were measured on an Intel i
   (any clip whose audio mapping differs, i.e. most video), which read every GPU-decoded frame back
   and made GPU decode look worthless. It shares the surface now, as `Frame`'s copy constructor
   does. Anything new that copies frames must do the same.
+- **NVDEC takes H.264, HEVC, VP8, VP9 and AV1** (2026-09-24; `IsHardwareDecodeSupported`), kept on
+  the device for 8-bit 4:2:0. Alpha VP9 stays on libvpx; AV1 needs FFmpeg's native `av1` decoder
+  (libdav1d has no hwaccel), chosen only while hardware decode is on. 10-bit (P010) is decoded by
+  NVDEC but still downloaded — `CudaInterop`/`GpuYuv` are R8/RG8 only.
+- **`unit.gpu_resident` is the "frame never leaves the GPU" gate**: every feature the service
+  constructs, 100 frames, no readback but the harness's one a frame, no CPU decode, no CPU
+  fallback, no uploads after warm-up. Add a new service feature to it.
+- **`blur_pairs` reads two taps per fetch through the linear filter**, exact only where the device's
+  filter keeps the pair sum's low bit; `linearMidpointIsExact()` (GpuEffect.cpp) probes it once per
+  device and falls back to `blur`. llvmpipe fails the probe — that is why lavapipe runs plain blur.
+- A `GpuEffect` with a multi-pass plan needs only `PlanForFrame`: `ApplyOnGpu` runs identity, clear
+  and any planned GPU step itself, and `RunGpuPass` binds a planned pass's own fragment/uniforms.
 - Hardware decode (`HARDWARE_DECODER != 0`) **worked again as of 2026-09-22** (plan step 1.5):
   `ProcessVideoPacket` takes swscale's source format from the frame it converts, not from
   `pCodecCtx->pix_fmt`, which is `AV_PIX_FMT_CUDA` once NVDEC is on. `~FFmpegReader` also no

@@ -29,12 +29,12 @@ default (2026-09-24). Every GPU path falls back to the CPU by itself when its re
 
 | stage | on the GPU | CPU fallback / notes |
 |---|---|---|
-| decode | NVDEC, frames stay on the device through `CudaInterop` into `GpuYuv` (YUV→RGBA on the GPU) | software decode + swscale; a stream NVDEC refuses (10-bit, > 4096 wide) reopens in software |
+| decode | NVDEC for H.264, HEVC, VP8, VP9, AV1 (and MPEG-2/VC-1); 8-bit 4:2:0 frames stay on the device through `CudaInterop` into `GpuYuv` (YUV→RGBA on the GPU), bit-exact against software decode (`unit.nvdec_on_device`, all five codecs) | software decode + swscale: ProRes (the watermark), alpha VP9 (libvpx), and a stream NVDEC refuses (> 4096 wide, 4:4:4) reopens in software. 10-bit (P010) is decoded by NVDEC but downloaded and converted by swscale |
 | read-ahead | one decode worker per `FFmpegReader` (`READ_AHEAD_FRAMES`, default 2) | host-memory frames only: with `GPU_DECODE` on, only for a stream that can never reach the GPU (no NVDEC, a layout `GpuYuv` does not convert — the ProRes 4444 watermark), since 2026-09-24 |
-| compositing | `Timeline::GetFrame` on a pooled Graphite surface; `Clip::draw_to_canvas` in one transformed draw; all 16 blend modes; clip shadow, blur, flip on the paint; a host-memory source (still image, held last frame) uploaded once, not per frame (`Clip::HostTextureCache`) | a clip that cannot draw on the GPU (overlay clip, frame-number overlay, waveform, an effect after keyframes) puts the whole frame on QPainter only if its blend mode is not `NORMAL` (`Timeline.cpp:1099`); a `NORMAL` one reads the canvas back mid-frame in `apply_background`, and everything after it in that frame is on the host |
+| compositing | `Timeline::GetFrame` on a pooled Graphite surface; `Clip::draw_to_canvas` in one transformed draw; all 16 blend modes; clip shadow, blur, flip on the paint; the opacity curve as an exact pre-pass; overlay-clip transitions (the overlay composited onto the source frame, the overlay clip transformed on the GPU); a host-memory source (still image, held last frame) uploaded once (`Clip::HostTextureCache`) | a clip that cannot draw on the GPU — a frame-number overlay, a waveform, an effect after keyframes, none of which the service uses — puts the whole frame on QPainter only if its blend mode is not `NORMAL` (`Timeline.cpp:1099`); a `NORMAL` one reads the canvas back mid-frame in `apply_background` |
 | text, subtitles | the whole Skia text engine incl. the glow ray-march; the resting text frame is kept on the GPU; subtitles draw on whatever canvas they are given | raster Skia |
-| effects | `GpuEffect` + SkSL twins: 11 per-clip/per-pixel effects and all 10 transition variants at every frame size (the rotational and diagonal blurs above the reference size as resample chains), overlay composites (additive, displacement); the planner's identity and clear run on the GPU too; a GPU-decoded mask matte is prepared on the GPU | the C++ twin runs whenever a fragment declines |
-| crop | `Crop` on GPU frames behind `GPU_CROP` | QPainter (reads the frame back) |
+| effects | every one of the 20 the service constructs, at every frame size and every parameter the production presets reach: `GpuEffect` + SkSL twins for the per-clip effects and the transitions (the rotational and diagonal blurs above the reference size, zoom-out, and box blurs up to 1023 taps as planned multi-pass chains; wide boxes two taps a fetch), the overlay composites with the overlay resized on the GPU, CameraMovement as a GPU draw, the planner's identity and clear; a GPU-decoded mask matte is prepared on the GPU | the C++ twin runs whenever a fragment declines, which with a GPU is now only past a loop bound no preset reaches (a box > 1023 taps) |
+| crop | `Crop` behind `GPU_CROP`, on GPU frames and on host frames (a still, a shape: uploaded once) | QPainter |
 | encode | NVENC takes the composited frame from the GPU (`GPU_ENCODE`) | readback + swscale + libx264 / NVENC |
 | telemetry | `GpuCounters` on every GPU path and fallback; `ExportTelemetry` (NVML) — the service logs one line per export | — |
 
@@ -45,17 +45,19 @@ BorderReflectedRotation, Brightness, CircleMask, ColorShift, Exposure, SplitShif
 animation (`Animation.cpp`): CameraMovement. The other effect classes are upstream OpenShot's and
 untouched.
 
-**Not on the GPU, deliberately:** `Crop` without `GPU_CROP` and `CameraMovement` (both QPainter
-resampling — a rasteriser difference, not an arithmetic one, so porting them redefines pixels);
-ChromaKey's non-YCbCr methods (babl colour science; the service only uses YCbCr); ColorMap's
+**Not on the GPU, deliberately:** `Crop` without `GPU_CROP` (the switch exists because the GPU's rounded
+corners antialias differently; the service turns it on); decoding what NVDEC cannot — ProRes (the
+watermark: 144 small frames per export, read ahead on their own thread and uploaded, the held last
+frame once), still images and SVG shapes (decoded once, uploaded once), alpha VP9 (libvpx); 10-bit
+video's conversion (P010, see "What is left", 6); ChromaKey's non-YCbCr methods (babl colour science; the service only uses YCbCr); ColorMap's
 colour-match mode (re-bakes the cube from the frame, i.e. a readback). Enhancement's grain *is* on
 the GPU (since 2026-09-24), but not as a parity fragment — see "Parity". Also CPU by nature and
 out of scope: **audio** — the service mutes every clip (`volume = 0`, `SetSilentAudioMode`), mixes
 the real audio outside libopenshot (`AudioExportHelper`, then an `ffmpeg amix` mux), so libopenshot
-only decodes the clips' audio streams and encodes a silent AAC track. Overlay clips are on the CPU
-too, listed under "Known issues". The 2026-09-24 audit (see "What is left", 5) found that these are
-the only deliberate CPU paths the service reaches; everything else it found is under 5, and all of
-it but A10 (codecs NVDEC is not given) was moved to the GPU the same day.
+only decodes the clips' audio streams and encodes a silent AAC track. The 2026-09-24 audit (see
+"What is left", 5 and 6) found everything else the service reaches, and all of it now runs on the
+GPU: `unit.gpu_resident` holds the whole production feature set to no readback, no CPU decode and
+no CPU fallback.
 
 ### The switches
 
@@ -65,7 +67,7 @@ The "default" column below is the library's, which the golden suite and the benc
 
 | switch | set by | default | what it does | changes pixels? |
 |---|---|---|---|---|
-| `OPENSHOT_GPU` | env, or `GpuDevice::SetBackend()` (overrides) | `off` | `vulkan` / `lavapipe` enable every GPU path at all | slightly — the four-way sweep is bit-exact except text (PSNR ≥ 38), three blend modes, film grain (same grain, different random phase), the circle mask's edge ring (analytic, not OpenCV's; ≥ 40 dB), a rotational blur above 1280 px (≤ 1 LSB) and a mask matte of another size (bilinear, not Qt's box; ~58 dB) |
+| `OPENSHOT_GPU` | env, or `GpuDevice::SetBackend()` (overrides) | `off` | `vulkan` / `lavapipe` enable every GPU path at all | slightly — the four-way sweep is bit-exact except text (PSNR ≥ 38), three blend modes, film grain (same grain, different random phase), the circle mask's edge ring (analytic, not OpenCV's; ≥ 40 dB), a rotational blur above 1280 px (≤ 1 LSB), a mask matte of another size (bilinear, not Qt's box; ~58 dB), zoom-out (≤ 1 LSB), CameraMovement (Skia's bilinear and edge rule for QPainter's; ≥ 44 dB) and the overlay transitions (now GPU-composited like every clip) |
 | `ENCODER` | service env | `libx264` | `h264_nvenc` (probed once; falls back) | encoder output only |
 | `GPU_DECODE` (+ `HARDWARE_DECODER=2`) | service env `OPENSHOT_GPU_DECODE` | off | NVDEC + GPU YUV→RGBA, frames never leave the device | **yes**: GPU rounding; honours a `bt709` tag swscale never did (12 frames + 3 checks of 307 move on Vulkan) |
 | `GPU_ENCODE` | service env `OPENSHOT_GPU_ENCODE` (needs `ENCODER=h264_nvenc`) | off | NVENC reads the GPU frame | **yes**: box vs bicubic chroma |
@@ -136,7 +138,11 @@ GPU, OpenCV's rasterised polygon in the C++: interior and exterior exact, the on
 37–50 dB, `Tolerance::GpuEdge` / the parity tool's `kCircleEdgeGate`); the rotational blur above
 the reference width (62 dB, 1 LSB: the chain's intermediate is 8-bit where the C++'s is float);
 a video mask matte resampled to another size (bilinear where Qt box-averages a shrink, ~58 dB,
-2 LSB). The diagonal blur's chain above a megapixel is bit-exact.
+2 LSB); zoom-out (76–80 dB, 1 LSB: resample_linear's rare fixed-point miss); CameraMovement drawn by
+Skia (bilinear and the rotated edge's aliasing where QPainter smooth-transforms; 47 dB at worst in
+`effects.camera_movement`). Bit-exact: the diagonal blur's chain above a megapixel (odd sizes within
+1 LSB), the wide box blurs read in pairs (`unit.gpu_blur_pairs`), the opacity curve's pre-pass, NVDEC
+of every codec (`unit.nvdec_on_device`).
 
 **Editor vs export.** The transitions are one source on both sides: the C++ in
 `src/effects/image-processing-lib` (compiled natively here, to WASM for the editor), the SkSL in its
@@ -201,6 +207,24 @@ without the "revisit if" condition being true.
   used only by name. Verified: a simulated CPU node (only lavapipe visible, no CUDA device) renders
   the corpus payload to its recorded CPU hash. *Revisit if* a GPU node's output must match a CPU
   node's byte for byte — then the pixel-changing three go back to opt-in.
+- **Nothing the service constructs runs on the CPU when a GPU is present** (owner, 2026-09-24): the
+  frame goes decode → every effect, transition, overlay, animation, text and subtitle → encode
+  without leaving the device, gated by `unit.gpu_resident` (no readback but the one the harness
+  makes for lack of an encoder, no CPU decode, no CPU fallback, no uploads after warm-up). What
+  stays on the CPU is only what cannot be on a GPU (ProRes and still-image decode, audio) or is
+  outside the service's use. Where porting moved pixels it was accepted, and each case is listed
+  under "Parity". *Revisit if* a feature is added to the service — it joins `unit.gpu_resident`.
+- **CameraMovement is a Skia draw on the GPU** (owner, 2026-09-24), not QPainter: the same transform,
+  bilinear where QPainter smooth-transforms and snapped to whole pixels for a translate-only move,
+  as the compositor does. *Revisit if* animations must match the CPU byte for byte.
+- **Wide box blurs read two taps per fetch through the linear filter, where the device allows it**
+  (2026-09-24): `blur_pairs.sksl` is byte-identical to `blur.sksl` on a device whose filter keeps
+  the pair sum exact at a texel midpoint, which `linearMidpointIsExact()` measures once per device
+  (NVIDIA yes, llvmpipe no → plain `blur`). 2.4–2.7× faster on the production presets' blurs.
+  *Revisit if* a device passes the probe and a golden moves — the probe then misses a case.
+- **The opacity curve on the GPU is a pre-pass, not paint alpha** (2026-09-24): `floor(byte * alpha)`
+  before the transform, exactly the CPU loop, so a fade is bit-exact on the GPU where paint alpha
+  was an LSB off.
 - **Glow quality is fixed**: in-motion glow matches resting glow; speed comes from the GPU and the
   composited-glow cache, never from fewer steps or a lower resolution.
 - **No CPU frame-level parallelism**: Graphite parallelises through pipeline depth (decode-ahead,
@@ -221,9 +245,6 @@ without the "revisit if" condition being true.
 
 ## Known issues and divergences
 
-- **Overlay clips composite on the CPU** (`Clip::draw_to_canvas` is skipped for `isOverlay`): in
-  `transitions_chain` only 45 of 180 frames take the GPU encode path, with 370 readbacks. The next
-  lever for transition-heavy exports.
 - **Resampled alpha boundaries vary with what else ran in the process** (golden suite, not fixed):
   1,280 pixels on the interpolated alpha edges of a scaled PNG move between an isolated and a full
   run, and between two 4-thread runs. Nothing is red — the affected scenarios were rebuilt on 1:1
@@ -374,15 +395,14 @@ pan-diagonal@1080 9.6 → 8.2 s, whoosh@1080 10.4 → 9.1 s, the corpus payload 
 New gates: `unit.host_texture_cache`, `unit.gpu_blur_large`, `unit.gpu_mask_matte`, a second
 `unit.read_ahead` check, `readers.watermark_prores4444` (new ProRes 4444 golden media).
 
-**Left from this audit:** A10 (HEVC/VP9/AV1/ProRes through NVDEC; 4:4:4 and alpha in `GpuYuv`) —
-not measured, needs HEVC media in the corpus first. **Found afterwards (2026-09-24, same A/B, 1080p /
-720p), both in production presets:**
+**Left from this audit:** see 6 — A10's codecs, A11 and A12 were done the same day too. **Found
+afterwards (2026-09-24, same A/B, 1080p / 720p), both in production presets:**
 
-- **A11 — Zoom below 100 %** (ZOOM_IN's in-clip 34 → 100, ZOOM_OUT's out-clip 100 → 66): the planner
+- **A11 (done, see 6) — Zoom below 100 %** (ZOOM_IN's in-clip 34 → 100, ZOOM_OUT's out-clip 100 → 66): the planner
   returns cpu below 100 (`EffectPlan.cpp`, `planZoom`: the C++ shrinks into a border), a readback
   and OpenCV every frame of the window: **+11.0 / +4.3 ms**. (b); a port would need the C++'s
   shrink-and-reflect as a pass — probably bit-exact like the other resamples, unmeasured.
-- **A12 — box blurs past the fragment's 255-tap loop**: BLUR_VERTICAL's `verticalRadius` 360 goes
+- **A12 (done, see 6) — box blurs past the fragment's 255-tap loop**: BLUR_VERTICAL's `verticalRadius` 360 goes
   to the CPU at 1080p (**+26.2 ms**, 2 readbacks); at 720p it fits and is on the GPU but still
   +13.3 ms. Big blurs that stay on the GPU are expensive too (PAN_*'s 230: +27.6 / +8.7) — the blur
   family is 206 fetches a pixel per box ("What is left", 4). (c); a raised loop bound fixes the
@@ -469,3 +489,53 @@ Portable, with pixels unchanged (the uploaded or cleared bytes stay the same):
   neither `ExportTelemetry` nor its summary. This is probably the garbled topic string under "Known
   issues" corrupting `std::cout`. Every run of the variants did this, so their export times were
   not usable and the costs above come from the A/B program.
+
+### 6. The frame never leaves the GPU (2026-09-24)
+
+**Done.** With a GPU the service's frame goes decode → every effect, transition, overlay, animation,
+text and subtitle → encode on the device. What moved, beyond 5:
+
+| item | before | now |
+|---|---|---|
+| webm (VP8, VP9), HEVC, AV1 decode | software + host upload | NVDEC, kept on the device, bit-exact vs software (`unit.nvdec_on_device`); AV1 takes the native decoder (libdav1d has no hwaccel) |
+| overlay transitions (LIGHT_FOOTAGE, GLITCH) | QPainter compositing, overlay read back, mismatched overlay → CPU | GPU: overlay clip drawn on the GPU, host clip GPU-composited, `overlayPasses` resize the overlay |
+| zoom-out (ZOOM_IN / ZOOM_OUT) | readback + OpenCV, +11 ms at 1080p | resample_linear + zoom_out_pad, +0.2 ms, ≤ 1 LSB, sizes identical |
+| box blurs > 255 taps (BLUR_VERTICAL) | readback + OpenCV, +26 ms | up to 1023 taps on the GPU, wide ones two taps a fetch (`blur_pairs`): +16.7 ms, byte-identical; radius 230 +28 → +10.4 |
+| CameraMovement | QPainter, readback | Skia draw on the GPU (owner: 47 dB at worst) |
+| Crop on a host frame (image, shape) | QPainter | uploaded once, cropped on the GPU |
+| diagonal blur, odd sizes > 1 MP; rotation at ±360 | CPU | GPU (odd sizes ≤ 1 LSB; the full turn is an identity) |
+| fade on a host source | CPU loop (and a re-upload every frame) | exact GPU pre-pass |
+| background colour on a GPU canvas | a CPU fill discarded every frame | not done |
+| a missing frame (VFR webm) | readback + copy of the previous one | shares its surface |
+| SVG shapes / large stills (`QtImageReader`) | re-rasterised / rescaled every frame (a cache bug; CPU path too) | once |
+| a still under a GPU effect | uploaded every frame | once |
+
+**Measured through the service** (`render-payload`, the corpus payload with its transition swapped
+for each production preset, 1080p, the service's defaults, gdb-counted; `doc/PERFORMANCE-BASELINE.md`):
+all 15 variants — FADE, DISSOLVE_BLUR, LIGHT_LEAK, LIGHT_FOOTAGE, BLUR_VERTICAL, ROTATE_LEFT,
+SPLIT_HORIZONTAL, ZOOM_IN, ZOOM_OUT, WHOOSH (+ a CAMERA_MOVEMENT), GLITCH, CONTRAST, CIRCLE_MASK,
+BARN_DOORS, PAN_DIAGONAL — 750 frames with **0 readbacks** (1 in the three with a wide blur: the
+once-per-process filter probe), **0 QPainter draws, 0 CPU fallbacks**; the only CPU video work is the
+ProRes watermark's 144 frames (decoded and uploaded; NVDEC has no ProRes) and one upload each for
+the background and the LUT/tone tables. The gate for all of it in the suite is `unit.gpu_resident`.
+
+**What is left on the CPU, and why:**
+
+- **The ProRes 4444 watermark** — no GPU decodes ProRes. 144 small frames an export, read ahead on
+  their own thread. Re-encoding the asset would not help: NVDEC has no alpha-capable codec either.
+- **10-bit video** (VP9 profile 2, HEVC Main 10): NVDEC decodes it, as P010, which `CudaInterop` /
+  `GpuYuv` do not take (R8/RG8 only), so it is downloaded and converted by swscale. The service's
+  inputs are 8-bit (H.264, browser webm); porting means R16/RG16 interop images and a 10-bit
+  `GpuYuv` conversion, and changes pixels like `GPU_DECODE` does.
+- **Alpha VP9** (libvpx, no hwaccel; NVDEC has no alpha plane) and **4:4:4 / 4:2:2** streams:
+  software decode, then `GpuYuv` for 4:2:0 or swscale otherwise.
+- **Still images and SVG shapes**: decoded / rasterised once on the CPU, uploaded once.
+- **Audio** (see "What runs where"), and the service's ffmpeg audio mux.
+- Past loop bounds no production preset reaches: a box blur over 1023 taps, a diagonal kernel over
+  513, a rotational blur over 30 iterations.
+
+**Owed:** the service's per-export telemetry line is not printed by `render-payload` (see "Known
+issues"), so the numbers above are gdb counts, not `ExportTelemetry`; and the editor needs a WASM
+built from the submodule's current `feature/gpu-rendering` for the new fragments (`zoom_out_pad`,
+`blur_pairs` with `linearSource`, `resample_*`) and `overlayPasses`.
+
