@@ -83,8 +83,19 @@ bool Brightness::SetGpuUniforms(SkRuntimeEffectBuilder& builder, int64_t frame_n
 	// Resolved by the shared planner (image-processing-lib/src/Planner), the same code the editor
 	// runs, so the two cannot disagree about what these values mean. It declines -- and the C++
 	// twin runs -- for every case the fragment does not cover.
-	return BindPlan(builder, Podcastle::Effects::planEffect(
-		"BRIGHTNESS", {{"brightness", brightness.GetValue(frame_number)}, {"contrast", contrast.GetValue(frame_number)}}, width, height));
+	Podcastle::Effects::EffectPlan plan;
+	PlanForFrame(frame_number, width, height, plan);
+	return BindPlan(builder, plan);
+}
+
+bool Brightness::PlanForFrame(int64_t frame_number, int width, int height,
+                             Podcastle::Effects::EffectPlan& plan) const
+{
+	// The planner's answer for ApplyOnGpu too, so an identity, a clear or a multi-pass plan runs
+	// on the GPU rather than declining to the C++.
+	plan = Podcastle::Effects::planEffect(
+		"BRIGHTNESS", {{"brightness", brightness.GetValue(frame_number)}, {"contrast", contrast.GetValue(frame_number)}}, width, height);
+	return true;
 }
 
 // This method is required for all derived classes of EffectBase, and returns a

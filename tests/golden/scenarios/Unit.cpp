@@ -468,7 +468,10 @@ void golden::registerUnitScenarios() {
                                   {"rotational(28) 1080p", 1920, 1080, 0, 28.0},
                                   {"rotational(20) 2160p", 3840, 2160, 0, 20.0},
                                   {"diagonal(100) 1080p", 1920, 1080, 100, 0.0},
-                                  {"diagonal(57) 2160p", 3840, 2160, 57, 0.0}};
+                                  {"diagonal(57) 2160p", 3840, 2160, 57, 0.0},
+                                  // odd sizes: OpenCV's fast area path, half to even (resample_area2)
+                                  {"diagonal(100) 1921x1081", 1921, 1081, 100, 0.0},
+                                  {"diagonal(40) 1083x1923", 1083, 1923, 40, 0.0}};
             for (const Case& c : cases) {
                 // Detail to blur: the background with the test pattern over its middle.
                 QImage source = background.scaled(c.w, c.h).convertToFormat(QImage::Format_RGBA8888_Premultiplied);
@@ -1485,13 +1488,17 @@ void golden::registerUnitScenarios() {
                 if (plan.steps.size() != 1 || plan.steps.front().kind != e.kind)
                     wrong += std::string(wrong.empty() ? "" : "; ") + e.label;
             }
-            // A cpu step names the C++ function the host must call. (Zoom-out was the example
-            // until it moved to the GPU; the full-turn rotation is still a cpu step.)
-            const fx::EffectPlan cpu = fx::planEffect("BORDER_REFLECTED_ROTATION", {{"angle", 360}}, kW, kH);
+            // A cpu step names the C++ function the host must call. Zoom-out and the full-turn
+            // rotation were the examples until they left the CPU (2026-09-24); a box wider than
+            // blur.sksl's 1023-tap loop still is one.
+            const fx::EffectPlan cpu = fx::planEffect("BLUR", {{"horizontalRadius", 50000}}, kW, kH);
             if (cpu.steps.size() != 1 || cpu.steps.front().kind != fx::PlanStep::Kind::Cpu ||
-                cpu.steps.front().cpu.function != "applyBorderReflectedRotationEffect")
-                wrong += std::string(wrong.empty() ? "" : "; ") + "BORDER_REFLECTED_ROTATION 360 names '" +
+                cpu.steps.front().cpu.function != "applyBlurEffect")
+                wrong += std::string(wrong.empty() ? "" : "; ") + "BLUR 50000 names '" +
                          (cpu.steps.empty() ? std::string() : cpu.steps.front().cpu.function) + "'";
+            const fx::EffectPlan turn = fx::planEffect("BORDER_REFLECTED_ROTATION", {{"angle", 360}}, kW, kH);
+            if (turn.steps.size() != 1 || turn.steps.front().kind != fx::PlanStep::Kind::Identity)
+                wrong += std::string(wrong.empty() ? "" : "; ") + "BORDER_REFLECTED_ROTATION 360 is not identity";
             checks.push_back({"identity_clear_cpu", wrong.empty(),
                               wrong.empty() ? std::to_string(sizeof(expects) / sizeof(expects[0])) +
                                                   " cases as expected"

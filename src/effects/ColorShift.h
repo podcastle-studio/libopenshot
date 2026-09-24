@@ -47,6 +47,10 @@ namespace openshot
 		bool SetGpuUniforms(SkRuntimeEffectBuilder& builder, int64_t frame_number,
 							int width, int height) const override;
 
+		/// The planner's answer (see GpuEffect::PlanForFrame).
+		bool PlanForFrame(int64_t frame_number, int width, int height,
+						  Podcastle::Effects::EffectPlan& plan) const override;
+
 	public:
 		Keyframe red_x;	///< Shift the Red X coordinates (left or right)
 		Keyframe red_y;	///< Shift the Red Y coordinates (up or down)

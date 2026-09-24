@@ -45,6 +45,10 @@ namespace openshot
 		bool SetGpuUniforms(SkRuntimeEffectBuilder& builder, int64_t frame_number,
 							int width, int height) const override;
 
+		/// The planner's answer (see GpuEffect::PlanForFrame).
+		bool PlanForFrame(int64_t frame_number, int width, int height,
+						  Podcastle::Effects::EffectPlan& plan) const override;
+
 	public:
 		Keyframe brightness;	///< Brightness keyframe. A constant value here will prevent animation.
 		Keyframe contrast;		///< Contrast keyframe.

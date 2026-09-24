@@ -98,8 +98,19 @@ bool Exposure::SetGpuUniforms(SkRuntimeEffectBuilder& builder, int64_t frame_num
 	// Resolved by the shared planner (image-processing-lib/src/Planner), the same code the editor
 	// runs, so the two cannot disagree about what these values mean. It declines -- and the C++
 	// twin runs -- for every case the fragment does not cover.
-	return BindPlan(builder, Podcastle::Effects::planEffect(
-		"EXPOSURE", {{"exposure", exposure.GetValue(frame_number)}}, width, height));
+	Podcastle::Effects::EffectPlan plan;
+	PlanForFrame(frame_number, width, height, plan);
+	return BindPlan(builder, plan);
+}
+
+bool Exposure::PlanForFrame(int64_t frame_number, int width, int height,
+                           Podcastle::Effects::EffectPlan& plan) const
+{
+	// The planner's answer for ApplyOnGpu too, so an identity, a clear or a multi-pass plan runs
+	// on the GPU rather than declining to the C++.
+	plan = Podcastle::Effects::planEffect(
+		"EXPOSURE", {{"exposure", exposure.GetValue(frame_number)}}, width, height);
+	return true;
 }
 
 // Generate JSON string of this object
