@@ -250,6 +250,7 @@ struct Case {
     bool statistical = false;
 };
 constexpr double kTransitionGate = 45.0;   // W20
+constexpr double kCircleEdgeGate = 35.0;   // the analytic circle edge, see the circlemask cases
 
 std::vector<Case> cases() {
     using openshot::Keyframe;
@@ -374,9 +375,18 @@ std::vector<Case> cases() {
                                    }},
         // CircleMask at three radii. The edge ring is the whole effect, so a radius that puts the
         // circle well inside the frame matters more than one that clips.
-        {"circlemask(0.8)",       [] { return std::make_shared<openshot::CircleMask>(Keyframe(0.8)); }},
-        {"circlemask(0.45)",      [] { return std::make_shared<openshot::CircleMask>(Keyframe(0.45)); }},
-        {"circlemask(0.12)",      [] { return std::make_shared<openshot::CircleMask>(Keyframe(0.12)); }},
+        //
+        // Gated at kCircleEdgeGate, not 48: the GPU edge is an analytic ramp and the C++'s is
+        // OpenCV's rasterised polygon (owner, 2026-09-24; circle_mask.sksl). The interior and
+        // exterior are exact, the one-pixel ring is not -- measured 37.4-49.6 dB here, the whole
+        // difference on the ring. The gate catches a circle in the wrong place or of the wrong
+        // size, which would cost far more than a ring.
+        {"circlemask(0.8)",       [] { return std::make_shared<openshot::CircleMask>(Keyframe(0.8)); },
+                                  kCircleEdgeGate},
+        {"circlemask(0.45)",      [] { return std::make_shared<openshot::CircleMask>(Keyframe(0.45)); },
+                                  kCircleEdgeGate},
+        {"circlemask(0.12)",      [] { return std::make_shared<openshot::CircleMask>(Keyframe(0.12)); },
+                                  kCircleEdgeGate},
 
         // Zoom-in at two magnifications and an off-centre anchor. Zoom-out declines, so there is
         // nothing to compare for it.
@@ -1006,7 +1016,8 @@ int main(int argc, char** argv) {
             std::printf("  %-6s %-12s psnr=%8.3f max=%3d differing=%6ld/%ld%s\n",
                         exact ? "EXACT" : (pass ? "PASS" : "FAIL"),
                         images[i].name.c_str(), d.psnr, d.max_delta, d.differing, d.total,
-                        all[c].psnrGate != 48.0 ? "  (45 dB gate, W20)" : "");
+                        all[c].psnrGate == kTransitionGate ? "  (45 dB gate, W20)"
+                        : all[c].psnrGate == kCircleEdgeGate ? "  (35 dB gate, analytic edge)" : "");
         }
     }
 

@@ -58,6 +58,8 @@ void add(const std::string& name, std::vector<std::string> tags, std::vector<int
         gpu_tol = Tolerance::GpuClose();
     if (std::find(tags.begin(), tags.end(), "gpu-blur") != tags.end())
         gpu_tol = Tolerance::GpuBlur();
+    if (std::find(tags.begin(), tags.end(), "gpu-edge") != tags.end())
+        gpu_tol = Tolerance::GpuEdge();
     if (std::find(tags.begin(), tags.end(), "gpu-amplified") != tags.end())
         gpu_tol = Tolerance::GpuAmplified();
     if (std::find(tags.begin(), tags.end(), "gpu-grain") != tags.end())

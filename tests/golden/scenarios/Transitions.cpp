@@ -46,7 +46,10 @@ void golden::registerTransitionScenarios() {
     for (auto e : all) {
         // Every one of these is bit-identical across the four-way sweep today (verified 2026-09-16),
         // so they are gated exact: the compositor must not move a transition pixel.
-        add(std::string("transitions.") + name(e), {"transitions", name(e), "exact", "gpu-composite"}, kRamp, [e](Scene& s) {
+        std::vector<std::string> tags = {"transitions", name(e), "exact", "gpu-composite"};
+        // The GPU circle's edge is analytic, not OpenCV's (owner, 2026-09-24): see GpuEdge.
+        if (e == TransitionEffect::CircleMask) tags.push_back("gpu-edge");
+        add(std::string("transitions.") + name(e), tags, kRamp, [e](Scene& s) {
             Pair p = pairScene(s);
             applyOverlappingTransition(*p.out, *p.in, 1.0, s.fps.ToDouble(), {e});
             finish(s, p);

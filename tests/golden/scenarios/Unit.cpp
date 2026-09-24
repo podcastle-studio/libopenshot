@@ -48,6 +48,7 @@ extern "C" {
 #include "Frame.h"
 
 #include <QImage>
+#include <QPainter>
 
 #include <memory>
 #include <string>
@@ -427,6 +428,56 @@ void golden::registerUnitScenarios() {
             const std::string counts = "uploads=" + std::to_string(uploads) +
                                        " cached=" + std::to_string(cached);
             checks.push_back({"stills_uploaded_once", uploads == 0 && cached == 8, counts});
+        });
+
+    // Above the reference width the rotational blur works on a resized copy, and above a megapixel
+    // the diagonal blur on a half-size one. Both were CPU-only there -- the 1080p frames every
+    // ROTATE and PAN_DIAGONAL transition hits -- and are now a resample, the blur and a resample
+    // back, as three GPU passes (owner's decision 2026-09-24: the resamples are OpenCV's fixed
+    // point to within a code value, and the rotational blur's intermediate is 8-bit where the
+    // C++'s is float). Asserts the passes ran, and the result against the CPU.
+    addCustom("unit.gpu_blur_large", {"unit", "gpu"}, unitScene,
+        [](Scene& s, std::vector<Captured>&, std::vector<Check>& checks) {
+            if (!openshot::GpuDevice::Instance().available()) {
+                checks.push_back({"no_gpu", true, "the OpenCV blurs run without a GPU"});
+                return;
+            }
+            const QImage background(QString::fromStdString(s.media("background_960x540.png")));
+            const QImage pattern(QString::fromStdString(s.media("image_rgb_400x300.jpg")));
+            struct Case { const char* label; int w, h; int diagonal; double rotational; };
+            const Case cases[] = {{"rotational(10) 1080p", 1920, 1080, 0, 10.0},
+                                  {"rotational(28) 1080p", 1920, 1080, 0, 28.0},
+                                  {"rotational(20) 2160p", 3840, 2160, 0, 20.0},
+                                  {"diagonal(100) 1080p", 1920, 1080, 100, 0.0},
+                                  {"diagonal(57) 2160p", 3840, 2160, 57, 0.0}};
+            for (const Case& c : cases) {
+                // Detail to blur: the background with the test pattern over its middle.
+                QImage source = background.scaled(c.w, c.h).convertToFormat(QImage::Format_RGBA8888_Premultiplied);
+                {
+                    QPainter painter(&source);
+                    painter.drawImage(QRect(c.w / 4, c.h / 4, c.w / 2, c.h / 2), pattern);
+                }
+                auto run = [&]() {
+                    openshot::Blur blur(openshot::Keyframe(0), openshot::Keyframe(0),
+                                        openshot::Keyframe(c.diagonal), openshot::Keyframe(c.rotational),
+                                        openshot::Keyframe(0), openshot::Keyframe(0), openshot::Keyframe(0),
+                                        openshot::Keyframe(0), openshot::Keyframe(1));
+                    auto frame = std::make_shared<openshot::Frame>(1, c.w, c.h, "#000000");
+                    frame->AddImage(std::make_shared<QImage>(source.copy()));
+                    return golden::fromFrame(blur.GetFrame(frame, 1));
+                };
+                openshot::GpuEffect::ResetCounters();
+                const golden::Image gpu = run();
+                const long long passes = openshot::GpuEffect::GpuPasses();
+                const openshot::GpuDevice::Backend backend = openshot::GpuDevice::RequestedBackend();
+                openshot::GpuDevice::SetBackend(openshot::GpuDevice::Backend::Off);
+                const golden::Image cpu = run();
+                openshot::GpuDevice::SetBackend(backend);
+                const golden::Metrics m = golden::compare(cpu, gpu);
+                char buf[160];
+                std::snprintf(buf, sizeof buf, "%s: gpu_passes=%lld psnr vs CPU %.2f max %d", c.label, passes, m.psnr, m.maxAbs);
+                checks.push_back({c.label, passes == 3 && m.psnr >= 45.0, buf});
+            }
         });
 
     // A GPU-decoded video matte is used on the GPU (Mask::PrepareGpuMask): its own texture when it

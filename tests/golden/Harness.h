@@ -42,6 +42,12 @@ struct Tolerance {
     /// W14's gate for blur, measured 43.2 dB / SSIM 0.9986 at the widest.
     static Tolerance GpuBlur() { return {40.0, 0.995, 255, 100.0}; }
 
+    /// For the circle mask on the GPU, whose edge is an analytic ramp where the CPU has OpenCV's
+    /// rasterised polygon (owner decision 2026-09-24; circle_mask.sksl). Interior and exterior
+    /// match exactly; the one-pixel ring differs, measured 43.5 dB at worst on a 640x360 frame.
+    /// The real gate is openshot-gpu-effect-parity's circlemask cases.
+    static Tolerance GpuEdge() { return {40.0, 0.995, 255, 100.0}; }
+
     /// For the few blend modes whose formula is mathematically steep enough to turn a
     /// sub-LSB difference in the source into a large one in the result.
     ///

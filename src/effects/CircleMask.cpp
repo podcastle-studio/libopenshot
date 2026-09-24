@@ -84,17 +84,6 @@ std::shared_ptr<openshot::Frame> CircleMask::GetFrame(std::shared_ptr<openshot::
 	return frame;
 }
 
-// The rasterised circle, cached across frames. See CircleMask.h.
-struct CircleMask::CoverageCache
-{
-	sk_sp<SkImage> texture;
-	double radius = -1.0;
-	int width = 0;
-	int height = 0;
-	unsigned long long generation = 0;
-	std::shared_ptr<GpuFrame> owner;   // keeps the pooled surface alive alongside its snapshot
-};
-
 // The shared SkSL source lives in image-processing-lib/shaders/ so the editor loads the
 // same bytes through CanvasKit; it is embedded here at build time. Read it there --
 // including why it is written the way it is.
@@ -106,42 +95,18 @@ const char* CircleMask::GpuShaderSource() const
 bool CircleMask::SetGpuUniforms(SkRuntimeEffectBuilder& builder, int64_t frame_number,
 								int width, int height) const
 {
-	const double radius_value = circleRadius.GetValue(frame_number);
-	const unsigned long long generation = GpuDevice::Generation();
-	const bool cached = coverage && coverage->radius == radius_value && coverage->width == width &&
-						coverage->height == height && coverage->generation == generation &&
-						coverage->texture;
-	if (!cached) {
-		// The coverage comes from the shared planner: OpenCV's antialiased circle, drawn with the
-		// same call and sub-pixel precision as applyCircleMaskEffect -- the same pixels the editor
-		// gets from the WASM planner. >= 1 and <= 0 are an identity and a clear there, which the
-		// C++ twin handles, so the GPU path declines for both.
-		const Podcastle::Effects::EffectPlan plan = Podcastle::Effects::planEffect(
-			"CIRCLE_MASK", {{"circleRadius", radius_value}}, width, height);
-		if (plan.steps.size() != 1 || plan.steps.front().kind != Podcastle::Effects::PlanStep::Kind::Gpu ||
-			plan.textures.size() != 1)
-			return false;
-		const Podcastle::Effects::PlanTexture& texture = plan.textures.front();
+	// Resolved by the shared planner, the same code the editor runs. >= 1 and <= 0 are an
+	// identity and a clear there; ApplyOnGpu takes both before this is reached.
+	Podcastle::Effects::EffectPlan plan;
+	PlanForFrame(frame_number, width, height, plan);
+	return BindPlan(builder, plan);
+}
 
-		auto cache = std::make_shared<CoverageCache>();
-		cache->radius = radius_value;
-		cache->width = width;
-		cache->height = height;
-		cache->generation = generation;
-		const SkPixmap pixels(
-			SkImageInfo::Make(texture.width, texture.height, kRGBA_8888_SkColorType, kPremul_SkAlphaType),
-			texture.rgba.data(), static_cast<std::size_t>(texture.width) * 4);
-		cache->owner = GpuFrame::Create(texture.width, texture.height, kRGBA_8888_SkColorType);
-		if (!cache->owner || !cache->owner->upload(pixels))
-			return false;
-		cache->texture = cache->owner->snapshot();
-		if (!cache->texture)
-			return false;
-		coverage = std::move(cache);
-	}
-
-	builder.child("coverage") = coverage->texture->makeShader(
-		SkTileMode::kClamp, SkTileMode::kClamp, SkSamplingOptions());
+bool CircleMask::PlanForFrame(int64_t frame_number, int width, int height,
+							  Podcastle::Effects::EffectPlan& plan) const
+{
+	plan = Podcastle::Effects::planEffect(
+		"CIRCLE_MASK", {{"circleRadius", circleRadius.GetValue(frame_number)}}, width, height);
 	return true;
 }
 

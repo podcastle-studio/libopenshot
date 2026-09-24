@@ -20,20 +20,18 @@ namespace openshot
 		void init_effect_details();
 
 	protected:
-		/// The SkSL twin of applyCircleMaskEffect's per-pixel half. The circle itself is
-		/// rasterised by OpenCV on the CPU and uploaded -- see the .cpp.
+		/// The SkSL twin of applyCircleMaskEffect, with an analytic edge where the C++ has
+		/// OpenCV's rasterised one (see circle_mask.sksl).
 		const char* GpuShaderSource() const override;
 
-		/// The coverage mask as a texture, or false when there is nothing to apply.
+		/// The circle's centre and radius, from the shared planner.
 		bool SetGpuUniforms(SkRuntimeEffectBuilder& builder, int64_t frame_number,
 							int width, int height) const override;
 
-	private:
-		/// The rasterised circle, cached across frames and keyed on the radius, the frame
-		/// size and GpuDevice::Generation(). Defined in the .cpp because this header is
-		/// installed and compiled without Skia on the include path.
-		struct CoverageCache;
-		mutable std::shared_ptr<CoverageCache> coverage;
+		/// The planner's answer, so a radius of 0 is cleared on the GPU instead of being
+		/// read back for the C++'s zero fill.
+		bool PlanForFrame(int64_t frame_number, int width, int height,
+						  Podcastle::Effects::EffectPlan& plan) const override;
 
 	public:
 
