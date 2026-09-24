@@ -725,8 +725,14 @@ void golden::registerUnitScenarios() {
     // driver) the path must decline and hardware decode must still produce the same frames.
     addCustom("unit.nvdec_on_device", {"unit", "gpu"}, unitScene,
         [](Scene& s, std::vector<Captured>&, std::vector<Check>& checks) {
+          // H.264, and the webm codecs and HEVC/AV1 NVDEC has been asked for since 2026-09-24.
+          const std::pair<const char*, const char*> clips[] = {
+              {"h264", "clip_a_640x360_30.mp4"}, {"vp9", "clip_vp9_640x360_30.webm"},
+              {"vp8", "clip_vp8_640x360_30.webm"}, {"hevc", "clip_hevc_640x360_30.mp4"},
+              {"av1", "clip_av1_640x360_30.mp4"}};
+          for (const auto& [codec, file] : clips) {
             const int wanted = 8;
-            const std::string clip = s.media("clip_a_640x360_30.mp4");
+            const std::string clip = s.media(file);
             openshot::Settings* settings = openshot::Settings::Instance();
             const bool previous_gpu = settings->GPU_DECODE;
             const int previous_hw = settings->HARDWARE_DECODER;
@@ -758,9 +764,10 @@ void golden::registerUnitScenarios() {
             // Settings is process-wide: restore before anything else can run.
             settings->GPU_DECODE = previous_gpu;
             settings->HARDWARE_DECODER = previous_hw;
+            const std::string label = std::string(codec);
             if (!failure.empty()) {
-                checks.push_back({"nvdec_on_device", false, failure});
-                return;
+                checks.push_back({"nvdec_on_device(" + label + ")", false, failure});
+                continue;
             }
 
             int differing = 0, worst = 0;
@@ -788,8 +795,9 @@ void golden::registerUnitScenarios() {
             // >=, as in unit.gpu_decode: the reader decodes ahead.
             const bool ok = (differing == 0 || !same_conversion) &&
                             (interop ? ran >= static_cast<unsigned long long>(wanted) : ran == 0);
-            checks.push_back({interop ? "nvdec_on_device_exact" : "nvdec_on_device_declines", ok,
-                              detail});
+            checks.push_back({std::string(interop ? "nvdec_on_device_exact(" : "nvdec_on_device_declines(") +
+                                  label + ")", ok, detail});
+          }
         });
 
     // A BT.709-tagged chart must decode to the sRGB values it was made from (W23's gate).

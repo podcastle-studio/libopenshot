@@ -43,6 +43,13 @@ a='if(between(X,60,259)*between(Y,60,139),255,if(between(X,20,299)*between(Y,20,
 ffmpeg -y -hide_banner -v error -f lavfi -i "nullsrc=size=160x120:rate=30,format=rgba,geq=\
 r='128+100*sin(X/9+T*3)':g='96+80*cos(Y/7)':b='200':\
 a='255*clip((40-hypot(X-80-30*sin(T*2),Y-60))/8,0,1)',format=yuva444p12le" -t 1 -c:v prores_ks -profile:v 4444 watermark_prores4444_160x120_30.mov
+# The same moving pattern in the other codecs the service's uploads arrive in -- webm (VP9, VP8)
+# and HEVC/AV1 -- 1 s each, for unit.nvdec_on_device: NVDEC must decode every one of them to the
+# same bytes as software decode. 4:2:0 8-bit, what NVDEC keeps on the device as NV12.
+ffmpeg -y -hide_banner -v error -f lavfi -i "testsrc2=size=640x360:rate=30" -t 1 -c:v libvpx-vp9 -b:v 800k -pix_fmt yuv420p -an clip_vp9_640x360_30.webm
+ffmpeg -y -hide_banner -v error -f lavfi -i "testsrc2=size=640x360:rate=30" -t 1 -c:v libvpx -b:v 800k -pix_fmt yuv420p -an clip_vp8_640x360_30.webm
+ffmpeg -y -hide_banner -v error -f lavfi -i "testsrc2=size=640x360:rate=30" -t 1 -c:v libx265 -x265-params log-level=error -crf 24 -pix_fmt yuv420p -tag:v hvc1 -an clip_hevc_640x360_30.mp4
+ffmpeg -y -hide_banner -v error -f lavfi -i "testsrc2=size=640x360:rate=30" -t 1 -c:v libsvtav1 -crf 40 -pix_fmt yuv420p -an clip_av1_640x360_30.mp4
 # opaque JPEG
 ffmpeg -y -hide_banner -v error -f lavfi -i "rgbtestsrc=size=400x300" -frames:v 1 -q:v 2 image_rgb_400x300.jpg
 # static luminance matte image

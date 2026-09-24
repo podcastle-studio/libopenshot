@@ -374,6 +374,14 @@ int FFmpegReader::IsHardwareDecodeSupported(int codecid)
 		case AV_CODEC_ID_WMV1:
 		case AV_CODEC_ID_WMV2:
 		case AV_CODEC_ID_WMV3:
+		// The webm codecs and HEVC (2026-09-24): NVDEC decodes all four on every GPU the service
+		// targets, and FFmpeg's native decoders expose the CUDA hwaccel for them. A stream the
+		// card refuses (an AV1 profile it lacks, 4:4:4) fails before its first frame and
+		// ReopenWithoutHardwareDecode() takes it to software, as for H.264.
+		case AV_CODEC_ID_HEVC:
+		case AV_CODEC_ID_VP8:
+		case AV_CODEC_ID_VP9:
+		case AV_CODEC_ID_AV1:
 			ret = 1;
 			break;
 		default :
@@ -471,6 +479,16 @@ void FFmpegReader::Open() {
 			// Get codec and codec context from stream
 			const AVCodec *pCodec = avcodec_find_decoder(codecId);
 
+#if USE_HW_ACCEL
+			// FFmpeg prefers libdav1d for AV1, which has no hwaccel; the native decoder has one and
+			// nothing else -- it cannot decode in software. So it is chosen only when hardware
+			// decode is on, and a stream NVDEC refuses reopens without it (force_sw_decode, set by
+			// ReopenWithoutHardwareDecode), back on libdav1d.
+			if (codecId == AV_CODEC_ID_AV1 && hw_de_on && !force_sw_decode) {
+				if (const AVCodec *native = avcodec_find_decoder_by_name("av1"))
+					pCodec = native;
+			}
+#endif
 			if (codecId == AV_CODEC_ID_VP9) {
 				// Does the stream metadata say alpha_mode=1?
 				AVDictionaryEntry *alpha =
@@ -490,6 +508,10 @@ void FFmpegReader::Open() {
 				if (hw_de_on && (retry_decode_open==2)) {
 					// Up to here no decision is made if hardware or software decode
 					hw_de_supported = IsHardwareDecodeSupported(pCodecCtx->codec_id);
+					// A VP9 with alpha is decoded by libvpx (above): NVDEC has no alpha plane and
+					// libvpx no hwaccel, so that stream stays in software.
+					if (hw_de_supported && pCodec && std::strncmp(pCodec->name, "libvpx", 6) == 0)
+						hw_de_supported = 0;
 				}
 #endif
 				retry_decode_open = 0;
