@@ -266,24 +266,36 @@ private:
 		const int requested = Settings::Instance()->HW_EN_DEVICE_SET;
 		int chosen = -1;
 		VkPhysicalDeviceProperties properties{};
+		// "vulkan" means a GPU. A software device (lavapipe, or any CPU-type ICD installed
+		// beside the real driver) is only ever taken when asked for by name: with the GPU on
+		// by default in the service, a CPU node that has Mesa's Vulkan drivers installed would
+		// otherwise render every export through a software rasteriser, several times slower
+		// than the raster path it is meant to fall back to.
+		const auto usable_device = [&](const VkPhysicalDeviceProperties& p) {
+			if (p.apiVersion < api_version)
+				return false;
+			return backend != GpuDevice::Backend::Vulkan || p.deviceType != VK_PHYSICAL_DEVICE_TYPE_CPU;
+		};
 		if (requested > 0 && requested < static_cast<int>(device_count)) {
 			vkGetPhysicalDeviceProperties(devices[requested], &properties);
-			if (properties.apiVersion >= api_version)
+			if (usable_device(properties))
 				chosen = requested;
 		}
 		for (uint32_t i = 0; i < device_count && chosen < 0; ++i) {
 			vkGetPhysicalDeviceProperties(devices[i], &properties);
-			if (properties.apiVersion >= api_version &&
+			if (usable_device(properties) &&
 				properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU)
 				chosen = static_cast<int>(i);
 		}
 		for (uint32_t i = 0; i < device_count && chosen < 0; ++i) {
 			vkGetPhysicalDeviceProperties(devices[i], &properties);
-			if (properties.apiVersion >= api_version)
+			if (usable_device(properties))
 				chosen = static_cast<int>(i);
 		}
 		if (chosen < 0) {
-			error = "no physical device supports the required Vulkan version";
+			error = backend == GpuDevice::Backend::Vulkan
+				? "no GPU with the required Vulkan version (software devices need OPENSHOT_GPU=lavapipe)"
+				: "no physical device supports the required Vulkan version";
 			return false;
 		}
 		physical_device = devices[chosen];

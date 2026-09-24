@@ -352,6 +352,32 @@ void checkSingleControl() {
     report("control", ok, detail);
 }
 
+// "vulkan" must mean a GPU. The service turns the GPU on by default (2026-09-24), so a CPU node
+// that happens to have Mesa's Vulkan drivers installed would otherwise pick lavapipe and render
+// every export through a software rasteriser instead of the raster path. Simulated by leaving the
+// loader only lavapipe's ICD: the device must stay unavailable. Last, because it rebuilds the device.
+void checkVulkanSkipsSoftwareDevices() {
+    const openshot::GpuDevice::Backend requested = openshot::GpuDevice::RequestedBackend();
+    if (requested != openshot::GpuDevice::Backend::Vulkan) {
+        report("vulkan-no-software", true, "skipped (only meaningful with OPENSHOT_GPU=vulkan)");
+        return;
+    }
+    const char* previous = std::getenv("VK_DRIVER_FILES");
+    const std::string saved = previous ? previous : "";
+    setenv("VK_DRIVER_FILES", "/usr/share/vulkan/icd.d/lvp_icd.json", 1);
+    openshot::GpuDevice::SetBackend(openshot::GpuDevice::Backend::Off);
+    openshot::GpuDevice::SetBackend(openshot::GpuDevice::Backend::Vulkan);
+    const bool refused = !openshot::GpuDevice::Instance().available();
+    const std::string why = openshot::GpuDevice::Instance().lastError();
+    if (previous) setenv("VK_DRIVER_FILES", saved.c_str(), 1); else unsetenv("VK_DRIVER_FILES");
+    openshot::GpuDevice::SetBackend(openshot::GpuDevice::Backend::Off);
+    openshot::GpuDevice::SetBackend(requested);
+    const bool back = openshot::GpuDevice::Instance().available();
+    report("vulkan-no-software", refused && back,
+           refused ? (back ? "lavapipe only -> unavailable (" + why + "); GPU back after" : "GPU did not come back")
+                   : "OPENSHOT_GPU=vulkan took a software device");
+}
+
 // Subtitles draw straight onto the canvas they are handed and build no offscreen
 // of their own, so the whole pass follows its destination. Render the same frame
 // onto a GPU surface and a raster one and require the results to agree.
@@ -567,6 +593,7 @@ int main() {
     checkSingleControl();
     checkSubtitleOnGpuCanvas();
     checkSubtitleCanvasColors();
+    checkVulkanSkipsSoftwareDevices();
 
     std::printf("\n%d failure(s)\n", failures);
     return failures == 0 ? 0 : 1;
