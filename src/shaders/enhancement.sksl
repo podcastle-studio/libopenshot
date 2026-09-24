@@ -1,22 +1,24 @@
 // enhancement.sksl
 //
-// The SkSL twin of the clarity and sharpness passes.
+// The SkSL twin of the clarity, sharpness and grain passes.
 //
-// **The grain pass is deliberately absent.** applyNoisePass is built on the classic GLSL hash
-// fract(sin(x * 12.9898 + y * 78.233) * 43758.5453). At 1080p the argument to sin() reaches ~85,000,
-// where the result depends entirely on how many bits the implementation carries: the C++ evaluates
-// it in double, an SkSL fragment in float. The two do not differ by an LSB, they differ by an
-// arbitrary amount in [0, 1), which the pass then scales to as much as ~140 LSB of grain. There is
-// no way to make them agree short of changing the CPU's hash, so a frame that asks for grain runs
-// entirely on the CPU -- SetGpuUniforms never sees it, because GetFrame checks first.
+// **Clarity and sharpness are parity fragments; grain is not, by owner decision (2026-09-24).**
+// applyNoisePass is built on the classic GLSL hash fract(sin(x * 12.9898 + y * 78.233) *
+// 43758.5453). At 1080p the argument to sin() reaches ~150,000, where the result depends entirely
+// on how many bits the implementation carries: the C++ evaluates it in double, a fragment in
+// float. The two do not differ by an LSB; they are different random values. The grain here is the
+// same formula, the same seed, the same luma-weighted amplitude and the same rounding, so it is the
+// same *kind* of grain at a different random phase -- and on a GPU path it could not be the CPU's
+// bytes anyway, because the hash is seeded from the pixel's own colour and GPU decode changes that
+// colour by an LSB. It is gated statistically (unit.gpu_grain), not byte for byte.
 //
 // Two details of the C++ that are easy to miss and are reproduced here: both passes SKIP the
 // one-pixel border (their loops run 1..h-2 and 1..w-2), leaving it exactly as it was; and both
 // work in 0..1 from the premultiplied bytes without unpremultiplying, then round rather than
 // truncate on the way back out (clamp255 uses std::round).
 uniform float2 size;   // frame size in pixels
-uniform float  mode;   // 0 clarity, 1 sharpen, 2 blur-mix
-uniform float  k;      // strength * 3 for clarity and sharpen; the mix amount for blur
+uniform float  mode;   // 0 clarity, 1 sharpen, 2 blur-mix, 3 grain
+uniform float  k;      // strength * 3 for clarity and sharpen; the mix amount for blur; the amount for grain
 
 // The C++ accumulates each neighbour already divided by 255, so the division happens nine times
 // and not once at the end. That is not the same sum in floating point, and this is a parity
@@ -29,9 +31,26 @@ float3 osBlur3x3(float2 p) {
 	return sum / 9.0;
 }
 
+// The grain pass, applyNoisePass line for line. It runs on every pixel -- unlike the two passes
+// below, the C++ grain loop has no border -- on the premultiplied bytes as they are, alpha kept.
+float4 osGrain(float4 bytes, float2 q) {
+	float3 c8 = bytes.rgb;
+	float seed = fract((c8.r * 0.123 + c8.g * 0.456 + c8.b * 0.789) / 255.0);
+	float2 h = q + seed * 437.0;   // q is the integer pixel, as the C++'s x and y are
+	float n = fract(sin(h.x * 12.9898 + h.y * 78.233) * 43758.5453) - 0.5;
+	float luma = (0.299 * c8.r + 0.587 * c8.g + 0.114 * c8.b) / 255.0;
+	float amp = 1.4 * (1.0 - luma) + 0.5 * luma;
+	float delta = n * k * 0.4 * amp * 255.0;
+	// clamp255: std::round, then clamp. floor(v + 0.5) differs from round only at negative
+	// halves, which the clamp to 0 then removes.
+	return float4(clamp(floor(c8 + delta + 0.5), 0.0, 255.0), bytes.a) / 255.0;
+}
+
 float4 main(float2 p) {
 	float4 bytes = osBytes(p);
 	float2 q = floor(p);
+	if (mode > 2.5)
+		return osGrain(bytes, q);
 	// The border the C++ never writes.
 	if (q.x < 1.0 || q.y < 1.0 || q.x >= size.x - 1.0 || q.y >= size.y - 1.0)
 		return bytes / 255.0;

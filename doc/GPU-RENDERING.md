@@ -46,15 +46,15 @@ untouched.
 
 **Not on the GPU, deliberately:** `Crop` without `GPU_CROP` and `CameraMovement` (both QPainter
 resampling — a rasteriser difference, not an arithmetic one, so porting them redefines pixels);
-ChromaKey's non-YCbCr methods (babl colour science; the service only uses YCbCr); Enhancement's
-grain pass (a `sin()` hash that differs by up to ~140 LSB between `double` and `float`); ColorMap's
-colour-match mode (re-bakes the cube from the frame, i.e. a readback).
+ChromaKey's non-YCbCr methods (babl colour science; the service only uses YCbCr); ColorMap's
+colour-match mode (re-bakes the cube from the frame, i.e. a readback). Enhancement's grain *is* on
+the GPU (since 2026-09-24), but not as a parity fragment — see "Parity".
 
 ### The switches
 
 | switch | set by | default | what it does | changes pixels? |
 |---|---|---|---|---|
-| `OPENSHOT_GPU` | env, or `GpuDevice::SetBackend()` (overrides) | `off` | `vulkan` / `lavapipe` enable every GPU path at all | no — the four-way sweep is bit-exact except text (PSNR ≥ 38) and three blend modes |
+| `OPENSHOT_GPU` | env, or `GpuDevice::SetBackend()` (overrides) | `off` | `vulkan` / `lavapipe` enable every GPU path at all | slightly — the four-way sweep is bit-exact except text (PSNR ≥ 38), three blend modes, and film grain (same grain, different random phase) |
 | `ENCODER` | service env | `libx264` | `h264_nvenc` (probed once; falls back) | encoder output only |
 | `GPU_DECODE` (+ `HARDWARE_DECODER=2`) | service env `OPENSHOT_GPU_DECODE` | off | NVDEC + GPU YUV→RGBA, frames never leave the device | **yes**: GPU rounding; honours a `bt709` tag swscale never did (12 frames + 3 checks of 307 move on Vulkan) |
 | `GPU_ENCODE` | service env `OPENSHOT_GPU_ENCODE` (needs `ENCODER=h264_nvenc`) | off | NVENC reads the GPU frame | **yes**: box vs bicubic chroma |
@@ -108,6 +108,18 @@ bit-exact wherever reachable; where not, it is one of exactly two causes: a divi
 (Vulkan allows 2.5 ULP — always 1 LSB, amplified by a contrast/exposure factor to 3–5), or a
 `double` parameter carried as a `float` uniform.
 
+**Film grain is the one deliberate exception** (owner, 2026-09-24). Enhancement's grain hash,
+`fract(sin(x·12.9898 + y·78.233)·43758.5453)`, is evaluated in `double` by the C++ and in `float` by
+the fragment, and at 1080p arguments that is a different random value per pixel, not an LSB. The
+fragment is the same formula, seed, amplitude and rounding, so it is the same grain at a different
+phase — and the CPU grain could not survive a GPU path anyway, because it is seeded from the pixel's
+own colour and `GPU_DECODE` moves that by an LSB. It is gated statistically instead: spread within
+5 % and mean within 0.5 LSB of the CPU twin's, no neighbour correlation (float `sin()` at large
+arguments is where such a hash turns into stripes), alpha untouched — `unit.gpu_grain` and the
+parity tool's `enhance(grain)` / `enhance(all, prod)` cases. `effects.enhancement` carries grain and
+is held on the GPU arms only to `Tolerance::GpuGrain()` (not a gate); `effects.enhancement_no_grain`
+holds the GPU's clarity and sharpness to `GpuClose`.
+
 **Editor vs export.** The transitions are one source on both sides: the C++ in
 `src/effects/image-processing-lib` (compiled natively here, to WASM for the editor), the SkSL in its
 `shaders/`, and the **planner** (`src/Planner/EffectPlan`) that turns a preset's parameters into
@@ -145,6 +157,11 @@ without the "revisit if" condition being true.
   2026-09-22): exports match the editor's 720p preview. The blur is a normalised Gaussian (three
   boxes), not a single box; the zoom blur's polar conversions are bilinear.
 - **Nearest stays nearest** where the C++ chose it (border-reflected rotation, displacement map).
+- **Film grain on the GPU is the same grain at a different random phase** (owner, 2026-09-24),
+  gated statistically. It was the one per-pixel pass that kept a whole effect on the CPU: with
+  grain on, the service's ADJUSTMENT filter read the frame back and ran clarity, sharpen and grain
+  in OpenMP at source resolution. *Revisit if* grain must be reproducible across paths — then the
+  hash has to change on both sides to one exact in `float`.
 - **Glow quality is fixed**: in-motion glow matches resting glow; speed comes from the GPU and the
   composited-glow cache, never from fewer steps or a lower resolution.
 - **No CPU frame-level parallelism**: Graphite parallelises through pipeline depth (decode-ahead,
@@ -168,8 +185,6 @@ without the "revisit if" condition being true.
 - **Overlay clips composite on the CPU** (`Clip::draw_to_canvas` is skipped for `isOverlay`): in
   `transitions_chain` only 45 of 180 frames take the GPU encode path, with 370 readbacks. The next
   lever for transition-heavy exports.
-- **The production payload still does ~251 readbacks per 750 frames** with every flag on and the GPU
-  ~10 % busy (W31 telemetry); which clips cause them is not measured (see "Worth doing").
 - **Resampled alpha boundaries vary with what else ran in the process** (golden suite, not fixed):
   1,280 pixels on the interpolated alpha edges of a scaled PNG move between an isolated and a full
   run, and between two 4-thread runs. Nothing is red — the affected scenarios were rebuilt on 1:1
@@ -179,11 +194,9 @@ without the "revisit if" condition being true.
   decision did not retire, so the same radius renders at full scale from 720p and at half from 1080p.
 - **The editor leaves some LUTs ungraded** (1-D-only cubes, a 3-D cube with a 1-D shaper, any
   non-WebGL2 renderer) where the export grades them.
-- **Film grain is chaotic in its input, so it never matches across paths.** Enhancement's grain
-  (always on the CPU) seeds its hash from the pixel's own colour, so a 1 LSB difference upstream —
-  which `GPU_DECODE` produces by design — gives the pixel entirely different grain. Same look, a
-  different random phase: a grain clip measures ~23 dB CPU vs full-GPU where everything around it
-  is ~42. Expected; exclude grain clips, or compare them by statistics, when checking parity.
+- **Film grain never matches across paths, by construction** (see "Parity"): a grain clip measures
+  ~23 dB CPU vs full-GPU where everything around it is ~42. Exclude grain clips, or compare them by
+  statistics, when checking parity.
 - `effects.stack_crop_chroma_light_lut` shows harsh white blotches (ChromaKey + Light + LUT
   stacked); baselined as-is.
 - **`render-payload` prints a garbled Pub/Sub topic name** in its progress messages once rendering
@@ -253,8 +266,8 @@ they should happen:
     recorded hash, and **CPU vs full-GPU compared** frame by frame with the *same* encoder
     (NVENC both sides — against x264 the comparison mostly measures the encoders). The one
     existing payload passed on 2026-09-24: CPU render identical to its recorded hash; CPU vs
-    full-GPU ~42 dB on every frame except the grain clip (see "Known issues"), and only ~15 %
-    faster, for reasons not yet measured (see "Worth doing"). Compressed output
+    full-GPU ~42 dB on every frame except the grain clip (see "Known issues"), and **2.9× faster**
+    (23.2 → 8.1 s) once grain moved to the GPU. Compressed output
     caps what this can see at the encoder's noise (~42 dB); a pre-encode frame dump from
     `render-payload` would make it exact.
 11. **Soak and concurrency on the GPU node**: a long export and N concurrent exports with every flag
@@ -268,12 +281,10 @@ they should happen:
 
 ### 4. Worth doing, not blocking
 
-- **Find out why the production payload gains only ~15 %** — the most important open question for
-  whether the GPU pays in production. With every GPU path on it renders in ~26 s against the CPU's
-  ~31 s (25 s of 720p), the GPU ~10 % busy (`doc/PERFORMANCE-BASELINE.md`, 2026-09-24). Unmeasured
-  candidates: its grain clip (Enhancement grain is CPU-only — a readback per frame), the WHOOSH
-  transition's overlay clip (CPU compositing path), and fixed per-export costs. Profile it with
-  `GpuCounters` per frame before building anything.
+- **Look for the next grain.** The production payload's GPU gain was capped at ~1.5× by one CPU
+  effect on one clip for a third of the export (`doc/PERFORMANCE-BASELINE.md`, 2026-09-24). The
+  telemetry's `readbacks` counter is how to find the next one: every new payload in the corpus
+  should be run full-GPU and any readback count much above its clip-transition count explained.
 - Overlay clips on the GPU (`isOverlay` frames composite on QPainter; `transitions_chain`).
 - Thread budgets from the cgroup (`FF_THREADS`/`OMP_THREADS` from `cpu.max` ÷ instances; W06) —
   needs a container to validate; check what the upstream merge's thread settings already do first.

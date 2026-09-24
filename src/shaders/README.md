@@ -11,3 +11,8 @@ frame is `osSrc` (premultiplied, NEAREST, pixel units), values are resolved on t
 rasteriser's or a transcendental's decision arrives as a texture (`contrastLut`, `maskImage`, the
 LUT atlas). The build embeds both directories into one header (`cmake/scripts/embed_shaders.cmake`);
 a stem may exist in only one of them.
+
+`enhancement.sksl`'s grain mode is the one fragment here that is **not** a parity twin: the hash is
+float where the C++'s is double, so it is the same grain at a different random phase (owner
+decision, 2026-09-24). It is gated statistically — `unit.gpu_grain`, and the parity tool's
+statistical cases — never byte for byte.

@@ -51,7 +51,7 @@ namespace openshot
     private:
         /// Which pass the next ApplyOnGpu call should run, and with what strength.
         /// Mutable because SetGpuUniforms is const; set by GetFrame, read once.
-        enum class GpuPass { Clarity, Sharpen, BlurMix };
+        enum class GpuPass { Clarity, Sharpen, BlurMix, Grain };
         mutable GpuPass gpu_pass = GpuPass::Clarity;
         mutable double gpu_pass_strength = 0.0;
 

@@ -98,11 +98,21 @@ void golden::registerEffectScenarios() {
         s.timeline->Open();
     });
 
-    add("effects.enhancement", {"effects", "filters", "exact", "gpu-composite"}, F, [](Scene& s) {
+    // With grain. On a GPU the grain is the same noise at a different random phase (float hash,
+    // owner decision 2026-09-24), so this frame cannot match its CPU golden there and the GPU arms
+    // hold it only to Tolerance::GpuGrain(), which is not a gate. unit.gpu_grain is the gate, and
+    // effects.enhancement_no_grain below holds the GPU's clarity and sharpness to GpuClose.
+    add("effects.enhancement", {"effects", "filters", "exact", "gpu-composite", "gpu-grain"}, F, [](Scene& s) {
         auto* c = baseScene(s);
         c->AddEffect(new openshot::Enhancement(openshot::Keyframe(0.3), ramp(0, 0.9), ramp(-0.5, 0.8)));
         s.timeline->Open();
     }, Tolerance::Loose());
+
+    add("effects.enhancement_no_grain", {"effects", "filters", "exact", "gpu-composite"}, F, [](Scene& s) {
+        auto* c = baseScene(s);
+        c->AddEffect(new openshot::Enhancement(openshot::Keyframe(0.0), ramp(0, 0.9), ramp(-0.5, 0.8)));
+        s.timeline->Open();
+    });
 
     add("effects.colormap_lut", {"effects", "lut", "exact", "gpu-composite"}, F, [](Scene& s) {
         auto* c = baseScene(s);

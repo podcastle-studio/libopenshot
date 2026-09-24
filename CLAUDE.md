@@ -283,6 +283,10 @@ GPU to take over. Earlier, lower figures in the docs were measured on an Intel i
   path (add one when you add a GPU path or a fallback), `ExportTelemetry` samples NVML (dlopen'd,
   `_v2` memory info — v1 counts the driver's reservation) and the service logs one line per export.
   Utilisation is device-wide. NVML needs the CUDA headers at build time (`NvmlBuiltIn()`).
+- **Film grain on the GPU is not the CPU's bytes, on purpose** (2026-09-24): Enhancement's hash is
+  float in the fragment, double in the C++, so it is the same grain at a different random phase,
+  gated statistically (`unit.gpu_grain`). Before the port a grain clip put the whole effect on the
+  CPU and capped the production payload at ~1.5× (now 2.9×). Never compare grain byte for byte.
 - **`FrameMapper` must not `GetImage()` a GPU-backed frame.** It did, for every frame it rebuilt
   (any clip whose audio mapping differs, i.e. most video), which read every GPU-decoded frame back
   and made GPU decode look worthless. It shares the surface now, as `Frame`'s copy constructor

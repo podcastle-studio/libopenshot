@@ -176,6 +176,44 @@ std::shared_ptr<openshot::Frame> frameFrom(const QImage& img) {
 
 struct Delta { double psnr; int max_delta; long differing; long total; };
 
+// What a grain pass added, as a distribution: the mean and standard deviation of (out - in) over
+// every colour byte, and the correlation of that delta with its right-hand neighbour. The mean and
+// spread are what the grain looks like; the neighbour correlation is ~0 for a good hash and is
+// what would catch float sin() degenerating into visible stripes or blocks at large arguments.
+struct GrainStats { double mean, stddev, neighbour_corr; };
+
+GrainStats grainStats(const QImage& in, const QImage& out) {
+    const int w = in.width(), h = in.height();
+    std::vector<double> d(static_cast<std::size_t>(w) * h);
+    double sum = 0.0, sum2 = 0.0;
+    long n = 0;
+    for (int y = 0; y < h; ++y) {
+        const uchar* pi = in.scanLine(y);
+        const uchar* po = out.scanLine(y);
+        for (int x = 0; x < w; ++x) {
+            double px = 0.0;
+            for (int c = 0; c < 3; ++c) {
+                const double v = (double) po[x * 4 + c] - (double) pi[x * 4 + c];
+                sum += v; sum2 += v * v; n++; px += v;
+            }
+            d[static_cast<std::size_t>(y) * w + x] = px / 3.0;
+        }
+    }
+    const double mean = sum / n;
+    const double var = std::max(0.0, sum2 / n - mean * mean);
+    double pm = 0.0;
+    for (double v : d) pm += v;
+    pm /= (double) d.size();
+    double num = 0.0, den = 0.0;
+    for (int y = 0; y < h; ++y)
+        for (int x = 0; x + 1 < w; ++x) {
+            const double a = d[static_cast<std::size_t>(y) * w + x] - pm;
+            const double b = d[static_cast<std::size_t>(y) * w + x + 1] - pm;
+            num += a * b; den += a * a;
+        }
+    return {mean, std::sqrt(var), den > 0.0 ? num / den : 0.0};
+}
+
 Delta compare(const QImage& a, const QImage& b) {
     Delta d{0.0, 0, 0, 0};
     double sum_squares = 0.0;
@@ -202,7 +240,15 @@ using Factory = std::function<std::shared_ptr<openshot::EffectBase>()>;
 // W19's per-effect clause is PSNR >= 48 dB, W20's is >= 45 dB. W20 is looser on purpose -- its
 // effects resample, and OpenCV's fixed-point interpolation weights are not reproducible in float
 // -- so holding a transition to W19's number would be testing against a gate nobody set.
-struct Case { std::string name; Factory make; double psnrGate = 48.0; };
+struct Case {
+    std::string name;
+    Factory make;
+    double psnrGate = 48.0;
+    /// Compared by the distribution of what the effect adds, not byte for byte. Only grain: its
+    /// hash is float on the GPU and double on the CPU, so the two are the same noise at a
+    /// different random phase (owner decision 2026-09-24). See grainStats().
+    bool statistical = false;
+};
 constexpr double kTransitionGate = 45.0;   // W20
 
 std::vector<Case> cases() {
@@ -300,6 +346,15 @@ std::vector<Case> cases() {
                                            Keyframe(0.0), Keyframe(0.0), Keyframe(-0.7)); }},
         {"enhance(clarity+sharp)",[] { return std::make_shared<openshot::Enhancement>(
                                            Keyframe(0.0), Keyframe(0.4), Keyframe(0.35)); }},
+
+        // Grain, alone and after the other two -- the whole production configuration of the
+        // service's ADJUSTMENT filter runs on the GPU now. Statistical cases: see Case.
+        {"enhance(grain)",        [] { return std::make_shared<openshot::Enhancement>(
+                                           Keyframe(0.67), Keyframe(0.0), Keyframe(0.0)); },
+                                  48.0, true},
+        {"enhance(all, prod)",    [] { return std::make_shared<openshot::Enhancement>(
+                                           Keyframe(0.67), Keyframe(0.68), Keyframe(-0.58)); },
+                                  48.0, true},
 
         // Mask through the ROUNDED_CORNERS type, which builds its own mask and so needs no
         // reader here. The mask itself is CPU-built either way; what is under test is the
@@ -916,6 +971,34 @@ int main(int argc, char** argv) {
             all[c].make()->GetFrame(frame, 1);
             const QImage cpu = frame->GetImage()->copy();
             const Delta d = compare(cpu, gpu_results[c][i]);
+
+            if (all[c].statistical) {
+                // The same grain, measured: the GPU's spread within 5 % of the CPU's, the means
+                // within half an LSB, alpha untouched, and no spatial structure. An image the
+                // grain cannot move (clamped white or black) has nothing to compare.
+                const GrainStats sc = grainStats(images[i].image, cpu);
+                const GrainStats sg = grainStats(images[i].image, gpu_results[c][i]);
+                bool alpha_kept = true;
+                for (int y = 0; y < cpu.height() && alpha_kept; ++y) {
+                    const uchar* pg = gpu_results[c][i].scanLine(y);
+                    const uchar* pc = cpu.scanLine(y);
+                    for (int x = 0; x < cpu.width(); ++x)
+                        if (pg[x * 4 + 3] != pc[x * 4 + 3]) { alpha_kept = false; break; }
+                }
+                const bool flat = sc.stddev < 0.5;
+                const bool pass = alpha_kept &&
+                    (flat ? sg.stddev < 0.5
+                          : std::abs(sg.stddev / sc.stddev - 1.0) <= 0.05 &&
+                            std::abs(sg.mean - sc.mean) <= 0.5 &&
+                            std::abs(sg.neighbour_corr) <= 0.1 + std::abs(sc.neighbour_corr));
+                if (!pass) failures++;
+                std::printf("  %-6s %-12s grain sd cpu=%6.2f gpu=%6.2f  mean cpu=%+6.2f gpu=%+6.2f  "
+                            "corr cpu=%+5.2f gpu=%+5.2f  alpha %s  (statistical)\n",
+                            pass ? "PASS" : "FAIL", images[i].name.c_str(), sc.stddev, sg.stddev,
+                            sc.mean, sg.mean, sc.neighbour_corr, sg.neighbour_corr,
+                            alpha_kept ? "kept" : "CHANGED");
+                continue;
+            }
 
             const bool exact = d.max_delta == 0;
             const bool pass = exact || d.psnr >= all[c].psnrGate;

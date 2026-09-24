@@ -456,28 +456,30 @@ frames on the CPU path. Raw results: `tests/bench/results/parallel-*.json`.
 enhancement filters, crop with rounded corners, WHOOSH transition, `.mov` alpha watermark) through
 the service's `render-payload`, media from the archive. RTX A2000, mains power.
 
-| configuration | render time | output |
-|---|---:|---|
-| CPU, libx264 (production default) | ~31 s | **identical to the corpus's recorded hash** |
-| CPU, NVENC | ~29 s | |
-| every GPU path on (`OPENSHOT_GPU=vulkan`, NVENC, `GPU_DECODE` + NVDEC, `GPU_ENCODE`, `GPU_CROP`) | **~26 s** | 750/750 frames, H.264 BT.709 |
+| configuration | export wall (`ExportTelemetry`) | fps | readbacks | GPU busy |
+|---|---:|---:|---:|---:|
+| CPU, libx264 (production default) | 23.2 s | 32 | — | — |
+| CPU, NVENC | 20.6 s | 36 | — | — |
+| every GPU path on — grain still on the CPU | 13.5–16.0 s | 47–56 | 251 | 11 % |
+| every GPU path on — **grain on the GPU** | **8.1 s** | **93** | **11** | 20 % |
 
-Render time is from the last media fetch to the MP4 being finalised, read off the log timestamps
-(so ±1 s). `render-payload` points Pub/Sub at a dead address and each progress publish during
-preparation blocks ~65 s, so its wall clock (~8.5 min) is not the render's.
+"Every GPU path" is `OPENSHOT_GPU=vulkan`, NVENC, `GPU_DECODE` + NVDEC, `GPU_ENCODE`, `GPU_CROP`.
+The CPU render is **identical to the corpus's recorded hash**. Times are the export's own
+(`ExportTelemetry wall=`): `render-payload`'s wall clock (~8.5 min) is mostly its Pub/Sub publishes
+blocking during preparation and a Redis timeout just before rendering, both artefacts of the offline
+tool — reading render time off its log timestamps once gave "31 → 26 s, 15 %", which was wrong.
 
-**The GPU buys only ~15 % on this payload** (≈ 24 → 29 fps), against 2–4× on the bench scenarios,
-and the per-export telemetry agrees that the GPU is mostly idle (~251 readbacks per 750 frames,
-GPU ~10 % busy). **The cause is not measured yet.** Candidates, none confirmed: the grain clip
-(Enhancement with `noise` runs wholly on the CPU, so its first 8 s read back every frame), the
-WHOOSH transition's overlay clip (an `isOverlay` clip puts the frames it covers on the CPU
-compositing path), and fixed per-export costs (reader open, prescale, encoder start) weighing more
-on a short 720p export. This is the one production payload measured, so it is the number that
-matters — see `doc/GPU-RENDERING.md`, "Worth doing".
+**Why the GPU first bought only ~1.5×.** The first 8 s carry one clip with the service's ADJUSTMENT
+filter at `noise 0.67`. Grain was the one pass not on the GPU, and the effect does not split, so
+for 240 frames that clip was read back and clarity, sharpen and grain ran in OpenMP at the source's
+1080p — `top -H` showed ~10 cores busy on 20 threads for ~8 s of a GPU export, and 240 of the 251
+readbacks. Measured by removal: the same payload with `noise 0` renders in 7.1 s full-GPU against
+20.2 s on the CPU (2.85×, 11 readbacks). Porting grain (same grain, different random phase; see
+`doc/GPU-RENDERING.md`, "Parity") took the real payload to **8.1 s, 2.9×**.
 
 **CPU vs full-GPU, encoder-matched** (the CPU path re-rendered with NVENC, so both sides share an
 encoder; against x264 the figure mostly measures the encoders): Y PSNR **~42 dB on frames
 250–750**, and **~33 dB on frames 1–230**. The low stretch is one clip: its `ADJUSTMENT` filter asks
 for film grain (`noise 0.67`), which seeds its hash from the pixel's colour, so the 1 LSB that
 `GPU_DECODE` changes by design re-rolls the grain (23 dB on that clip alone, the rest of the frame
-at 37–42). Not a defect — see `doc/GPU-RENDERING.md`, "Known issues".
+at 37–42). Not a defect — see `doc/GPU-RENDERING.md`, "Known issues". The figures are the same after grain moved to the GPU: the grain was already a different random phase.

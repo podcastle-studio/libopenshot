@@ -56,6 +56,13 @@ struct Tolerance {
     /// with no resampling and holds every mode to 2 LSB. Run it when touching blend code.
     static Tolerance GpuAmplified() { return {25.0, 0.96, 255, 100.0}; }
 
+    /// For a scenario with film grain, when a GPU is in use. The GPU grain is the same noise as
+    /// the CPU's at a different random phase (Enhancement's float hash, owner decision
+    /// 2026-09-24), so the frame differs from its CPU golden by roughly the grain's own amplitude
+    /// wherever there is grain. This band only proves the frame is the right picture with grain on
+    /// it; it is **not** a regression gate for the grain -- unit.gpu_grain is.
+    static Tolerance GpuGrain() { return {20.0, 0.60, 255, 100.0}; }
+
     /// For a scenario whose video frames the GPU decoded: the reader ran the YUV->RGBA
     /// conversion as an SkSL pass instead of handing it to swscale.
     ///

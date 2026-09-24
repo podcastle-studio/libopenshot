@@ -33,6 +33,7 @@ extern "C" {
 #include "effects/Blur.h"
 #include "effects/Brightness.h"
 #include "effects/Crop.h"
+#include "effects/Enhancement.h"
 #include "effects/ColorMap.h"
 #include "gpu/CudaInterop.h"
 #include "gpu/GpuDevice.h"
@@ -1021,6 +1022,103 @@ void golden::registerUnitScenarios() {
                 detail = std::to_string(decoded) + " of " + std::to_string(wanted) +
                          " frames decoded with HARDWARE_DECODER=2";
             checks.push_back({"hardware_decode_no_throw", ok, detail});
+        });
+
+    // unit.gpu_grain gates Enhancement's grain on the GPU. It cannot be gated byte for byte: the
+    // hash is float in the fragment and double in the C++, so the GPU grain is the same noise at a
+    // different random phase (owner decision 2026-09-24; src/shaders/enhancement.sksl). What is
+    // held instead is what the grain looks like -- its spread and mean against the CPU twin's on
+    // the same frame -- that it has no spatial structure (float sin() at large arguments is where
+    // a hash like this goes wrong), that alpha is untouched, and that the service's whole ADJUSTMENT
+    // configuration (grain + clarity + blur-mix) ran as three shader passes with no readback.
+    addCustom("unit.gpu_grain", {"unit", "gpu"}, unitScene,
+        [](Scene&, std::vector<Captured>&, std::vector<Check>& checks) {
+            constexpr int kW = 640, kH = 360;
+            QImage src(kW, kH, QImage::Format_RGBA8888_Premultiplied);
+            for (int y = 0; y < kH; ++y) {
+                uchar* row = src.scanLine(y);
+                for (int x = 0; x < kW; ++x) {
+                    const int a = y < kH / 2 ? 255 : 160;          // an opaque and a translucent band
+                    const int v = x * 255 / (kW - 1);               // shadows to highlights
+                    row[x * 4 + 0] = static_cast<uchar>(v * a / 255);
+                    row[x * 4 + 1] = static_cast<uchar>((255 - v) * a / 255 / 2);
+                    row[x * 4 + 2] = static_cast<uchar>(128 * a / 255);
+                    row[x * 4 + 3] = static_cast<uchar>(a);
+                }
+            }
+            const auto run = [&](double noise, double clarity, double sharpness) {
+                auto frame = std::make_shared<openshot::Frame>();
+                frame->AddImage(std::make_shared<QImage>(src.copy()));
+                openshot::Enhancement fx{openshot::Keyframe(noise), openshot::Keyframe(clarity),
+                                         openshot::Keyframe(sharpness)};
+                fx.GetFrame(frame, 1);
+                return frame->GetImage()->copy();
+            };
+            struct Stats { double mean, sd, corr; };
+            const auto stats = [&](const QImage& out) {
+                std::vector<double> d(static_cast<std::size_t>(kW) * kH);
+                double sum = 0, sum2 = 0; long n = 0;
+                for (int y = 0; y < kH; ++y)
+                    for (int x = 0; x < kW; ++x) {
+                        double px = 0;
+                        for (int c = 0; c < 3; ++c) {
+                            const double v = double(out.scanLine(y)[x * 4 + c]) - double(src.scanLine(y)[x * 4 + c]);
+                            sum += v; sum2 += v * v; n++; px += v;
+                        }
+                        d[static_cast<std::size_t>(y) * kW + x] = px / 3;
+                    }
+                const double mean = sum / n;
+                double pm = 0; for (double v : d) pm += v; pm /= double(d.size());
+                double num = 0, den = 0;
+                for (int y = 0; y < kH; ++y)
+                    for (int x = 0; x + 1 < kW; ++x) {
+                        const double a = d[static_cast<std::size_t>(y) * kW + x] - pm;
+                        const double b = d[static_cast<std::size_t>(y) * kW + x + 1] - pm;
+                        num += a * b; den += a * a;
+                    }
+                return Stats{mean, std::sqrt(std::max(0.0, sum2 / n - mean * mean)), den > 0 ? num / den : 0};
+            };
+            const auto alphaKept = [&](const QImage& out) {
+                for (int y = 0; y < kH; ++y)
+                    for (int x = 0; x < kW; ++x)
+                        if (out.scanLine(y)[x * 4 + 3] != src.scanLine(y)[x * 4 + 3]) return false;
+                return true;
+            };
+            char buf[256];
+
+            if (!openshot::GpuDevice::Instance().available()) {
+                // The CPU path, which ships: it must still run and still be deterministic.
+                openshot::GpuEffect::ResetCounters();
+                const QImage a = run(0.67, 0.0, 0.0), b = run(0.67, 0.0, 0.0);
+                const bool same = a == b;
+                checks.push_back({"grain_on_cpu_deterministic",
+                                  same && openshot::GpuEffect::GpuPasses() == 0 && alphaKept(a),
+                                  same ? "no GPU: CPU grain, identical across runs" : "CPU grain differs between runs"});
+                return;
+            }
+
+            // The service's configuration, on the GPU: three passes, no fallback.
+            openshot::GpuEffect::ResetCounters();
+            const QImage gpu_all = run(0.67, 0.68, -0.58);
+            const long long passes = openshot::GpuEffect::GpuPasses();
+            const long long fallbacks = openshot::GpuEffect::CpuFallbacks();
+            std::snprintf(buf, sizeof buf, "gpu_passes=%lld cpu_fallbacks=%lld", passes, fallbacks);
+            checks.push_back({"adjustment_ran_as_shaders", passes == 3 && fallbacks == 0, buf});
+
+            const QImage gpu = run(0.67, 0.0, 0.0);
+            const openshot::GpuDevice::Backend backend = openshot::GpuDevice::RequestedBackend();
+            openshot::GpuDevice::SetBackend(openshot::GpuDevice::Backend::Off);
+            const QImage cpu = run(0.67, 0.0, 0.0);
+            openshot::GpuDevice::SetBackend(backend);
+
+            const Stats sg = stats(gpu), sc = stats(cpu);
+            const bool spread = std::abs(sg.sd / sc.sd - 1.0) <= 0.05 && std::abs(sg.mean - sc.mean) <= 0.5;
+            std::snprintf(buf, sizeof buf, "sd gpu %.2f cpu %.2f, mean gpu %+.2f cpu %+.2f", sg.sd, sc.sd, sg.mean, sc.mean);
+            checks.push_back({"grain_matches_cpu_statistically", spread, buf});
+            std::snprintf(buf, sizeof buf, "neighbour correlation gpu %+.3f cpu %+.3f", sg.corr, sc.corr);
+            checks.push_back({"grain_has_no_structure", std::abs(sg.corr) <= 0.1, buf});
+            checks.push_back({"grain_keeps_alpha", alphaKept(gpu) && alphaKept(gpu_all),
+                              alphaKept(gpu) && alphaKept(gpu_all) ? "alpha untouched" : "alpha changed"});
         });
 
     // unit.effect_plan guards the shared effect planner (image-processing-lib/src/Planner), which

@@ -313,44 +313,57 @@ Enhancement::GetFrame(std::shared_ptr<openshot::Frame> frame, int64_t frame_numb
     if (noise_v == 0.0 && clarity_v == 0.0 && std::abs(sharpness_v) < 1e-6)
         return frame;                                // nothing to do
 
-    // The shader when there is a GPU to run it on AND no grain is asked for. The grain pass is
-    // deliberately not ported -- see GpuShaderSource() -- so a frame that wants it runs entirely
-    // on the CPU rather than half on each, which would be two crossings for no gain.
+    // The shader when there is a GPU to run it on: clarity, then sharpen or blur, then grain,
+    // each a pass that reads the previous one's output as a texture, so only the last is ever
+    // read back. Clarity and sharpness read the NEIGHBOURS of what the previous pass wrote, so
+    // they cannot be folded into one fragment; grain is per pixel but keeps the same order.
     //
-    // This is the first effect that is more than one pass: clarity and sharpness each read the
-    // NEIGHBOURS of what the previous pass wrote, so they cannot be folded into one fragment.
-    // Each ApplyOnGpu leaves its result as the frame's GPU backing, so the second pass reads the
-    // first's output as a texture and only the last one is ever read back.
-    const bool done_on_gpu = noise_v == 0.0 && [&] {
-        bool ran = false;
-        if (clarity_v > 0.0) {
+    // Grain on the GPU is not the CPU's bytes -- the hash is evaluated in float, not double --
+    // but the same grain at a different random phase (owner decision 2026-09-24; see
+    // enhancement.sksl). The CPU branch below is unchanged and is what a no-GPU export runs.
+    //
+    // Which passes have run on the GPU, in order. A pass that declines stops the chain, and the
+    // CPU carries on from there on the frame's pixels -- which already hold the passes before it
+    // (each ApplyOnGpu leaves its result as the frame's GPU backing, and GetImage() reads that
+    // back). The CPU must therefore skip what already ran: re-running clarity on an image that
+    // already has it applies it twice.
+    bool clarity_done = clarity_v <= 0.0;
+    bool sharpness_done = sharpness_v == 0.0;
+    bool noise_done = noise_v <= 0.0;
+    [&] {
+        if (!clarity_done) {
             gpu_pass = GpuPass::Clarity;
             gpu_pass_strength = clarity_v;
             if (!ApplyOnGpu(frame, frame_number))
-                return false;
-            ran = true;
+                return;
+            clarity_done = true;
         }
-        if (sharpness_v != 0.0) {
+        if (!sharpness_done) {
             gpu_pass = sharpness_v > 0.0 ? GpuPass::Sharpen : GpuPass::BlurMix;
             gpu_pass_strength = sharpness_v;
             if (!ApplyOnGpu(frame, frame_number))
-                return false;
-            ran = true;
+                return;
+            sharpness_done = true;
         }
-        return ran;
+        if (!noise_done) {
+            gpu_pass = GpuPass::Grain;
+            gpu_pass_strength = noise_v;
+            if (!ApplyOnGpu(frame, frame_number))
+                return;
+            noise_done = true;
+        }
     }();
-    if (done_on_gpu)
+    if (clarity_done && sharpness_done && noise_done)
         return frame;
 
-    // Falling back after a pass has already run on the GPU is still correct: that pass left its
-    // result as the frame's pixels, so GetImage() reads it back and the remaining passes carry on
-    // from there. It costs a crossing, which is why declining happens up front where it can.
+    // The CPU path: every pass on a no-GPU export, and whatever the GPU did not finish otherwise.
+    // Reading back after a GPU pass costs a crossing, which is why a pass declines up front.
     std::shared_ptr<QImage> img = frame->GetImage();
 
-    /* order: clarity ? sharpen/blur ? grain */
-    if (clarity_v   > 0.0) applyClarityPass (*img, clarity_v);
-    if (sharpness_v != 0.0) applySharpnessPass(*img, sharpness_v);
-    if (noise_v     > 0.0) applyNoisePass    (*img, noise_v);
+    /* order: clarity -> sharpen/blur -> grain */
+    if (!clarity_done)   applyClarityPass  (*img, clarity_v);
+    if (!sharpness_done) applySharpnessPass(*img, sharpness_v);
+    if (!noise_done)     applyNoisePass    (*img, noise_v);
 
     return frame;
 }
@@ -380,6 +393,10 @@ bool Enhancement::SetGpuUniforms(SkRuntimeEffectBuilder& builder, int64_t frame_
 	case GpuPass::BlurMix:
 		builder.uniform("mode") = 2.0f;
 		builder.uniform("k") = static_cast<float>(-gpu_pass_strength);
+		break;
+	case GpuPass::Grain:
+		builder.uniform("mode") = 3.0f;
+		builder.uniform("k") = static_cast<float>(gpu_pass_strength);
 		break;
 	}
 	return true;
