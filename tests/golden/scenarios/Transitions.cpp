@@ -63,7 +63,7 @@ void golden::registerTransitionScenarios() {
             finish(s, p);
         });
 
-    add("transitions.overlay_additive_blend", {"transitions", "overlay", "exact"}, kRamp, [](Scene& s) {
+    add("transitions.overlay_additive_blend", {"transitions", "overlay", "exact", "gpu-composite"}, kRamp, [](Scene& s) {
         Pair p = pairScene(s);
         applyOverlappingTransition(*p.out, *p.in, 1.0, s.fps.ToDouble(), {});
         auto* overlay = addOverlayClip(s, s.media("overlay_gradients_640x360_30.mp4"), 1.0,
@@ -72,13 +72,34 @@ void golden::registerTransitionScenarios() {
         finish(s, p);
     });
 
-    add("transitions.overlay_displacement_map", {"transitions", "overlay", "exact"}, kRamp, [](Scene& s) {
+    add("transitions.overlay_displacement_map", {"transitions", "overlay", "exact", "gpu-composite"}, kRamp, [](Scene& s) {
         Pair p = pairScene(s);
         applyOverlappingTransition(*p.out, *p.in, 1.0, s.fps.ToDouble(), {});
         addOverlayClip(s, s.media("overlay_gradients_640x360_30.mp4"), 1.0,
                        openshot::Clip::DISPLACEMENT_MAP, p.out, p.in, 0.15, 0.1);
         finish(s, p);
     });
+
+    // The service's overlays (light_leaks.mp4, glitch_map.mp4) are rarely the clip's size, and the
+    // C++ resizes them with cv::resize(INTER_LINEAR) first. On the GPU that is the planner's
+    // overlay pass (resample_linear) since 2026-09-24; before, a mismatched overlay put the whole
+    // transition on the CPU. A 1280x720 25 fps overlay over 640x360 clips.
+    add("transitions.overlay_additive_blend_scaled", {"transitions", "overlay", "exact", "gpu-composite"}, kRamp,
+        [](Scene& s) {
+            Pair p = pairScene(s);
+            applyOverlappingTransition(*p.out, *p.in, 1.0, s.fps.ToDouble(), {});
+            addOverlayClip(s, s.media("clip_c_1280x720_25.mp4"), 1.0, openshot::Clip::ADDITIVE_BLEND, p.out, p.in);
+            finish(s, p);
+        });
+
+    add("transitions.overlay_displacement_map_scaled", {"transitions", "overlay", "exact", "gpu-composite"}, kRamp,
+        [](Scene& s) {
+            Pair p = pairScene(s);
+            applyOverlappingTransition(*p.out, *p.in, 1.0, s.fps.ToDouble(), {});
+            addOverlayClip(s, s.media("clip_c_1280x720_25.mp4"), 1.0, openshot::Clip::DISPLACEMENT_MAP,
+                           p.out, p.in, 0.15, 0.1);
+            finish(s, p);
+        });
 
     add("transitions.stack_zoom_blur_alpha", {"transitions", "stack", "exact", "gpu-composite"}, kRamp, [](Scene& s) {
         Pair p = pairScene(s);

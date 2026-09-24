@@ -18,12 +18,9 @@ namespace openshot
 	 * per-pixel functions of two images, so both are one draw.
 	 *
 	 * Each returns false to decline, which is a normal answer and means the caller
-	 * must run its OpenCV path: no GPU, an upload that failed, or a case the fragment
-	 * does not implement. The one such case is **a size mismatch** — the C++ resizes
-	 * the overlay with cv::resize, and OpenCV's INTER_LINEAR is a fixed-point filter
-	 * that Skia's sampling does not reproduce, so matching it would mean guessing at
-	 * a rasteriser rather than at arithmetic. Same-size overlays, which is what the
-	 * golden suite and the service's transition overlays use, run on the GPU.
+	 * must run its OpenCV path: no GPU, or an upload that failed. An overlay that is not
+	 * the frame's size is resized first, as the C++'s cv::resize(INTER_LINEAR) is, by
+	 * the planner's overlay passes (resample_linear, OpenCV's fixed point; 2026-09-24).
 	 *
 	 * @note Both leave the result as @a frame's GPU backing rather than reading it
 	 * back, so an overlay in the middle of a chain costs no crossing at all.

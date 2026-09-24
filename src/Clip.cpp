@@ -41,6 +41,7 @@
 
 #include <thread>
 
+#include "skia/include/core/SkCanvas.h"
 #include "skia/include/core/SkImage.h"
 #include "skia/include/core/SkMatrix.h"
 #include "skia/include/core/SkPaint.h"
@@ -713,7 +714,34 @@ std::shared_ptr<Frame> Clip::GetFrame(std::shared_ptr<openshot::Frame> backgroun
             if (gpu_path && frame->has_image_data)
                 drawn_on_canvas = draw_to_canvas(frame, background_frame);
 
-            if (!drawn_on_canvas) {
+            // An overlay clip (a transition's light leak or displacement map) has no timeline
+            // canvas: its frame is composited onto another clip's source. apply_keyframes would
+            // draw it with QPainter onto a transparent image of its own size -- a readback of the
+            // GPU-decoded frame every transition frame. The same draw onto a transparent GPU
+            // surface of that size is draw_to_canvas, and the result stays on the GPU.
+            bool overlay_on_gpu = false;
+            if (isOverlay && !background_frame && frame->has_image_data && frame->IsGpuBacked() &&
+                can_draw_to_canvas()) {
+                if (auto surface = GpuFrame::Create(timeline_size.width(), timeline_size.height(),
+                                                    kRGBA_8888_SkColorType)) {
+                    if (SkCanvas* canvas = surface->canvas()) {
+                        canvas->clear(SK_ColorTRANSPARENT);
+                        auto transformed = std::make_shared<Frame>(
+                            frame->number, timeline_size.width(), timeline_size.height(), "#00000000",
+                            frame->GetAudioSamplesCount(), frame->GetAudioChannelsCount());
+                        transformed->AttachGpuFrame(std::move(surface));
+                        if (draw_to_canvas(frame, transformed)) {
+                            // The frame keeps its number and audio; its pixels become the draw.
+                            frame->AttachGpuFrame(transformed->GpuBacking());
+                            overlay_on_gpu = true;
+                        }
+                    }
+                }
+            }
+
+            // The GPU overlay is not cached either, for the GPU path's reason: final_cache holds
+            // host images a later hit composites as they are, and this one is bound to its thread.
+            if (!drawn_on_canvas && !overlay_on_gpu) {
                 // Apply keyframe / transforms to current clip image
                 apply_keyframes(frame, timeline_size);
 
@@ -1747,9 +1775,9 @@ bool Clip::can_draw_to_canvas() const
 	if (display != FRAME_DISPLAY_NONE || waveform)
 		return false;
 
-	// Overlay clips composite through OpenCV on the clip's own image.
-	if (!overlayClips.empty())
-		return false;
+	// Overlay clips no longer disqualify a clip: GetFrame composites them onto the clip's own
+	// source frame before this draw either way (GpuOverlay on the GPU, OpenCV otherwise), and
+	// the draw then transforms that frame exactly as apply_keyframes would.
 
 	// Anything applied *after* the keyframes expects the timeline-sized, already
 	// transformed image. Collapsing the transform into the final draw means that image

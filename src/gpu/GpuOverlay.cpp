@@ -13,6 +13,10 @@
 
 #include <atomic>
 #include <functional>
+#include <map>
+#include <mutex>
+#include <string>
+#include <vector>
 
 #include "skia/include/core/SkBlendMode.h"
 #include "skia/include/core/SkCanvas.h"
@@ -81,9 +85,50 @@ namespace
 		return staging->snapshot();
 	}
 
+	// One planned pass over @a source into a new surface of the pass's size, for the overlay's
+	// resize (EffectPlan::overlayPasses). @a keep owns the surface behind the returned image.
+	sk_sp<SkImage> runOverlayPass(const Podcastle::Effects::PlanPass& pass, const sk_sp<SkImage>& source,
+								  std::vector<std::shared_ptr<GpuFrame>>& keep)
+	{
+		const char* body = openshot::shaders::ByName(pass.shader.c_str());
+		if (!body)
+			return nullptr;
+		// One compiled program per fragment, for the process (see AdditiveBlend's cache).
+		static std::mutex mutex;
+		static std::map<std::string, sk_sp<SkRuntimeEffect>> programs;
+		SkRuntimeEffect* effect = nullptr;
+		{
+			std::lock_guard<std::mutex> lock(mutex);
+			effect = compiled(body, programs[pass.shader]);
+		}
+		if (!effect)
+			return nullptr;
+		std::shared_ptr<GpuFrame> destination =
+			GpuFrame::Create(pass.width, pass.height, kRGBA_8888_SkColorType);
+		SkCanvas* canvas = destination ? destination->canvas() : nullptr;
+		if (!canvas)
+			return nullptr;
+		SkRuntimeEffectBuilder builder(sk_ref_sp(effect));
+		builder.child("osSrc") = source->makeShader(SkTileMode::kClamp, SkTileMode::kClamp, SkSamplingOptions());
+		for (const Podcastle::Effects::PlanUniform& u : pass.uniforms)
+			if (!builder.uniform(u.name.c_str()).set(u.values.data(), static_cast<int>(u.values.size())))
+				return nullptr;
+		sk_sp<SkShader> shader = builder.makeShader();
+		if (!shader)
+			return nullptr;
+		SkPaint paint;
+		paint.setShader(std::move(shader));
+		paint.setBlendMode(SkBlendMode::kSrc);
+		canvas->drawRect(SkRect::MakeIWH(pass.width, pass.height), paint);
+		sk_sp<SkImage> out = destination->snapshot();
+		keep.push_back(std::move(destination));
+		return out;
+	}
+
 	// Everything the two composites share: bind both images, run the fragment into a
 	// fresh surface, and make that the frame's pixels.
 	bool draw(Frame& frame, Frame& overlay, SkRuntimeEffect* effect,
+			  const Podcastle::Effects::EffectPlan& plan,
 			  const std::function<void(SkRuntimeEffectBuilder&)>& uniforms)
 	{
 		// Counted on every path so a test can tell "the shader ran" from "it declined and
@@ -100,15 +145,24 @@ namespace
 		const int height = frame.GetHeight();
 		if (width <= 0 || height <= 0)
 			return declined();
-		// The C++ resizes a mismatched overlay with cv::resize; Skia will not reproduce
-		// OpenCV's INTER_LINEAR, so decline rather than differ. See GpuOverlay.h.
-		if (overlay.GetWidth() != width || overlay.GetHeight() != height)
+		if (plan.steps.size() != 1 || plan.steps.front().kind != Podcastle::Effects::PlanStep::Kind::Gpu)
 			return declined();
 
 		std::shared_ptr<GpuFrame> frame_staging, overlay_staging;
 		sk_sp<SkImage> frame_texture = asTexture(frame, frame_staging);
 		sk_sp<SkImage> overlay_texture = asTexture(overlay, overlay_staging);
 		if (!frame_texture || !overlay_texture)
+			return declined();
+		// The C++ resizes an overlay that is not the frame's size with cv::resize(INTER_LINEAR);
+		// the planner hands that over as passes on the overlay (resample_linear, OpenCV's fixed
+		// point). Before 2026-09-24 a mismatched overlay put the whole composite on the CPU.
+		std::vector<std::shared_ptr<GpuFrame>> resized;
+		for (const Podcastle::Effects::PlanPass& pass : plan.overlayPasses) {
+			overlay_texture = runOverlayPass(pass, overlay_texture, resized);
+			if (!overlay_texture)
+				return declined();
+		}
+		if (overlay_texture->width() != width || overlay_texture->height() != height)
 			return declined();
 
 		std::shared_ptr<GpuFrame> destination =
@@ -152,7 +206,9 @@ bool GpuOverlay::AdditiveBlend(Frame& frame, Frame& overlay)
 	// nothing from the Graphite Context, so unlike a texture it survives a teardown and
 	// needs no Generation() key.
 	static sk_sp<SkRuntimeEffect> cache;
-	return draw(frame, overlay, compiled(openshot::shaders::kAdditiveBlend, cache),
+	const Podcastle::Effects::EffectPlan plan = Podcastle::Effects::planEffect(
+		"ADDITIVE_BLEND", {}, frame.GetWidth(), frame.GetHeight(), overlay.GetWidth(), overlay.GetHeight());
+	return draw(frame, overlay, compiled(openshot::shaders::kAdditiveBlend, cache), plan,
 				[](SkRuntimeEffectBuilder&) {});
 }
 
@@ -166,8 +222,8 @@ bool GpuOverlay::DisplacementMap(Frame& frame, Frame& overlay,
 	static sk_sp<SkRuntimeEffect> cache;
 	SkRuntimeEffect* effect = compiled(openshot::shaders::kDisplacementMap, cache);
 
-	// The uniforms come from the shared planner, as the editor's do. It only plans a GPU pass
-	// for an overlay the frame's size -- draw() declines the other case itself, before this runs.
+	// The uniforms come from the shared planner, as the editor's do, and so does the overlay's
+	// resize when it is not the frame's size (draw() runs it).
 	const Podcastle::Effects::EffectPlan plan = Podcastle::Effects::planEffect(
 		"DISPLACEMENT_MAP",
 		{{"horizontalDisplacement", horizontal}, {"verticalDisplacement", vertical}},
@@ -177,7 +233,7 @@ bool GpuOverlay::DisplacementMap(Frame& frame, Frame& overlay,
 		return false;
 	}
 	const Podcastle::Effects::PlanPass& pass = plan.steps.front().passes.front();
-	return draw(frame, overlay, effect, [&](SkRuntimeEffectBuilder& builder) {
+	return draw(frame, overlay, effect, plan, [&](SkRuntimeEffectBuilder& builder) {
 		for (const Podcastle::Effects::PlanUniform& u : pass.uniforms)
 			builder.uniform(u.name.c_str()).set(u.values.data(), static_cast<int>(u.values.size()));
 	});
