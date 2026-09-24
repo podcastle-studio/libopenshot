@@ -13,8 +13,9 @@ Working rules and the sharp edges of the GPU code are in `CLAUDE.md`; benchmark 
 
 ## The one constraint
 
-**The CPU path ships; the GPU path is an opt-in addition** (project owner, 2026-09-14). Production
-runs CPU-only today and a machine with no GPU is a supported configuration, so:
+**The CPU path ships; the GPU path is an addition** (project owner, 2026-09-14). Since 2026-09-24 the
+service turns every GPU path on by default (below, "The switches"), but a machine with no GPU is still a
+supported configuration and runs exactly the CPU pipeline, so:
 
 - no change may make the CPU path slower, worse-looking, or dependent on a GPU;
 - CPU code is never deleted because the GPU does not need it — it is gated on
@@ -23,8 +24,8 @@ runs CPU-only today and a machine with no GPU is a supported configuration, so:
 
 ## What runs where
 
-Everything below is off unless switched on, and every GPU path falls back to the CPU by itself when
-its requirement is missing. `false` from `available()` is a normal answer, not an error.
+In the library everything below is off unless switched on; the service switches all of it on by
+default (2026-09-24). Every GPU path falls back to the CPU by itself when its requirement is missing. `false` from `available()` is a normal answer, not an error.
 
 | stage | on the GPU | CPU fallback / notes |
 |---|---|---|
@@ -57,6 +58,10 @@ the only deliberate CPU paths the service reaches; everything else it found is u
 it but A10 (codecs NVDEC is not given) was moved to the GPU the same day.
 
 ### The switches
+
+The service's defaults are all "on" since 2026-09-24 (`RenderBackend`, the image's `ENV`): `ENCODER=h264_nvenc`,
+`OPENSHOT_GPU=vulkan`, `OPENSHOT_GPU_DECODE/_ENCODE/_CROP=1`, the last three applied only when a GPU came up.
+The "default" column below is the library's, which the golden suite and the bench rely on.
 
 | switch | set by | default | what it does | changes pixels? |
 |---|---|---|---|---|
@@ -188,6 +193,14 @@ without the "revisit if" condition being true.
 - **A GPU-decoded mask matte is resampled on the GPU with Skia's bilinear** (owner, 2026-09-24),
   not Qt's `SmoothTransformation`; bit-exact when the matte is the frame's size. *Revisit if* mattes
   are routinely much larger than the clip (a box filter would then be the right one).
+- **Every GPU path is on by default in the service** (owner, 2026-09-24): `ENCODER=h264_nvenc`,
+  `OPENSHOT_GPU=vulkan`, GPU decode/encode/crop — accepting their measured pixel changes. The
+  library keeps defaulting off (the suite and the bench name their arms explicitly). Two guards
+  make "on by default" safe on a CPU node: the decode/encode/crop switches are applied only when
+  the device came up, and `vulkan` never picks a CPU-type Vulkan device, so the image's lavapipe is
+  used only by name. Verified: a simulated CPU node (only lavapipe visible, no CUDA device) renders
+  the corpus payload to its recorded CPU hash. *Revisit if* a GPU node's output must match a CPU
+  node's byte for byte — then the pixel-changing three go back to opt-in.
 - **Glow quality is fixed**: in-motion glow matches resting glow; speed comes from the GPU and the
   composited-glow cache, never from fewer steps or a lower resolution.
 - **No CPU frame-level parallelism**: Graphite parallelises through pipeline depth (decode-ahead,
@@ -256,10 +269,9 @@ was refreshed.
 
 ### 1. Owner decisions
 
-1. **Defaults for `GPU_DECODE`, `GPU_ENCODE`, `GPU_CROP`.** Each changes pixels (measured, gated,
-   listed under "The switches"); each is off. Decide per flag whether a GPU node runs with it on.
-   Without them a GPU node still gets GPU compositing, text, effects and NVENC, but pays a readback
-   and upload per clip per frame.
+1. ~~**Defaults for `GPU_DECODE`, `GPU_ENCODE`, `GPU_CROP`.**~~ **Decided 2026-09-24: on**, with every
+   other GPU path, in the service (see "Decisions"). Owed: the corpus's recorded hash is the CPU
+   render, so a GPU node's output has no recorded reference yet — record one per GPU (10).
 2. **`compositing.layer_order`** — accept insertion-stable ordering for clips sharing a layer and
    position, or fix the collision in the service (the background clip shares layer 1 with content,
    which is arguably the real bug).
@@ -363,8 +375,19 @@ New gates: `unit.host_texture_cache`, `unit.gpu_blur_large`, `unit.gpu_mask_matt
 `unit.read_ahead` check, `readers.watermark_prores4444` (new ProRes 4444 golden media).
 
 **Left from this audit:** A10 (HEVC/VP9/AV1/ProRes through NVDEC; 4:4:4 and alpha in `GpuYuv`) —
-not measured, needs HEVC media in the corpus first. The box blur is on the GPU but still +6.5 ms at
-1080p (206 fetches a pixel; "What is left", 4 in 1).
+not measured, needs HEVC media in the corpus first. **Found afterwards (2026-09-24, same A/B, 1080p /
+720p), both in production presets:**
+
+- **A11 — Zoom below 100 %** (ZOOM_IN's in-clip 34 → 100, ZOOM_OUT's out-clip 100 → 66): the planner
+  returns cpu below 100 (`EffectPlan.cpp`, `planZoom`: the C++ shrinks into a border), a readback
+  and OpenCV every frame of the window: **+11.0 / +4.3 ms**. (b); a port would need the C++'s
+  shrink-and-reflect as a pass — probably bit-exact like the other resamples, unmeasured.
+- **A12 — box blurs past the fragment's 255-tap loop**: BLUR_VERTICAL's `verticalRadius` 360 goes
+  to the CPU at 1080p (**+26.2 ms**, 2 readbacks); at 720p it fits and is on the GPU but still
+  +13.3 ms. Big blurs that stay on the GPU are expensive too (PAN_*'s 230: +27.6 / +8.7) — the blur
+  family is 206 fetches a pixel per box ("What is left", 4). (c); a raised loop bound fixes the
+  CPU case without changing pixels; the cost wants a different algorithm (e.g. a downscaled
+  Gaussian), which would change pixels.
 
 The audit as it was written:
 

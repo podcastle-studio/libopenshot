@@ -151,8 +151,9 @@ drop). It only stays a single switch because every GPU path asks `GpuDevice::Ins
 — or `GpuOffscreen::Match` / `GpuFrame::Create`, which ask for you — and none reads the environment
 itself. Add new GPU logic the same way; the `control` check in `openshot-gpu-checks` enforces it.
 
-Off unless `OPENSHOT_GPU` says otherwise — `off` (default), `vulkan`, or `lavapipe` (Mesa's software
-rasteriser, for machines with no GPU and for checking a result is not vendor-specific). Everything
+In the library, off unless `OPENSHOT_GPU` says otherwise — `off` (default), `vulkan` (a GPU only, never
+a software device), or `lavapipe` (Mesa's software rasteriser, for machines with no GPU and for
+checking a result is not vendor-specific). The service defaults it to `vulkan` (see "Facts"). Everything
 goes through `GpuDevice::Instance().available()`, and `false` is a normal answer: fall back to
 raster, never treat it as an error.
 
@@ -238,11 +239,15 @@ GPU to take over. Earlier, lower figures in the docs were measured on an Intel i
 
 ## Facts that are easy to get wrong
 
-- The service never touches `openshot::Settings`; `HARDWARE_DECODER` is 0. The codec is **no longer
-  hard-coded**: since plan step 2.0 (2026-09-15) `ExportSettings::vCodec` comes from
-  `RenderBackend::videoCodec()`, which reads `ENCODER` (`libx264` default, or `h264_nvenc`), probes
-  it once and falls back to libx264 if no device answers. `OPENSHOT_GPU` is likewise passed through
-  to the library. Both default to the CPU, and the runtime image is GPU-*capable*, not GPU-requiring.
+- **The service defaults every GPU path on** (owner, 2026-09-24); **the library still defaults off**,
+  which is what the golden suite relies on. `RenderBackend::applyLibrarySettings` hands
+  `OPENSHOT_GPU` (default `vulkan`) to `GpuDevice::SetBackend`, and sets `GPU_DECODE` +
+  `HARDWARE_DECODER=2`, `GPU_ENCODE` and `GPU_CROP` (all default on) **only when the GPU came up**;
+  `ENCODER` defaults to `h264_nvenc`, probed once, libx264 if no device answers. So a node with no
+  GPU runs byte-for-byte the CPU pipeline, and `ENCODER=libx264 OPENSHOT_GPU=off` forces it
+  anywhere. **`vulkan` never takes a software (CPU-type) Vulkan device** — lavapipe only by name —
+  or a CPU node with Mesa installed (the image has it) would render through a software rasteriser
+  (`vulkan-no-software` in `openshot-gpu-checks`).
 - **The reader can convert YUV→RGBA on the GPU** (`src/gpu/GpuYuv`, `Settings::GPU_DECODE`,
   2026-09-22): the decoded frame is born on a GPU surface and stays there for the compositor.
   **Off by default because it changes pixels** — rounding, plus it honours the stream's declared
