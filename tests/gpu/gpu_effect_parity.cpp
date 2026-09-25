@@ -426,22 +426,28 @@ std::vector<Case> cases() {
         {"splitshift(horiz)",     [] { return std::make_shared<openshot::SplitShift>(
                                            Keyframe(0.15), true, Keyframe(0.62)); }},
 
-        // The box blur, as six half-passes of blur.sksl. Radii are large because these images are
-        // 256 wide and the parameter is in reference pixels: anything under about 20 resolves to a
-        // one-tap kernel here, which is the identity and would compare two untouched images.
-        // One case per axis on its own, because a one-tap half is skipped rather than drawn.
+        // The four blurs are pass chains the planner builds and both paths run (EffectPlan.h,
+        // boxBlurChain and friends; 2026-09-25): the C++ twin runs the same passes, so every case
+        // here is expected EXACT but the zoom blur, whose ray direction takes a sqrt.
+        //
+        // The Gaussian. Radii are large because these images are 256 wide and the parameter is in
+        // reference pixels. Up to a sigma of 6 px it is one pass per axis at full size; the last
+        // two cases are wide enough (sigma 11.5 / 6.9 px here) to take the block downsample and
+        // the upsample, and 200 x 0 downsamples one axis only.
         {"blur(40, 40)",          [] { return std::make_shared<openshot::Blur>(
                                            Keyframe(40.0), Keyframe(40.0)); }, kTransitionGate},
-        {"blur(100, 100)",        [] { return std::make_shared<openshot::Blur>(
-                                           Keyframe(100.0), Keyframe(100.0)); }, kTransitionGate},
         {"blur(100, 0)",          [] { return std::make_shared<openshot::Blur>(
                                            Keyframe(100.0), Keyframe(0.0)); }, kTransitionGate},
         {"blur(0, 60)",           [] { return std::make_shared<openshot::Blur>(
                                            Keyframe(0.0), Keyframe(60.0)); }, kTransitionGate},
+        {"blur(200, 120)",        [] { return std::make_shared<openshot::Blur>(
+                                           Keyframe(200.0), Keyframe(120.0)); }, kTransitionGate},
+        {"blur(200, 0)",          [] { return std::make_shared<openshot::Blur>(
+                                           Keyframe(200.0), Keyframe(0.0)); }, kTransitionGate},
 
-        // The diagonal blur. Its reflection length is the length of each pixel's own diagonal, so
-        // the short corner diagonals are the interesting part of a 256x256 image, not the middle.
-        // A radius of 15 resolves to a 3-tap kernel here, which is the smallest the effect builds.
+        // The diagonal blur: each diagonal reflects at its own length, so the short corner
+        // diagonals are the interesting part of a 256x256 image. 15 is the smallest kernel the
+        // effect builds; 100 is wide enough here to decimate along the diagonals.
         {"diagonal_blur(15)",     [] { return std::make_shared<openshot::Blur>(
                                            Keyframe(0.0), Keyframe(0.0), Keyframe(15.0)); }, kTransitionGate},
         {"diagonal_blur(40)",     [] { return std::make_shared<openshot::Blur>(
@@ -449,10 +455,8 @@ std::vector<Case> cases() {
         {"diagonal_blur(100)",    [] { return std::make_shared<openshot::Blur>(
                                            Keyframe(0.0), Keyframe(0.0), Keyframe(100.0)); }, kTransitionGate},
 
-        // The rotational blur, across all four of its parameter branches: below 10 degrees it
-        // uses BORDER_REPLICATE and above it BORDER_REFLECT; below 15 it takes the other angle
-        // schedule and adds the mild Gaussian this fragment leaves out; 25 and 45 differ only in
-        // tap count, which is what the iteration clamp is there to bound.
+        // The rotational blur, from one pass to several: the tap count and pass count follow the
+        // arc at the corners, and taps that leave the frame reflect.
         {"rotational_blur(5)",    [] { return std::make_shared<openshot::Blur>(
                                            Keyframe(0.0), Keyframe(0.0), Keyframe(0.0), Keyframe(5.0)); }, kTransitionGate},
         {"rotational_blur(12)",   [] { return std::make_shared<openshot::Blur>(
@@ -462,8 +466,8 @@ std::vector<Case> cases() {
         {"rotational_blur(45)",   [] { return std::make_shared<openshot::Blur>(
                                            Keyframe(0.0), Keyframe(0.0), Keyframe(0.0), Keyframe(45.0)); }, kTransitionGate},
 
-        // The zoom blur, three passes. Its centre matters more than its strength: a centred
-        // blur puts whole rays on the axes, where both polar maps are at their most ambiguous.
+        // The zoom blur. Its centre matters more than its strength: rays through a centred blur
+        // run along the axes and across the centre, and a corner centre sends every ray one way.
         {"zoom_blur(40, centre)", [] { return std::make_shared<openshot::Blur>(
                                            Keyframe(0.0), Keyframe(0.0), Keyframe(0.0), Keyframe(0.0),
                                            Keyframe(40.0), Keyframe(0.5), Keyframe(0.5)); }, kTransitionGate},

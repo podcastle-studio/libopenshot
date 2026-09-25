@@ -108,27 +108,27 @@ namespace openshot
 		/// Init effect settings
 		void init_effect_details();
 
-		/// The box blur as up to six fragment passes — horizontal and vertical for each
-		/// of applyBlurEffect's three. False means nothing was touched and the caller
-		/// must run the C++; it is decided before the first pass, so a half-blurred
-		/// frame is not a state this can leave behind.
+		/// The Gaussian blur as its planned chain (boxBlurChain: an optional block
+		/// downsample, one Gaussian pass per axis, the upsample back). False means nothing
+		/// was touched and the caller must run the C++; it is decided before the first
+		/// pass, so a half-blurred frame is not a state this can leave behind.
 		bool ApplyBoxBlurOnGpu(std::shared_ptr<openshot::Frame> frame, int64_t frame_number,
 							   int horizontal, int vertical);
 
-		/// The diagonal blur as one fragment pass, for the frame sizes applyDiagonalBlurEffect
-		/// does not downscale. False means the caller must run the C++.
+		/// The diagonal blur as its planned chain (diagonalBlurChain: decimate along each
+		/// diagonal, Gaussian, expand). False means the caller must run the C++.
 		bool ApplyDiagonalBlurOnGpu(std::shared_ptr<openshot::Frame> frame, int64_t frame_number,
 									int authored_radius);
 
-		/// The rotational blur as one fragment pass, for the frame widths applyRotationalBlur
-		/// does not downscale. False means the caller must run the C++.
+		/// The rotational blur as its planned chain (rotationalBlurChain: passes of rotated
+		/// bilinear taps, each finer than the last). False means the caller must run the C++.
 		bool ApplyRotationalBlurOnGpu(std::shared_ptr<openshot::Frame> frame, int64_t frame_number,
 									  double angle_degrees);
 
-		/// The zoom blur as three passes -- forward polar, a box blur along rho, inverse
-		/// polar -- with its own padded-size buffer in between. False means the caller
-		/// must run the C++; nothing is attached to the frame until the last pass lands,
-		/// so a failure half way through leaves the frame untouched.
+		/// The zoom blur as its planned chain (zoomBlurChain: passes of bilinear taps along
+		/// each pixel's ray from the centre). False means the caller must run the C++;
+		/// nothing is attached to the frame until the last pass lands, so a failure half way
+		/// through leaves the frame untouched.
 		bool ApplyZoomBlurOnGpu(std::shared_ptr<openshot::Frame> frame, int64_t frame_number,
 								int authored_strength, double center_x, double center_y);
 

@@ -184,11 +184,10 @@ std::shared_ptr<openshot::Frame> Blur::GetFrame(std::shared_ptr<openshot::Frame>
 
 /* ---------- GPU ---------- */
 
-// Every mode is resolved by the shared planner (image-processing-lib/src/Planner): the box blur's
-// separable half-passes, the diagonal kernel, the rotational blur's thirty inverse matrices, the
-// zoom blur's polar geometry -- and the cases none of the fragments covers, which it returns as a
-// CPU step so the OpenCV twin below runs instead. The editor resolves the same presets through the
-// same code, which is the point: before this the arithmetic lived here and nowhere else.
+// Every mode is a pass chain built by the shared planner (image-processing-lib/src/Planner,
+// boxBlurChain and friends): the GPU draws it here, and the C++ twins above run the very same
+// chain when there is no GPU, so the two paths give the same bytes. A chain no fragment can run
+// comes back as a CPU step. The editor resolves the same presets through the same code.
 bool Blur::ApplyPlannedBlurOnGpu(std::shared_ptr<openshot::Frame> frame, int64_t frame_number,
                                  const std::map<std::string, double>& params)
 {
@@ -242,7 +241,7 @@ bool Blur::ApplyZoomBlurOnGpu(std::shared_ptr<openshot::Frame> frame, int64_t fr
 // The fragment and uniforms of whichever planned pass is being drawn.
 const char* Blur::GpuShaderSource() const
 {
-	return PlannedShaderSource(openshot::shaders::kBlur);
+	return PlannedShaderSource(openshot::shaders::kGaussian);
 }
 
 bool Blur::SetGpuUniforms(SkRuntimeEffectBuilder& builder, int64_t frame_number,

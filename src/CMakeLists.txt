@@ -155,6 +155,7 @@ set(OPENSHOT_CV_SOURCES
 # Video effects
 set(EFFECTS_SOURCES
   effects/image-processing-lib/src/Effects/effects.cpp
+  effects/image-processing-lib/src/Effects/blurPasses.cpp
   effects/image-processing-lib/src/Planner/EffectPlan.cpp
   effects/Alpha.cpp
   effects/CameraMovement.cpp

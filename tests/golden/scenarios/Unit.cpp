@@ -449,12 +449,11 @@ void golden::registerUnitScenarios() {
             checks.push_back({"stills_uploaded_once", uploads == 0 && cached == 8, counts});
         });
 
-    // Above the reference width the rotational blur works on a resized copy, and above a megapixel
-    // the diagonal blur on a half-size one. Both were CPU-only there -- the 1080p frames every
-    // ROTATE and PAN_DIAGONAL transition hits -- and are now a resample, the blur and a resample
-    // back, as three GPU passes (owner's decision 2026-09-24: the resamples are OpenCV's fixed
-    // point to within a code value, and the rotational blur's intermediate is 8-bit where the
-    // C++'s is float). Asserts the passes ran, and the result against the CPU.
+    // The four blurs at the sizes production renders, with the presets' own extremes: every one is
+    // a pass chain the planner builds once and both paths run (EffectPlan.h, boxBlurChain and
+    // friends; 2026-09-25). Asserts that every pass of the chain ran on the GPU, and that the GPU's
+    // bytes are the CPU's -- exactly, except the zoom blur, whose ray direction takes a square
+    // root that two devices may round differently (within 1 LSB).
     addCustom("unit.gpu_blur_large", {"unit", "gpu"}, unitScene,
         [](Scene& s, std::vector<Captured>&, std::vector<Check>& checks) {
             if (!openshot::GpuDevice::Instance().available()) {
@@ -463,15 +462,22 @@ void golden::registerUnitScenarios() {
             }
             const QImage background(QString::fromStdString(s.media("background_960x540.png")));
             const QImage pattern(QString::fromStdString(s.media("image_rgb_400x300.jpg")));
-            struct Case { const char* label; int w, h; int diagonal; double rotational; };
-            const Case cases[] = {{"rotational(10) 1080p", 1920, 1080, 0, 10.0},
-                                  {"rotational(28) 1080p", 1920, 1080, 0, 28.0},
-                                  {"rotational(20) 2160p", 3840, 2160, 0, 20.0},
-                                  {"diagonal(100) 1080p", 1920, 1080, 100, 0.0},
-                                  {"diagonal(57) 2160p", 3840, 2160, 57, 0.0},
-                                  // odd sizes: OpenCV's fast area path, half to even (resample_area2)
-                                  {"diagonal(100) 1921x1081", 1921, 1081, 100, 0.0},
-                                  {"diagonal(40) 1083x1923", 1083, 1923, 40, 0.0}};
+            struct Case { const char* label; int w, h; int horizontal, vertical, diagonal; double rotational; int zoom; };
+            const Case cases[] = {{"rotational(10) 1080p", 1920, 1080, 0, 0, 0, 10.0, 0},
+                                  {"rotational(28) 1080p", 1920, 1080, 0, 0, 0, 28.0, 0},
+                                  {"rotational(20) 2160p", 3840, 2160, 0, 0, 0, 20.0, 0},
+                                  {"rotational(28) 1283x719", 1283, 719, 0, 0, 0, 28.0, 0},
+                                  {"diagonal(100) 1080p", 1920, 1080, 0, 0, 100, 0.0, 0},
+                                  {"diagonal(57) 2160p", 3840, 2160, 0, 0, 57, 0.0, 0},
+                                  {"diagonal(100) 1921x1081", 1921, 1081, 0, 0, 100, 0.0, 0},
+                                  {"diagonal(40) 1083x1923", 1083, 1923, 0, 0, 40, 0.0, 0},
+                                  {"blur(0, 360) 1080p", 1920, 1080, 0, 360, 0, 0.0, 0},
+                                  {"blur(230, 0) 1080p", 1920, 1080, 230, 0, 0, 0.0, 0},
+                                  {"blur(80, 80) 1921x1081", 1921, 1081, 80, 80, 0, 0.0, 0},
+                                  {"blur(12, 140) 2160p", 3840, 2160, 12, 140, 0, 0.0, 0},
+                                  {"blur(6, 6) 1080p", 1920, 1080, 6, 6, 0, 0.0, 0},
+                                  {"zoom(55) 1080p", 1920, 1080, 0, 0, 0, 0.0, 55},
+                                  {"zoom(45) 2160p", 3840, 2160, 0, 0, 0, 0.0, 45}};
             for (const Case& c : cases) {
                 // Detail to blur: the background with the test pattern over its middle.
                 QImage source = background.scaled(c.w, c.h).convertToFormat(QImage::Format_RGBA8888_Premultiplied);
@@ -480,9 +486,9 @@ void golden::registerUnitScenarios() {
                     painter.drawImage(QRect(c.w / 4, c.h / 4, c.w / 2, c.h / 2), pattern);
                 }
                 auto run = [&]() {
-                    openshot::Blur blur(openshot::Keyframe(0), openshot::Keyframe(0),
+                    openshot::Blur blur(openshot::Keyframe(c.horizontal), openshot::Keyframe(c.vertical),
                                         openshot::Keyframe(c.diagonal), openshot::Keyframe(c.rotational),
-                                        openshot::Keyframe(0), openshot::Keyframe(0), openshot::Keyframe(0),
+                                        openshot::Keyframe(c.zoom), openshot::Keyframe(0.5), openshot::Keyframe(0.5),
                                         openshot::Keyframe(0), openshot::Keyframe(1));
                     auto frame = std::make_shared<openshot::Frame>(1, c.w, c.h, "#000000");
                     frame->AddImage(std::make_shared<QImage>(source.copy()));
@@ -495,64 +501,19 @@ void golden::registerUnitScenarios() {
                 openshot::GpuDevice::SetBackend(openshot::GpuDevice::Backend::Off);
                 const golden::Image cpu = run();
                 openshot::GpuDevice::SetBackend(backend);
+                namespace fx = Podcastle::Effects;
+                size_t expected = 0;
+                if (c.diagonal > 0) expected += fx::diagonalBlurChain(c.w, c.h, c.diagonal).size();
+                if (c.rotational > 0) expected += fx::rotationalBlurChain(c.w, c.h, c.rotational).size();
+                if (c.zoom > 0) expected += fx::zoomBlurChain(c.w, c.h, c.zoom, 0.5, 0.5).size();
+                if (c.horizontal > 0 || c.vertical > 0)
+                    expected += fx::boxBlurChain(c.w, c.h, c.horizontal, c.vertical).size();
                 const golden::Metrics m = golden::compare(cpu, gpu);
-                char buf[160];
-                std::snprintf(buf, sizeof buf, "%s: gpu_passes=%lld psnr vs CPU %.2f max %d", c.label, passes, m.psnr, m.maxAbs);
-                checks.push_back({c.label, passes == 3 && m.psnr >= 45.0, buf});
-            }
-        });
-
-    // blur_pairs.sksl reads a wide box's taps two per fetch through the linear filter, and must give
-    // blur.sksl's bytes exactly: the same planned blur is run twice on the GPU, as planned and with
-    // every blur_pairs pass rewritten to plain blur, over noise (where a wrong tap cannot hide) and
-    // at frame sizes where the window reflects at one end, both ends, and not at all.
-    addCustom("unit.gpu_blur_pairs", {"unit", "gpu"}, unitScene,
-        [](Scene&, std::vector<Captured>&, std::vector<Check>& checks) {
-            namespace fx = Podcastle::Effects;
-            if (!openshot::GpuDevice::Instance().available()) {
-                checks.push_back({"no_gpu", true, "no GPU passes to compare"});
-                return;
-            }
-            struct Case { int w, h, hr, vr; };
-            const Case cases[] = {{640, 360, 60, 60}, {1920, 1080, 230, 0}, {1920, 1080, 0, 360},
-                                  {1280, 720, 150, 150}, {320, 180, 360, 360}};
-            for (const Case& c : cases) {
-                QImage noise(c.w, c.h, QImage::Format_RGBA8888_Premultiplied);
-                uint32_t seed = 12345u + c.w + c.hr;
-                for (int y = 0; y < c.h; ++y) {
-                    uint8_t* row = noise.scanLine(y);
-                    for (int x = 0; x < c.w; ++x) {
-                        seed = seed * 1664525u + 1013904223u;
-                        const uint8_t a = 128 + ((seed >> 24) & 127);
-                        for (int k = 0; k < 3; ++k) row[x * 4 + k] = static_cast<uint8_t>(((seed >> (k * 8)) & 255) * a / 255);
-                        row[x * 4 + 3] = a;
-                    }
-                }
-                const fx::EffectPlan planned = fx::planEffect(
-                    "BLUR", {{"horizontalRadius", double(c.hr)}, {"verticalRadius", double(c.vr)}}, c.w, c.h);
-                if (planned.steps.size() != 1 || planned.steps.front().kind != fx::PlanStep::Kind::Gpu) {
-                    checks.push_back({"blur_pairs_planned", false, "the blur did not plan a GPU step"});
-                    return;
-                }
-                fx::PlanStep plain = planned.steps.front();
-                int paired = 0;
-                for (auto& pass : plain.passes)
-                    if (pass.shader == "blur_pairs") { pass.shader = "blur"; pass.linearSource = false; ++paired; }
-                auto run = [&](const fx::PlanStep& step) {
-                    PlanRunner runner;
-                    auto frame = std::make_shared<openshot::Frame>(1, c.w, c.h, "#000000");
-                    frame->AddImage(std::make_shared<QImage>(noise.copy()));
-                    const bool ok = runner.run(frame, step);
-                    return std::make_pair(ok, golden::fromFrame(frame));
-                };
-                const auto a = run(planned.steps.front());
-                const auto b = run(plain);
-                const golden::Metrics m = golden::compare(b.second, a.second);
-                char label[64], buf[200];
-                std::snprintf(label, sizeof label, "blur_pairs %dx%d h%d v%d", c.w, c.h, c.hr, c.vr);
-                std::snprintf(buf, sizeof buf, "%s: %d of %zu half-passes paired; ran %s/%s; vs plain blur max %d",
-                              label, paired, plain.passes.size(), a.first ? "yes" : "no", b.first ? "yes" : "no", m.maxAbs);
-                checks.push_back({label, a.first && b.first && paired > 0 && m.maxAbs == 0, buf});
+                const bool same = c.zoom > 0 ? m.maxAbs <= 1 && m.psnr >= 60.0 : m.maxAbs == 0;
+                char buf[200];
+                std::snprintf(buf, sizeof buf, "%s: gpu_passes=%lld of %zu, psnr vs CPU %.2f max %d",
+                              c.label, passes, expected, m.psnr, m.maxAbs);
+                checks.push_back({c.label, passes == static_cast<long long>(expected) && same, buf});
             }
         });
 
@@ -655,9 +616,9 @@ void golden::registerUnitScenarios() {
     // silently -- and a decline produces exactly the golden frame, so transitions.blur passing on
     // Vulkan says nothing about which path drew it. This asserts the path, per mode.
     //
-    // The box blur's pass count is checked as well as its being non-zero: it is separable and runs
-    // one draw per axis per box, so a half silently skipped would still look like "the shader
-    // ran". The expected count comes from the same function the effect resolves its kernels with.
+    // Each mode's pass count is checked as well as its being non-zero: every blur is a chain of
+    // several draws, so one silently skipped would still look like "the shader ran". The expected
+    // counts come from the same chains the effect runs (EffectPlan.h).
     addCustom("unit.gpu_blur_path", {"unit", "gpu"},
         [](Scene& s) {
             auto& tl = s.makeTimeline();
@@ -691,14 +652,12 @@ void golden::registerUnitScenarios() {
             const long long diagonal_passes = count(diagonal);
             const long long rotational_passes = count(rotational);
 
-            // One draw per axis per box, minus any whose kernel is a single tap.
-            const Podcastle::Effects::BlurBoxes boxes =
-                Podcastle::Effects::blurBoxSizes(s.width, kRadius, kRadius);
-            long long expected_box = 0;
-            for (int pass = 0; pass < 3; ++pass) {
-                if (boxes.x[pass] > 1) expected_box++;
-                if (boxes.y[pass] > 1) expected_box++;
-            }
+            namespace fx = Podcastle::Effects;
+            const int w = source->width(), h = source->height();
+            const long long expected_box = fx::boxBlurChain(w, h, kRadius, kRadius).size();
+            const long long expected_diagonal = fx::diagonalBlurChain(w, h, kRadius).size();
+            const long long expected_rotational = fx::rotationalBlurChain(w, h, 25.0).size();
+            const long long expected_zoom = fx::zoomBlurChain(w, h, 40, 0.5, 0.5).size();
 
             auto report = [](const char* name, long long passes, long long expected, bool gpu_on,
                              std::vector<Check>& out) {
@@ -709,14 +668,12 @@ void golden::registerUnitScenarios() {
                                               : got + ", expected " + std::to_string(want)});
             };
             report("box_blur_pass_count", box_passes, expected_box, gpu, checks);
-            report("diagonal_blur_pass_count", diagonal_passes, 1, gpu, checks);
-            report("rotational_blur_pass_count", rotational_passes, 1, gpu, checks);
+            report("diagonal_blur_pass_count", diagonal_passes, expected_diagonal, gpu, checks);
+            report("rotational_blur_pass_count", rotational_passes, expected_rotational, gpu, checks);
 
-            // The zoom blur is three draws -- forward polar, the box blur along rho, inverse
-            // polar -- and the count is what proves the middle one is not being skipped.
             openshot::Blur zoom{0, 0, 0, 0, openshot::Keyframe(40.0),
                                 openshot::Keyframe(0.5), openshot::Keyframe(0.5)};
-            report("zoom_blur_pass_count", count(zoom), 3, gpu, checks);
+            report("zoom_blur_pass_count", count(zoom), expected_zoom, gpu, checks);
         });
 
     // ColorMap's fragment declines silently and a decline produces the golden frame, so
@@ -1489,8 +1446,8 @@ void golden::registerUnitScenarios() {
                     wrong += std::string(wrong.empty() ? "" : "; ") + e.label;
             }
             // A cpu step names the C++ function the host must call. Zoom-out and the full-turn
-            // rotation were the examples until they left the CPU (2026-09-24); a box wider than
-            // blur.sksl's 1023-tap loop still is one.
+            // rotation were the examples until they left the CPU (2026-09-24); a Gaussian wider
+            // than gaussian.sksl's loop still is one.
             const fx::EffectPlan cpu = fx::planEffect("BLUR", {{"horizontalRadius", 50000}}, kW, kH);
             if (cpu.steps.size() != 1 || cpu.steps.front().kind != fx::PlanStep::Kind::Cpu ||
                 cpu.steps.front().cpu.function != "applyBlurEffect")
