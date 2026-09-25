@@ -30,9 +30,10 @@ namespace text {
 namespace {
 // Glow quality, read once from the environment for easy A/B tuning (no rebuild). Applied
 // UNIFORMLY to resting and in-motion frames so the glow never changes quality mid-clip (no
-// pop). Defaults are the chosen 0.40 / 24 balance; lowering trades softness for speed.
+// pop). Defaults are full resolution and uncapped steps (see GLOW_RENDER_SCALE); lowering trades
+// smoothness for speed.
 //   OPENSHOT_GLOW_SCALE  silhouette/ray-march render scale (0.05..1.0, default GLOW_RENDER_SCALE)
-//   OPENSHOT_GLOW_STEPS  ray-march step cap (4..32, default 24)
+//   OPENSHOT_GLOW_STEPS  ray-march step cap (4..GLOW_MAX_STEPS, default GLOW_MAX_STEPS: no cap)
 double glowScaleSetting() {
     static const double v = [] {
         if (const char* e = std::getenv("OPENSHOT_GLOW_SCALE")) {
@@ -45,9 +46,9 @@ double glowScaleSetting() {
 double glowStepCapSetting() {
     static const double v = [] {
         if (const char* e = std::getenv("OPENSHOT_GLOW_STEPS")) {
-            try { double d = std::stod(e); if (d >= 4.0 && d <= 32.0) return d; } catch (...) {}
+            try { double d = std::stod(e); if (d >= 4.0 && d <= GLOW_MAX_STEPS) return d; } catch (...) {}
         }
-        return 24.0;
+        return static_cast<double>(GLOW_MAX_STEPS);
     }();
     return v;
 }
@@ -183,8 +184,9 @@ TextGlowRenderer::GlowMargin TextGlowRenderer::glowMarginFor(
     // the full beam extent instead of truncating it. The front end's GLOW_MAX_TEXTURE_DIM cap is
     // in reference space (it renders at reference size and GPU-scales the sprite by sizeScale);
     // the backend renders at actual size, so scale the cap by sizeScale, bounded by a ceiling.
-    const double texCap = std::clamp(GLOW_MAX_TEXTURE_DIM * style.sizeScale,
-                                     static_cast<double>(GLOW_MAX_TEXTURE_DIM), 4096.0);
+    // The floor is 4096 since the glow went to full resolution (2026-09-25): at 1080p the
+    // reference cap is ~1536 px, which would quietly put a wide glow back at a fraction of it.
+    const double texCap = std::clamp(GLOW_MAX_TEXTURE_DIM * style.sizeScale, 4096.0, 8192.0);
     const double fullMaxDim = std::max(width + 2.0 * rectPadX, height + 2.0 * rectPadY);
     const double pixelMaxDim = fullMaxDim * glowScale_;
     const double downscale = pixelMaxDim > texCap ? texCap / pixelMaxDim : 1.0;
@@ -339,7 +341,14 @@ sk_sp<SkImage> TextGlowRenderer::paintGlowFromSilhouette(
     // content, plus the light offset.
     const float lightX = static_cast<float>((rectPadX + imageMargin + contentWidth / 2.0 + offX) * s);
     const float lightY = static_cast<float>((rectPadY + imageMargin + contentHeight / 2.0 + offY) * s);
-    const float steps = static_cast<float>(std::min(glowStepCap_, glowSteps(glow.rayLen)));
+    // The silhouette pixel farthest from the light: one of the image's corners, in working pixels.
+    const double imageLeft = offsetPxX, imageTop = offsetPxY;
+    const double imageRight = imageLeft + width * s, imageBottom = imageTop + height * s;
+    const double reachX = std::max(std::abs(lightX - imageLeft), std::abs(imageRight - lightX));
+    const double reachY = std::max(std::abs(lightY - imageTop), std::abs(imageBottom - lightY));
+    const double reach = std::sqrt(reachX * reachX + reachY * reachY);
+    const float steps = static_cast<float>(std::min(
+        glowStepCap_, glowSteps(glow.rayLen, reach, std::max(1.0, beamBlurSigma))));
 
     // Uniforms in SkSL declaration order: float2 lightPos, rayLen, steps, gain, falloff.
     const float uniforms[6] = {

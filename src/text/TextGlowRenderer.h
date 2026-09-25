@@ -162,7 +162,7 @@ private:
     // Glow render quality for this pass. The animated path lowers these (motion hides the
     // difference); the static/resting path keeps full quality (and is cached, so paid once).
     double glowScale_ = GLOW_RENDER_SCALE;
-    double glowStepCap_ = 32.0;
+    double glowStepCap_ = GLOW_MAX_STEPS;
 };
 
 } // namespace text
