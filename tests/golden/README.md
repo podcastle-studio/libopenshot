@@ -12,7 +12,7 @@ render path; every GPU change is accepted on it, four ways (see `doc/GPU-RENDERI
 tests/golden/
   main.cpp Harness.* Image.* Report.cpp   runner, PNG I/O + metrics (the only Qt-touching file is Image.cpp)
   Recipes.*                               helpers that build clips/effects EXACTLY like the service
-  scenarios/*.cpp                         one file per feature group, ~95 scenarios
+  scenarios/*.cpp                         one file per feature group, ~130 scenarios
   media/                                  deterministic test media (generate.sh), fonts, LUT, SVG shapes
   expected/<scenario>/f000030.png         committed goldens
 ```

@@ -143,7 +143,7 @@ and a no-GPU machine is a supported configuration, so no change may make the CPU
 looking, or dependent on a GPU. Never delete CPU code because the GPU makes it unnecessary — gate
 it on `GpuOffscreen::onGpu()` / `GpuDevice::available()` and keep the CPU branch. Every change is
 accepted on the four-way golden sweep below (CPU Skia; GPU Skia with the GPU off; GPU Skia on
-Vulkan; GPU Skia on lavapipe), all four at 295/295.
+Vulkan; GPU Skia on lavapipe), all four green (current counts: `doc/GPU-RENDERING.md`, "Validating a change").
 
 **One control.** `GpuDevice::SetBackend(Backend::Off|Vulkan|Lavapipe)` is the single switch and
 overrides `OPENSHOT_GPU` at runtime (it tears the device down, moving `Generation()`, so caches
@@ -161,7 +161,7 @@ raster, never treat it as an error.
 cmake -S . -B cmake-build-gpu -DCMAKE_BUILD_TYPE=Release -DSkia_ROOT=/usr/local/skia-gpu
 cmake --build cmake-build-gpu --target openshot openshot-gpu-checks
 OPENSHOT_GPU=vulkan cmake-build-gpu/tests/gpu/openshot-gpu-checks     # and =lavapipe
-BUILD_DIR=$PWD/cmake-build-gpu tools/golden.sh check                  # must stay 295/295
+BUILD_DIR=$PWD/cmake-build-gpu tools/golden.sh check                  # must stay green
 ```
 
 Effect shaders (`src/GpuEffect.h`) are gated by `openshot-gpu-effect-parity`: PSNR and max LSB

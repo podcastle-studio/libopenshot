@@ -96,7 +96,7 @@ The two Skia builds, what the GPU installer adds and why, and the Vulkan 1.4 hea
 
 | gate | command | what it proves |
 |---|---|---|
-| four-way golden sweep | `tools/golden.sh check` (CPU Skia); `BUILD_DIR=$PWD/cmake-build-gpu tools/golden.sh check` with `OPENSHOT_GPU` unset, `=vulkan`, `=lavapipe` (give the GPU arms their own `GOLDEN_OUT`/`GOLDEN_REPORT`) | 117 scenarios, 307 frames, 39 checks, all four green |
+| four-way golden sweep | `tools/golden.sh check` (CPU Skia); `BUILD_DIR=$PWD/cmake-build-gpu tools/golden.sh check` with `OPENSHOT_GPU` unset, `=vulkan`, `=lavapipe` (give the GPU arms their own `GOLDEN_OUT`/`GOLDEN_REPORT`) | 129 scenarios, 326 frames; 51 checks with the GPU off, 73 with it on (2026-09-25); all four green |
 | GPU unit checks | `OPENSHOT_GPU=vulkan cmake-build-gpu/tests/gpu/openshot-gpu-checks` (and `=lavapipe`) | device lifetime, pools, the single control, readback |
 | effect parity | `OPENSHOT_GPU=vulkan cmake-build-gpu/tests/gpu/openshot-gpu-effect-parity` (and `=lavapipe`, ~45 min) | every fragment against its C++ twin over eight alpha-edge images; refuses a case that never reached the GPU. Exits non-zero today on the per-pass cost gate only (see "What is left", 4) |
 | CUDA interop | `cmake-build-gpu/tests/gpu/openshot-gpu-cuda-interop` | NVDEC/NVENC hand-off, per-pair semaphores |
@@ -275,11 +275,11 @@ without the "revisit if" condition being true.
 
 **Done.** Every render stage the service uses can run on the GPU, under one control, with the CPU
 path intact and bit-exact to what shipped: decode (NVDEC → GPU YUV), read-ahead, compositing, text
-and subtitles, all effects and transitions the service constructs except the two QPainter ones,
-crop (flagged), NVENC from the GPU (flagged), BT.709 end to end, and per-export telemetry. The
-editor has a shared planner and a published WASM (`dist/image_processing_lib_v2.1.0`) to reach
-parity. Headline numbers (RTX A2000, 1080p) are in `doc/PERFORMANCE-BASELINE.md`, "End of the
-migration".
+and subtitles, all 20 effects and transitions the service constructs (CameraMovement and the
+overlay transitions included, since 2026-09-24), crop (flagged), NVENC from the GPU (flagged),
+BT.709 end to end, and per-export telemetry. The editor has a shared planner and a published WASM
+(`dist/image_processing_lib_v2.1.0`) to reach parity. Headline numbers (RTX A2000, 1080p) are in
+`doc/PERFORMANCE-BASELINE.md`, "End of the migration".
 
 **Also done 2026-09-24: the CPU work the audit found** (5 below; A1–A9 moved to the GPU, A10 left).
 Consumers must rebuild against the new headers — `Clip`, `Mask`, `CircleMask`, `GpuEffect`,
@@ -359,10 +359,9 @@ was refreshed.
   effect on one clip for a third of the export (`doc/PERFORMANCE-BASELINE.md`, 2026-09-24). The
   telemetry's `readbacks` counter is how to find the next one: every new payload in the corpus
   should be run full-GPU and any readback count much above its clip-transition count explained.
-  The corpus payload's remaining 11 readbacks are the WHOOSH out-clip's `Alpha` at 0 (5, row A5).
-  `readbacks` does not see uploads (`GpuFrame::ToTexture`/`upload` have no counter), and uploads are
-  the biggest item in 5.
-- Overlay clips on the GPU (`isOverlay` frames composite on QPainter; `transitions_chain`).
+  Since 6 the expected count is 0 (1 with a wide blur: the filter probe). Uploads have their own
+  counter (`GpuCounters::Upload`); expect one per still and per LUT/tone table, plus one a frame
+  per stream NVDEC does not take (the ProRes watermark).
 - Thread budgets from the cgroup (`FF_THREADS`/`OMP_THREADS` from `cpu.max` ÷ instances; W06) —
   needs a container to validate; check what the upstream merge's thread settings already do first.
 - Audio is covered by one smoke scenario; upstream's new effects (AnalogTape, Glow, Shadow, …) are
