@@ -533,7 +533,8 @@ void FFmpegReader::Open() {
 					char *adapter_ptr = NULL;
 					int adapter_num;
 					adapter_num = openshot::Settings::Instance()->HW_DE_DEVICE_SET;
-					fprintf(stderr, "Hardware decoding device number: %d\n", adapter_num);
+					ZmqLogger::Instance()->AppendDebugMethod(
+						"FFmpegReader::Open (hardware decoding device)", "adapter_num", adapter_num);
 
 					// Set hardware pix format (callback)
 					pCodecCtx->get_format = get_hw_dec_format;
