@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <condition_variable>
 #include <exception>
+#include <memory>
 #include <iostream>
 #include <cmath>
 #include <ctime>
@@ -51,6 +52,15 @@ extern "C" {
 using namespace openshot;
 
 namespace {
+
+#if IS_FFMPEG_3_2
+// Owns a packet from av_packet_alloc. AV_FREE_PACKET is av_packet_unref, which releases the
+// packet's data but not the AVPacket itself, so every packet that was only "freed" with it leaked
+// its 104-byte struct -- one per video and audio packet of every export (LeakSanitizer,
+// 2026-09-25). The early error returns leaked it too; an owner covers those.
+struct PacketFree { void operator()(AVPacket* p) const { av_packet_free(&p); } };
+using OwnedPacket = std::unique_ptr<AVPacket, PacketFree>;
+#endif
 
 /// Bounded blocking queue for pipeline: producer pushes frames, consumer pops in order.
 class BoundedFrameQueue {
@@ -1061,6 +1071,7 @@ void FFmpegWriter::flush_encoders() {
 
 #if IS_FFMPEG_3_2
 			AVPacket* pkt = av_packet_alloc();
+			const OwnedPacket owned_pkt(pkt);
 #else
 			AVPacket* pkt;
 			av_init_packet(pkt);
@@ -1304,9 +1315,19 @@ void FFmpegWriter::Close() {
 	if (audio_st)
 		close_audio(oc, audio_st);
 
-	// Remove single software scaler
+	// Remove single software scaler. Nulled, or a writer opened again would reuse the freed one.
 	if (img_convert_ctx)
 		sws_freeContext(img_convert_ctx);
+	img_convert_ctx = nullptr;
+
+	// The RGBA -> YUV conversion frames live for the whole export and were never freed: a frame's
+	// worth of YUV per export (3.1 MB at 1080p; LeakSanitizer, 2026-09-25). Neither frame owns its
+	// data through a buffer ref -- the source points at the Frame's pixels, the destination at
+	// persistent_dst_buffer -- so av_frame_free releases only the structs.
+	av_frame_free(&persistent_src_frame);
+	av_frame_free(&persistent_dst_frame);
+	av_freep(&persistent_dst_buffer);
+	persistent_dst_size = 0;
 
 	if (!(oc->oformat->flags & AVFMT_NOFILE)) {
 		/* close the output file */
@@ -2341,10 +2362,12 @@ void FFmpegWriter::write_audio_packets(bool is_final, std::shared_ptr<openshot::
 			if (nb_samples > 0)
 				memcpy(samples, frame_final->data[0], copy_length);
 
-			// deallocate AVFrame
+			// deallocate AVFrame. Its data is final_samples_planar, not all_queued_samples: on the
+			// final call the first resampling did not run, so the queued array is still this
+			// function's to free at the end -- nulling it here leaked 384 KB per export
+			// (AVCODEC_MAX_AUDIO_FRAME_SIZE samples; LeakSanitizer, 2026-09-25).
 			av_freep(&(audio_frame->data[0]));
 			AV_FREE_FRAME(&audio_frame);
-			all_queued_samples = NULL; // this array cleared with above call
 
 			ZmqLogger::Instance()->AppendDebugMethod(
 				"FFmpegWriter::write_audio_packets (Successfully completed 2nd resampling for Planar formats)",
@@ -2390,6 +2413,7 @@ void FFmpegWriter::write_audio_packets(bool is_final, std::shared_ptr<openshot::
 		// Init the packet
 #if IS_FFMPEG_3_2
 		AVPacket* pkt = av_packet_alloc();
+		const OwnedPacket owned_pkt(pkt);
 #else
 		AVPacket* pkt;
 		av_init_packet(pkt);
@@ -2791,6 +2815,7 @@ bool FFmpegWriter::write_video_packet(std::shared_ptr<Frame> frame, AVFrame *fra
 		// Raw video case.
 #if IS_FFMPEG_3_2
 		AVPacket* pkt = av_packet_alloc();
+		const OwnedPacket owned_pkt(pkt);
 #else
 		AVPacket* pkt;
 		av_init_packet(pkt);
@@ -2825,6 +2850,7 @@ bool FFmpegWriter::write_video_packet(std::shared_ptr<Frame> frame, AVFrame *fra
 
 #if IS_FFMPEG_3_2
 		AVPacket* pkt = av_packet_alloc();
+		const OwnedPacket owned_pkt(pkt);
 #else
 		AVPacket* pkt;
 		av_init_packet(pkt);
