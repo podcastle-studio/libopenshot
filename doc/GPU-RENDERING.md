@@ -61,24 +61,29 @@ no CPU fallback.
 
 ### The switches
 
-The service's defaults are all "on" since 2026-09-24 (`RenderBackend`, the image's `ENV`): `ENCODER=h264_nvenc`,
-`OPENSHOT_GPU=vulkan`, `OPENSHOT_GPU_DECODE/_ENCODE/_CROP=1`, the last three applied only when a GPU came up.
-The "default" column below is the library's, which the golden suite and the bench rely on.
+The service has **one** switch, `GPU_RENDERING` (owner, 2026-09-25): `on` by default in the code
+(`RenderBackend`; the image sets nothing), `off`, or `lavapipe`. `on` sets `OPENSHOT_GPU`'s backend
+to `vulkan`, picks `h264_nvenc` if the probe answers, and — only when the device came up — turns on
+`GPU_DECODE`, `GPU_CROP`, `GPU_ENCODE` when NVENC is the encoder, and `HARDWARE_DECODER=2` when a
+CUDA device can be created (probed once: a Vulkan device may be another vendor's, or the driver may
+have lost the card, and `FFmpegReader` throws on a failed device create instead of falling back). `off`
+is the CPU pipeline with libx264. The rows below are the library's switches and defaults, which the
+golden suite and the bench rely on.
 
 | switch | set by | default | what it does | changes pixels? |
 |---|---|---|---|---|
 | `OPENSHOT_GPU` | env, or `GpuDevice::SetBackend()` (overrides) | `off` | `vulkan` / `lavapipe` enable every GPU path at all | slightly — the four-way sweep is bit-exact except text (PSNR ≥ 38), three blend modes, film grain (same grain, different random phase), the circle mask's edge ring (analytic, not OpenCV's; ≥ 40 dB), a rotational blur above 1280 px (≤ 1 LSB), a mask matte of another size (bilinear, not Qt's box; ~58 dB), zoom-out (≤ 1 LSB), CameraMovement (Skia's bilinear and edge rule for QPainter's; ≥ 44 dB) and the overlay transitions (now GPU-composited like every clip) |
-| `ENCODER` | service env | `libx264` | `h264_nvenc` (probed once; falls back) | encoder output only |
-| `GPU_DECODE` (+ `HARDWARE_DECODER=2`) | service env `OPENSHOT_GPU_DECODE` | off | NVDEC + GPU YUV→RGBA, frames never leave the device | **yes**: GPU rounding; honours a `bt709` tag swscale never did (12 frames + 3 checks of 307 move on Vulkan) |
-| `GPU_ENCODE` | service env `OPENSHOT_GPU_ENCODE` (needs `ENCODER=h264_nvenc`) | off | NVENC reads the GPU frame | **yes**: box vs bicubic chroma |
-| `GPU_CROP` | service env `OPENSHOT_GPU_CROP` | off | `Crop` draws GPU frames on the GPU | **yes**: rounded corners antialias differently from QPainter |
+| encoder | service, from `GPU_RENDERING` | `libx264` | `h264_nvenc` (probed once; falls back) | encoder output only |
+| `GPU_DECODE` (+ `HARDWARE_DECODER=2`) | `Settings`; the service, from `GPU_RENDERING` | off | NVDEC + GPU YUV→RGBA, frames never leave the device | **yes**: GPU rounding; honours a `bt709` tag swscale never did (12 frames + 3 checks of 307 move on Vulkan) |
+| `GPU_ENCODE` | `Settings`; the service, from `GPU_RENDERING` (needs NVENC) | off | NVENC reads the GPU frame | **yes**: box vs bicubic chroma |
+| `GPU_CROP` | `Settings`; the service, from `GPU_RENDERING` | off | `Crop` draws GPU frames on the GPU | **yes**: rounded corners antialias differently from QPainter |
 | `READ_AHEAD_FRAMES` | `Settings` | 2 | decode-ahead depth; 0 = off | no (~8 MB per open reader per frame) |
 | `RENDER_SINGLE_WRITEFRAME` | service env | off | one `WriteFrame` call per export instead of 8-frame chunks | no (byte-identical); ~6 % on the corpus payload |
 
 All the GPU paths need `OPENSHOT_GPU=vulkan`; the NVDEC/NVENC interop also needs the NVIDIA driver's
 `libcuda` in the container (it is `dlopen`ed; only `cuda.h` is a build dependency). The service
-reports what it resolved in its first log line (`RenderBackend: encoder=… | OPENSHOT_GPU=… |
-gpu_decode=… gpu_encode=… gpu_crop=…`).
+reports what it resolved in its first log line (`RenderBackend: GPU_RENDERING=… | encoder=… |
+gpu=… | gpu_decode=… gpu_encode=… gpu_crop=…`).
 
 ## Building
 
@@ -199,8 +204,9 @@ without the "revisit if" condition being true.
 - **A GPU-decoded mask matte is resampled on the GPU with Skia's bilinear** (owner, 2026-09-24),
   not Qt's `SmoothTransformation`; bit-exact when the matte is the frame's size. *Revisit if* mattes
   are routinely much larger than the clip (a box filter would then be the right one).
-- **Every GPU path is on by default in the service** (owner, 2026-09-24): `ENCODER=h264_nvenc`,
-  `OPENSHOT_GPU=vulkan`, GPU decode/encode/crop — accepting their measured pixel changes. The
+- **Every GPU path is on by default in the service** (owner, 2026-09-24), behind **one switch**,
+  `GPU_RENDERING`, defaulted in the code rather than the image (owner, 2026-09-25): NVENC,
+  `vulkan`, GPU decode/encode/crop — accepting their measured pixel changes. The
   library keeps defaulting off (the suite and the bench name their arms explicitly). Two guards
   make "on by default" safe on a CPU node: the decode/encode/crop switches are applied only when
   the device came up, and `vulkan` never picks a CPU-type Vulkan device, so the image's lavapipe is
@@ -245,6 +251,11 @@ without the "revisit if" condition being true.
 
 ## Known issues and divergences
 
+- **`FFmpegReader` throws when it cannot create the hardware device** (`Hardware device create
+  failed.`) instead of decoding in software; only a failure *after* opening falls back
+  (`ReopenWithoutHardwareDecode`). The service guards it by probing CUDA before setting
+  `HARDWARE_DECODER=2` (2026-09-25); any other caller setting it on a machine without a working
+  CUDA device fails every open. A library-side fallback would be the complete fix.
 - **Resampled alpha boundaries vary with what else ran in the process** (golden suite, not fixed):
   1,280 pixels on the interpolated alpha edges of a scaled PNG move between an isolated and a full
   run, and between two 4-thread runs. Nothing is red — the affected scenarios were rebuilt on 1:1
@@ -309,7 +320,7 @@ was refreshed.
 
 5. **Build and pin the real service image** (W01): the build-stage base is in a private registry
    (`gcloud auth login`, then `docker build`); pin both bases by digest; confirm the build stage has
-   the Skia headers; deploy to a CPU node and a GPU node (`helm/values_gpu_example.yaml`). The GPU
+   the Skia headers; deploy to a CPU node and a GPU node (deployment values are another team's; the service needs no GPU env). The GPU
    node needs `libcuda` and the Vulkan ICD (`NVIDIA_DRIVER_CAPABILITIES` including `graphics`).
    Gate: one export on each; the CPU node's output identical to today's; `tools/gpu-preflight.sh`
    shows NVENC and the NVIDIA ICD on the GPU node.

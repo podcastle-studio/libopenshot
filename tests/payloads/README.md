@@ -23,8 +23,9 @@ cmake -S . -B cmake-build-release -DCMAKE_BUILD_TYPE=Release -DBUILD_RENDER_PAYL
 cmake --build cmake-build-release --target render-payload
 ```
 
-The switches under test are the ordinary environment ones, read by the service and the library
-rather than by the script: `ENCODER=libx264|h264_nvenc`, `OPENSHOT_GPU=off|vulkan|lavapipe`.
+The switch under test is the service's one, read by the service rather than by the script:
+`GPU_RENDERING=on|off|lavapipe` (default `on`). The recorded hashes are the CPU render, so check
+them with `GPU_RENDERING=off`.
 
 What it checks, in order: both rounds complete; the two rounds' decoded frames are identical
 (`ffmpeg -f framemd5`, so container metadata is ignored and every pixel is not); and the frame

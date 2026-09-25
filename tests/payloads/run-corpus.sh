@@ -17,8 +17,8 @@
 #
 # Environment:
 #   RENDER_PAYLOAD   path to the render-payload binary (default: the service's Release build)
-#   ENCODER          libx264 (default) | h264_nvenc — read by the service, not by this script
-#   OPENSHOT_GPU     off (default) | vulkan | lavapipe — read by the library
+#   GPU_RENDERING    on (default) | off | lavapipe — read by the service, not by this script.
+#                    The recorded hashes are the CPU render: check them with GPU_RENDERING=off.
 #   KEEP_OUTPUT      set to keep the rendered mp4s instead of deleting them
 #
 set -euo pipefail
