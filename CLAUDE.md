@@ -306,9 +306,13 @@ GPU to take over. Earlier, lower figures in the docs were measured on an Intel i
 - **`unit.gpu_resident` is the "frame never leaves the GPU" gate**: every feature the service
   constructs, 100 frames, no readback but the harness's one a frame, no CPU decode, no CPU
   fallback, no uploads after warm-up. Add a new service feature to it.
-- **`blur_pairs` reads two taps per fetch through the linear filter**, exact only where the device's
-  filter keeps the pair sum's low bit; `linearMidpointIsExact()` (GpuEffect.cpp) probes it once per
-  device and falls back to `blur`. llvmpipe fails the probe — that is why lavapipe runs plain blur.
+- **The four blurs are one pass chain per blur, run by both paths** (owner, 2026-09-25): the
+  planner builds it (`boxBlurChain`, `diagonalBlurChain`, `rotationalBlurChain`, `zoomBlurChain`),
+  the GPU draws the fragments and `applyBlurEffect` & co. run the same passes through C++ twins in
+  `image-processing-lib/src/Effects/blurPasses.cpp`. All integer arithmetic below 2^24, so CPU and
+  GPU are byte-identical (the zoom blur within 1 LSB: its ray takes a `sqrt`). Change a fragment and
+  its twin together; `unit.gpu_blur_large` and the parity tool hold them to it. Radii keep their old
+  strength (the sigma of the box they replaced).
 - A `GpuEffect` with a multi-pass plan needs only `PlanForFrame`: `ApplyOnGpu` runs identity, clear
   and any planned GPU step itself, and `RunGpuPass` binds a planned pass's own fragment/uniforms.
 - Hardware decode (`HARDWARE_DECODER != 0`) **worked again as of 2026-09-22** (plan step 1.5):
@@ -337,6 +341,11 @@ GPU to take over. Earlier, lower figures in the docs were measured on an Intel i
 - The glow is ~99 % of an animated glow frame on the raster path, and the ray-march is ~91 % of
   that (sweep `OPENSHOT_GLOW_STEPS` to measure — it changes only the step count). Optimise the
   march or skip it; nothing else in the text engine is worth measuring against it.
+- **The glow runs at full resolution with smooth-limit step counts** (owner, 2026-09-25, both
+  paths): `GLOW_RENDER_SCALE` 1.0 (was 0.40), steps raised until samples are one beam-blur sigma
+  apart (up to `GLOW_MAX_STEPS` 512; was capped at 24). GPU ~-10 %, CPU ~24x slower (0.1 fps at
+  1080p on `text_animated_glow_3`), accepted. `OPENSHOT_GLOW_SCALE=0.4 OPENSHOT_GLOW_STEPS=24`
+  reproduces the old glow. The front end's glow (text-glow-shader.ts) is still 64 steps at most.
 - A **block-mode** animation concats its transform onto the canvas, so the glow is marched in
   block-local space and is frame-invariant. `text::GlowFrameCache` on `TextClipReader` reuses the
   composited image — bit-identical, raster only (a pooled GPU snapshot must not outlive its frame).

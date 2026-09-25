@@ -33,7 +33,7 @@ default (2026-09-24). Every GPU path falls back to the CPU by itself when its re
 | read-ahead | one decode worker per `FFmpegReader` (`READ_AHEAD_FRAMES`, default 2) | host-memory frames only: with `GPU_DECODE` on, only for a stream that can never reach the GPU (no NVDEC, a layout `GpuYuv` does not convert — the ProRes 4444 watermark), since 2026-09-24 |
 | compositing | `Timeline::GetFrame` on a pooled Graphite surface; `Clip::draw_to_canvas` in one transformed draw; all 16 blend modes; clip shadow, blur, flip on the paint; the opacity curve as an exact pre-pass; overlay-clip transitions (the overlay composited onto the source frame, the overlay clip transformed on the GPU); a host-memory source (still image, held last frame) uploaded once (`Clip::HostTextureCache`) | a clip that cannot draw on the GPU — a frame-number overlay, a waveform, an effect after keyframes, none of which the service uses — puts the whole frame on QPainter only if its blend mode is not `NORMAL` (`Timeline.cpp:1099`); a `NORMAL` one reads the canvas back mid-frame in `apply_background` |
 | text, subtitles | the whole Skia text engine incl. the glow ray-march; the resting text frame is kept on the GPU; subtitles draw on whatever canvas they are given | raster Skia |
-| effects | every one of the 20 the service constructs, at every frame size and every parameter the production presets reach: `GpuEffect` + SkSL twins for the per-clip effects and the transitions (the rotational and diagonal blurs above the reference size, zoom-out, and box blurs up to 1023 taps as planned multi-pass chains; wide boxes two taps a fetch), the overlay composites with the overlay resized on the GPU, CameraMovement as a GPU draw, the planner's identity and clear; a GPU-decoded mask matte is prepared on the GPU | the C++ twin runs whenever a fragment declines, which with a GPU is now only past a loop bound no preset reaches (a box > 1023 taps) |
+| effects | every one of the 20 the service constructs, at every frame size and every parameter the production presets reach: `GpuEffect` + SkSL twins for the per-clip effects and the transitions (the four blurs and zoom-out as planned multi-pass chains — for the blurs, the same chains the CPU path runs), the overlay composites with the overlay resized on the GPU, CameraMovement as a GPU draw, the planner's identity and clear; a GPU-decoded mask matte is prepared on the GPU | the C++ twin runs whenever a fragment declines, which with a GPU is now only past a loop bound no preset reaches (a Gaussian sigma over ~1,300 px) |
 | crop | `Crop` behind `GPU_CROP`, on GPU frames and on host frames (a still, a shape: uploaded once) | QPainter |
 | encode | NVENC takes the composited frame from the GPU (`GPU_ENCODE`) | readback + swscale + libx264 / NVENC |
 | telemetry | `GpuCounters` on every GPU path and fallback; `ExportTelemetry` (NVML) — the service logs one line per export | — |
@@ -101,12 +101,14 @@ The two Skia builds, what the GPU installer adds and why, and the Vulkan 1.4 hea
 
 | gate | command | what it proves |
 |---|---|---|
-| four-way golden sweep | `tools/golden.sh check` (CPU Skia); `BUILD_DIR=$PWD/cmake-build-gpu tools/golden.sh check` with `OPENSHOT_GPU` unset, `=vulkan`, `=lavapipe` (give the GPU arms their own `GOLDEN_OUT`/`GOLDEN_REPORT`) | 129 scenarios, 326 frames; 51 checks with the GPU off, 73 with it on (2026-09-25); all four green |
+| four-way golden sweep | `tools/golden.sh check` (CPU Skia); `BUILD_DIR=$PWD/cmake-build-gpu tools/golden.sh check` with `OPENSHOT_GPU` unset, `=vulkan`, `=lavapipe` (give the GPU arms their own `GOLDEN_OUT`/`GOLDEN_REPORT`) | 128 scenarios, 326 frames; 50 checks with the GPU off, 76 with it on (2026-09-25); all four green |
 | GPU unit checks | `OPENSHOT_GPU=vulkan cmake-build-gpu/tests/gpu/openshot-gpu-checks` (and `=lavapipe`) | device lifetime, pools, the single control, readback |
 | effect parity | `OPENSHOT_GPU=vulkan cmake-build-gpu/tests/gpu/openshot-gpu-effect-parity` (and `=lavapipe`, ~45 min) | every fragment against its C++ twin over eight alpha-edge images; refuses a case that never reached the GPU. Exits non-zero today on the per-pass cost gate only (see "What is left", 4) |
 | CUDA interop | `cmake-build-gpu/tests/gpu/openshot-gpu-cuda-interop` | NVDEC/NVENC hand-off, per-pair semaphores |
 | payload corpus | `tests/payloads/run-corpus.sh` | a real production payload through `render-payload`, two rounds hash-stable, against a recorded hash |
 | benchmark | `openshot-bench` — see `doc/PERFORMANCE-BASELINE.md` | performance against `baseline-cpu.json` |
+| memory (leaks, heap errors) | an ASan build of the GPU tree: `-DCMAKE_BUILD_TYPE=RelWithDebInfo -DSkia_ROOT=/usr/local/skia-gpu`, C/C++ flags `-fsanitize=address -fno-omit-frame-pointer -U__SANITIZE_ADDRESS__`, linker `-fsanitize=address`; run `openshot-golden` with `ASAN_OPTIONS=protect_shadow_gap=0:detect_leaks=1` and `OPENSHOT_GPU` off and `=vulkan` | no ASan error and no leak with a libopenshot frame (2026-09-25: 355 / 390 results, only libdbus and glibc residue). `-U__SANITIZE_ADDRESS__` is load-bearing: Skia's `SkTArray` adds a member under ASan, so an instrumented libopenshot and the uninstrumented `libskia.a` disagree on every `TArray` layout (a false `new-delete-type-mismatch` on `graphite::Recording`, 184 vs 176 bytes). `protect_shadow_gap=0` lets `cuInit` run under ASan |
+| memory (growth) | a long export with RSS and device VRAM sampled every 5 s (`OPENSHOT_BENCH_REPEAT`, encode modes) | flat after warm-up: 2026-09-25, `everything` full-GPU/NVENC 5,400 frames (RSS 841–883 MB after 40 s, VRAM 1,484 MiB flat); `transitions_chain` CPU/x264 2,700 frames (RSS ~1.95 GB flat) |
 
 Harness switches for the flagged paths: `OPENSHOT_GOLDEN_GPU_DECODE=1`, `OPENSHOT_GOLDEN_HW_DECODE=1`,
 `OPENSHOT_GOLDEN_GPU_CROP=1`; bench: `OPENSHOT_BENCH_GPU_DECODE=1`, `OPENSHOT_BENCH_HW_DECODE=2`,
@@ -140,14 +142,13 @@ holds the GPU's clarity and sharpness to `GpuClose`.
 
 **Also not bit-exact, by decision (owner, 2026-09-24):** the circle mask's edge (analytic on the
 GPU, OpenCV's rasterised polygon in the C++: interior and exterior exact, the one-pixel ring
-37–50 dB, `Tolerance::GpuEdge` / the parity tool's `kCircleEdgeGate`); the rotational blur above
-the reference width (62 dB, 1 LSB: the chain's intermediate is 8-bit where the C++'s is float);
+37–50 dB, `Tolerance::GpuEdge` / the parity tool's `kCircleEdgeGate`);
 a video mask matte resampled to another size (bilinear where Qt box-averages a shrink, ~58 dB,
 2 LSB); zoom-out (76–80 dB, 1 LSB: resample_linear's rare fixed-point miss); CameraMovement drawn by
 Skia (bilinear and the rotated edge's aliasing where QPainter smooth-transforms; 47 dB at worst in
-`effects.camera_movement`). Bit-exact: the diagonal blur's chain above a megapixel (odd sizes within
-1 LSB), the wide box blurs read in pairs (`unit.gpu_blur_pairs`), the opacity curve's pre-pass, NVDEC
-of every codec (`unit.nvdec_on_device`).
+`effects.camera_movement`). Bit-exact: the four blurs, because the CPU runs the GPU's own pass chain
+(the zoom blur within 1 LSB for its square root; `unit.gpu_blur_large` at production sizes), the
+opacity curve's pre-pass, NVDEC of every codec (`unit.nvdec_on_device`).
 
 **Editor vs export.** The transitions are one source on both sides: the C++ in
 `src/effects/image-processing-lib` (compiled natively here, to WASM for the editor), the SkSL in its
@@ -196,10 +197,9 @@ without the "revisit if" condition being true.
   1/8-px radius, instead of OpenCV's circle rasterised on the CPU and uploaded every animated frame
   (+7.4 ms at 1080p). The C++ is unchanged, so CPU and GPU differ on the ring. *Revisit if* the edge
   must match across paths — then both sides take one analytic circle.
-- **Resizes inside an effect are passes** (2026-09-24): `resample_linear` (INTER_LINEAR) and
-  `resample_area2` (INTER_AREA at half size) reproduce OpenCV's fixed point — the SIMD vertical
-  kernel, 11-bit weights — so the diagonal blur's chain is bit-exact and the rotational one within a
-  code value. The planner, not a host, decides the chain. *Revisit if* OpenCV's resize arithmetic
+- **Resizes inside an effect are passes** (2026-09-24): `resample_linear` (INTER_LINEAR) reproduces
+  OpenCV's fixed point — the SIMD vertical kernel, 11-bit weights — for zoom-out and a mismatched
+  overlay. The planner, not a host, decides the chain. *Revisit if* OpenCV's resize arithmetic
   changes (a new OpenCV, or an IPP-enabled build): re-measure against `cv::resize`.
 - **A GPU-decoded mask matte is resampled on the GPU with Skia's bilinear** (owner, 2026-09-24),
   not Qt's `SmoothTransformation`; bit-exact when the matte is the frame's size. *Revisit if* mattes
@@ -223,11 +223,22 @@ without the "revisit if" condition being true.
 - **CameraMovement is a Skia draw on the GPU** (owner, 2026-09-24), not QPainter: the same transform,
   bilinear where QPainter smooth-transforms and snapped to whole pixels for a translate-only move,
   as the compositor does. *Revisit if* animations must match the CPU byte for byte.
-- **Wide box blurs read two taps per fetch through the linear filter, where the device allows it**
-  (2026-09-24): `blur_pairs.sksl` is byte-identical to `blur.sksl` on a device whose filter keeps
-  the pair sum exact at a texel midpoint, which `linearMidpointIsExact()` measures once per device
-  (NVIDIA yes, llvmpipe no → plain `blur`). 2.4–2.7× faster on the production presets' blurs.
-  *Revisit if* a device passes the probe and a golden moves — the probe then misses a case.
+- **The blurs are built for quality, and both paths run one chain** (owner, 2026-09-25: "much
+  better blur", CPU and GPU both, accepting a slower CPU). The planner builds each blur as a pass
+  chain (`boxBlurChain`, `diagonalBlurChain`, `rotationalBlurChain`, `zoomBlurChain`); the GPU draws
+  the fragments and the C++ effects run the same passes through their twins
+  (`image-processing-lib/src/Effects/blurPasses.cpp`), all integer arithmetic below 2^24, so the two
+  are byte-identical rather than close. A true Gaussian (integer weights; above sigma 6 px at 1/f of
+  the size, f = floor(sigma / 3), the resampling's own variance subtracted); the diagonal blur as a
+  Gaussian along each diagonal, decimated along it only, at full resolution at every size; the
+  rotational and zoom blurs as passes of up to 16 bilinear taps, each pass finer, so K^P samples are
+  under 0.8 px apart where they are farthest. Strengths unchanged — a radius is still the sigma of
+  the box it replaced — except the diagonal blur at > 1 MP, which the old half-size step doubled.
+  They replaced three box passes, a half-size diagonal box, ≤ 30 rotations of a 1280-wide copy (up
+  to ~30 px ghosts at 1080p corners) and a polar remap (one ray per ~5 px at the corners), and with
+  them `blur_pairs` and its per-device filter probe. Cost: `doc/PERFORMANCE-BASELINE.md`,
+  2026-09-25. *Revisit if* the CPU path's zoom or diagonal cost matters (the twins are scalar;
+  SIMD would recover it without changing a byte).
 - **The opacity curve on the GPU is a pre-pass, not paint alpha** (2026-09-24): `floor(byte * alpha)`
   before the transform, exactly the CPU loop, so a fade is bit-exact on the GPU where paint alpha
   was an LSB off.
@@ -261,8 +272,6 @@ without the "revisit if" condition being true.
   run, and between two 4-thread runs. Nothing is red — the affected scenarios were rebuilt on 1:1
   clips — but the instability is real. Start with whether anything caches a scaled image per path
   rather than per reader.
-- **Diagonal blur still halves above one megapixel** (on the GPU too since 2026-09-24, as the same chain) — the one downscale threshold the reference
-  decision did not retire, so the same radius renders at full scale from 720p and at half from 1080p.
 - **The editor leaves some LUTs ungraded** (1-D-only cubes, a 3-D cube with a 1-D shaper, any
   non-WebGL2 renderer) where the export grades them.
 - **Film grain never matches across paths, by construction** (see "Parity"): a grain clip measures
@@ -278,24 +287,45 @@ without the "revisit if" condition being true.
   file's birth → last write.
 - **Heap corruption under gdb** (2026-09-24): bench `podcast_pip`, `everything` and
   `transitions_chain`, every flag on, aborted in glibc (`corrupted size vs. prev_size`,
-  `free(): invalid size`) under a gdb breakpoint tracer; they run cleanly without it. A
-  timing-sensitive memory bug is the likeliest reading; chase it before the soak (11). ASan on the
-  GPU build is the first thing to try.
+  `free(): invalid size`) under a gdb breakpoint tracer; they run cleanly without it. ASan
+  (2026-09-25, "Validating a change") finds no heap error in the golden suite on either arm; the
+  bench scenarios under ASan with every flag on have not been run yet — that is the next step.
+- **FFmpegWriter's raw-video path frees each frame buffer twice** (read, not run: nothing here
+  encodes rawvideo): `av_packet_from_data` hands `frame_final->data[0]` to the packet, the muxer
+  releases it, and `write_frame` then `av_freep`s it.
+- **`unit.hardware_decode` leaves `HARDWARE_DECODER=2` set when the reader throws**, so on a
+  machine where CUDA cannot start every later scenario that decodes video fails too (seen under
+  ASan before `protect_shadow_gap=0`). The harness should restore Settings with a guard.
 
-## Status (2026-09-24) and what is left
+## Status (2026-09-25) and what is left
 
 **Done.** Every render stage the service uses can run on the GPU, under one control, with the CPU
 path intact and bit-exact to what shipped: decode (NVDEC → GPU YUV), read-ahead, compositing, text
 and subtitles, all 20 effects and transitions the service constructs (CameraMovement and the
 overlay transitions included, since 2026-09-24), crop (flagged), NVENC from the GPU (flagged),
 BT.709 end to end, and per-export telemetry. The editor has a shared planner and a published WASM
-(`dist/image_processing_lib_v2.1.0`) to reach parity. Headline numbers (RTX A2000, 1080p) are in
+(`dist/image_processing_lib_v2.2.0`, with the 2026-09-25 blurs) to reach parity. Headline numbers (RTX A2000, 1080p) are in
 `doc/PERFORMANCE-BASELINE.md`, "End of the migration".
 
 **Also done 2026-09-24: the CPU work the audit found** (5 below; A1–A9 moved to the GPU, A10 left).
 Consumers must rebuild against the new headers — `Clip`, `Mask`, `CircleMask`, `GpuEffect`,
 `TextClipReader` and `GpuCounters` changed layout; `../video-rendering-service`'s `cpp-third-party`
 was refreshed.
+
+**Also done 2026-09-25: four encoder leaks fixed** (LeakSanitizer): every video and audio
+`AVPacket` struct (`AV_FREE_PACKET` only unrefs), the writer's RGBA→YUV conversion frames (a
+frame of YUV per export, 3.1 MB at 1080p), 384 KB of queued audio per export on a planar codec
+(AAC), and a freed `img_convert_ctx` left dangling for a reopened writer. The text glow now runs at
+full resolution with smooth-limit step counts (CLAUDE.md). And `FFmpegReader` no longer prints
+"Hardware decoding device number" to stderr on every open (debug logger).
+
+**Also done 2026-09-25: the blurs rebuilt for quality, on both paths** (owner; see "Decisions",
+"The blurs are built for quality"). A true Gaussian, a full-resolution diagonal Gaussian, and
+rotational and zoom blurs sampled under a pixel apart, each one pass chain that the GPU draws and
+the CPU runs through C++ twins, byte-identical (zoom within 1 LSB). Five `transitions.*blur*`
+goldens re-baselined; `unit.gpu_blur_large` now covers all four at production sizes;
+`unit.gpu_blur_pairs` is gone with `blur_pairs`. The editor needs the new shaders and a new WASM
+(12). The service must be rebuilt against the new library to pick it up.
 
 **What is left is decisions, infrastructure and final checks.** In the order they should happen:
 
@@ -355,14 +385,19 @@ was refreshed.
 11. **Soak and concurrency on the GPU node**: a long export and N concurrent exports with every flag
     on — VRAM and RSS flat (VRAM was flat over 10,080 frames on the laptop), no NVDEC/NVENC session
     exhaustion, telemetry line per export, clean fallback when `libcuda` or the ICD is absent.
-12. **Editor parity**: the front end moves to `dist/v2.1.0` (their current v2.0.4, built from the
+12. **Editor parity**: the front end moves to `dist/v2.2.0` (their current v2.0.4, built from the
     submodule's `main`, lacks the 2026-09-22 blur and zoom-blur changes, so preview and export
     already disagree on blurs), then integrates the shaders per `FRONTEND-INTEGRATION.md` and runs
     its checks. The submodule's `main` should take `feature/gpu-rendering` when this ships, or the
     editor's line and the export's keep diverging. **Since 2026-09-24 the planner emits two new
     fragments (`resample_linear`, `resample_area2`) and `CIRCLE_MASK` no longer has a texture**, so
-    the editor needs a WASM built after `bb7ad18` (`dist/` has not been republished) and the new
-    shaders; `wasm/test/plan-check.mjs` passes against it.
+    the editor needs a WASM built after `bb7ad18` and the new shaders. **Since 2026-09-25 every
+    blur is a new chain** (`gaussian`, `blur_downsample`/`blur_upsample`, `diagonal_*`, a new
+    `rotational_blur`, `zoom_blur`; `blur`, `blur_pairs`, `diagonal_blur`,
+    `zoom_blur_forward/inverse` and `resample_area2` are gone): `dist/v2.2.0` carries all of it and
+    `wasm/test/plan-check.mjs` passes against it; the guide's "What changed on 2026-09-25" lists
+    the front end's steps. The text glow (full resolution, up to 512 steps) is ahead of the
+    editor's `text-glow-shader.ts` (64 steps) until the editor takes the same step schedule.
 
 ### 4. Worth doing, not blocking
 
@@ -370,7 +405,7 @@ was refreshed.
   effect on one clip for a third of the export (`doc/PERFORMANCE-BASELINE.md`, 2026-09-24). The
   telemetry's `readbacks` counter is how to find the next one: every new payload in the corpus
   should be run full-GPU and any readback count much above its clip-transition count explained.
-  Since 6 the expected count is 0 (1 with a wide blur: the filter probe). Uploads have their own
+  Since 6 the expected count is 0. Uploads have their own
   counter (`GpuCounters::Upload`); expect one per still and per LUT/tone table, plus one a frame
   per stream NVDEC does not take (the ProRes watermark).
 - Thread budgets from the cgroup (`FF_THREADS`/`OMP_THREADS` from `cpu.max` ÷ instances; W06) —
@@ -510,7 +545,7 @@ text and subtitle → encode on the device. What moved, beyond 5:
 | webm (VP8, VP9), HEVC, AV1 decode | software + host upload | NVDEC, kept on the device, bit-exact vs software (`unit.nvdec_on_device`); AV1 takes the native decoder (libdav1d has no hwaccel) |
 | overlay transitions (LIGHT_FOOTAGE, GLITCH) | QPainter compositing, overlay read back, mismatched overlay → CPU | GPU: overlay clip drawn on the GPU, host clip GPU-composited, `overlayPasses` resize the overlay |
 | zoom-out (ZOOM_IN / ZOOM_OUT) | readback + OpenCV, +11 ms at 1080p | resample_linear + zoom_out_pad, +0.2 ms, ≤ 1 LSB, sizes identical |
-| box blurs > 255 taps (BLUR_VERTICAL) | readback + OpenCV, +26 ms | up to 1023 taps on the GPU, wide ones two taps a fetch (`blur_pairs`): +16.7 ms, byte-identical; radius 230 +28 → +10.4 |
+| box blurs > 255 taps (BLUR_VERTICAL) | readback + OpenCV, +26 ms | up to 1023 taps on the GPU, wide ones two taps a fetch (`blur_pairs`): +16.7 ms, byte-identical; radius 230 +28 → +10.4 (superseded 2026-09-25: every blur is a new chain) |
 | CameraMovement | QPainter, readback | Skia draw on the GPU (owner: 47 dB at worst) |
 | Crop on a host frame (image, shape) | QPainter | uploaded once, cropped on the GPU |
 | diagonal blur, odd sizes > 1 MP; rotation at ±360 | CPU | GPU (odd sizes ≤ 1 LSB; the full turn is an identity) |
@@ -541,11 +576,11 @@ the background and the LUT/tone tables. The gate for all of it in the suite is `
   software decode, then `GpuYuv` for 4:2:0 or swscale otherwise.
 - **Still images and SVG shapes**: decoded / rasterised once on the CPU, uploaded once.
 - **Audio** (see "What runs where"), and the service's ffmpeg audio mux.
-- Past loop bounds no production preset reaches: a box blur over 1023 taps, a diagonal kernel over
-  513, a rotational blur over 30 iterations.
+- Past the loop bound no production preset reaches: a Gaussian whose low-size sigma needs more
+  than 64 taps a side (a sigma over ~1,300 px).
 
 **Owed:** the service's per-export telemetry line is not printed by `render-payload` (see "Known
 issues"), so the numbers above are gdb counts, not `ExportTelemetry`; and the editor needs a WASM
 built from the submodule's current `feature/gpu-rendering` for the new fragments (`zoom_out_pad`,
-`blur_pairs` with `linearSource`, `resample_*`) and `overlayPasses`.
+`resample_linear`, and since 2026-09-25 every blur's) and `overlayPasses`.
 

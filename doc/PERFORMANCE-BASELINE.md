@@ -553,3 +553,36 @@ readbacks (1 — the filter probe — where a wide blur runs), 0 QPainter draws,
 fallbacks; 144 swscale conversions and ~149 uploads, all of them the ProRes watermark's frames plus
 the background and two tables once. Wall times were not recorded: `render-payload` prints no
 `ExportTelemetry` line (see `GPU-RENDERING.md`, "Known issues").
+
+## 2026-09-25 — The blurs and the glow rebuilt for quality (owner: both paths, slower CPU accepted)
+
+What changed is in `doc/GPU-RENDERING.md` ("Decisions": the blurs; CLAUDE.md: the glow). RTX A2000
+laptop, mains power, nothing building, arms interleaved, two rounds.
+
+**Blurs, 1080p, one effect on one frame** (`openshot-gpu-effect-parity`'s cost tables: the GPU
+shader passes alone, and the C++ path with the device off), the committed code (`d3711d74`, built in
+a scratch worktree) against the new chains. Range over the tool's cases:
+
+| blur | GPU before → after | CPU before → after |
+|---|---:|---:|
+| Gaussian (40/40, 100/0, 0/60; new: 200/120, 200/0) | 3.0–11.1 → 0.33–0.55 ms | 15–19 → 13–15 ms |
+| diagonal (15, 40, 100) | 0.74–1.9 → 0.37–0.91 ms | 17–18 → 17–37 ms |
+| rotational (5°, 12°, 25°, 45°) | 1.4–3.7 → 2.4–3.7 ms | 64–181 → 61–98 ms |
+| zoom (20, 40, 100) | 2.2–11.0 → 2.2–3.0 ms | 23–52 → 61–79 ms |
+
+A standalone CPU microbenchmark of the effect functions at the presets' own values (1920x1080
+BGRA, best of 5): Gaussian 14.2 → 5.7 ms (40/40), 17.4 → 8.5–11 (0/360), 12.8 → 10.5 (230/0);
+diagonal 3.7–4.4 → 13.7–14.6 (57, 115: the old one ran at half size); rotational 50–56 → 53 (10°),
+75–77 → 71 (28°); zoom 20–21 → 45–46 (45, 55). The CPU twins are scalar; SIMD would recover zoom
+and diagonal without changing a byte.
+
+**Glow** (`openshot-bench --modes render --res 1080p`, 30–60 frames):
+
+| scenario | arm | old (0.40, 24 steps) | new (1.0, smooth steps) |
+|---|---|---:|---:|
+| `text_animated_glow_3` | GPU | 55.8 / 58.5 fps | 48.9 fps |
+| `text_animated_glow_3` | CPU | 2.4 / 2.5 fps | 0.1 fps (p95 11.9 s) |
+| `everything` | GPU | 23.9 / 27.4 fps | 20.1 / 21.7 fps |
+
+The intermediate (smooth steps at 0.40) was 50–62 fps GPU and 0.5 fps CPU: most of the CPU cost is
+the resolution, and the CPU glow runs on one core (the bench reports 1.0 cores).
