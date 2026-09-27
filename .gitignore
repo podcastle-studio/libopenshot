@@ -6,6 +6,7 @@
 /cmake-build-release
 /cmake-build-gpu
 /cmake-build-gpu-smoke
+/cmake-build-asan
 /build*
 *.DS_Store
 .pydevproject
