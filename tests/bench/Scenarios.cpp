@@ -10,6 +10,7 @@
 #include "effects/Enhancement.h"
 #include "effects/LightAdjustment.h"
 
+#include <algorithm>
 #include <sstream>
 
 using namespace golden;
@@ -71,6 +72,27 @@ std::string longSubtitles(const std::string& font, int width) {
         }
         o << "]}";
         t += 1500;
+    }
+    o << "]}";
+    return o.str();
+}
+
+// Word-by-word subtitles for `seconds` of timeline: a three-word segment every 1.5 s, the same
+// styling as longSubtitles(). For the long-project scenario.
+std::string subtitlesFor(const std::string& font, int width, double seconds) {
+    const std::string base = longSubtitles(font, width);
+    const std::string head = base.substr(0, base.find("\"segments\":[") + 12);
+    const char* words[] = {"Every", "frame", "should", "stay", "on", "the", "GPU", "from", "decode", "to", "encode", "today"};
+    std::ostringstream o;
+    o << head;
+    int n = 0;
+    for (int t = 0; t + 1500 <= static_cast<int>(seconds * 1000); t += 1500, ++n) {
+        o << (n ? "," : "") << "{\"id\":\"s" << n << "\",\"startTime\":" << t << ",\"endTime\":" << t + 1500
+          << ",\"visible\":true,\"attached\":true,\"wordDetails\":[";
+        for (int w = 0; w < 3; ++w)
+            o << (w ? "," : "") << "{\"word\":\"" << words[(n * 3 + w) % 12] << "\",\"startTime\":" << t + w * 500
+              << ",\"endTime\":" << t + (w + 1) * 500 << "}";
+        o << "]}";
     }
     o << "]}";
     return o.str();
@@ -268,6 +290,97 @@ const std::vector<BenchScenario>& scenarios() {
          t.animations = ta; t.track = 4;
          s.timeline->AddClip(textClip(s, t, s.fps.ToDouble()));
          s.timeline->LoadSubtitlesFromJsonString(longSubtitles(s.font("NotoSans-Bold.ttf"), s.width));
+         s.timeline->Open();
+     }},
+
+    // The heaviest single export we expect: everything on screen at once. Nine 4K sources in a
+    // grid (three with the full effect chain), a keyed clip with a LUT, two blend-mode layers,
+    // three animated glow texts and subtitles -- twelve decoders. Sizes a node's per-export
+    // memory; run it at 2160p with --parallel to find where a GPU runs out.
+    {"worst_case_4k", "nine 4K sources (three with the full effect chain), keyed clip + LUT, two blend layers, three glow texts, subtitles",
+     [](Scene& s) {
+         background(s);
+         for (int i = 0; i < 9; ++i) {
+             auto* c = video(s, "v2160_a.mp4", BBox{1.f / 6 + (i % 3) / 3.f, 1.f / 6 + (i / 3) / 3.f, 0.32f, 0.32f}, 1, i);
+             if (i % 3 == 0) {
+                 c->AddEffect(cropEffect(0.02, 0.02, 0.02, 0.02, 0.2));
+                 c->AddEffect(new openshot::Blur(12, 12, 0, 0, 0, 0, 0, 1, 1));
+                 c->AddEffect(new openshot::Enhancement(0.3, 0.6, 0.4));
+                 c->AddEffect(new openshot::ColorAdjustment(20, -10, 30, 20));
+                 c->AddEffect(new openshot::LightAdjustment(10, 20, -15, 15, 5, -5));
+                 c->AddEffect(new openshot::ColorMap(s.media("lut_example.cube")));
+                 c->Shadow(true); c->shadow_blur = openshot::Keyframe(20); c->shadow_distance = openshot::Keyframe(18);
+             }
+             s.timeline->AddClip(c);
+         }
+         auto* g = video(s, "v1080_green.mp4", BBox{0.5f, 0.5f, 0.5f, 0.5f}, 2, 0);
+         g->AddEffect(new openshot::ChromaKey(openshot::Color(0, 255, 0, 0), 70, 20, openshot::CHROMAKEY_YCBCR));
+         g->AddEffect(new openshot::ColorMap(s.media("lut_example.cube")));
+         s.timeline->AddClip(g);
+         const openshot::BlendMode modes[] = {openshot::BLEND_SCREEN, openshot::BLEND_SOFT_LIGHT};
+         for (int i = 0; i < 2; ++i) {
+             auto* b = video(s, "v1080_overlay.mp4", BBox{0.5f, 0.5f, 1.f, 1.f}, 3, i);
+             b->Blend(modes[i]);
+             s.timeline->AddClip(b);
+         }
+         const char* words[] = {"Worst case", "EVERYTHING", "ALL AT ONCE"};
+         const char* glows[] = {"#40C0FF", "#FF8040", "#40FF80"};
+         for (int i = 0; i < 3; ++i) {
+             auto t = text(s, words[i], 14.0 + 4 * i, 0.5f, 0.2f + 0.3f * i, true);
+             t.style.glowColor = glows[i]; t.style.glowIntensityRatio = 0.9; t.style.glowRangeRatio = 0.6;
+             TextAnimations ta; ta.inAnimationId = "rise-chars"; ta.inAnimationDuration = 1.5; ta.loopAnimationId = "pulse"; ta.loopAnimationDuration = 1.0;
+             t.animations = ta; t.track = 4; t.priority = i;
+             s.timeline->AddClip(textClip(s, t, s.fps.ToDouble()));
+         }
+         s.timeline->LoadSubtitlesFromJsonString(longSubtitles(s.font("NotoSans-Bold.ttf"), s.width));
+         s.timeline->Open();
+     }},
+
+    // A long project with many short clips: 10 minutes, a new main clip every 4 s joined by a
+    // 1 s transition (~150 clips), a PiP every 20 s, a 2 s text clip every 3 s (~200, half of
+    // them animated with glow), subtitles throughout. Whether memory grows as clips open and
+    // close over an hour-long export shows here, not in the 6 s scenarios. Run it with
+    // --frames 18000.
+    {"long_many_clips", "10-minute project: ~150 clips joined by transitions, PiPs, ~200 text clips (half animated glow), subtitles throughout",
+     [](Scene& s) {
+         background(s);
+         const double fps = s.fps.ToDouble();
+         const double total = 600.0;
+         const char* files[] = {"v1080_a.mp4", "v1080_b.mp4", "v1080_c.mp4", "v2160_a.mp4"};
+         const TransitionEffect sets[][3] = {
+             {TransitionEffect::Zoom, TransitionEffect::Blur, TransitionEffect::Alpha},
+             {TransitionEffect::CircleMask, TransitionEffect::Alpha, TransitionEffect::Alpha},
+             {TransitionEffect::RotationalBlur, TransitionEffect::Alpha, TransitionEffect::Alpha},
+             {TransitionEffect::ZoomBlur, TransitionEffect::Alpha, TransitionEffect::Alpha}};
+         std::vector<openshot::Clip*> mains;
+         for (int i = 0; i * 4.0 < total; ++i) {
+             const double start = i * 4.0, end = std::min(total, start + 5.0);   // 1 s overlap with the next
+             // Each source is 6-8 s long; start every clip at the file's beginning.
+             mains.push_back(video(s, files[i % 4], BBox{0.5f, 0.5f, 0.96f, 0.96f}, 1, i % 2, start, end));
+         }
+         for (size_t i = 0; i + 1 < mains.size(); ++i) {
+             const auto& set = sets[i % 4];
+             if (i % 4 == 0) applyOverlappingTransition(*mains[i], *mains[i + 1], 1.0, fps, {set[0], set[1], set[2]});
+             else applyOverlappingTransition(*mains[i], *mains[i + 1], 1.0, fps, {set[0], set[1]});
+         }
+         for (auto* m : mains) s.timeline->AddClip(m);
+         for (int i = 0; i * 20.0 + 10.0 <= total; ++i) {
+             auto* pip = video(s, files[(i + 1) % 3], BBox{0.8f, 0.75f, 0.3f, 0.3f}, 2, 0, i * 20.0 + 5.0, i * 20.0 + 11.0);
+             pip->AddEffect(cropEffect(0.0, 0.0, 0.0, 0.0, 0.25));
+             pip->Shadow(true); pip->shadow_blur = openshot::Keyframe(16); pip->shadow_distance = openshot::Keyframe(12);
+             s.timeline->AddClip(pip);
+         }
+         for (int i = 0; i * 3.0 + 2.0 <= total; ++i) {
+             auto t = text(s, i % 2 ? "Chapter " + std::to_string(i) : "Lower third " + std::to_string(i), 9.0, 0.5f, 0.12f, true);
+             t.start = i * 3.0; t.end = i * 3.0 + 2.0; t.track = 3;
+             if (i % 2) {
+                 t.style.glowColor = "#40C0FF"; t.style.glowIntensityRatio = 0.8; t.style.glowRangeRatio = 0.5;
+                 TextAnimations ta; ta.inAnimationId = "rise-chars"; ta.inAnimationDuration = 0.8;
+                 t.animations = ta;
+             }
+             s.timeline->AddClip(textClip(s, t, fps));
+         }
+         s.timeline->LoadSubtitlesFromJsonString(subtitlesFor(s.font("NotoSans-Bold.ttf"), s.width, total));
          s.timeline->Open();
      }},
     };
