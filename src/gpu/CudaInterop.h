@@ -126,6 +126,11 @@ namespace openshot
 		/// stay alive as objects but go invalid.
 		static void Shutdown();
 
+		/// Construct the statics Shutdown() uses, taking no lock -- it is called from inside
+		/// available() (via GpuDevice's initialisation), where Shutdown() would deadlock. GpuDevice
+		/// calls it before registering its exit-time teardown, so they outlive that teardown.
+		static void ConstructStatics();
+
 		/// Is there a CUDA context sharing memory with the Vulkan device? Sets it
 		/// up on the first call. False is a normal answer; see lastError().
 		bool available();

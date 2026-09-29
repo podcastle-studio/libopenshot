@@ -61,6 +61,12 @@ GpuSurfacePool& GpuSurfacePool::Instance()
 	return pool;
 }
 
+void GpuSurfacePool::ConstructStatics()
+{
+	(void)poolRegistryMutex();
+	(void)poolRegistry();
+}
+
 void GpuSurfacePool::DiscardAllPools()
 {
 	std::lock_guard<std::mutex> lock(poolRegistryMutex());

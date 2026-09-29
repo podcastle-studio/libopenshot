@@ -190,7 +190,34 @@ public:
 			return false;
 
 		usable = true;
+		registerExitTeardown();
 		return true;
+	}
+
+	// Tear the device down at exit while the driver is still there. Exit handlers run in reverse
+	// order of registration, and the device slot's own static destructor was registered at the
+	// first Instance() -- before vkCreateInstance loaded the driver, which registers its own
+	// cleanup. So the driver went first and ~Recorder -> ~VulkanResourceProvider called into it
+	// after it was gone: SIGSEGV on every exit in a container (2026-09-28; the host's library
+	// load order happened to hide it). Registered here, once the driver is loaded, this runs
+	// before the driver's cleanup, and through DestroyInstance() it also keeps the ordered
+	// teardown (pools, CUDA interop, then the device) the bare slot destructor skipped.
+	//
+	// Everything DestroyInstance() touches has to outlive the handler, and function-local statics
+	// are destroyed in reverse order of construction relative to it -- so they are all constructed
+	// here first. CudaInterop's slot, built lazily after this, was destroyed before the handler ran
+	// and Shutdown() read freed memory (lavapipe, 2 of 3 golden runs). ConstructStatics() takes no
+	// lock: this runs inside CudaInterop::available() when NVDEC setup is what first starts the
+	// device, and calling Shutdown() here deadlocked on the interop's own mutex.
+	static void registerExitTeardown()
+	{
+		static std::once_flag once;
+		std::call_once(once, [] {
+			GpuSurfacePool::ConstructStatics();
+			CudaInterop::ConstructStatics();
+			(void)GpuDevice::Generation();
+			std::atexit([] { GpuDevice::DestroyInstance(); });
+		});
 	}
 
 	void teardown()

@@ -1059,6 +1059,12 @@ CudaInterop::CudaInterop() : impl(new Impl) {}
 
 CudaInterop::~CudaInterop() = default;
 
+void CudaInterop::ConstructStatics()
+{
+	(void)interopSlotMutex();
+	(void)interopSlot();
+}
+
 CudaInterop& CudaInterop::Instance()
 {
 	std::lock_guard<std::mutex> lock(interopSlotMutex());
@@ -1251,6 +1257,7 @@ CudaInterop& CudaInterop::Instance()
 }
 
 void CudaInterop::Shutdown() {}
+void CudaInterop::ConstructStatics() {}
 bool CudaInterop::available() { return false; }
 std::string CudaInterop::lastError() const { return impl->error; }
 std::string CudaInterop::deviceName() const { return std::string(); }

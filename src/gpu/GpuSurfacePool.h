@@ -53,6 +53,10 @@ namespace openshot
 		/// requirement as DestroyInstance(): no other thread may be rendering.
 		static void DiscardAllPools();
 
+		/// Construct the statics DiscardAllPools() uses, taking no lock. GpuDevice calls it before
+		/// registering its exit-time teardown, so they are destroyed after that teardown runs.
+		static void ConstructStatics();
+
 		/// A render target of this size, colour type and colour space, or null when
 		/// the GPU is unavailable or allocation failed. Call release() when finished.
 		///
