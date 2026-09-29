@@ -586,3 +586,36 @@ and diagonal without changing a byte.
 
 The intermediate (smooth steps at 0.40) was 50–62 fps GPU and 0.5 fps CPU: most of the CPU cost is
 the resolution, and the CPU glow runs on one core (the bench reports 1.0 cores).
+
+## 2026-09-28/29 — Cloud GPUs: RunPod and a GCP L4 (choosing the production GPU)
+
+Every GPU path on (the service's configuration: Vulkan compositing, NVDEC + GPU decode, GPU crop,
+NVENC p4 from the GPU, pipeline threading), the bench matrix plus 1/2/4/8 exports at once. One host
+per GPU, so the host CPU is part of the result (RunPod: AMD EPYC Zen 2–4; GCP g2-standard-8: Xeon
+2.2 GHz, 8 vCPU). Raw results: `tests/bench/results/cloud-2026-09-29/` (`summary.md` per GPU × case:
+fps, cores, GPU/NVENC/NVDEC %, VRAM, $ per video-hour). Full report with sizing and the
+recommendation: https://claude.ai/artifact/WUpNvt7pb3isZyADpXpWkK. The tooling (bundle, pod and VM
+scripts) is local, git-ignored, in `tmp/runpod-bench/` (`RESUME.md`).
+
+**One export, fps of the whole export** (30 fps = real time):
+
+| scenario | RTX PRO 4000 | L4 (GCP) | RTX 4000 Ada | RTX 3090 | PRO 6000 MIG 24GB |
+|---|---:|---:|---:|---:|---:|
+| 1080p `single_video` | 316 | 274 | 235 | 235 | 73 |
+| 1080p `transitions_chain` | 63 | 72 | 32 | 35 | 3 |
+| 1080p `text_animated_glow_3` | 107 | 98 | 74 | 102 | — |
+| 1080p `everything` | 118 | 113 | 94 | 100 | 0.1 |
+| 2160p `everything` | 88 | 81 | 70 | 73 | — |
+| `everything`, best of 1/2/4/8 at once (aggregate) | 165 | 140 | 131 | 149 | — |
+| price per hour | $0.57 | $0.854 ($0.512 spot) | $0.28 | $0.50 | $0.59 |
+| $ per video-hour, `everything` at best density | 0.104 | 0.183 | 0.064 | 0.101 | — |
+
+- The MIG slice has no Vulkan (graphics are unavailable on MIG), so it composites on the CPU.
+- 3 of 4 RunPod RTX 3090 hosts refused NVENC, and one RTX PRO 4000 host was stuck at idle clocks.
+  Check the host before trusting its numbers.
+- **Sizing** (new bench scenarios `worst_case_4k`, `long_many_clips`): the worst case uses
+  8.4 / 9.4 GB of GPU memory per export (1080p / 4K output) on the Ada and 7.5 / 8.6 GB on the L4,
+  plus 2.4–3.3 GB of RAM. Two fit on 20–24 GB. At three or four the GPU fills up and every export
+  falls to ~0.5 fps (CPU fallback, **no error**). The 10-minute, 380-clip project uses 2.1–2.3 GB,
+  and its GPU memory creeps ~1 MB per clip played ("Known issues").
+- 1080p `transitions_chain` is slower than the same scenario at 4K output on every GPU. Unexplained.

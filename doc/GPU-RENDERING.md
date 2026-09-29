@@ -293,6 +293,23 @@ without the "revisit if" condition being true.
 - **FFmpegWriter's raw-video path frees each frame buffer twice** (read, not run: nothing here
   encodes rawvideo): `av_packet_from_data` hands `frame_final->data[0]` to the packet, the muxer
   releases it, and `write_frame` then `av_freep`s it.
+- **Running out of GPU memory is silent** (cloud sizing, 2026-09-29): once concurrent exports
+  fill the GPU, allocations fail, the paths fall back to the CPU, and every export drops to
+  ~0.5 fps with no error and no log line. The worst-case payload uses 7.5–9.4 GB of GPU memory,
+  so three or four at once fill a 20–24 GB card. The service needs admission control (the
+  report's rule: estimate each export, keep the sum ≤ 16 GB on 20 GB, ≤ 19 GB on 24 GB, at most 4),
+  and a fallback counter in `GpuCounters` should make this visible in the telemetry line.
+- **GPU memory creeps ~1 MB per clip played** (`long_many_clips`, 380 clips: 1.8 → 2.0 GB on the
+  L4; RAM levels off). Probably per-clip GPU caches kept after a clip ends. Not investigated.
+- **1080p `transitions_chain` is slower than at 4K output on every GPU** measured (Ada 32 vs 72 fps,
+  L4 72 vs 95). Unexplained. The p95 frame time at 1080p is ~100 ms, which suggests a stall rather than
+  work.
+- **GPU nodes need libraries the stock images lack**, or the service silently renders and encodes
+  on the CPU. In a plain container the NVIDIA Vulkan ICD needs `libxcb-glx0 libx11-xcb1 libegl1
+  libx11-6 libxext6`. GCP's `ubuntu-accelerator-2404-amd64-with-nvidia-580` ships only the compute
+  half of the driver, so it also needs `libnvidia-gl-580-server`, `libnvidia-encode-580-server` and
+  `libnvidia-decode-580-server` at the loaded driver's exact version. MIG slices have no Vulkan at
+  all. `tools/gpu-preflight.sh` on the node is the check.
 - **`unit.hardware_decode` leaves `HARDWARE_DECODER=2` set when the reader throws**, so on a
   machine where CUDA cannot start every later scenario that decodes video fails too (seen under
   ASan before `protect_shadow_gap=0`). The harness should restore Settings with a guard.
@@ -327,6 +344,17 @@ goldens re-baselined; `unit.gpu_blur_large` now covers all four at production si
 `unit.gpu_blur_pairs` is gone with `blur_pairs`. The editor needs the new shaders and a new WASM
 (12). The service must be rebuilt against the new library to pick it up.
 
+**Also done 2026-09-28/29: the GPU device tears down before the driver at exit, and the cloud
+benchmark.** Every process that had used the GPU crashed on exit (SIGSEGV) in a container: the device's
+static destructor ran after the NVIDIA driver's own cleanup. `GpuDevice` now registers
+`DestroyInstance()` with `atexit` once the driver is loaded, after constructing every static the
+teardown touches. Those statics are built without taking a lock (`GpuSurfacePool::ConstructStatics`,
+`CudaInterop::ConstructStatics`), because the first call can come from inside
+`CudaInterop::available()`. Four RunPod GPUs and a GCP L4 were benchmarked
+(`doc/PERFORMANCE-BASELINE.md`, "Cloud GPUs"). The RTX 4000 Ada is the best value, the RTX PRO 4000
+the fastest, and the L4 the choice on GCP, at ~3× the Ada's cost per video-hour. New bench scenarios
+`worst_case_4k` and `long_many_clips` size concurrency.
+
 **What is left is decisions, infrastructure and final checks.** In the order they should happen:
 
 ### 1. Owner decisions
@@ -351,10 +379,15 @@ goldens re-baselined; `unit.gpu_blur_large` now covers all four at production si
 5. **Build and pin the real service image** (W01): the build-stage base is in a private registry
    (`gcloud auth login`, then `docker build`); pin both bases by digest; confirm the build stage has
    the Skia headers; deploy to a CPU node and a GPU node (deployment values are another team's; the service needs no GPU env). The GPU
-   node needs `libcuda` and the Vulkan ICD (`NVIDIA_DRIVER_CAPABILITIES` including `graphics`).
+   node needs `libcuda` and the Vulkan ICD (`NVIDIA_DRIVER_CAPABILITIES` including `graphics`), and
+   the runtime stage needs the X/EGL client libraries the ICD loads (see "Known issues"; not yet
+   checked in the service's Dockerfile).
    Gate: one export on each; the CPU node's output identical to today's; `tools/gpu-preflight.sh`
    shows NVENC and the NVIDIA ICD on the GPU node.
-6. **Density on the target GPU** (W30, L4 owed): `openshot-bench --parallel 1,2,4` with every flag
+6. **Density on the target GPU** (W30). **Measured 2026-09-29** on the RTX 4000 Ada, RTX PRO 4000,
+   RTX 3090 and L4 (`doc/PERFORMANCE-BASELINE.md`, "Cloud GPUs"). Owed: the owner's choice of GPU,
+   then admission control in the service (see "Known issues": running out of GPU memory is silent).
+   What was planned: `openshot-bench --parallel 1,2,4` with every flag
    on; set `SERVICE_NUM_INSTANCES_PARALLEL`, GPU time-slicing and pod requests from it. The laptop
    says a GPU-bound export already keeps the GPU ~85 % busy, so the unit of density is the GPU, and
    **2 exports per GPU** is the indicative start.
@@ -372,7 +405,9 @@ goldens re-baselined; `unit.gpu_blur_large` now covers all four at production si
    `ENCODER=h264_nvenc`, `OPENSHOT_BENCH_GPU_DECODE=1 OPENSHOT_BENCH_HW_DECODE=2
    OPENSHOT_BENCH_GPU_ENCODE=1 OPENSHOT_BENCH_GPU_CROP=1 OPENSHOT_BENCH_PIPELINE=1`), recorded in
    `doc/PERFORMANCE-BASELINE.md` as the GPU baseline, and the restated gates (4) checked against it.
-10. **Payload corpus 1 → 6** (W04): text animations, subtitles, a transition-heavy timeline, chroma
+10. **Payload corpus 1 → 6** (W04). **The one recorded hash is stale since the 2026-09-25 blurs and
+    glow**: re-record it with the GPU off (`tests/payloads/run-corpus.sh update`) once the owner
+    approves the new look. Until then the corpus gate is expected to fail. The planned work: text animations, subtitles, a transition-heavy timeline, chroma
     key, a 4K source — fresh captures, media archived the same day (signed URLs last 24 h). Each
     rendered on the CPU and full-GPU: hash-stable across two rounds, the CPU render matching its
     recorded hash, and **CPU vs full-GPU compared** frame by frame with the *same* encoder
