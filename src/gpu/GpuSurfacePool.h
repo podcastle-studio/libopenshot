@@ -2,6 +2,7 @@
 
 // Reuses GPU render targets instead of allocating one per frame.
 
+#include <chrono>
 #include <cstddef>
 #include <memory>
 #include <vector>
@@ -26,11 +27,22 @@ namespace openshot
 	 * created it, and GpuDevice hands out one recorder per thread, so Instance()
 	 * returns a thread-local pool. Never move a surface between threads.
 	 *
-	 * The pool holds surfaces until clear(), GpuDevice::ReleaseThreadResources()
-	 * or thread exit (which calls it). Nothing here is a cache with an eviction
-	 * policy: the render path uses a handful of distinct sizes per export, and a
-	 * thread that outlives its export (a service's worker thread) should call
-	 * ReleaseThreadResources() when the export is done rather than keep them.
+	 * **Idle surfaces are evicted.** A surface nobody has acquired for
+	 * IdleLimit() (default 2 s, `OPENSHOT_GPU_POOL_IDLE_MS`) is dropped on the next
+	 * acquire(), and so is the least recently used idle surface while the idle set
+	 * exceeds IdleBytesLimit() (default 512 MiB, `OPENSHOT_GPU_POOL_IDLE_MB`). The
+	 * sizes an export uses are not a handful: every text clip has its own frame
+	 * size, and a keyframed glow's working surface grew by a few pixels every frame
+	 * -- a 4K export with 45 text clips held 2.7 GB in 90 surfaces with 10 in use
+	 * (2026-09-30). Anything drawn every frame is reused as before; what a finished
+	 * clip leaves behind goes within seconds. Dropping a surface only makes its
+	 * texture purgeable in the recorder's cache, so an eviction also asks
+	 * GpuDevice to clean up what has sat unused that long.
+	 *
+	 * The rest is held until clear(), GpuDevice::ReleaseThreadResources() or
+	 * thread exit (which calls it); a thread that outlives its export (a
+	 * service's worker thread) should call ReleaseThreadResources() when the
+	 * export is done.
 	 */
 	class GpuSurfacePool
 	{
@@ -43,6 +55,8 @@ namespace openshot
 			std::size_t in_use = 0;    ///< handed out and not yet released
 			std::size_t idle = 0;      ///< held on the free list
 			std::size_t bytes = 0;     ///< approximate VRAM held (4 bytes/px)
+			std::size_t idle_bytes = 0; ///< the part of @c bytes on the free list
+			std::size_t evicted = 0;   ///< idle surfaces dropped by the eviction policy
 		};
 
 		/// This thread's pool
@@ -67,10 +81,12 @@ namespace openshot
 		/// the GPU is unavailable or allocation failed. Call release() when finished.
 		///
 		/// The surface's canvas comes back in the state a new surface's would be —
-		/// identity transform, no clip, empty save stack — because a recycled
-		/// surface otherwise carries the previous user's transform, which is not
-		/// part of the pixels and so survives clearing them. Its CONTENTS are still
-		/// undefined; clear them.
+		/// identity transform, empty save stack, and no clip beyond one set at the
+		/// base save level — because a recycled surface otherwise carries the
+		/// previous user's transform, which is not part of the pixels and so
+		/// survives clearing them. SkCanvas gives no way to drop a base-level clip,
+		/// so a user that clips must do so inside a save(); GpuOffscreen does. Its
+		/// CONTENTS are still undefined; clear them.
 		///
 		/// @a color_space defaults to null, which is Skia's legacy mode: no gamma
 		/// conversion on blending or on readback. That is deliberate — the raster
@@ -89,6 +105,18 @@ namespace openshot
 
 		Stats stats() const;
 
+		/// How long a surface may sit idle before acquire() drops it
+		/// (`OPENSHOT_GPU_POOL_IDLE_MS`, default 2000; 0 keeps every idle surface).
+		static std::chrono::milliseconds IdleLimit();
+
+		/// Idle bytes the pool keeps at most, least recently used dropped first
+		/// (`OPENSHOT_GPU_POOL_IDLE_MB`, default 512; 0 = no cap).
+		static std::size_t IdleBytesLimit();
+
+		/// Override both limits for every pool in the process (a service's config, or a
+		/// test). Takes effect on the next acquire() on each thread.
+		static void SetIdlePolicy(std::chrono::milliseconds idle_limit, std::size_t idle_bytes_limit);
+
 		/// Every pool in the process at once, from counters kept as surfaces come
 		/// and go (no pool is walked, so any thread may ask while others render).
 		/// @c misses counts release() calls that matched nothing: a surface given
@@ -101,6 +129,7 @@ namespace openshot
 			std::size_t in_use = 0;
 			std::size_t bytes = 0;
 			std::size_t misses = 0;
+			std::size_t evicted = 0;
 		};
 		static GlobalStats Global();
 
@@ -119,6 +148,7 @@ namespace openshot
 			sk_sp<SkColorSpace> color_space;
 			sk_sp<SkSurface> surface;
 			bool in_use = false;
+			std::chrono::steady_clock::time_point last_used;   ///< last acquire or release
 		};
 
 		/// Put a recycled surface's canvas back into a new surface's state
@@ -129,6 +159,9 @@ namespace openshot
 
 		/// Drop every surface, in use or not
 		void discardAll();
+
+		/// Apply the eviction policy to the free list; see the class comment.
+		void evictIdle(std::chrono::steady_clock::time_point now);
 
 		std::vector<Entry> entries;
 		Stats counters;

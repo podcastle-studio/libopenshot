@@ -904,6 +904,12 @@ void FFmpegReader::Open() {
 			CheckFPS();
 		}
 
+		// Audio the caller does not want is treated as absent: its packets are dropped unread
+		// and frames are final as soon as the video stream is past them (see DecodeAudio()).
+		// Before the Seek below, whose override keeps it through every reopen.
+		if (!decode_audio)
+			info.has_audio = false;
+
 		// Mark as "open"
 		is_open = true;
 
@@ -912,6 +918,12 @@ void FFmpegReader::Open() {
 			Seek(1);
 		}
 	}
+}
+
+void FFmpegReader::DecodeAudio(bool enable) {
+	decode_audio = enable;
+	if (is_open)
+		info.has_audio = enable && audioStream != -1;
 }
 
 void FFmpegReader::Close() {

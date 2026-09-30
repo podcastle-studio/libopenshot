@@ -10,6 +10,7 @@
 #include "GpuSurfacePool.h"
 
 #include <atomic>
+#include <chrono>
 #include <cstdlib>
 #include <cstring>
 #include <map>
@@ -446,6 +447,7 @@ private:
 		backend_context.fMemoryAllocator = allocator;
 
 		skgpu::graphite::ContextOptions options;
+		options.fGpuBudgetInBytes = GpuDevice::ContextBudgetBytes();
 		context = skgpu::graphite::ContextFactory::MakeVulkan(backend_context, options);
 		if (!context) {
 			error = "graphite::ContextFactory::MakeVulkan failed";
@@ -614,6 +616,61 @@ GpuDevice::MemoryStats GpuDevice::Memory()
 	return stats;
 }
 
+std::size_t GpuDevice::ContextBudgetBytes()
+{
+	static const std::size_t budget = [] {
+		const std::size_t fallback = static_cast<std::size_t>(256) << 20;   // Skia's kDefaultContextBudget
+		const char* value = std::getenv("OPENSHOT_GPU_BUDGET_MB");
+		if (!value || !*value)
+			return fallback;
+		char* end = nullptr;
+		const long long mib = std::strtoll(value, &end, 10);
+		if (end == value || mib <= 0)
+			return fallback;
+		return static_cast<std::size_t>(mib) << 20;
+	}();
+	return budget;
+}
+
+namespace
+{
+	// OPENSHOT_GPU_CLEANUP=0 turns every deferred cleanup off (diagnosis: is a purge what
+	// broke something?). Read once.
+	bool cleanupEnabled()
+	{
+		static const bool enabled = [] {
+			const char* value = std::getenv("OPENSHOT_GPU_CLEANUP");
+			return !(value && *value == '0');
+		}();
+		return enabled;
+	}
+}
+
+void GpuDevice::PerformDeferredCleanup(std::chrono::milliseconds not_used_for)
+{
+#ifdef OPENSHOT_HAVE_SKIA_GPU
+	if (!cleanupEnabled())
+		return;
+	if (not_used_for.count() < 0)
+		not_used_for = std::chrono::milliseconds(0);
+	// Under the slot lock, so the device cannot be torn down mid-way.
+	std::lock_guard<std::mutex> slot_lock(deviceSlotMutex());
+	GpuDevice* device = deviceSlot().get();
+	if (!device || !device->impl || !device->impl->context)
+		return;
+	{
+		std::lock_guard<std::mutex> lock(device->impl->recorder_mutex);
+		auto it = device->impl->recorders.find(std::this_thread::get_id());
+		if (it != device->impl->recorders.end() && it->second)
+			it->second->performDeferredCleanup(not_used_for);
+	}
+	std::lock_guard<std::mutex> lock(device->impl->context_mutex);
+	device->impl->context->performDeferredCleanup(not_used_for);
+#else
+	(void)not_used_for;
+#endif
+}
+
 std::size_t GpuDevice::RecorderCount()
 {
 #ifdef OPENSHOT_HAVE_SKIA_GPU
@@ -746,8 +803,24 @@ bool GpuDevice::submit(bool syncToCpu, const unsigned long long* wait_semaphores
 	}
 	if (impl->context->insertRecording(info) != skgpu::graphite::InsertStatus::kSuccess)
 		return false;
-	return impl->context->submit(syncToCpu ? skgpu::graphite::SyncToCpu::kYes
-										   : skgpu::graphite::SyncToCpu::kNo);
+	const bool submitted = impl->context->submit(syncToCpu ? skgpu::graphite::SyncToCpu::kYes
+														   : skgpu::graphite::SyncToCpu::kNo);
+
+	// Once a second, let go of what nobody has used for the pool's idle limit: the
+	// snapshot copies and layers Skia made for frames that are long encoded. Without this
+	// the context cache only shrinks when it crosses its budget, and live surfaces can hold
+	// it above the budget for the whole export, so purgeable ones then never go.
+	static std::atomic<long long> last_cleanup_ms{0};
+	const long long now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+								 std::chrono::steady_clock::now().time_since_epoch()).count();
+	long long last = last_cleanup_ms.load(std::memory_order_relaxed);
+	if (cleanupEnabled() && now_ms - last >= 1000 &&
+		last_cleanup_ms.compare_exchange_strong(last, now_ms, std::memory_order_relaxed)) {
+		const std::chrono::milliseconds idle = GpuSurfacePool::IdleLimit();
+		impl->context->performDeferredCleanup(idle.count() > 0 ? idle : std::chrono::milliseconds(2000));
+		rec->performDeferredCleanup(idle.count() > 0 ? idle : std::chrono::milliseconds(2000));
+	}
+	return submitted;
 }
 
 const GpuDevice::VulkanHandles* GpuDevice::vulkanHandles()

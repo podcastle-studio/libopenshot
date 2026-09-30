@@ -1194,7 +1194,7 @@ void golden::registerUnitScenarios() {
             openshot::Settings* settings = openshot::Settings::Instance();
             const bool previous = settings->GPU_CROP;
             int worst_inside = 0, band_worst = 0;
-            bool stayed_on_gpu = true;
+            bool stayed_on_gpu = true, create_failed = false;
             for (const Case& c : cases) {
                 const auto run = [&](bool on_gpu) {
                     settings->GPU_CROP = on_gpu;
@@ -1206,6 +1206,12 @@ void golden::registerUnitScenarios() {
                     crop.y = openshot::Keyframe(c.sy);
                     auto frame = std::make_shared<openshot::Frame>(1, W, H, "#000000");
                     auto gpu = openshot::GpuFrame::Create(W, H);
+                    // A null here is a failed surface allocation, which is a result to report, not
+                    // a crash (one full Vulkan run segfaulted on it, 2026-09-30).
+                    if (!gpu) {
+                        create_failed = true;
+                        return std::make_shared<QImage>(*image);
+                    }
                     gpu->upload(SkPixmap(SkImageInfo::Make(W, H, kRGBA_8888_SkColorType, kPremul_SkAlphaType),
                                          image->constBits(), image->bytesPerLine()));
                     frame->AttachGpuFrame(gpu);
@@ -1239,9 +1245,10 @@ void golden::registerUnitScenarios() {
             char detail[192];
             std::snprintf(detail, sizeof(detail),
                           "away from the outline: max delta %d (gate 2); within 2 px of it: %d "
-                          "(rasteriser, not gated); stayed on the GPU: %s",
-                          worst_inside, band_worst, stayed_on_gpu ? "yes" : "no");
-            checks.push_back({"gpu_crop", worst_inside <= 2 && stayed_on_gpu, detail});
+                          "(rasteriser, not gated); stayed on the GPU: %s%s",
+                          worst_inside, band_worst, stayed_on_gpu ? "yes" : "no",
+                          create_failed ? "; GpuFrame::Create returned null" : "");
+            checks.push_back({"gpu_crop", worst_inside <= 2 && stayed_on_gpu && !create_failed, detail});
         });
 
     // Per-export telemetry (W31): the counters move with the work, and the report carries the

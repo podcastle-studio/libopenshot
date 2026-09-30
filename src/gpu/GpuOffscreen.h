@@ -36,6 +36,16 @@ namespace openshot
 	 * A GPU offscreen falls back to raster whenever the pool cannot hand one out,
 	 * so valid() is about running out of memory, not about the GPU being off.
 	 *
+	 * **A GPU offscreen is padded.** The pooled surface is the requested size
+	 * rounded up to a multiple of kSizeStep in each dimension, its canvas clipped to
+	 * the requested rectangle, and snapshot() copies only that rectangle -- so the
+	 * pixels are those of an exact-size surface (the clip bounds every blur layer
+	 * exactly as the surface edge did) while surfaces whose size drifts by a few
+	 * pixels a frame, or differs a little between clips, share one pooled
+	 * allocation instead of taking a new one each. A 4K block bake whose glow
+	 * margin is keyframed took a fresh ~40 MB surface every frame before this. The
+	 * raster branch stays exact: those surfaces are freed when the offscreen dies.
+	 *
 	 * @note The pooled surface is returned to the pool when the GpuOffscreen dies,
 	 * so it must outlive any drawing into its canvas — but not the image from
 	 * snapshot(), which is a genuine copy of the contents.
@@ -50,6 +60,16 @@ namespace openshot
 		/// An offscreen of this size in the same memory as @a target. Invalid only
 		/// when allocation failed; a raster @a target simply gets a raster surface.
 		static GpuOffscreen Match(const SkCanvas* target, int width, int height);
+
+		/// The step a GPU offscreen's pooled surface is rounded up to, in pixels
+		static constexpr int kSizeStep = 256;
+
+		/// Round a dimension up to the pool step used for GPU offscreens
+		static int PaddedSize(int size);
+
+		/// The size that was asked for (the drawable, snapshotted area)
+		int width() const { return offscreen_width; }
+		int height() const { return offscreen_height; }
 
 		GpuOffscreen() = default;
 
@@ -79,5 +99,7 @@ namespace openshot
 	private:
 		std::shared_ptr<GpuFrame> gpu_frame;
 		sk_sp<SkSurface> raster_surface;
+		int offscreen_width = 0;
+		int offscreen_height = 0;
 	};
 }

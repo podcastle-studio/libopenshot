@@ -370,8 +370,22 @@ sk_sp<SkImage> TextGlowRenderer::paintGlowFromSilhouette(
     const bool gpuDestination = GpuOffscreen::IsGpuBacked(canvas);
     std::shared_ptr<GpuFrame> gpuFrame;
     sk_sp<SkImage> source = image;
+    // The working surface's size follows the beam reach, and a keyframed rayLen or light offset
+    // moves that by a few pixels every frame. Pooled surfaces are keyed by exact size, so at 4K
+    // every frame of such a clip took a new ~40 MB surface and left the last one idle: 2.7 GB
+    // in 90 surfaces for one 45-clip export (2026-09-30). When the glow stays on the GPU, ask
+    // for the size rounded up to a coarse step and draw into the top-left gsw x gsh of it,
+    // clipped, so a clip's frames share a handful of surfaces. The pixels are the same: the
+    // clip bounds the blur layers exactly as the surface edge did, and only that rectangle is
+    // snapshotted. The readback path below keeps the exact size (it reads the whole surface).
+    int poolW = gsw, poolH = gsh;
+    if (gpuDestination && GpuDevice::Instance().available()) {
+        constexpr int kSurfaceStep = 256;
+        poolW = (gsw + kSurfaceStep - 1) / kSurfaceStep * kSurfaceStep;
+        poolH = (gsh + kSurfaceStep - 1) / kSurfaceStep * kSurfaceStep;
+    }
     if (GpuDevice::Instance().available())
-        gpuFrame = GpuFrame::Create(gsw, gsh);
+        gpuFrame = GpuFrame::Create(poolW, poolH);
     if (gpuFrame) {
         // Graphite will not upload the raster silhouette on our behalf: a raster image
         // used as a shader is dropped with "Couldn't convert SkImage to a
@@ -412,6 +426,12 @@ sk_sp<SkImage> TextGlowRenderer::paintGlowFromSilhouette(
     // Pooled GPU surfaces are recycled, so this clear is load-bearing there, not
     // just tidiness as it is for a fresh raster surface.
     gc->clear(SK_ColorTRANSPARENT);
+    // Inside a save(): a clip at the base level would survive the surface's return to the
+    // pool and cut its next user down to this size (see GpuOffscreen::Match).
+    if (poolW != gsw || poolH != gsh) {
+        gc->save();
+        gc->clipRect(SkRect::MakeIWH(gsw, gsh));
+    }
 
     SkPaint rayPaint;                                 // base layer (onto transparent)
     rayPaint.setShader(shader);
@@ -438,8 +458,11 @@ sk_sp<SkImage> TextGlowRenderer::paintGlowFromSilhouette(
     // round trip.
     sk_sp<SkImage> combined;
     if (gpuFrame && gpuDestination) {
-        // Both sides are in VRAM: no round trip at all, just a texture draw below.
-        combined = gpuFrame->snapshot();
+        // Both sides are in VRAM: no round trip at all, just a texture draw below. The part
+        // that was drawn, not the whole (rounded-up) surface.
+        combined = (poolW != gsw || poolH != gsh)
+            ? gpuFrame->surface()->makeImageSnapshot(SkIRect::MakeWH(gsw, gsh))
+            : gpuFrame->snapshot();
     } else if (gpuFrame) {
         SkBitmap readback;
         if (!readback.tryAllocN32Pixels(gsw, gsh)) return nullptr;

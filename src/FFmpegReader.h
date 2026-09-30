@@ -298,6 +298,9 @@ namespace openshot {
 		/// codecs have trouble seeking, and can introduce artifacts or blank images into the video.
 		bool enable_seek;
 
+		/// Decode the audio stream at all (see DecodeAudio())
+		bool decode_audio = true;
+
 		/// @brief Constructor for FFmpegReader.
 		///
 		/// Sets (and possibly opens) the media file path,
@@ -344,6 +347,16 @@ namespace openshot {
 
 		/// Open File - which is called by the constructor automatically
 		void Open() override;
+
+		/// @brief Decode the file's audio, or ignore it and hand out video-only frames.
+		///
+		/// A frame is not final until the audio has been decoded a second past it, so a reader
+		/// whose audio nobody uses still holds about a second of decoded frames waiting -- and
+		/// with GPU decode each is a full RGBA surface: 24 of them per reader, 800 MB at 4K. An
+		/// export whose sound is mixed elsewhere (the service's) turns this off and gets the
+		/// video frames the moment they are decoded, with no audio decode at all. Survives
+		/// Open()/Close() and seeks; @c info.has_audio reads false while it is off.
+		void DecodeAudio(bool enable);
 
 		/// Return true if frame can be read with GetFrame()
 		bool GetIsDurationKnown();

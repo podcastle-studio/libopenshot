@@ -10,6 +10,8 @@
 // you) rather than reading the environment or adding a flag of its own, so
 // SetBackend(Backend::Off) is guaranteed to disable all of it at once.
 
+#include <chrono>
+#include <cstddef>
 #include <memory>
 #include <string>
 
@@ -126,6 +128,19 @@ namespace openshot
 
 		/// How many threads hold a recorder now. For tests and leak checks.
 		static std::size_t RecorderCount();
+
+		/// Free every GPU resource Skia has kept unused for @a not_used_for: the
+		/// calling thread's recorder cache and the shared context cache. Dropping an
+		/// SkSurface or SkImage only makes its texture purgeable; the VRAM comes back
+		/// when one of these cleanups runs. GpuSurfacePool calls it when it evicts,
+		/// submit() once a second with the pool's idle limit. Safe to call from any
+		/// thread, with or without a device.
+		static void PerformDeferredCleanup(std::chrono::milliseconds not_used_for);
+
+		/// The Graphite context's resource budget, in bytes: `OPENSHOT_GPU_BUDGET_MB`
+		/// or Skia's default (256 MiB). Purgeable resources are dropped past it; live
+		/// ones -- every surface the pool holds -- count against it but never go.
+		static std::size_t ContextBudgetBytes();
 
 		/// What Skia holds on the GPU right now: the context's resource cache and
 		/// every recorder's, in bytes. Surfaces in GpuSurfacePool are inside the

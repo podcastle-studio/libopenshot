@@ -188,7 +188,22 @@ Rules that are easy to get wrong and crash in the NVIDIA driver rather than anyw
 - Cache a GPU object across calls only alongside `GpuDevice::Generation()`, and drop the cache when
   it changes.
 - `GpuSurfacePool` is **per thread**, because a Graphite surface belongs to the recorder that made
-  it. Never move a surface between threads.
+  it. Never move a surface between threads. It **evicts idle surfaces** (2 s unused, or LRU past
+  512 MB idle; 2026-09-30) — it is keyed by exact size, and a size that drifts a few pixels a frame
+  (a keyframed glow's ray-march surface) once filled 2.7 GB with surfaces used exactly once. Any
+  new offscreen whose size can vary per frame goes through `GpuOffscreen::Match`, which pads to a
+  256 px step, clips inside a `save()` and snapshots the subset; the pixels are identical. Dropping
+  an `SkSurface` only makes its texture purgeable: `GpuDevice::PerformDeferredCleanup` is what gives
+  the VRAM back. Anything that holds a `GpuFrame` across frames (a reader's resting frame) must
+  release it in `Close()`.
+- **A clip set at the canvas's base save level survives the surface's return to the pool.**
+  `resetCanvas` restores to the base level and resets the matrix, which is all SkCanvas allows, so
+  a base-level `clipRect` cuts the surface's next user down to your size — one golden run painted
+  "TILTED" into "PULSE" that way. Clip inside a `save()`.
+- **A reader whose audio nobody reads must say so** (`FFmpegReader::DecodeAudio(false)`; the
+  service does, and `Recipes::videoReader`): a frame is final only once the audio is decoded a
+  second past it, so a reader holds ~24 decoded frames — 24 RGBA GPU surfaces with GPU decode —
+  for nothing, and decodes audio it throws away.
 - A recycled surface hands back the **previous user's canvas transform, clip and save stack** —
   clearing the pixels does not touch them. `acquire()` resets it (`pool-canvas` in
   `openshot-gpu-checks` guards this), so code written against `SkSurfaces::Raster`, which is fresh

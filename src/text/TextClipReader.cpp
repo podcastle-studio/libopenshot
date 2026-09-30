@@ -240,6 +240,13 @@ void TextClipReader::Close() {
     if (!is_open) return;
     is_open = false;
     rendered_image.reset();
+    // The resting surface goes back to the pool with the clip. The Timeline closes a clip the
+    // moment it stops intersecting the frame, so this is what keeps a finished clip's frame --
+    // 46 MB for a 4K glow -- from staying in VRAM until the export ends: 45 text clips held 45
+    // surfaces that way (2026-09-30). Close() runs on the thread that rendered it; if it did
+    // not, the release would miss its pool and be counted, not crash (GpuFrame::~GpuFrame).
+    rendered_gpu.reset();
+    glow_cache.reset();
     info.vcodec = "";
     info.acodec = "";
 }

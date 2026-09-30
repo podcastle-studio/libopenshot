@@ -79,6 +79,13 @@ golden suite and the bench rely on.
 | `GPU_CROP` | `Settings`; the service, from `GPU_RENDERING` | off | `Crop` draws GPU frames on the GPU | **yes**: rounded corners antialias differently from QPainter |
 | `READ_AHEAD_FRAMES` | `Settings` | 2 | decode-ahead depth; 0 = off | no (~8 MB per open reader per frame) |
 | `RENDER_SINGLE_WRITEFRAME` | service env | off | one `WriteFrame` call per export instead of 8-frame chunks | no (byte-identical); ~6 % on the corpus payload |
+| `OPENSHOT_GPU_POOL_IDLE_MS`, `OPENSHOT_GPU_POOL_IDLE_MB` | env, or `GpuSurfacePool::SetIdlePolicy()` | 2000, 512 | how long a pooled surface may sit idle, and how many idle bytes are kept (LRU past it); 0 disables either | no (memory only) |
+| `OPENSHOT_GPU_BUDGET_MB` | env | 256 (Skia's) | Graphite context resource budget | no |
+| `OPENSHOT_GPU_CLEANUP` | env | on | `0` turns every deferred Skia cleanup off (the pool's on eviction, `submit()`'s once a second) — to find out whether a purge is what broke something | no (memory only) |
+| `OPENSHOT_GPU_POOL_TRACE` | env | off | one stderr line per pool allocation, eviction and mis-threaded release | no (diagnostic) |
+| `FFmpegReader::DecodeAudio(false)` | service, on every video and mask reader; the golden recipes | on | ignore the file's audio: frames are final as the video passes them instead of a second later | no (video); the reader reports `has_audio=false` |
+| `GPU_RENDERING_DISABLE` | service env | unset | `decode,nvdec,encode,crop`: turn single paths off under `on`, to measure or as a kill switch | as each path's row |
+| `RENDER_PIPELINE_QUEUE` | service env | 16 | writer pipeline depth (frames buffered between compositing and encoding) | no |
 
 All the GPU paths need `OPENSHOT_GPU=vulkan`; the NVDEC/NVENC interop also needs the NVIDIA driver's
 `libcuda` in the container (it is `dlopen`ed; only `cuda.h` is a build dependency). The service
@@ -368,6 +375,37 @@ service had its own share: it never deleted the readers it gives `Clip` and `Mas
 state per export with one video clip); fixed there. Together: 1080×1920, 45 text clips + 1 video,
 four exports in one process held 706 → 1122 MB before, 285 → 269 MB after.
 
+**Also done 2026-09-30 (later): GPU memory per export, from 7.8 GB to 2.8 GB at 4K.** The
+2160×3840, 45-text-clip payload filled an 8 GB card, dropped draws and ran at 9 fps; it now peaks at
+2.8 GB (1.5–1.7 GB steady), drops nothing and runs at 81 fps. Three things were wrong, none of them
+"full-canvas text surfaces" (text frames were already sized to the text): **(1)** a keyframed glow's
+ray-march surface grows by a few pixels every frame, so every frame took a fresh ~40 MB surface —
+`GpuSurfacePool` is keyed by exact size and never freed anything: 2.7 GB in 90 surfaces with 10 in
+use. The pool now **evicts** idle surfaces (unused for 2 s, and least-recently-used past 512 MB idle;
+`OPENSHOT_GPU_POOL_IDLE_MS` / `_MB`, `GpuSurfacePool::SetIdlePolicy`) and asks Graphite to purge
+what it dropped (`GpuDevice::PerformDeferredCleanup`, also once a second from `submit()`;
+`OPENSHOT_GPU_BUDGET_MB` sets the context budget). GPU offscreens (`GpuOffscreen::Match`) and the
+glow's working surface are **padded to a 256 px step**, clipped to the requested size inside a
+`save()` and snapshotted as a subset, so drifting sizes share one allocation; the pixels are
+identical (four-way sweep green). **A clip set at the base save level survives the surface's return to
+the pool** — `resetCanvas` cannot remove it — which is why the clip is inside a `save()`; the first
+attempt without it painted one scenario's text into another's surface. **(2)** `TextClipReader::Close()`
+kept the resting-frame surface (46 MB for a 4K glow) until the export ended; the Timeline closes a clip
+when it stops intersecting, so 45 clips held 45 surfaces. **(3)** `FFmpegReader` holds a second of
+decoded frames waiting for audio nobody reads (a frame is final only once the audio is 1 s past it):
+with GPU decode that is 24 RGBA surfaces per reader, 800 MB at 4K. `FFmpegReader::DecodeAudio(false)`
+(the service sets it on every video and mask reader, the recipe's `videoReader` too) drops the
+audio packets unread and finalises frames as the video passes them; the CPU golden suite runs in
+31 s instead of 54 s. Diagnostics: `OPENSHOT_GPU_POOL_TRACE=1` logs every pool allocation, eviction
+and mis-threaded release; the service's `RENDER_PAYLOAD_MEMTRACE` shows `evicted`, and
+`GPU_RENDERING_DISABLE=decode,nvdec,encode,crop` / `RENDER_PIPELINE_QUEUE=N` isolate a path's cost.
+What is left of the 4K figure (steady 1.7 GB, RTX A2000): Skia ~0.6 GB (context cache, recorder
+cache, pool), ~0.65 GB fixed per process (Vulkan device, CUDA context, Skia pipelines, NVENC/NVDEC
+sessions), ~0.6 GB for NVENC reading frames from the device (its 20-frame CUDA pool, the 16 frames in
+the pipeline queue, and more Graphite work in flight at 4× the frame rate; the queue depth itself is
+worth 40 MB), ~0.1 GB for NVDEC on a 720×1280 source. The 1080p, 12-clip transitions payload peaks
+at 1.8 GB. `unit`: `pool-evict` in `openshot-gpu-checks`.
+
 **What is left is decisions, infrastructure and final checks.** In the order they should happen:
 
 ### 1. Owner decisions
@@ -449,15 +487,15 @@ four exports in one process held 706 → 1122 MB before, 285 → 269 MB after.
 
 ### 4. Worth doing, not blocking
 
-- **Peak VRAM of one export scales with canvas × text clips — now the top item.** Measured
-  2026-09-30 (`../video-rendering-service/doc/HANDOFF-2026-09-30.md`, payload
-  `tests/payloads/dev-2026-09-30-4k-45text-glow-gradient.json`): at 4K the surface pool held 2.7 GB in
-  ~90 full-canvas surfaces with 8–11 in use, the Graphite context cache 1.3 GB, ~3.6 GB outside
-  Skia; the card filled, draws were dropped and NVENC failed to open. Fix order: text surfaces sized
-  to the text, pool eviction/trim, context budget, then the non-Skia share.
-  `GpuSurfacePool::Global()` and `GpuDevice::Memory()` measure it.
-  Until then the service's concurrency has to be sized for its largest export, not its average
-  (pod 2 runs at 2).
+- **Peak VRAM of one export** — fixed 2026-09-30 (see "Status": 7.8 → 2.8 GB at 4K on the
+  payload `tests/payloads/dev-2026-09-30-4k-45text-glow-gradient.json`). Still worth doing: the
+  service's admission gate (estimate an export's need, wait for free VRAM before starting it, restore
+  concurrency 4) and failing loudly on a Skia allocation failure instead of delivering dropped draws.
+  Beyond that, the remaining per-export share is NVENC's device path (~0.6 GB at 4K; a smaller CUDA
+  pool than FFmpeg's 20 would need the encoder's in-flight count checked) and, on video-heavy
+  payloads, one NVDEC session per clip on the same file (12 decoders for one file in the 1080p
+  transitions payload). `GpuSurfacePool::Global()`, `GpuDevice::Memory()` and
+  `OPENSHOT_GPU_POOL_TRACE` measure it.
 
 - **Look for the next grain.** The production payload's GPU gain was capped at ~1.5× by one CPU
   effect on one clip for a third of the export (`doc/PERFORMANCE-BASELINE.md`, 2026-09-24). The

@@ -5,6 +5,9 @@
 #include "GpuDevice.h"
 
 #include <atomic>
+#include <chrono>
+#include <cstdio>
+#include <cstdlib>
 #include <mutex>
 
 #include "skia/include/core/SkAlphaType.h"
@@ -39,11 +42,35 @@ namespace
 	// DiscardCurrentThread() can ask during thread exit without constructing one.
 	thread_local GpuSurfacePool* tThisThreadPool = nullptr;
 
-	std::atomic<std::size_t> gCreated{0}, gInUse{0}, gBytes{0}, gMisses{0};
+	std::atomic<std::size_t> gCreated{0}, gInUse{0}, gBytes{0}, gMisses{0}, gEvicted{0};
 
 	std::size_t entryBytes(int width, int height)
 	{
 		return static_cast<std::size_t>(width) * static_cast<std::size_t>(height) * 4u;
+	}
+
+	// OPENSHOT_GPU_POOL_TRACE=1: log every surface the pool allocates or evicts (size, colour
+	// type, what the pool holds) to stderr. Diagnostics only; read once.
+	bool traceEnabled()
+	{
+		static const bool enabled = [] {
+			const char* value = std::getenv("OPENSHOT_GPU_POOL_TRACE");
+			return value && *value && *value != '0';
+		}();
+		return enabled;
+	}
+
+	// A non-negative integer from the environment, or the default when unset or unparsable.
+	long long envNumber(const char* name, long long fallback)
+	{
+		const char* value = std::getenv(name);
+		if (!value || !*value)
+			return fallback;
+		char* end = nullptr;
+		const long long parsed = std::strtoll(value, &end, 10);
+		if (end == value || parsed < 0)
+			return fallback;
+		return parsed;
 	}
 }
 
@@ -81,6 +108,37 @@ void GpuSurfacePool::ConstructStatics()
 {
 	(void)poolRegistryMutex();
 	(void)poolRegistry();
+}
+
+namespace
+{
+	// The limits, from the environment once, until SetIdlePolicy() overrides them.
+	std::atomic<long long>& idleLimitMs()
+	{
+		static std::atomic<long long> ms{envNumber("OPENSHOT_GPU_POOL_IDLE_MS", 2000)};
+		return ms;
+	}
+	std::atomic<long long>& idleBytesLimit()
+	{
+		static std::atomic<long long> bytes{envNumber("OPENSHOT_GPU_POOL_IDLE_MB", 512) << 20};
+		return bytes;
+	}
+}
+
+std::chrono::milliseconds GpuSurfacePool::IdleLimit()
+{
+	return std::chrono::milliseconds(idleLimitMs().load(std::memory_order_relaxed));
+}
+
+std::size_t GpuSurfacePool::IdleBytesLimit()
+{
+	return static_cast<std::size_t>(idleBytesLimit().load(std::memory_order_relaxed));
+}
+
+void GpuSurfacePool::SetIdlePolicy(std::chrono::milliseconds idle_limit, std::size_t idle_bytes_limit)
+{
+	idleLimitMs().store(std::max<long long>(0, idle_limit.count()), std::memory_order_relaxed);
+	idleBytesLimit().store(static_cast<long long>(idle_bytes_limit), std::memory_order_relaxed);
 }
 
 void GpuSurfacePool::DiscardAllPools()
@@ -127,28 +185,44 @@ sk_sp<SkSurface> GpuSurfacePool::acquire(int width, int height, SkColorType colo
 
 	discardIfStale();
 
+	const auto now = std::chrono::steady_clock::now();
 	for (Entry& entry : entries) {
 		if (!entry.in_use && entry.width == width && entry.height == height &&
 			entry.color_type == color_type &&
 			SkColorSpace::Equals(entry.color_space.get(), color_space.get())) {
 			entry.in_use = true;
+			entry.last_used = now;
 			gInUse++;
 			counters.reused++;
 			resetCanvas(entry.surface.get());
-			return entry.surface;
+			// The match first, so a surface that is wanted right now is never the one evicted --
+			// and a copy of it first, because evictIdle() erases from `entries` and `entry` is a
+			// reference into it. Returning through the reference handed back a moved-from null
+			// about one run in three (golden `unit.gpu_crop`, 2026-09-30).
+			sk_sp<SkSurface> surface = entry.surface;
+			evictIdle(now);
+			return surface;
 		}
 	}
+	evictIdle(now);
 
 #ifdef OPENSHOT_HAVE_SKIA_GPU
 	skgpu::graphite::Recorder* recorder = GpuDevice::Instance().recorder();
-	if (!recorder)
+	if (!recorder) {
+		if (traceEnabled())
+			std::fprintf(stderr, "GpuSurfacePool: no recorder for %dx%d\n", width, height);
 		return nullptr;
+	}
 
 	const SkImageInfo info =
 		SkImageInfo::Make(width, height, color_type, kPremul_SkAlphaType, color_space);
 	sk_sp<SkSurface> surface = SkSurfaces::RenderTarget(recorder, info);
-	if (!surface)
+	if (!surface) {
+		if (traceEnabled())
+			std::fprintf(stderr, "GpuSurfacePool: SkSurfaces::RenderTarget failed for %dx%d ct=%d\n",
+						 width, height, static_cast<int>(color_type));
 		return nullptr;
+	}
 
 	Entry entry;
 	entry.width = width;
@@ -157,11 +231,22 @@ sk_sp<SkSurface> GpuSurfacePool::acquire(int width, int height, SkColorType colo
 	entry.color_space = color_space;
 	entry.surface = surface;
 	entry.in_use = true;
+	entry.last_used = now;
 	entries.push_back(entry);
 	counters.created++;
 	gCreated++;
 	gInUse++;
 	gBytes += entryBytes(width, height);
+	if (traceEnabled()) {
+		// One line per allocation, so a memory trace can say which sizes fill the pool.
+		std::size_t idle = 0;
+		for (const Entry& e : entries)
+			if (!e.in_use)
+				idle++;
+		std::fprintf(stderr, "GpuSurfacePool: new %dx%d ct=%d (%zu MiB) pool: %zu entries, %zu idle, %zu MiB\n",
+					 width, height, static_cast<int>(color_type), entryBytes(width, height) >> 20,
+					 entries.size(), idle, gBytes.load() >> 20);
+	}
 	return surface;
 #else
 	return nullptr;
@@ -201,10 +286,14 @@ void GpuSurfacePool::release(sk_sp<SkSurface> surface)
 			if (entry.in_use)
 				gInUse--;
 			entry.in_use = false;
+			entry.last_used = std::chrono::steady_clock::now();
 			return;
 		}
 	}
 	gMisses++;
+	if (traceEnabled())
+		std::fprintf(stderr, "GpuSurfacePool: release of %dx%d matched nothing in this thread's pool\n",
+					 surface->width(), surface->height());
 }
 
 void GpuSurfacePool::clear()
@@ -219,6 +308,62 @@ void GpuSurfacePool::clear()
 	}
 }
 
+void GpuSurfacePool::evictIdle(std::chrono::steady_clock::time_point now)
+{
+	const std::chrono::milliseconds idle_limit = IdleLimit();
+	const std::size_t bytes_limit = IdleBytesLimit();
+	if (idle_limit.count() <= 0 && bytes_limit == 0)
+		return;
+
+	std::size_t idle_bytes = 0;
+	for (const Entry& entry : entries)
+		if (!entry.in_use)
+			idle_bytes += entryBytes(entry.width, entry.height);
+
+	std::size_t evicted = 0;
+	auto drop = [&](std::vector<Entry>::iterator it) {
+		const std::size_t bytes = entryBytes(it->width, it->height);
+		if (traceEnabled())
+			std::fprintf(stderr, "GpuSurfacePool: evict %dx%d ct=%d (%zu MiB) idle %lld ms\n",
+						 it->width, it->height, static_cast<int>(it->color_type), bytes >> 20,
+						 static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(
+							 now - it->last_used).count()));
+		gBytes -= bytes;
+		idle_bytes -= bytes;
+		evicted++;
+		return entries.erase(it);
+	};
+
+	// 1. Anything idle for longer than the limit.
+	if (idle_limit.count() > 0) {
+		for (auto it = entries.begin(); it != entries.end();) {
+			if (!it->in_use && now - it->last_used > idle_limit)
+				it = drop(it);
+			else
+				++it;
+		}
+	}
+
+	// 2. Least recently used first while the idle set is over its byte cap.
+	while (bytes_limit > 0 && idle_bytes > bytes_limit) {
+		auto oldest = entries.end();
+		for (auto it = entries.begin(); it != entries.end(); ++it)
+			if (!it->in_use && (oldest == entries.end() || it->last_used < oldest->last_used))
+				oldest = it;
+		if (oldest == entries.end())
+			break;
+		drop(oldest);
+	}
+
+	if (evicted == 0)
+		return;
+	counters.evicted += evicted;
+	gEvicted += evicted;
+	// The surfaces are gone from here, but Skia keeps their textures as purgeable
+	// entries in this thread's recorder cache until something asks it to let go.
+	GpuDevice::PerformDeferredCleanup(idle_limit);
+}
+
 GpuSurfacePool::GlobalStats GpuSurfacePool::Global()
 {
 	GlobalStats result;
@@ -230,6 +375,7 @@ GpuSurfacePool::GlobalStats GpuSurfacePool::Global()
 	result.in_use = gInUse.load();
 	result.bytes = gBytes.load();
 	result.misses = gMisses.load();
+	result.evicted = gEvicted.load();
 	return result;
 }
 
@@ -240,12 +386,14 @@ GpuSurfacePool::Stats GpuSurfacePool::stats() const
 	result.idle = 0;
 	result.bytes = 0;
 	for (const Entry& entry : entries) {
-		if (entry.in_use)
+		const std::size_t bytes = entryBytes(entry.width, entry.height);
+		if (entry.in_use) {
 			result.in_use++;
-		else
+		} else {
 			result.idle++;
-		result.bytes += static_cast<std::size_t>(entry.width) *
-						static_cast<std::size_t>(entry.height) * 4u;
+			result.idle_bytes += bytes;
+		}
+		result.bytes += bytes;
 	}
 	return result;
 }

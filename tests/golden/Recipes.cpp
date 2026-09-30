@@ -223,7 +223,13 @@ void mergeOpacityKeyframes(Keyframe& alpha, const std::vector<OpacityKf>& kfs, d
 
 // ── clips ────────────────────────────────────────────────────────────────────────────────────
 ReaderBase* imageReader(Scene& scene, const std::string& path) { return scene.own(new QtImageReader(path)); }
-ReaderBase* videoReader(Scene& scene, const std::string& path) { return scene.own(new FFmpegReader(path)); }
+ReaderBase* videoReader(Scene& scene, const std::string& path) {
+    // As the service opens every video: its sound is mixed from separate files, so the reader's
+    // audio is never read (FFmpegReader::DecodeAudio).
+    auto* reader = new FFmpegReader(path);
+    reader->DecodeAudio(false);
+    return scene.own(reader);
+}
 
 Clip* backgroundClip(Scene& scene, const std::string& path) {
     auto* clip = scene.own(new Clip(imageReader(scene, path)));

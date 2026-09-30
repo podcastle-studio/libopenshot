@@ -9,6 +9,7 @@
  *   2. transfer  upload -> readback of 1000 random RGBA images is bit-identical
  *   3. pool      the second acquire of a given size returns the same allocation
  *   4. canvas    a recycled surface's canvas comes back in a new surface's state
+ *      evict     idle surfaces are dropped by age and by byte cap, in-use ones never
  *   5. control   GpuDevice::SetBackend is the single on/off switch for all of it
  *   6. subtitle  the subtitle pass renders the same on a GPU and a raster canvas
  *
@@ -36,11 +37,13 @@
 #include "skia/include/core/SkPixmap.h"
 #include "skia/include/core/SkRect.h"
 
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <random>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -230,6 +233,69 @@ void checkPoolReuse() {
            "created=" + std::to_string(created) + " reused=" + std::to_string(reused) +
                    " same_allocation=" + (sameAllocation ? "yes" : "no") +
                    " other_size_is_new=" + (differentIsNew ? "yes" : "no"));
+}
+
+/// Idle surfaces go: anything unused for the idle limit on the next acquire, and the
+/// least recently used while the idle set is over its byte cap. Surfaces in use and
+/// the one just matched are never touched.
+void checkPoolEvictsIdle() {
+    openshot::GpuDevice& device = openshot::GpuDevice::Instance();
+    if (!device.available()) {
+        report("pool-evict", false, "GPU unavailable: " + device.lastError());
+        return;
+    }
+    using namespace std::chrono_literals;
+    openshot::GpuSurfacePool& pool = openshot::GpuSurfacePool::Instance();
+    pool.clear();
+    const openshot::GpuSurfacePool::Stats start = pool.stats();
+
+    // Time-based: two released surfaces, wait past the limit, the next acquire drops both.
+    openshot::GpuSurfacePool::SetIdlePolicy(50ms, 0);
+    pool.release(pool.acquire(256, 128, kRGBA_8888_SkColorType));
+    pool.release(pool.acquire(320, 128, kRGBA_8888_SkColorType));
+    sk_sp<SkSurface> kept = pool.acquire(64, 64, kRGBA_8888_SkColorType);   // in use throughout
+    std::this_thread::sleep_for(120ms);
+    sk_sp<SkSurface> fresh = pool.acquire(32, 32, kRGBA_8888_SkColorType);
+    const openshot::GpuSurfacePool::Stats afterTime = pool.stats();
+    const bool timeOk = fresh && kept && afterTime.idle == 0 && afterTime.in_use == 2 &&
+                        afterTime.evicted - start.evicted == 2;
+    pool.release(fresh);
+
+    // A match is served before eviction runs, so a wanted surface is not dropped underneath.
+    std::this_thread::sleep_for(120ms);
+    sk_sp<SkSurface> again = pool.acquire(32, 32, kRGBA_8888_SkColorType);
+    const bool matchOk = again && again.get() == fresh.get();
+    pool.release(again);
+    pool.clear();   // start the byte-cap phase with nothing idle
+
+    // Byte cap: 1 MiB of idle surfaces allowed; the oldest idle 512x512 (1 MiB) goes first.
+    openshot::GpuSurfacePool::SetIdlePolicy(0ms, 1u << 20);
+    sk_sp<SkSurface> first = pool.acquire(512, 512, kRGBA_8888_SkColorType);
+    sk_sp<SkSurface> second = pool.acquire(512, 512, kRGBA_8888_SkColorType);
+    pool.release(first);
+    std::this_thread::sleep_for(5ms);
+    pool.release(second);
+    sk_sp<SkSurface> trigger = pool.acquire(16, 16, kRGBA_8888_SkColorType);
+    const openshot::GpuSurfacePool::Stats afterBytes = pool.stats();
+    // One 512x512 remains idle: exactly the cap, which is allowed.
+    const bool bytesOk = trigger && afterBytes.idle_bytes <= (1u << 20) &&
+                         afterBytes.evicted - afterTime.evicted == 1;
+    // The survivor is the one released last.
+    sk_sp<SkSurface> survivor = pool.acquire(512, 512, kRGBA_8888_SkColorType);
+    const bool lruOk = survivor && survivor.get() == second.get();
+    pool.release(survivor);
+    pool.release(trigger);
+    pool.release(kept);
+
+    openshot::GpuSurfacePool::SetIdlePolicy(2000ms, static_cast<std::size_t>(512) << 20);
+    pool.clear();
+
+    const bool ok = timeOk && matchOk && bytesOk && lruOk;
+    report("pool-evict", ok,
+           std::string("idle_after_wait=") + std::to_string(afterTime.idle) +
+                   " evicted=" + std::to_string(afterBytes.evicted - start.evicted) +
+                   " match_first=" + (matchOk ? "yes" : "no") +
+                   " byte_cap=" + (bytesOk ? "yes" : "no") + " lru=" + (lruOk ? "yes" : "no"));
 }
 
 /// A surface carries its canvas, so a recycled one carries the previous user's
@@ -589,6 +655,7 @@ int main() {
     checkTransferRoundTrip();
     checkPoolReuse();
     checkPoolResetsCanvasState();
+    checkPoolEvictsIdle();
     checkPoolSurvivesDeviceRestart();
     checkSingleControl();
     checkSubtitleOnGpuCanvas();
