@@ -404,7 +404,12 @@ cache, pool), ~0.65 GB fixed per process (Vulkan device, CUDA context, Skia pipe
 sessions), ~0.6 GB for NVENC reading frames from the device (its 20-frame CUDA pool, the 16 frames in
 the pipeline queue, and more Graphite work in flight at 4× the frame rate; the queue depth itself is
 worth 40 MB), ~0.1 GB for NVDEC on a 720×1280 source. The 1080p, 12-clip transitions payload peaks
-at 1.8 GB. `unit`: `pool-evict` in `openshot-gpu-checks`.
+at 1.8 GB. `unit`: `pool-evict` in `openshot-gpu-checks`. For the service's admission gate and
+its fail-loud check: `ExportTelemetry::DeviceMemoryNow()` (NVML total/used/free and this process's
+share) and two new counters, `allocation_failures` (`GpuSurfacePool::acquire`: Skia refused a render
+target, the GPU is full) and `submit_failures` (`GpuDevice::submit`: a recording could not be inserted
+-- "Failed to instantiate RenderPassTask target" -- and its draws are gone). Both are in the
+telemetry line; the service fails the export when either moved.
 
 **What is left is decisions, infrastructure and final checks.** In the order they should happen:
 

@@ -8,6 +8,7 @@
 
 #include "CudaInterop.h"
 #include "GpuSurfacePool.h"
+#include "GpuTelemetry.h"
 
 #include <atomic>
 #include <chrono>
@@ -801,10 +802,17 @@ bool GpuDevice::submit(bool syncToCpu, const unsigned long long* wait_semaphores
 		info.fTargetSurface = hand_to_cuda;
 		info.fTargetTextureState = &to_general;
 	}
-	if (impl->context->insertRecording(info) != skgpu::graphite::InsertStatus::kSuccess)
+	// A recording that cannot be inserted is one whose render targets could not be
+	// instantiated ("Failed to instantiate RenderPassTask target": the GPU is full) -- its
+	// draws are gone and nothing downstream can tell. Counted so the service can.
+	if (impl->context->insertRecording(info) != skgpu::graphite::InsertStatus::kSuccess) {
+		GpuCounters::Add(GpuCounters::SubmitFailure);
 		return false;
+	}
 	const bool submitted = impl->context->submit(syncToCpu ? skgpu::graphite::SyncToCpu::kYes
 														   : skgpu::graphite::SyncToCpu::kNo);
+	if (!submitted)
+		GpuCounters::Add(GpuCounters::SubmitFailure);
 
 	// Once a second, let go of what nobody has used for the pool's idle limit: the
 	// snapshot copies and layers Skia made for frames that are long encoded. Without this

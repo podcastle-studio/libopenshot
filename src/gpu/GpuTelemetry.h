@@ -37,6 +37,8 @@ namespace openshot
 			HardwareDecodeFallback, ///< NVDEC refused a stream; the reader reopened in software
 			Upload,              ///< host pixels copied to the GPU (GpuFrame::ToTexture / upload)
 			UploadCached,        ///< a host source drawn from a texture kept from an earlier frame
+			AllocationFailure,   ///< Skia could not allocate a render target (GpuSurfacePool::acquire): the GPU is full
+			SubmitFailure,       ///< a recording could not be inserted or submitted (GpuDevice::submit): draws were lost
 			Count
 		};
 
@@ -75,6 +77,21 @@ namespace openshot
 		/// Was this build compiled with NVML support (it needs the CUDA headers at build
 		/// time, as CudaInterop does)? False on a CPU-Skia build without them.
 		static bool NvmlBuiltIn();
+
+		/// The render device's memory right now, for a caller deciding whether another
+		/// export fits (the service's admission gate). @c nvml false means no NVIDIA
+		/// driver, and every figure is zero. "Used" is NVML's v2 figure, the one
+		/// nvidia-smi shows; @c process_bytes is this process's share of it.
+		struct DeviceMemory
+		{
+			bool nvml = false;
+			std::string device;
+			unsigned long long total_bytes = 0;
+			unsigned long long used_bytes = 0;
+			unsigned long long free_bytes = 0;
+			unsigned long long process_bytes = 0;
+		};
+		static DeviceMemory DeviceMemoryNow();
 
 		/// Start sampling on a thread of its own (every 250 ms). Idempotent.
 		void Start();

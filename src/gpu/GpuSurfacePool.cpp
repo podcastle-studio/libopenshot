@@ -3,6 +3,7 @@
 #include "GpuSurfacePool.h"
 
 #include "GpuDevice.h"
+#include "GpuTelemetry.h"
 
 #include <atomic>
 #include <chrono>
@@ -218,6 +219,11 @@ sk_sp<SkSurface> GpuSurfacePool::acquire(int width, int height, SkColorType colo
 		SkImageInfo::Make(width, height, color_type, kPremul_SkAlphaType, color_space);
 	sk_sp<SkSurface> surface = SkSurfaces::RenderTarget(recorder, info);
 	if (!surface) {
+		// RenderTarget instantiates its texture at once, so a null here is an allocation the
+		// driver refused: the GPU is full. The caller falls back to raster and the export goes
+		// on, quietly slower; the counter is how the service finds out (its telemetry line,
+		// and it can fail the export instead of delivering one that may have dropped draws).
+		GpuCounters::Add(GpuCounters::AllocationFailure);
 		if (traceEnabled())
 			std::fprintf(stderr, "GpuSurfacePool: SkSurfaces::RenderTarget failed for %dx%d ct=%d\n",
 						 width, height, static_cast<int>(color_type));

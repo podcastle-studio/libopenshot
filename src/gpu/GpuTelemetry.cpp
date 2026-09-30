@@ -59,6 +59,8 @@ const char* GpuCounters::Name(Counter counter)
 	case HardwareDecodeFallback: return "nvdec_fallbacks";
 	case Upload: return "uploads";
 	case UploadCached: return "uploads_cached";
+	case AllocationFailure: return "allocation_failures";
+	case SubmitFailure: return "submit_failures";
 	default: return "?";
 	}
 }
@@ -237,6 +239,29 @@ bool ExportTelemetry::NvmlBuiltIn()
 ExportTelemetry::~ExportTelemetry()
 {
 	Stop();
+}
+
+ExportTelemetry::DeviceMemory ExportTelemetry::DeviceMemoryNow()
+{
+	DeviceMemory result;
+#ifdef OPENSHOT_NVML
+	std::string name;
+	nvmlDevice_t device = pickDevice(name);
+	if (!device)
+		return result;
+	Nvml& nvml = Nvml::Instance();
+	nvmlMemory_v2_t memory{};
+	memory.version = nvmlMemory_v2;
+	if (nvml.DeviceGetMemoryInfo(device, &memory) != NVML_SUCCESS)
+		return result;
+	result.nvml = true;
+	result.device = name;
+	result.total_bytes = memory.total;
+	result.used_bytes = memory.used;
+	result.free_bytes = memory.free;
+	result.process_bytes = processVram(device);
+#endif
+	return result;
 }
 
 void ExportTelemetry::Start()
