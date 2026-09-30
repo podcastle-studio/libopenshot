@@ -1,0 +1,4429 @@
+{
+ "requestId": "6abce56c29f1ddf8a4e5f93f",
+ "exportId": "1536c5ce-8a3d-4171-b4ff-932afcdee354",
+ "projectId": "6ab64bd841382d1b38a61868",
+ "name": "Sticker issue (copy)",
+ "settings": {
+  "width": 2160.0,
+  "height": 3840.0,
+  "previewOverlay": null
+ },
+ "start": 0,
+ "end": 26060,
+ "tracks": [
+  {
+   "trackId": "610849998168315",
+   "type": "TEXT",
+   "zindex": 48,
+   "visible": true,
+   "muted": null,
+   "clips": [
+    {
+     "type": "TEXT",
+     "clipId": "711530190994657",
+     "priority": 1,
+     "start": 11577,
+     "end": 16577,
+     "speed": 1.0,
+     "trimStart": 0,
+     "trimEnd": 0,
+     "volume": 0.0,
+     "muted": false,
+     "visible": true,
+     "fadeIn": 0,
+     "fadeOut": 0,
+     "opacity": 1.0,
+     "file": null,
+     "originalFile": null,
+     "effectIntensity": null,
+     "crop": null,
+     "transformation": {
+      "size": 2.084848484848485,
+      "rotation": 0.0,
+      "position": {
+       "x": 0.5,
+       "y": 0.4731208570075758
+      },
+      "maxWidth": 9.209302325581394,
+      "tiltX": 0,
+      "tiltY": 0
+     },
+     "value": "BORN",
+     "style": {
+      "fontId": "6a616077-cb80-4d7f-b376-5793f88b60cb",
+      "italic": false,
+      "textAlign": "CENTER",
+      "textTransform": "UPPERCASE",
+      "color": "#dddddd",
+      "lineHeight": 1.2,
+      "letterSpacing": 0.6,
+      "fontWeight": 400,
+      "strokeWidthRatio": 0.0,
+      "shadowBlurRatio": 0.0,
+      "shadowDistanceRatio": 0.0,
+      "shadowAngle": 45.0,
+      "backgroundRadiusRatio": 0.0,
+      "backgroundPaddingXRatio": 0.0,
+      "backgroundPaddingYRatio": 0.0
+     },
+     "textAnimations": null,
+     "loopable": false,
+     "duration": 0,
+     "cornerRadius": 0.0,
+     "filters": null,
+     "lutId": null,
+     "opacityFade": {
+      "opacityFadeIn": 0,
+      "opacityFadeOut": 0,
+      "interpolation": {
+       "value": [
+        0.0,
+        0.0,
+        0.67,
+        1.0
+       ],
+       "type": "BEZIER"
+      }
+     },
+     "keyframes": [],
+     "mask": null,
+     "audioEffects": null,
+     "flip": null,
+     "shapeConfig": null,
+     "path": null,
+     "baseStyle": null,
+     "lineStart": null,
+     "lineEnd": null,
+     "blendMode": "normal"
+    }
+   ]
+  },
+  {
+   "trackId": "664297071011557",
+   "type": "TEXT",
+   "zindex": 46,
+   "visible": true,
+   "muted": null,
+   "clips": [
+    {
+     "type": "TEXT",
+     "clipId": "clip-18b2d3ec-26aa-423e-854f-28634499fe97",
+     "priority": 0,
+     "start": 20723,
+     "end": 21740,
+     "speed": 1.0,
+     "trimStart": 0,
+     "trimEnd": 0,
+     "volume": 0.0,
+     "muted": false,
+     "visible": true,
+     "fadeIn": 0,
+     "fadeOut": 0,
+     "opacity": 1.0,
+     "file": null,
+     "originalFile": null,
+     "effectIntensity": null,
+     "crop": null,
+     "transformation": {
+      "size": 39.34309063747938,
+      "rotation": 0.0,
+      "position": {
+       "x": 0.22197779329139222,
+       "y": 0.4501222041987807
+      },
+      "maxWidth": 3.5653477868112016,
+      "tiltX": 0,
+      "tiltY": 0
+     },
+     "value": "happen.",
+     "style": {
+      "fontId": "b15cf926-bbba-462c-81ac-e54f7475d608",
+      "italic": false,
+      "textAlign": "LEFT",
+      "textTransform": "NONE",
+      "color": "#7F77DD",
+      "lineHeight": 1.0,
+      "letterSpacing": -0.03,
+      "fontWeight": 800,
+      "strokeWidthRatio": 0.0,
+      "shadowColor": "#000000",
+      "shadowBlurRatio": 0.07,
+      "shadowDistanceRatio": 0.015,
+      "shadowAngle": 90.0,
+      "backgroundRadiusRatio": 0.0,
+      "backgroundPaddingXRatio": 0.0,
+      "backgroundPaddingYRatio": 0.0
+     },
+     "textAnimations": {
+      "inAnimationId": "c9c00437-e849-55d1-835a-db22e844ecaa",
+      "inAnimationDuration": 850
+     },
+     "loopable": false,
+     "duration": 0,
+     "cornerRadius": 0.0,
+     "filters": null,
+     "lutId": null,
+     "opacityFade": {
+      "opacityFadeIn": 0,
+      "opacityFadeOut": 0,
+      "interpolation": {
+       "value": [
+        0.0,
+        0.0,
+        0.67,
+        1.0
+       ],
+       "type": "BEZIER"
+      }
+     },
+     "keyframes": [],
+     "mask": null,
+     "audioEffects": null,
+     "flip": null,
+     "shapeConfig": null,
+     "path": null,
+     "baseStyle": null,
+     "lineStart": null,
+     "lineEnd": null,
+     "blendMode": null
+    }
+   ]
+  },
+  {
+   "trackId": "854736377061454",
+   "type": "TEXT",
+   "zindex": 45,
+   "visible": true,
+   "muted": null,
+   "clips": [
+    {
+     "type": "TEXT",
+     "clipId": "clip-9288c2a2-aac3-4191-9963-6c7804765913",
+     "priority": 0,
+     "start": 19922,
+     "end": 21740,
+     "speed": 1.0,
+     "trimStart": 0,
+     "trimEnd": 0,
+     "volume": 0.0,
+     "muted": false,
+     "visible": true,
+     "fadeIn": 0,
+     "fadeOut": 0,
+     "opacity": 1.0,
+     "file": null,
+     "originalFile": null,
+     "effectIntensity": null,
+     "crop": null,
+     "transformation": {
+      "size": 16.79278258916803,
+      "rotation": 0.0,
+      "position": {
+       "x": 0.05138888888888869,
+       "y": 0.4590376064409172
+      },
+      "maxWidth": 1.961164021164021,
+      "tiltX": 0,
+      "tiltY": 0
+     },
+     "value": "idea",
+     "style": {
+      "fontId": "b15cf926-bbba-462c-81ac-e54f7475d608",
+      "italic": false,
+      "textAlign": "LEFT",
+      "textTransform": "NONE",
+      "color": "#FFFFFF",
+      "lineHeight": 1.0,
+      "letterSpacing": -0.02,
+      "fontWeight": 400,
+      "strokeWidthRatio": 0.0,
+      "shadowColor": "#000000",
+      "shadowBlurRatio": 0.07,
+      "shadowDistanceRatio": 0.015,
+      "shadowAngle": 90.0,
+      "backgroundRadiusRatio": 0.0,
+      "backgroundPaddingXRatio": 0.0,
+      "backgroundPaddingYRatio": 0.0
+     },
+     "textAnimations": {
+      "inAnimationId": "c9c00437-e849-55d1-835a-db22e844ecaa",
+      "inAnimationDuration": 850
+     },
+     "loopable": false,
+     "duration": 0,
+     "cornerRadius": 0.0,
+     "filters": null,
+     "lutId": null,
+     "opacityFade": {
+      "opacityFadeIn": 0,
+      "opacityFadeOut": 0,
+      "interpolation": {
+       "value": [
+        0.0,
+        0.0,
+        0.67,
+        1.0
+       ],
+       "type": "BEZIER"
+      }
+     },
+     "keyframes": [],
+     "mask": null,
+     "audioEffects": null,
+     "flip": null,
+     "shapeConfig": null,
+     "path": null,
+     "baseStyle": null,
+     "lineStart": null,
+     "lineEnd": null,
+     "blendMode": null
+    }
+   ]
+  },
+  {
+   "trackId": "794026012419795",
+   "type": "TEXT",
+   "zindex": 44,
+   "visible": true,
+   "muted": null,
+   "clips": [
+    {
+     "type": "TEXT",
+     "clipId": "clip-0f7b62e3-fdae-453e-b149-4b8d92b038ec",
+     "priority": 0,
+     "start": 19403,
+     "end": 21740,
+     "speed": 1.0,
+     "trimStart": 0,
+     "trimEnd": 0,
+     "volume": 0.0,
+     "muted": false,
+     "visible": true,
+     "fadeIn": 0,
+     "fadeOut": 0,
+     "opacity": 1.0,
+     "file": null,
+     "originalFile": null,
+     "effectIntensity": null,
+     "crop": null,
+     "transformation": {
+      "size": 24.46948320135913,
+      "rotation": 0.0,
+      "position": {
+       "x": 0.5398367354798533,
+       "y": 0.375453540469021
+      },
+      "maxWidth": 2.1268881626724765,
+      "tiltX": 0,
+      "tiltY": 0
+     },
+     "value": "next",
+     "style": {
+      "fontId": "b15cf926-bbba-462c-81ac-e54f7475d608",
+      "italic": false,
+      "textAlign": "LEFT",
+      "textTransform": "NONE",
+      "color": "#FFFFFF",
+      "lineHeight": 1.0,
+      "letterSpacing": -0.025,
+      "fontWeight": 800,
+      "strokeWidthRatio": 0.0,
+      "shadowColor": "#000000",
+      "shadowBlurRatio": 0.07,
+      "shadowDistanceRatio": 0.015,
+      "shadowAngle": 90.0,
+      "backgroundRadiusRatio": 0.0,
+      "backgroundPaddingXRatio": 0.0,
+      "backgroundPaddingYRatio": 0.0
+     },
+     "textAnimations": {
+      "inAnimationId": "c9c00437-e849-55d1-835a-db22e844ecaa",
+      "inAnimationDuration": 850
+     },
+     "loopable": false,
+     "duration": 0,
+     "cornerRadius": 0.0,
+     "filters": null,
+     "lutId": null,
+     "opacityFade": {
+      "opacityFadeIn": 0,
+      "opacityFadeOut": 0,
+      "interpolation": {
+       "value": [
+        0.0,
+        0.0,
+        0.67,
+        1.0
+       ],
+       "type": "BEZIER"
+      }
+     },
+     "keyframes": [],
+     "mask": null,
+     "audioEffects": null,
+     "flip": null,
+     "shapeConfig": null,
+     "path": null,
+     "baseStyle": null,
+     "lineStart": null,
+     "lineEnd": null,
+     "blendMode": null
+    }
+   ]
+  },
+  {
+   "trackId": "835374151768075",
+   "type": "TEXT",
+   "zindex": 43,
+   "visible": true,
+   "muted": null,
+   "clips": [
+    {
+     "type": "TEXT",
+     "clipId": "clip-0d486152-9b17-4425-9d75-b95f8d988e69",
+     "priority": 0,
+     "start": 19203,
+     "end": 21740,
+     "speed": 1.0,
+     "trimStart": 0,
+     "trimEnd": 0,
+     "volume": 0.0,
+     "muted": false,
+     "visible": true,
+     "fadeIn": 0,
+     "fadeOut": 0,
+     "opacity": 1.0,
+     "file": null,
+     "originalFile": null,
+     "effectIntensity": null,
+     "crop": null,
+     "transformation": {
+      "size": 16.79278258916803,
+      "rotation": 0.0,
+      "position": {
+       "x": 0.37603158213916443,
+       "y": 0.3881508588222167
+      },
+      "maxWidth": 2.0944973544973546,
+      "tiltX": 0,
+      "tiltY": 0
+     },
+     "value": "your",
+     "style": {
+      "fontId": "b15cf926-bbba-462c-81ac-e54f7475d608",
+      "italic": false,
+      "textAlign": "LEFT",
+      "textTransform": "NONE",
+      "color": "#FFFFFF",
+      "lineHeight": 1.0,
+      "letterSpacing": -0.02,
+      "fontWeight": 400,
+      "strokeWidthRatio": 0.0,
+      "shadowColor": "#000000",
+      "shadowBlurRatio": 0.07,
+      "shadowDistanceRatio": 0.015,
+      "shadowAngle": 90.0,
+      "backgroundRadiusRatio": 0.0,
+      "backgroundPaddingXRatio": 0.0,
+      "backgroundPaddingYRatio": 0.0
+     },
+     "textAnimations": {
+      "inAnimationId": "c9c00437-e849-55d1-835a-db22e844ecaa",
+      "inAnimationDuration": 850
+     },
+     "loopable": false,
+     "duration": 0,
+     "cornerRadius": 0.0,
+     "filters": null,
+     "lutId": null,
+     "opacityFade": {
+      "opacityFadeIn": 0,
+      "opacityFadeOut": 0,
+      "interpolation": {
+       "value": [
+        0.0,
+        0.0,
+        0.67,
+        1.0
+       ],
+       "type": "BEZIER"
+      }
+     },
+     "keyframes": [],
+     "mask": null,
+     "audioEffects": null,
+     "flip": null,
+     "shapeConfig": null,
+     "path": null,
+     "baseStyle": null,
+     "lineStart": null,
+     "lineEnd": null,
+     "blendMode": null
+    }
+   ]
+  },
+  {
+   "trackId": "692555219609255",
+   "type": "TEXT",
+   "zindex": 42,
+   "visible": true,
+   "muted": null,
+   "clips": [
+    {
+     "type": "TEXT",
+     "clipId": "clip-5adf2dd8-7ab7-4248-91ca-daa8b5047ca3",
+     "priority": 0,
+     "start": 18483,
+     "end": 21740,
+     "speed": 1.0,
+     "trimStart": 0,
+     "trimEnd": 0,
+     "volume": 0.0,
+     "muted": false,
+     "visible": true,
+     "fadeIn": 0,
+     "fadeOut": 0,
+     "opacity": 1.0,
+     "file": null,
+     "originalFile": null,
+     "effectIntensity": null,
+     "crop": null,
+     "transformation": {
+      "size": 24.46948320135913,
+      "rotation": 0.0,
+      "position": {
+       "x": 0.10114639237945194,
+       "y": 0.37482115449635217
+      },
+      "maxWidth": 2.526888162672476,
+      "tiltX": 0,
+      "tiltY": 0
+     },
+     "value": "Make",
+     "style": {
+      "fontId": "b15cf926-bbba-462c-81ac-e54f7475d608",
+      "italic": false,
+      "textAlign": "LEFT",
+      "textTransform": "NONE",
+      "color": "#FFFFFF",
+      "lineHeight": 1.0,
+      "letterSpacing": -0.025,
+      "fontWeight": 800,
+      "strokeWidthRatio": 0.0,
+      "shadowColor": "#000000",
+      "shadowBlurRatio": 0.07,
+      "shadowDistanceRatio": 0.015,
+      "shadowAngle": 90.0,
+      "backgroundRadiusRatio": 0.0,
+      "backgroundPaddingXRatio": 0.0,
+      "backgroundPaddingYRatio": 0.0
+     },
+     "textAnimations": {
+      "inAnimationId": "c9c00437-e849-55d1-835a-db22e844ecaa",
+      "inAnimationDuration": 850
+     },
+     "loopable": false,
+     "duration": 0,
+     "cornerRadius": 0.0,
+     "filters": null,
+     "lutId": null,
+     "opacityFade": {
+      "opacityFadeIn": 0,
+      "opacityFadeOut": 0,
+      "interpolation": {
+       "value": [
+        0.0,
+        0.0,
+        0.67,
+        1.0
+       ],
+       "type": "BEZIER"
+      }
+     },
+     "keyframes": [],
+     "mask": null,
+     "audioEffects": null,
+     "flip": null,
+     "shapeConfig": null,
+     "path": null,
+     "baseStyle": null,
+     "lineStart": null,
+     "lineEnd": null,
+     "blendMode": null
+    }
+   ]
+  },
+  {
+   "trackId": "526277680391817",
+   "type": "TEXT",
+   "zindex": 41,
+   "visible": true,
+   "muted": null,
+   "clips": [
+    {
+     "type": "TEXT",
+     "clipId": "clip-15fc073c-9416-40e2-b937-a05454e93c38",
+     "priority": 0,
+     "start": 16980,
+     "end": 18240,
+     "speed": 1.0,
+     "trimStart": 0,
+     "trimEnd": 0,
+     "volume": 0.0,
+     "muted": false,
+     "visible": true,
+     "fadeIn": 0,
+     "fadeOut": 0,
+     "opacity": 1.0,
+     "file": null,
+     "originalFile": null,
+     "effectIntensity": null,
+     "crop": null,
+     "transformation": {
+      "size": 33.078896885846646,
+      "rotation": 0.0,
+      "position": {
+       "x": 0.08379629629629609,
+       "y": 0.4927099471364442
+      },
+      "maxWidth": 5.589484385041532,
+      "tiltX": 0,
+      "tiltY": 0
+     },
+     "value": "unexpected.",
+     "style": {
+      "fontId": "b15cf926-bbba-462c-81ac-e54f7475d608",
+      "italic": false,
+      "textAlign": "LEFT",
+      "textTransform": "NONE",
+      "color": "#7F77DD",
+      "lineHeight": 1.0,
+      "letterSpacing": -0.03,
+      "fontWeight": 800,
+      "strokeWidthRatio": 0.0,
+      "shadowColor": "#000000",
+      "shadowBlurRatio": 0.07,
+      "shadowDistanceRatio": 0.015,
+      "shadowAngle": 90.0,
+      "backgroundRadiusRatio": 0.0,
+      "backgroundPaddingXRatio": 0.0,
+      "backgroundPaddingYRatio": 0.0
+     },
+     "textAnimations": {
+      "inAnimationId": "c9c00437-e849-55d1-835a-db22e844ecaa",
+      "inAnimationDuration": 850
+     },
+     "loopable": false,
+     "duration": 0,
+     "cornerRadius": 0.0,
+     "filters": null,
+     "lutId": null,
+     "opacityFade": {
+      "opacityFadeIn": 0,
+      "opacityFadeOut": 0,
+      "interpolation": {
+       "value": [
+        0.0,
+        0.0,
+        0.67,
+        1.0
+       ],
+       "type": "BEZIER"
+      }
+     },
+     "keyframes": [],
+     "mask": null,
+     "audioEffects": null,
+     "flip": null,
+     "shapeConfig": null,
+     "path": null,
+     "baseStyle": null,
+     "lineStart": null,
+     "lineEnd": null,
+     "blendMode": null
+    }
+   ]
+  },
+  {
+   "trackId": "422572312300686",
+   "type": "TEXT",
+   "zindex": 40,
+   "visible": true,
+   "muted": null,
+   "clips": [
+    {
+     "type": "TEXT",
+     "clipId": "clip-f6dea981-ea1c-4a2a-887c-65852cda9349",
+     "priority": 0,
+     "start": 16620,
+     "end": 18240,
+     "speed": 1.0,
+     "trimStart": 0,
+     "trimEnd": 0,
+     "volume": 0.0,
+     "muted": false,
+     "visible": true,
+     "fadeIn": 0,
+     "fadeOut": 0,
+     "opacity": 1.0,
+     "file": null,
+     "originalFile": null,
+     "effectIntensity": null,
+     "crop": null,
+     "transformation": {
+      "size": 16.8206836005359,
+      "rotation": 0.0,
+      "position": {
+       "x": 0.6819593291391033,
+       "y": 0.43547661536913296
+      },
+      "maxWidth": 1.4700529100529105,
+      "tiltX": 0,
+      "tiltY": 0
+     },
+     "value": "are",
+     "style": {
+      "fontId": "b15cf926-bbba-462c-81ac-e54f7475d608",
+      "italic": false,
+      "textAlign": "LEFT",
+      "textTransform": "NONE",
+      "color": "#FFFFFF",
+      "lineHeight": 1.0,
+      "letterSpacing": -0.02,
+      "fontWeight": 400,
+      "strokeWidthRatio": 0.0,
+      "shadowColor": "#000000",
+      "shadowBlurRatio": 0.07,
+      "shadowDistanceRatio": 0.015,
+      "shadowAngle": 90.0,
+      "backgroundRadiusRatio": 0.0,
+      "backgroundPaddingXRatio": 0.0,
+      "backgroundPaddingYRatio": 0.0
+     },
+     "textAnimations": {
+      "inAnimationId": "c9c00437-e849-55d1-835a-db22e844ecaa",
+      "inAnimationDuration": 850
+     },
+     "loopable": false,
+     "duration": 0,
+     "cornerRadius": 0.0,
+     "filters": null,
+     "lutId": null,
+     "opacityFade": {
+      "opacityFadeIn": 0,
+      "opacityFadeOut": 0,
+      "interpolation": {
+       "value": [
+        0.0,
+        0.0,
+        0.67,
+        1.0
+       ],
+       "type": "BEZIER"
+      }
+     },
+     "keyframes": [],
+     "mask": null,
+     "audioEffects": null,
+     "flip": null,
+     "shapeConfig": null,
+     "path": null,
+     "baseStyle": null,
+     "lineStart": null,
+     "lineEnd": null,
+     "blendMode": null
+    }
+   ]
+  },
+  {
+   "trackId": "4578080037424",
+   "type": "TEXT",
+   "zindex": 39,
+   "visible": true,
+   "muted": null,
+   "clips": [
+    {
+     "type": "TEXT",
+     "clipId": "clip-5776e5bb-6450-4162-b989-ac05bc75a271",
+     "priority": 0,
+     "start": 15940,
+     "end": 18240,
+     "speed": 1.0,
+     "trimStart": 0,
+     "trimEnd": 0,
+     "volume": 0.0,
+     "muted": false,
+     "visible": true,
+     "fadeIn": 0,
+     "fadeOut": 0,
+     "opacity": 1.0,
+     "file": null,
+     "originalFile": null,
+     "effectIntensity": null,
+     "crop": null,
+     "transformation": {
+      "size": 27.87427568088806,
+      "rotation": 0.0,
+      "position": {
+       "x": 0.3820527704243631,
+       "y": 0.42191492875822706
+      },
+      "maxWidth": 2.7201689988481514,
+      "tiltX": 0,
+      "tiltY": 0
+     },
+     "value": "ideas",
+     "style": {
+      "fontId": "b15cf926-bbba-462c-81ac-e54f7475d608",
+      "italic": false,
+      "textAlign": "LEFT",
+      "textTransform": "NONE",
+      "color": "#FFFFFF",
+      "lineHeight": 1.0,
+      "letterSpacing": -0.025,
+      "fontWeight": 800,
+      "strokeWidthRatio": 0.0,
+      "shadowColor": "#000000",
+      "shadowBlurRatio": 0.07,
+      "shadowDistanceRatio": 0.015,
+      "shadowAngle": 90.0,
+      "backgroundRadiusRatio": 0.0,
+      "backgroundPaddingXRatio": 0.0,
+      "backgroundPaddingYRatio": 0.0
+     },
+     "textAnimations": {
+      "inAnimationId": "c9c00437-e849-55d1-835a-db22e844ecaa",
+      "inAnimationDuration": 850
+     },
+     "loopable": false,
+     "duration": 0,
+     "cornerRadius": 0.0,
+     "filters": null,
+     "lutId": null,
+     "opacityFade": {
+      "opacityFadeIn": 0,
+      "opacityFadeOut": 0,
+      "interpolation": {
+       "value": [
+        0.0,
+        0.0,
+        0.67,
+        1.0
+       ],
+       "type": "BEZIER"
+      }
+     },
+     "keyframes": [],
+     "mask": null,
+     "audioEffects": null,
+     "flip": null,
+     "shapeConfig": null,
+     "path": null,
+     "baseStyle": null,
+     "lineStart": null,
+     "lineEnd": null,
+     "blendMode": null
+    }
+   ]
+  },
+  {
+   "trackId": "157480004525145",
+   "type": "TEXT",
+   "zindex": 38,
+   "visible": true,
+   "muted": null,
+   "clips": [
+    {
+     "type": "TEXT",
+     "clipId": "clip-92e7f33f-1f8b-45ea-829d-ae74c0f07334",
+     "priority": 0,
+     "start": 15500,
+     "end": 18240,
+     "speed": 1.0,
+     "trimStart": 0,
+     "trimEnd": 0,
+     "volume": 0.0,
+     "muted": false,
+     "visible": true,
+     "fadeIn": 0,
+     "fadeOut": 0,
+     "opacity": 1.0,
+     "file": null,
+     "originalFile": null,
+     "effectIntensity": null,
+     "crop": null,
+     "transformation": {
+      "size": 24.510138960780882,
+      "rotation": 0.0,
+      "position": {
+       "x": 0.15299444154428773,
+       "y": 0.4259859322896776
+      },
+      "maxWidth": 2.037999273783587,
+      "tiltX": 0,
+      "tiltY": 0
+     },
+     "value": "best",
+     "style": {
+      "fontId": "b15cf926-bbba-462c-81ac-e54f7475d608",
+      "italic": false,
+      "textAlign": "LEFT",
+      "textTransform": "NONE",
+      "color": "#FFFFFF",
+      "lineHeight": 1.0,
+      "letterSpacing": -0.025,
+      "fontWeight": 800,
+      "strokeWidthRatio": 0.0,
+      "shadowColor": "#000000",
+      "shadowBlurRatio": 0.07,
+      "shadowDistanceRatio": 0.015,
+      "shadowAngle": 90.0,
+      "backgroundRadiusRatio": 0.0,
+      "backgroundPaddingXRatio": 0.0,
+      "backgroundPaddingYRatio": 0.0
+     },
+     "textAnimations": {
+      "inAnimationId": "c9c00437-e849-55d1-835a-db22e844ecaa",
+      "inAnimationDuration": 850
+     },
+     "loopable": false,
+     "duration": 0,
+     "cornerRadius": 0.0,
+     "filters": null,
+     "lutId": null,
+     "opacityFade": {
+      "opacityFadeIn": 0,
+      "opacityFadeOut": 0,
+      "interpolation": {
+       "value": [
+        0.0,
+        0.0,
+        0.67,
+        1.0
+       ],
+       "type": "BEZIER"
+      }
+     },
+     "keyframes": [],
+     "mask": null,
+     "audioEffects": null,
+     "flip": null,
+     "shapeConfig": null,
+     "path": null,
+     "baseStyle": null,
+     "lineStart": null,
+     "lineEnd": null,
+     "blendMode": null
+    }
+   ]
+  },
+  {
+   "trackId": "967953016646859",
+   "type": "TEXT",
+   "zindex": 37,
+   "visible": true,
+   "muted": null,
+   "clips": [
+    {
+     "type": "TEXT",
+     "clipId": "clip-6c8aeee6-07ed-4b53-8409-793506e47e4e",
+     "priority": 0,
+     "start": 15260,
+     "end": 18240,
+     "speed": 1.0,
+     "trimStart": 0,
+     "trimEnd": 0,
+     "volume": 0.0,
+     "muted": false,
+     "visible": true,
+     "fadeIn": 0,
+     "fadeOut": 0,
+     "opacity": 1.0,
+     "file": null,
+     "originalFile": null,
+     "effectIntensity": null,
+     "crop": null,
+     "transformation": {
+      "size": 16.8206836005359,
+      "rotation": 0.0,
+      "position": {
+       "x": 0.7430383239844752,
+       "y": 0.3677774500474261
+      },
+      "maxWidth": 1.5589417989417993,
+      "tiltX": 0,
+      "tiltY": 0
+     },
+     "value": "the",
+     "style": {
+      "fontId": "b15cf926-bbba-462c-81ac-e54f7475d608",
+      "italic": false,
+      "textAlign": "LEFT",
+      "textTransform": "NONE",
+      "color": "#FFFFFF",
+      "lineHeight": 1.0,
+      "letterSpacing": -0.02,
+      "fontWeight": 400,
+      "strokeWidthRatio": 0.0,
+      "shadowColor": "#000000",
+      "shadowBlurRatio": 0.07,
+      "shadowDistanceRatio": 0.015,
+      "shadowAngle": 90.0,
+      "backgroundRadiusRatio": 0.0,
+      "backgroundPaddingXRatio": 0.0,
+      "backgroundPaddingYRatio": 0.0
+     },
+     "textAnimations": {
+      "inAnimationId": "c9c00437-e849-55d1-835a-db22e844ecaa",
+      "inAnimationDuration": 850
+     },
+     "loopable": false,
+     "duration": 0,
+     "cornerRadius": 0.0,
+     "filters": null,
+     "lutId": null,
+     "opacityFade": {
+      "opacityFadeIn": 0,
+      "opacityFadeOut": 0,
+      "interpolation": {
+       "value": [
+        0.0,
+        0.0,
+        0.67,
+        1.0
+       ],
+       "type": "BEZIER"
+      }
+     },
+     "keyframes": [],
+     "mask": null,
+     "audioEffects": null,
+     "flip": null,
+     "shapeConfig": null,
+     "path": null,
+     "baseStyle": null,
+     "lineStart": null,
+     "lineEnd": null,
+     "blendMode": null
+    }
+   ]
+  },
+  {
+   "trackId": "646698440354600",
+   "type": "TEXT",
+   "zindex": 36,
+   "visible": true,
+   "muted": null,
+   "clips": [
+    {
+     "type": "TEXT",
+     "clipId": "clip-0e4feb85-418e-4e8c-8ab8-7e9cb391e996",
+     "priority": 0,
+     "start": 14100,
+     "end": 18240,
+     "speed": 1.0,
+     "trimStart": 0,
+     "trimEnd": 0,
+     "volume": 0.0,
+     "muted": false,
+     "visible": true,
+     "fadeIn": 0,
+     "fadeOut": 0,
+     "opacity": 1.0,
+     "file": null,
+     "originalFile": null,
+     "effectIntensity": null,
+     "crop": null,
+     "transformation": {
+      "size": 44.45466380141631,
+      "rotation": 0.0,
+      "position": {
+       "x": 0.08568556388390262,
+       "y": 0.34739121303793824
+      },
+      "maxWidth": 3.3389389389389392,
+      "tiltX": 0,
+      "tiltY": 0
+     },
+     "value": "Sometimes",
+     "style": {
+      "fontId": "f47acd26-8766-496e-9053-4fe63e72cbc3",
+      "italic": false,
+      "textAlign": "LEFT",
+      "textTransform": "NONE",
+      "color": "#7F77DD",
+      "lineHeight": 1.0,
+      "letterSpacing": 0.0,
+      "fontWeight": 400,
+      "strokeWidthRatio": 0.0,
+      "shadowColor": "#000000",
+      "shadowBlurRatio": 0.07,
+      "shadowDistanceRatio": 0.015,
+      "shadowAngle": 90.0,
+      "backgroundRadiusRatio": 0.0,
+      "backgroundPaddingXRatio": 0.0,
+      "backgroundPaddingYRatio": 0.0
+     },
+     "textAnimations": {
+      "inAnimationId": "c9c00437-e849-55d1-835a-db22e844ecaa",
+      "inAnimationDuration": 850
+     },
+     "loopable": false,
+     "duration": 0,
+     "cornerRadius": 0.0,
+     "filters": null,
+     "lutId": null,
+     "opacityFade": {
+      "opacityFadeIn": 0,
+      "opacityFadeOut": 0,
+      "interpolation": {
+       "value": [
+        0.0,
+        0.0,
+        0.67,
+        1.0
+       ],
+       "type": "BEZIER"
+      }
+     },
+     "keyframes": [],
+     "mask": null,
+     "audioEffects": null,
+     "flip": null,
+     "shapeConfig": null,
+     "path": null,
+     "baseStyle": null,
+     "lineStart": null,
+     "lineEnd": null,
+     "blendMode": null
+    }
+   ]
+  },
+  {
+   "trackId": "221703061152399",
+   "type": "TEXT",
+   "zindex": 35,
+   "visible": true,
+   "muted": null,
+   "clips": [
+    {
+     "type": "TEXT",
+     "clipId": "clip-ed1a543f-0812-4743-b92c-0180eb29f5a1",
+     "priority": 0,
+     "start": 13040,
+     "end": 14100,
+     "speed": 1.0,
+     "trimStart": 0,
+     "trimEnd": 0,
+     "volume": 0.0,
+     "muted": false,
+     "visible": true,
+     "fadeIn": 0,
+     "fadeOut": 0,
+     "opacity": 1.0,
+     "file": null,
+     "originalFile": null,
+     "effectIntensity": null,
+     "crop": null,
+     "transformation": {
+      "size": 39.36,
+      "rotation": 0.0,
+      "position": {
+       "x": 0.18375333333333332,
+       "y": 0.6375143750000001
+      },
+      "maxWidth": 3.913125564588979,
+      "tiltX": 0,
+      "tiltY": 0
+     },
+     "value": "forward.",
+     "style": {
+      "fontId": "b15cf926-bbba-462c-81ac-e54f7475d608",
+      "italic": false,
+      "textAlign": "LEFT",
+      "textTransform": "NONE",
+      "color": "#7F77DD",
+      "lineHeight": 1.0,
+      "letterSpacing": -0.03,
+      "fontWeight": 800,
+      "strokeWidthRatio": 0.0,
+      "shadowColor": "#000000",
+      "shadowBlurRatio": 0.07,
+      "shadowDistanceRatio": 0.015,
+      "shadowAngle": 90.0,
+      "backgroundRadiusRatio": 0.0,
+      "backgroundPaddingXRatio": 0.0,
+      "backgroundPaddingYRatio": 0.0
+     },
+     "textAnimations": {
+      "inAnimationId": "c9c00437-e849-55d1-835a-db22e844ecaa",
+      "inAnimationDuration": 850
+     },
+     "loopable": false,
+     "duration": 0,
+     "cornerRadius": 0.0,
+     "filters": null,
+     "lutId": null,
+     "opacityFade": {
+      "opacityFadeIn": 0,
+      "opacityFadeOut": 0,
+      "interpolation": {
+       "value": [
+        0.0,
+        0.0,
+        0.67,
+        1.0
+       ],
+       "type": "BEZIER"
+      }
+     },
+     "keyframes": [],
+     "mask": null,
+     "audioEffects": null,
+     "flip": null,
+     "shapeConfig": null,
+     "path": null,
+     "baseStyle": null,
+     "lineStart": null,
+     "lineEnd": null,
+     "blendMode": null
+    }
+   ]
+  },
+  {
+   "trackId": "864505143618916",
+   "type": "TEXT",
+   "zindex": 34,
+   "visible": true,
+   "muted": null,
+   "clips": [
+    {
+     "type": "TEXT",
+     "clipId": "clip-2f992191-4dd9-459a-b8a2-a213b5ba381c",
+     "priority": 0,
+     "start": 12240,
+     "end": 14100,
+     "speed": 1.0,
+     "trimStart": 0,
+     "trimEnd": 0,
+     "volume": 0.0,
+     "muted": false,
+     "visible": true,
+     "fadeIn": 0,
+     "fadeOut": 0,
+     "opacity": 1.0,
+     "file": null,
+     "originalFile": null,
+     "effectIntensity": null,
+     "crop": null,
+     "transformation": {
+      "size": 44.400000000000006,
+      "rotation": 0.0,
+      "position": {
+       "x": 0.315,
+       "y": 0.57822375
+      },
+      "maxWidth": 2.0500500500500496,
+      "tiltX": 0,
+      "tiltY": 0
+     },
+     "value": "moving",
+     "style": {
+      "fontId": "f47acd26-8766-496e-9053-4fe63e72cbc3",
+      "italic": false,
+      "textAlign": "LEFT",
+      "textTransform": "NONE",
+      "color": "#7F77DD",
+      "lineHeight": 1.0,
+      "letterSpacing": 0.0,
+      "fontWeight": 400,
+      "strokeWidthRatio": 0.0,
+      "shadowColor": "#000000",
+      "shadowBlurRatio": 0.07,
+      "shadowDistanceRatio": 0.015,
+      "shadowAngle": 90.0,
+      "backgroundRadiusRatio": 0.0,
+      "backgroundPaddingXRatio": 0.0,
+      "backgroundPaddingYRatio": 0.0
+     },
+     "textAnimations": {
+      "inAnimationId": "c9c00437-e849-55d1-835a-db22e844ecaa",
+      "inAnimationDuration": 850
+     },
+     "loopable": false,
+     "duration": 0,
+     "cornerRadius": 0.0,
+     "filters": null,
+     "lutId": null,
+     "opacityFade": {
+      "opacityFadeIn": 0,
+      "opacityFadeOut": 0,
+      "interpolation": {
+       "value": [
+        0.0,
+        0.0,
+        0.67,
+        1.0
+       ],
+       "type": "BEZIER"
+      }
+     },
+     "keyframes": [],
+     "mask": null,
+     "audioEffects": null,
+     "flip": null,
+     "shapeConfig": null,
+     "path": null,
+     "baseStyle": null,
+     "lineStart": null,
+     "lineEnd": null,
+     "blendMode": null
+    }
+   ]
+  },
+  {
+   "trackId": "324750311115360",
+   "type": "TEXT",
+   "zindex": 33,
+   "visible": true,
+   "muted": null,
+   "clips": [
+    {
+     "type": "TEXT",
+     "clipId": "clip-eae05f92-e643-4d4a-bb98-5befcd275812",
+     "priority": 0,
+     "start": 11440,
+     "end": 14100,
+     "speed": 1.0,
+     "trimStart": 0,
+     "trimEnd": 0,
+     "volume": 0.0,
+     "muted": false,
+     "visible": true,
+     "fadeIn": 0,
+     "fadeOut": 0,
+     "opacity": 1.0,
+     "file": null,
+     "originalFile": null,
+     "effectIntensity": null,
+     "crop": null,
+     "transformation": {
+      "size": 27.98371703067821,
+      "rotation": 0.0,
+      "position": {
+       "x": 0.5643518518518519,
+       "y": 0.775
+      },
+      "maxWidth": 2.402043422733078,
+      "tiltX": 0,
+      "tiltY": 0
+     },
+     "value": "ideas",
+     "style": {
+      "fontId": "b15cf926-bbba-462c-81ac-e54f7475d608",
+      "italic": false,
+      "textAlign": "LEFT",
+      "textTransform": "NONE",
+      "color": "#FFFFFF",
+      "lineHeight": 1.0,
+      "letterSpacing": -0.025,
+      "fontWeight": 800,
+      "strokeWidthRatio": 0.0,
+      "shadowColor": "#000000",
+      "shadowBlurRatio": 0.07,
+      "shadowDistanceRatio": 0.015,
+      "shadowAngle": 90.0,
+      "backgroundRadiusRatio": 0.0,
+      "backgroundPaddingXRatio": 0.0,
+      "backgroundPaddingYRatio": 0.0
+     },
+     "textAnimations": {
+      "inAnimationId": "c9c00437-e849-55d1-835a-db22e844ecaa",
+      "inAnimationDuration": 850
+     },
+     "loopable": false,
+     "duration": 0,
+     "cornerRadius": 0.0,
+     "filters": null,
+     "lutId": null,
+     "opacityFade": {
+      "opacityFadeIn": 0,
+      "opacityFadeOut": 0,
+      "interpolation": {
+       "value": [
+        0.0,
+        0.0,
+        0.67,
+        1.0
+       ],
+       "type": "BEZIER"
+      }
+     },
+     "keyframes": [],
+     "mask": null,
+     "audioEffects": null,
+     "flip": null,
+     "shapeConfig": null,
+     "path": null,
+     "baseStyle": null,
+     "lineStart": null,
+     "lineEnd": null,
+     "blendMode": null
+    }
+   ]
+  },
+  {
+   "trackId": "798377149519117",
+   "type": "TEXT",
+   "zindex": 32,
+   "visible": true,
+   "muted": null,
+   "clips": [
+    {
+     "type": "TEXT",
+     "clipId": "clip-caa14e32-1c31-4ac5-8522-7dde11c98378",
+     "priority": 0,
+     "start": 11160,
+     "end": 14100,
+     "speed": 1.0,
+     "trimStart": 0,
+     "trimEnd": 0,
+     "volume": 0.0,
+     "muted": false,
+     "visible": true,
+     "fadeIn": 0,
+     "fadeOut": 0,
+     "opacity": 1.0,
+     "file": null,
+     "originalFile": null,
+     "effectIntensity": null,
+     "crop": null,
+     "transformation": {
+      "size": 16.82074993803725,
+      "rotation": 0.0,
+      "position": {
+       "x": 0.41671423276078456,
+       "y": 0.5506134350338296
+      },
+      "maxWidth": 2.0944973544973546,
+      "tiltX": 0,
+      "tiltY": 0
+     },
+     "value": "your",
+     "style": {
+      "fontId": "b15cf926-bbba-462c-81ac-e54f7475d608",
+      "italic": false,
+      "textAlign": "LEFT",
+      "textTransform": "NONE",
+      "color": "#FFFFFF",
+      "lineHeight": 1.0,
+      "letterSpacing": -0.02,
+      "fontWeight": 400,
+      "strokeWidthRatio": 0.0,
+      "shadowColor": "#000000",
+      "shadowBlurRatio": 0.07,
+      "shadowDistanceRatio": 0.015,
+      "shadowAngle": 90.0,
+      "backgroundRadiusRatio": 0.0,
+      "backgroundPaddingXRatio": 0.0,
+      "backgroundPaddingYRatio": 0.0
+     },
+     "textAnimations": {
+      "inAnimationId": "c9c00437-e849-55d1-835a-db22e844ecaa",
+      "inAnimationDuration": 850
+     },
+     "loopable": false,
+     "duration": 0,
+     "cornerRadius": 0.0,
+     "filters": null,
+     "lutId": null,
+     "opacityFade": {
+      "opacityFadeIn": 0,
+      "opacityFadeOut": 0,
+      "interpolation": {
+       "value": [
+        0.0,
+        0.0,
+        0.67,
+        1.0
+       ],
+       "type": "BEZIER"
+      }
+     },
+     "keyframes": [],
+     "mask": null,
+     "audioEffects": null,
+     "flip": null,
+     "shapeConfig": null,
+     "path": null,
+     "baseStyle": null,
+     "lineStart": null,
+     "lineEnd": null,
+     "blendMode": null
+    }
+   ]
+  },
+  {
+   "trackId": "881928117716666",
+   "type": "TEXT",
+   "zindex": 31,
+   "visible": true,
+   "muted": null,
+   "clips": [
+    {
+     "type": "TEXT",
+     "clipId": "clip-b2108d30-1f5d-4457-8d59-02afe3592fdf",
+     "priority": 0,
+     "start": 10720,
+     "end": 14100,
+     "speed": 1.0,
+     "trimStart": 0,
+     "trimEnd": 0,
+     "volume": 0.0,
+     "muted": false,
+     "visible": true,
+     "fadeIn": 0,
+     "fadeOut": 0,
+     "opacity": 1.0,
+     "file": null,
+     "originalFile": null,
+     "effectIntensity": null,
+     "crop": null,
+     "transformation": {
+      "size": 24.51023562399714,
+      "rotation": 0.0,
+      "position": {
+       "x": 0.14907407407407403,
+       "y": 0.5429133230197426
+      },
+      "maxWidth": 2.4157770515613652,
+      "tiltX": 0,
+      "tiltY": 0
+     },
+     "value": "Keep",
+     "style": {
+      "fontId": "b15cf926-bbba-462c-81ac-e54f7475d608",
+      "italic": false,
+      "textAlign": "LEFT",
+      "textTransform": "NONE",
+      "color": "#FFFFFF",
+      "lineHeight": 1.0,
+      "letterSpacing": -0.025,
+      "fontWeight": 800,
+      "strokeWidthRatio": 0.0,
+      "shadowColor": "#000000",
+      "shadowBlurRatio": 0.07,
+      "shadowDistanceRatio": 0.015,
+      "shadowAngle": 90.0,
+      "backgroundRadiusRatio": 0.0,
+      "backgroundPaddingXRatio": 0.0,
+      "backgroundPaddingYRatio": 0.0
+     },
+     "textAnimations": {
+      "inAnimationId": "c9c00437-e849-55d1-835a-db22e844ecaa",
+      "inAnimationDuration": 850
+     },
+     "loopable": false,
+     "duration": 0,
+     "cornerRadius": 0.0,
+     "filters": null,
+     "lutId": null,
+     "opacityFade": {
+      "opacityFadeIn": 0,
+      "opacityFadeOut": 0,
+      "interpolation": {
+       "value": [
+        0.0,
+        0.0,
+        0.67,
+        1.0
+       ],
+       "type": "BEZIER"
+      }
+     },
+     "keyframes": [],
+     "mask": null,
+     "audioEffects": null,
+     "flip": null,
+     "shapeConfig": null,
+     "path": null,
+     "baseStyle": null,
+     "lineStart": null,
+     "lineEnd": null,
+     "blendMode": null
+    }
+   ]
+  },
+  {
+   "trackId": "885469888897075",
+   "type": "TEXT",
+   "zindex": 30,
+   "visible": true,
+   "muted": null,
+   "clips": [
+    {
+     "type": "TEXT",
+     "clipId": "clip-9c476e5a-218d-4625-8b73-443cfbadb036",
+     "priority": 0,
+     "start": 9780,
+     "end": 10720,
+     "speed": 1.0,
+     "trimStart": 0,
+     "trimEnd": 0,
+     "volume": 0.0,
+     "muted": false,
+     "visible": true,
+     "fadeIn": 0,
+     "fadeOut": 0,
+     "opacity": 1.0,
+     "file": null,
+     "originalFile": null,
+     "effectIntensity": null,
+     "crop": null,
+     "transformation": {
+      "size": 39.36,
+      "rotation": 0.0,
+      "position": {
+       "x": 0.20744222222222222,
+       "y": 0.7447225
+      },
+      "maxWidth": 3.624236675700089,
+      "tiltX": 0,
+      "tiltY": 0
+     },
+     "value": "explore.",
+     "style": {
+      "fontId": "b15cf926-bbba-462c-81ac-e54f7475d608",
+      "italic": false,
+      "textAlign": "LEFT",
+      "textTransform": "NONE",
+      "color": "#7F77DD",
+      "lineHeight": 1.0,
+      "letterSpacing": -0.03,
+      "fontWeight": 800,
+      "strokeWidthRatio": 0.0,
+      "shadowColor": "#000000",
+      "shadowBlurRatio": 0.07,
+      "shadowDistanceRatio": 0.015,
+      "shadowAngle": 90.0,
+      "backgroundRadiusRatio": 0.0,
+      "backgroundPaddingXRatio": 0.0,
+      "backgroundPaddingYRatio": 0.0
+     },
+     "textAnimations": {
+      "inAnimationId": "c9c00437-e849-55d1-835a-db22e844ecaa",
+      "inAnimationDuration": 850
+     },
+     "loopable": false,
+     "duration": 0,
+     "cornerRadius": 0.0,
+     "filters": null,
+     "lutId": null,
+     "opacityFade": {
+      "opacityFadeIn": 0,
+      "opacityFadeOut": 0,
+      "interpolation": {
+       "value": [
+        0.0,
+        0.0,
+        0.67,
+        1.0
+       ],
+       "type": "BEZIER"
+      }
+     },
+     "keyframes": [],
+     "mask": null,
+     "audioEffects": null,
+     "flip": null,
+     "shapeConfig": null,
+     "path": null,
+     "baseStyle": null,
+     "lineStart": null,
+     "lineEnd": null,
+     "blendMode": null
+    }
+   ]
+  },
+  {
+   "trackId": "972996989741668",
+   "type": "TEXT",
+   "zindex": 29,
+   "visible": true,
+   "muted": null,
+   "clips": [
+    {
+     "type": "TEXT",
+     "clipId": "clip-82766563-c72f-45b5-9fd9-a1875598acc3",
+     "priority": 0,
+     "start": 9140,
+     "end": 10720,
+     "speed": 1.0,
+     "trimStart": 0,
+     "trimEnd": 0,
+     "volume": 0.0,
+     "muted": false,
+     "visible": true,
+     "fadeIn": 0,
+     "fadeOut": 0,
+     "opacity": 1.0,
+     "file": null,
+     "originalFile": null,
+     "effectIntensity": null,
+     "crop": null,
+     "transformation": {
+      "size": 16.8,
+      "rotation": 0.0,
+      "position": {
+       "x": 0.5543666666666667,
+       "y": 0.67525
+      },
+      "maxWidth": 1.0678306878306878,
+      "tiltX": 0,
+      "tiltY": 0
+     },
+     "value": "to",
+     "style": {
+      "fontId": "b15cf926-bbba-462c-81ac-e54f7475d608",
+      "italic": false,
+      "textAlign": "LEFT",
+      "textTransform": "NONE",
+      "color": "#FFFFFF",
+      "lineHeight": 1.0,
+      "letterSpacing": -0.02,
+      "fontWeight": 400,
+      "strokeWidthRatio": 0.0,
+      "shadowColor": "#000000",
+      "shadowBlurRatio": 0.07,
+      "shadowDistanceRatio": 0.015,
+      "shadowAngle": 90.0,
+      "backgroundRadiusRatio": 0.0,
+      "backgroundPaddingXRatio": 0.0,
+      "backgroundPaddingYRatio": 0.0
+     },
+     "textAnimations": {
+      "inAnimationId": "c9c00437-e849-55d1-835a-db22e844ecaa",
+      "inAnimationDuration": 850
+     },
+     "loopable": false,
+     "duration": 0,
+     "cornerRadius": 0.0,
+     "filters": null,
+     "lutId": null,
+     "opacityFade": {
+      "opacityFadeIn": 0,
+      "opacityFadeOut": 0,
+      "interpolation": {
+       "value": [
+        0.0,
+        0.0,
+        0.67,
+        1.0
+       ],
+       "type": "BEZIER"
+      }
+     },
+     "keyframes": [],
+     "mask": null,
+     "audioEffects": null,
+     "flip": null,
+     "shapeConfig": null,
+     "path": null,
+     "baseStyle": null,
+     "lineStart": null,
+     "lineEnd": null,
+     "blendMode": null
+    }
+   ]
+  },
+  {
+   "trackId": "316900054881512",
+   "type": "TEXT",
+   "zindex": 28,
+   "visible": true,
+   "muted": null,
+   "clips": [
+    {
+     "type": "TEXT",
+     "clipId": "clip-a8e05ecc-6ab5-4608-a389-c066d5ce1ebc",
+     "priority": 0,
+     "start": 8540,
+     "end": 10720,
+     "speed": 1.0,
+     "trimStart": 0,
+     "trimEnd": 0,
+     "volume": 0.0,
+     "muted": false,
+     "visible": true,
+     "fadeIn": 0,
+     "fadeOut": 0,
+     "opacity": 1.0,
+     "file": null,
+     "originalFile": null,
+     "effectIntensity": null,
+     "crop": null,
+     "transformation": {
+      "size": 16.8,
+      "rotation": 0.0,
+      "position": {
+       "x": 0.38014444444444445,
+       "y": 0.6783125
+      },
+      "maxWidth": 2.361164021164022,
+      "tiltX": 0,
+      "tiltY": 0
+     },
+     "value": "more",
+     "style": {
+      "fontId": "b15cf926-bbba-462c-81ac-e54f7475d608",
+      "italic": false,
+      "textAlign": "LEFT",
+      "textTransform": "NONE",
+      "color": "#FFFFFF",
+      "lineHeight": 1.0,
+      "letterSpacing": -0.02,
+      "fontWeight": 400,
+      "strokeWidthRatio": 0.0,
+      "shadowColor": "#000000",
+      "shadowBlurRatio": 0.07,
+      "shadowDistanceRatio": 0.015,
+      "shadowAngle": 90.0,
+      "backgroundRadiusRatio": 0.0,
+      "backgroundPaddingXRatio": 0.0,
+      "backgroundPaddingYRatio": 0.0
+     },
+     "textAnimations": {
+      "inAnimationId": "c9c00437-e849-55d1-835a-db22e844ecaa",
+      "inAnimationDuration": 850
+     },
+     "loopable": false,
+     "duration": 0,
+     "cornerRadius": 0.0,
+     "filters": null,
+     "lutId": null,
+     "opacityFade": {
+      "opacityFadeIn": 0,
+      "opacityFadeOut": 0,
+      "interpolation": {
+       "value": [
+        0.0,
+        0.0,
+        0.67,
+        1.0
+       ],
+       "type": "BEZIER"
+      }
+     },
+     "keyframes": [],
+     "mask": null,
+     "audioEffects": null,
+     "flip": null,
+     "shapeConfig": null,
+     "path": null,
+     "baseStyle": null,
+     "lineStart": null,
+     "lineEnd": null,
+     "blendMode": null
+    }
+   ]
+  },
+  {
+   "trackId": "613329544703080",
+   "type": "TEXT",
+   "zindex": 27,
+   "visible": true,
+   "muted": null,
+   "clips": [
+    {
+     "type": "TEXT",
+     "clipId": "clip-362202be-519f-4b73-b76f-e911664f51c1",
+     "priority": 0,
+     "start": 7859,
+     "end": 10720,
+     "speed": 1.0,
+     "trimStart": 0,
+     "trimEnd": 0,
+     "volume": 0.0,
+     "muted": false,
+     "visible": true,
+     "fadeIn": 0,
+     "fadeOut": 0,
+     "opacity": 1.0,
+     "file": null,
+     "originalFile": null,
+     "effectIntensity": null,
+     "crop": null,
+     "transformation": {
+      "size": 44.400000000000006,
+      "rotation": 0.0,
+      "position": {
+       "x": 0.48011777777777775,
+       "y": 0.621990625
+      },
+      "maxWidth": 2.027827827827828,
+      "tiltX": 0,
+      "tiltY": 0
+     },
+     "value": "always",
+     "style": {
+      "fontId": "f47acd26-8766-496e-9053-4fe63e72cbc3",
+      "italic": false,
+      "textAlign": "LEFT",
+      "textTransform": "NONE",
+      "color": "#7F77DD",
+      "lineHeight": 1.0,
+      "letterSpacing": 0.0,
+      "fontWeight": 400,
+      "strokeWidthRatio": 0.0,
+      "shadowColor": "#000000",
+      "shadowBlurRatio": 0.07,
+      "shadowDistanceRatio": 0.015,
+      "shadowAngle": 90.0,
+      "backgroundRadiusRatio": 0.0,
+      "backgroundPaddingXRatio": 0.0,
+      "backgroundPaddingYRatio": 0.0
+     },
+     "textAnimations": {
+      "inAnimationId": "c9c00437-e849-55d1-835a-db22e844ecaa",
+      "inAnimationDuration": 850
+     },
+     "loopable": false,
+     "duration": 0,
+     "cornerRadius": 0.0,
+     "filters": null,
+     "lutId": null,
+     "opacityFade": {
+      "opacityFadeIn": 0,
+      "opacityFadeOut": 0,
+      "interpolation": {
+       "value": [
+        0.0,
+        0.0,
+        0.67,
+        1.0
+       ],
+       "type": "BEZIER"
+      }
+     },
+     "keyframes": [],
+     "mask": null,
+     "audioEffects": null,
+     "flip": null,
+     "shapeConfig": null,
+     "path": null,
+     "baseStyle": null,
+     "lineStart": null,
+     "lineEnd": null,
+     "blendMode": null
+    }
+   ]
+  },
+  {
+   "trackId": "6038561627491",
+   "type": "TEXT",
+   "zindex": 26,
+   "visible": true,
+   "muted": null,
+   "clips": [
+    {
+     "type": "TEXT",
+     "clipId": "clip-dbe8888f-cad0-4d4f-aa30-4b1fc8a98b1b",
+     "priority": 0,
+     "start": 7660,
+     "end": 10720,
+     "speed": 1.0,
+     "trimStart": 0,
+     "trimEnd": 0,
+     "volume": 0.0,
+     "muted": false,
+     "visible": true,
+     "fadeIn": 0,
+     "fadeOut": 0,
+     "opacity": 1.0,
+     "file": null,
+     "originalFile": null,
+     "effectIntensity": null,
+     "crop": null,
+     "transformation": {
+      "size": 16.8,
+      "rotation": 0.0,
+      "position": {
+       "x": 0.38364,
+       "y": 0.626928125
+      },
+      "maxWidth": 0.8233862433862437,
+      "tiltX": 0,
+      "tiltY": 0
+     },
+     "value": "is",
+     "style": {
+      "fontId": "b15cf926-bbba-462c-81ac-e54f7475d608",
+      "italic": false,
+      "textAlign": "LEFT",
+      "textTransform": "NONE",
+      "color": "#FFFFFF",
+      "lineHeight": 1.0,
+      "letterSpacing": -0.02,
+      "fontWeight": 400,
+      "strokeWidthRatio": 0.0,
+      "shadowColor": "#000000",
+      "shadowBlurRatio": 0.07,
+      "shadowDistanceRatio": 0.015,
+      "shadowAngle": 90.0,
+      "backgroundRadiusRatio": 0.0,
+      "backgroundPaddingXRatio": 0.0,
+      "backgroundPaddingYRatio": 0.0
+     },
+     "textAnimations": {
+      "inAnimationId": "c9c00437-e849-55d1-835a-db22e844ecaa",
+      "inAnimationDuration": 850
+     },
+     "loopable": false,
+     "duration": 0,
+     "cornerRadius": 0.0,
+     "filters": null,
+     "lutId": null,
+     "opacityFade": {
+      "opacityFadeIn": 0,
+      "opacityFadeOut": 0,
+      "interpolation": {
+       "value": [
+        0.0,
+        0.0,
+        0.67,
+        1.0
+       ],
+       "type": "BEZIER"
+      }
+     },
+     "keyframes": [],
+     "mask": null,
+     "audioEffects": null,
+     "flip": null,
+     "shapeConfig": null,
+     "path": null,
+     "baseStyle": null,
+     "lineStart": null,
+     "lineEnd": null,
+     "blendMode": null
+    }
+   ]
+  },
+  {
+   "trackId": "53158032139144",
+   "type": "TEXT",
+   "zindex": 25,
+   "visible": true,
+   "muted": null,
+   "clips": [
+    {
+     "type": "TEXT",
+     "clipId": "clip-cc208e4f-aa69-4820-bc91-9c0ffab49095",
+     "priority": 0,
+     "start": 7420,
+     "end": 10720,
+     "speed": 1.0,
+     "trimStart": 0,
+     "trimEnd": 0,
+     "volume": 0.0,
+     "muted": false,
+     "visible": true,
+     "fadeIn": 0,
+     "fadeOut": 0,
+     "opacity": 1.0,
+     "file": null,
+     "originalFile": null,
+     "effectIntensity": null,
+     "crop": null,
+     "transformation": {
+      "size": 17.76,
+      "rotation": 0.0,
+      "position": {
+       "x": 0.15399333333333332,
+       "y": 0.6266156249999999
+      },
+      "maxWidth": 2.5784584584584587,
+      "tiltX": 0,
+      "tiltY": 0
+     },
+     "value": "There",
+     "style": {
+      "fontId": "b15cf926-bbba-462c-81ac-e54f7475d608",
+      "italic": false,
+      "textAlign": "LEFT",
+      "textTransform": "NONE",
+      "color": "#FFFFFF",
+      "lineHeight": 1.0,
+      "letterSpacing": -0.02,
+      "fontWeight": 400,
+      "strokeWidthRatio": 0.0,
+      "shadowColor": "#000000",
+      "shadowBlurRatio": 0.07,
+      "shadowDistanceRatio": 0.015,
+      "shadowAngle": 90.0,
+      "backgroundRadiusRatio": 0.0,
+      "backgroundPaddingXRatio": 0.0,
+      "backgroundPaddingYRatio": 0.0
+     },
+     "textAnimations": {
+      "inAnimationId": "c9c00437-e849-55d1-835a-db22e844ecaa",
+      "inAnimationDuration": 850
+     },
+     "loopable": false,
+     "duration": 0,
+     "cornerRadius": 0.0,
+     "filters": null,
+     "lutId": null,
+     "opacityFade": {
+      "opacityFadeIn": 0,
+      "opacityFadeOut": 0,
+      "interpolation": {
+       "value": [
+        0.0,
+        0.0,
+        0.67,
+        1.0
+       ],
+       "type": "BEZIER"
+      }
+     },
+     "keyframes": [],
+     "mask": null,
+     "audioEffects": null,
+     "flip": null,
+     "shapeConfig": null,
+     "path": null,
+     "baseStyle": null,
+     "lineStart": null,
+     "lineEnd": null,
+     "blendMode": null
+    }
+   ]
+  },
+  {
+   "trackId": "413565146580670",
+   "type": "TEXT",
+   "zindex": 24,
+   "visible": true,
+   "muted": null,
+   "clips": [
+    {
+     "type": "TEXT",
+     "clipId": "clip-2ead72a4-585b-47fd-abf9-1cc70cab015b",
+     "priority": 0,
+     "start": 6560,
+     "end": 7420,
+     "speed": 1.0,
+     "trimStart": 0,
+     "trimEnd": 0,
+     "volume": 0.0,
+     "muted": false,
+     "visible": true,
+     "fadeIn": 0,
+     "fadeOut": 0,
+     "opacity": 1.0,
+     "file": null,
+     "originalFile": null,
+     "effectIntensity": null,
+     "crop": null,
+     "transformation": {
+      "size": 22.573637318554404,
+      "rotation": 0.0,
+      "position": {
+       "x": 0.026388888888888993,
+       "y": 0.7603294938437463
+      },
+      "maxWidth": 2.7068780253220437,
+      "tiltX": 0,
+      "tiltY": 0
+     },
+     "value": "story.",
+     "style": {
+      "fontId": "b15cf926-bbba-462c-81ac-e54f7475d608",
+      "italic": false,
+      "textAlign": "LEFT",
+      "textTransform": "NONE",
+      "color": "#FFFFFF",
+      "lineHeight": 1.0,
+      "letterSpacing": -0.025,
+      "fontWeight": 800,
+      "strokeWidthRatio": 0.0,
+      "shadowColor": "#000000",
+      "shadowBlurRatio": 0.07,
+      "shadowDistanceRatio": 0.015,
+      "shadowAngle": 90.0,
+      "backgroundRadiusRatio": 0.0,
+      "backgroundPaddingXRatio": 0.0,
+      "backgroundPaddingYRatio": 0.0
+     },
+     "textAnimations": {
+      "inAnimationId": "c9c00437-e849-55d1-835a-db22e844ecaa",
+      "inAnimationDuration": 850
+     },
+     "loopable": false,
+     "duration": 0,
+     "cornerRadius": 0.0,
+     "filters": null,
+     "lutId": null,
+     "opacityFade": {
+      "opacityFadeIn": 0,
+      "opacityFadeOut": 0,
+      "interpolation": {
+       "value": [
+        0.0,
+        0.0,
+        0.67,
+        1.0
+       ],
+       "type": "BEZIER"
+      }
+     },
+     "keyframes": [],
+     "mask": null,
+     "audioEffects": null,
+     "flip": null,
+     "shapeConfig": null,
+     "path": null,
+     "baseStyle": null,
+     "lineStart": null,
+     "lineEnd": null,
+     "blendMode": null
+    }
+   ]
+  },
+  {
+   "trackId": "968566978452717",
+   "type": "TEXT",
+   "zindex": 23,
+   "visible": true,
+   "muted": null,
+   "clips": [
+    {
+     "type": "TEXT",
+     "clipId": "clip-718e0296-18a6-4aee-aa86-a07321dc89e7",
+     "priority": 0,
+     "start": 5600,
+     "end": 7420,
+     "speed": 1.0,
+     "trimStart": 0,
+     "trimEnd": 0,
+     "volume": 0.0,
+     "muted": false,
+     "visible": true,
+     "fadeIn": 0,
+     "fadeOut": 0,
+     "opacity": 1.0,
+     "file": null,
+     "originalFile": null,
+     "effectIntensity": null,
+     "crop": null,
+     "transformation": {
+      "size": 30.215664938360604,
+      "rotation": 0.0,
+      "position": {
+       "x": 0.02453703703703709,
+       "y": 0.7038803260763727
+      },
+      "maxWidth": 4.959021469537351,
+      "tiltX": 0,
+      "tiltY": 0
+     },
+     "value": "change the",
+     "style": {
+      "fontId": "b15cf926-bbba-462c-81ac-e54f7475d608",
+      "italic": false,
+      "textAlign": "LEFT",
+      "textTransform": "NONE",
+      "color": "#7F77DD",
+      "lineHeight": 1.0,
+      "letterSpacing": -0.03,
+      "fontWeight": 800,
+      "strokeWidthRatio": 0.0,
+      "shadowColor": "#000000",
+      "shadowBlurRatio": 0.07,
+      "shadowDistanceRatio": 0.015,
+      "shadowAngle": 90.0,
+      "backgroundRadiusRatio": 0.0,
+      "backgroundPaddingXRatio": 0.0,
+      "backgroundPaddingYRatio": 0.0
+     },
+     "textAnimations": {
+      "inAnimationId": "c9c00437-e849-55d1-835a-db22e844ecaa",
+      "inAnimationDuration": 850
+     },
+     "loopable": false,
+     "duration": 0,
+     "cornerRadius": 0.0,
+     "filters": null,
+     "lutId": null,
+     "opacityFade": {
+      "opacityFadeIn": 0,
+      "opacityFadeOut": 0,
+      "interpolation": {
+       "value": [
+        0.0,
+        0.0,
+        0.67,
+        1.0
+       ],
+       "type": "BEZIER"
+      }
+     },
+     "keyframes": [],
+     "mask": null,
+     "audioEffects": null,
+     "flip": null,
+     "shapeConfig": null,
+     "path": null,
+     "baseStyle": null,
+     "lineStart": null,
+     "lineEnd": null,
+     "blendMode": null
+    }
+   ]
+  },
+  {
+   "trackId": "811034482665376",
+   "type": "TEXT",
+   "zindex": 22,
+   "visible": true,
+   "muted": null,
+   "clips": [
+    {
+     "type": "TEXT",
+     "clipId": "clip-beb44329-2fb3-4e8b-926a-9350c42a4913",
+     "priority": 0,
+     "start": 4760,
+     "end": 7420,
+     "speed": 1.0,
+     "trimStart": 0,
+     "trimEnd": 0,
+     "volume": 0.0,
+     "muted": false,
+     "visible": true,
+     "fadeIn": 0,
+     "fadeOut": 0,
+     "opacity": 1.0,
+     "file": null,
+     "originalFile": null,
+     "effectIntensity": null,
+     "crop": null,
+     "transformation": {
+      "size": 13.593298577726342,
+      "rotation": 0.0,
+      "position": {
+       "x": 0.47305138486569986,
+       "y": 0.6488135407727574
+      },
+      "maxWidth": 1.7455248546606572,
+      "tiltX": 0,
+      "tiltY": 0
+     },
+     "value": "can",
+     "style": {
+      "fontId": "b15cf926-bbba-462c-81ac-e54f7475d608",
+      "italic": false,
+      "textAlign": "LEFT",
+      "textTransform": "NONE",
+      "color": "#FFFFFF",
+      "lineHeight": 1.0,
+      "letterSpacing": -0.02,
+      "fontWeight": 400,
+      "strokeWidthRatio": 0.0,
+      "shadowColor": "#000000",
+      "shadowBlurRatio": 0.07,
+      "shadowDistanceRatio": 0.015,
+      "shadowAngle": 90.0,
+      "backgroundRadiusRatio": 0.0,
+      "backgroundPaddingXRatio": 0.0,
+      "backgroundPaddingYRatio": 0.0
+     },
+     "textAnimations": {
+      "inAnimationId": "c9c00437-e849-55d1-835a-db22e844ecaa",
+      "inAnimationDuration": 850
+     },
+     "loopable": false,
+     "duration": 0,
+     "cornerRadius": 0.0,
+     "filters": null,
+     "lutId": null,
+     "opacityFade": {
+      "opacityFadeIn": 0,
+      "opacityFadeOut": 0,
+      "interpolation": {
+       "value": [
+        0.0,
+        0.0,
+        0.67,
+        1.0
+       ],
+       "type": "BEZIER"
+      }
+     },
+     "keyframes": [],
+     "mask": null,
+     "audioEffects": null,
+     "flip": null,
+     "shapeConfig": null,
+     "path": null,
+     "baseStyle": null,
+     "lineStart": null,
+     "lineEnd": null,
+     "blendMode": null
+    }
+   ]
+  },
+  {
+   "trackId": "815571860553718",
+   "type": "TEXT",
+   "zindex": 21,
+   "visible": true,
+   "muted": null,
+   "clips": [
+    {
+     "type": "TEXT",
+     "clipId": "clip-c5a23261-cfb6-44e0-a98a-678604fe09d1",
+     "priority": 0,
+     "start": 4320,
+     "end": 7420,
+     "speed": 1.0,
+     "trimStart": 0,
+     "trimEnd": 0,
+     "volume": 0.0,
+     "muted": false,
+     "visible": true,
+     "fadeIn": 0,
+     "fadeOut": 0,
+     "opacity": 1.0,
+     "file": null,
+     "originalFile": null,
+     "effectIntensity": null,
+     "crop": null,
+     "transformation": {
+      "size": 35.95841026543124,
+      "rotation": 0.0,
+      "position": {
+       "x": 0.10117811447612386,
+       "y": 0.6350613347370384
+      },
+      "maxWidth": 2.2840124074691976,
+      "tiltX": 0,
+      "tiltY": 0
+     },
+     "value": "moment",
+     "style": {
+      "fontId": "f47acd26-8766-496e-9053-4fe63e72cbc3",
+      "italic": false,
+      "textAlign": "LEFT",
+      "textTransform": "NONE",
+      "color": "#7F77DD",
+      "lineHeight": 1.0,
+      "letterSpacing": 0.0,
+      "fontWeight": 400,
+      "strokeWidthRatio": 0.0,
+      "shadowColor": "#000000",
+      "shadowBlurRatio": 0.07,
+      "shadowDistanceRatio": 0.015,
+      "shadowAngle": 90.0,
+      "backgroundRadiusRatio": 0.0,
+      "backgroundPaddingXRatio": 0.0,
+      "backgroundPaddingYRatio": 0.0
+     },
+     "textAnimations": {
+      "inAnimationId": "c9c00437-e849-55d1-835a-db22e844ecaa",
+      "inAnimationDuration": 850
+     },
+     "loopable": false,
+     "duration": 0,
+     "cornerRadius": 0.0,
+     "filters": null,
+     "lutId": null,
+     "opacityFade": {
+      "opacityFadeIn": 0,
+      "opacityFadeOut": 0,
+      "interpolation": {
+       "value": [
+        0.0,
+        0.0,
+        0.67,
+        1.0
+       ],
+       "type": "BEZIER"
+      }
+     },
+     "keyframes": [],
+     "mask": null,
+     "audioEffects": null,
+     "flip": null,
+     "shapeConfig": null,
+     "path": null,
+     "baseStyle": null,
+     "lineStart": null,
+     "lineEnd": null,
+     "blendMode": null
+    }
+   ]
+  },
+  {
+   "trackId": "335588606212985",
+   "type": "TEXT",
+   "zindex": 20,
+   "visible": true,
+   "muted": null,
+   "clips": [
+    {
+     "type": "TEXT",
+     "clipId": "clip-ded216a7-2a6c-4dbc-9920-25b0578dbb59",
+     "priority": 0,
+     "start": 4080,
+     "end": 7420,
+     "speed": 1.0,
+     "trimStart": 0,
+     "trimEnd": 0,
+     "volume": 0.0,
+     "muted": false,
+     "visible": true,
+     "fadeIn": 0,
+     "fadeOut": 0,
+     "opacity": 1.0,
+     "file": null,
+     "originalFile": null,
+     "effectIntensity": null,
+     "crop": null,
+     "transformation": {
+      "size": 22.585663487395554,
+      "rotation": 0.0,
+      "position": {
+       "x": 0.2759259259259259,
+       "y": 0.5734375
+      },
+      "maxWidth": 2.242989136433155,
+      "tiltX": 0,
+      "tiltY": 0
+     },
+     "value": "right",
+     "style": {
+      "fontId": "b15cf926-bbba-462c-81ac-e54f7475d608",
+      "italic": false,
+      "textAlign": "LEFT",
+      "textTransform": "NONE",
+      "color": "#FFFFFF",
+      "lineHeight": 1.0,
+      "letterSpacing": -0.025,
+      "fontWeight": 800,
+      "strokeWidthRatio": 0.0,
+      "shadowColor": "#000000",
+      "shadowBlurRatio": 0.07,
+      "shadowDistanceRatio": 0.015,
+      "shadowAngle": 90.0,
+      "backgroundRadiusRatio": 0.0,
+      "backgroundPaddingXRatio": 0.0,
+      "backgroundPaddingYRatio": 0.0
+     },
+     "textAnimations": {
+      "inAnimationId": "c9c00437-e849-55d1-835a-db22e844ecaa",
+      "inAnimationDuration": 850
+     },
+     "loopable": false,
+     "duration": 0,
+     "cornerRadius": 0.0,
+     "filters": null,
+     "lutId": null,
+     "opacityFade": {
+      "opacityFadeIn": 0,
+      "opacityFadeOut": 0,
+      "interpolation": {
+       "value": [
+        0.0,
+        0.0,
+        0.67,
+        1.0
+       ],
+       "type": "BEZIER"
+      }
+     },
+     "keyframes": [],
+     "mask": null,
+     "audioEffects": null,
+     "flip": null,
+     "shapeConfig": null,
+     "path": null,
+     "baseStyle": null,
+     "lineStart": null,
+     "lineEnd": null,
+     "blendMode": null
+    }
+   ]
+  },
+  {
+   "trackId": "722148023220472",
+   "type": "TEXT",
+   "zindex": 19,
+   "visible": true,
+   "muted": null,
+   "clips": [
+    {
+     "type": "TEXT",
+     "clipId": "clip-9ce8b947-2550-4dde-8e96-9cd0b90c6a16",
+     "priority": 0,
+     "start": 3700,
+     "end": 7420,
+     "speed": 1.0,
+     "trimStart": 0,
+     "trimEnd": 0,
+     "volume": 0.0,
+     "muted": false,
+     "visible": true,
+     "fadeIn": 0,
+     "fadeOut": 0,
+     "opacity": 1.0,
+     "file": null,
+     "originalFile": null,
+     "effectIntensity": null,
+     "crop": null,
+     "transformation": {
+      "size": 13.593298577726344,
+      "rotation": 0.0,
+      "position": {
+       "x": 0.17317440776975632,
+       "y": 0.5734473994816106
+      },
+      "maxWidth": 1.7899692991051015,
+      "tiltX": 0,
+      "tiltY": 0
+     },
+     "value": "The",
+     "style": {
+      "fontId": "b15cf926-bbba-462c-81ac-e54f7475d608",
+      "italic": false,
+      "textAlign": "LEFT",
+      "textTransform": "NONE",
+      "color": "#FFFFFF",
+      "lineHeight": 1.0,
+      "letterSpacing": -0.02,
+      "fontWeight": 400,
+      "strokeWidthRatio": 0.0,
+      "shadowColor": "#000000",
+      "shadowBlurRatio": 0.07,
+      "shadowDistanceRatio": 0.015,
+      "shadowAngle": 90.0,
+      "backgroundRadiusRatio": 0.0,
+      "backgroundPaddingXRatio": 0.0,
+      "backgroundPaddingYRatio": 0.0
+     },
+     "textAnimations": {
+      "inAnimationId": "c9c00437-e849-55d1-835a-db22e844ecaa",
+      "inAnimationDuration": 850
+     },
+     "loopable": false,
+     "duration": 0,
+     "cornerRadius": 0.0,
+     "filters": null,
+     "lutId": null,
+     "opacityFade": {
+      "opacityFadeIn": 0,
+      "opacityFadeOut": 0,
+      "interpolation": {
+       "value": [
+        0.0,
+        0.0,
+        0.67,
+        1.0
+       ],
+       "type": "BEZIER"
+      }
+     },
+     "keyframes": [],
+     "mask": null,
+     "audioEffects": null,
+     "flip": null,
+     "shapeConfig": null,
+     "path": null,
+     "baseStyle": null,
+     "lineStart": null,
+     "lineEnd": null,
+     "blendMode": null
+    }
+   ]
+  },
+  {
+   "trackId": "315650457058619",
+   "type": "TEXT",
+   "zindex": 18,
+   "visible": true,
+   "muted": null,
+   "clips": [
+    {
+     "type": "TEXT",
+     "clipId": "clip-bcbd86c0-158b-471e-91b0-492372f59e94",
+     "priority": 0,
+     "start": 3080,
+     "end": 3700,
+     "speed": 1.0,
+     "trimStart": 0,
+     "trimEnd": 0,
+     "volume": 0.0,
+     "muted": false,
+     "visible": true,
+     "fadeIn": 0,
+     "fadeOut": 0,
+     "opacity": 1.0,
+     "file": null,
+     "originalFile": null,
+     "effectIntensity": null,
+     "crop": null,
+     "transformation": {
+      "size": 16.782518880095058,
+      "rotation": 360.0,
+      "position": {
+       "x": 0.4073664030486229,
+       "y": 0.5642375870220772
+      },
+      "maxWidth": 1.961164021164021,
+      "tiltX": 0,
+      "tiltY": 0
+     },
+     "value": "you.",
+     "style": {
+      "fontId": "b15cf926-bbba-462c-81ac-e54f7475d608",
+      "italic": false,
+      "textAlign": "LEFT",
+      "textTransform": "NONE",
+      "color": "#FFFFFF",
+      "lineHeight": 1.0,
+      "letterSpacing": -0.02,
+      "fontWeight": 400,
+      "strokeWidthRatio": 0.0,
+      "shadowColor": "#000000",
+      "shadowBlurRatio": 0.07,
+      "shadowDistanceRatio": 0.015,
+      "shadowAngle": 90.0,
+      "backgroundRadiusRatio": 0.0,
+      "backgroundPaddingXRatio": 0.0,
+      "backgroundPaddingYRatio": 0.0
+     },
+     "textAnimations": {
+      "inAnimationId": "c9c00437-e849-55d1-835a-db22e844ecaa",
+      "inAnimationDuration": 850
+     },
+     "loopable": false,
+     "duration": 0,
+     "cornerRadius": 0.0,
+     "filters": null,
+     "lutId": null,
+     "opacityFade": {
+      "opacityFadeIn": 0,
+      "opacityFadeOut": 0,
+      "interpolation": {
+       "value": [
+        0.0,
+        0.0,
+        0.67,
+        1.0
+       ],
+       "type": "BEZIER"
+      }
+     },
+     "keyframes": [],
+     "mask": null,
+     "audioEffects": null,
+     "flip": null,
+     "shapeConfig": null,
+     "path": null,
+     "baseStyle": null,
+     "lineStart": null,
+     "lineEnd": null,
+     "blendMode": null
+    }
+   ]
+  },
+  {
+   "trackId": "601618730679194",
+   "type": "TEXT",
+   "zindex": 17,
+   "visible": true,
+   "muted": null,
+   "clips": [
+    {
+     "type": "TEXT",
+     "clipId": "clip-364acdf2-1e4e-41e8-afcc-8e0cdd3e0ac7",
+     "priority": 0,
+     "start": 2440,
+     "end": 3700,
+     "speed": 1.0,
+     "trimStart": 0,
+     "trimEnd": 0,
+     "volume": 0.0,
+     "muted": false,
+     "visible": true,
+     "fadeIn": 0,
+     "fadeOut": 0,
+     "opacity": 1.0,
+     "file": null,
+     "originalFile": null,
+     "effectIntensity": null,
+     "crop": null,
+     "transformation": {
+      "size": 44.353799897394104,
+      "rotation": 360.0,
+      "position": {
+       "x": 0.15783873956489095,
+       "y": 0.5402330387157479
+      },
+      "maxWidth": 3.4400500500500497,
+      "tiltX": 0,
+      "tiltY": 0
+     },
+     "value": "inspires",
+     "style": {
+      "fontId": "b15cf926-bbba-462c-81ac-e54f7475d608",
+      "italic": false,
+      "textAlign": "LEFT",
+      "textTransform": "NONE",
+      "color": "#7F77DD",
+      "lineHeight": 1.0,
+      "letterSpacing": -0.03,
+      "fontWeight": 800,
+      "strokeWidthRatio": 0.0,
+      "shadowColor": "#000000",
+      "shadowBlurRatio": 0.07,
+      "shadowDistanceRatio": 0.015,
+      "shadowAngle": 90.0,
+      "backgroundRadiusRatio": 0.0,
+      "backgroundPaddingXRatio": 0.0,
+      "backgroundPaddingYRatio": 0.0
+     },
+     "textAnimations": {
+      "inAnimationId": "c9c00437-e849-55d1-835a-db22e844ecaa",
+      "inAnimationDuration": 850
+     },
+     "loopable": false,
+     "duration": 0,
+     "cornerRadius": 0.0,
+     "filters": null,
+     "lutId": null,
+     "opacityFade": {
+      "opacityFadeIn": 0,
+      "opacityFadeOut": 0,
+      "interpolation": {
+       "value": [
+        0.0,
+        0.0,
+        0.67,
+        1.0
+       ],
+       "type": "BEZIER"
+      }
+     },
+     "keyframes": [],
+     "mask": null,
+     "audioEffects": null,
+     "flip": null,
+     "shapeConfig": null,
+     "path": null,
+     "baseStyle": null,
+     "lineStart": null,
+     "lineEnd": null,
+     "blendMode": null
+    }
+   ]
+  },
+  {
+   "trackId": "810688392153354",
+   "type": "TEXT",
+   "zindex": 16,
+   "visible": true,
+   "muted": null,
+   "clips": [
+    {
+     "type": "TEXT",
+     "clipId": "clip-577de1de-b58f-4df9-b5dc-3f67712849f9",
+     "priority": 0,
+     "start": 1920,
+     "end": 3700,
+     "speed": 1.0,
+     "trimStart": 0,
+     "trimEnd": 0,
+     "volume": 0.0,
+     "muted": false,
+     "visible": true,
+     "fadeIn": 0,
+     "fadeOut": 0,
+     "opacity": 1.0,
+     "file": null,
+     "originalFile": null,
+     "effectIntensity": null,
+     "crop": null,
+     "transformation": {
+      "size": 16.782518880095058,
+      "rotation": 360.0,
+      "position": {
+       "x": 0.3965924883607815,
+       "y": 0.43822386085334347
+      },
+      "maxWidth": 2.2944973544973544,
+      "tiltX": 0,
+      "tiltY": 0
+     },
+     "value": "what",
+     "style": {
+      "fontId": "b15cf926-bbba-462c-81ac-e54f7475d608",
+      "italic": false,
+      "textAlign": "LEFT",
+      "textTransform": "NONE",
+      "color": "#FFFFFF",
+      "lineHeight": 1.0,
+      "letterSpacing": -0.02,
+      "fontWeight": 400,
+      "strokeWidthRatio": 0.0,
+      "shadowColor": "#000000",
+      "shadowBlurRatio": 0.07,
+      "shadowDistanceRatio": 0.015,
+      "shadowAngle": 90.0,
+      "backgroundRadiusRatio": 0.0,
+      "backgroundPaddingXRatio": 0.0,
+      "backgroundPaddingYRatio": 0.0
+     },
+     "textAnimations": {
+      "inAnimationId": "c9c00437-e849-55d1-835a-db22e844ecaa",
+      "inAnimationDuration": 850
+     },
+     "loopable": false,
+     "duration": 0,
+     "cornerRadius": 0.0,
+     "filters": null,
+     "lutId": null,
+     "opacityFade": {
+      "opacityFadeIn": 0,
+      "opacityFadeOut": 0,
+      "interpolation": {
+       "value": [
+        0.0,
+        0.0,
+        0.67,
+        1.0
+       ],
+       "type": "BEZIER"
+      }
+     },
+     "keyframes": [],
+     "mask": null,
+     "audioEffects": null,
+     "flip": null,
+     "shapeConfig": null,
+     "path": null,
+     "baseStyle": null,
+     "lineStart": null,
+     "lineEnd": null,
+     "blendMode": null
+    }
+   ]
+  },
+  {
+   "trackId": "363015810305780",
+   "type": "TEXT",
+   "zindex": 15,
+   "visible": true,
+   "muted": null,
+   "clips": [
+    {
+     "type": "TEXT",
+     "clipId": "clip-6c5cc815-f6c0-4a0a-9d3b-b236a6f689c6",
+     "priority": 0,
+     "start": 1720,
+     "end": 3700,
+     "speed": 1.0,
+     "trimStart": 0,
+     "trimEnd": 0,
+     "volume": 0.0,
+     "muted": false,
+     "visible": true,
+     "fadeIn": 0,
+     "fadeOut": 0,
+     "opacity": 1.0,
+     "file": null,
+     "originalFile": null,
+     "effectIntensity": null,
+     "crop": null,
+     "transformation": {
+      "size": 16.67278394577545,
+      "rotation": 360.0,
+      "position": {
+       "x": 0.7958796585829113,
+       "y": 0.36318121678196497
+      },
+      "maxWidth": 1.045608465608466,
+      "tiltX": 0,
+      "tiltY": 0
+     },
+     "value": "of",
+     "style": {
+      "fontId": "b15cf926-bbba-462c-81ac-e54f7475d608",
+      "italic": false,
+      "textAlign": "LEFT",
+      "textTransform": "NONE",
+      "color": "#FFFFFF",
+      "lineHeight": 1.0,
+      "letterSpacing": -0.02,
+      "fontWeight": 400,
+      "strokeWidthRatio": 0.0,
+      "shadowColor": "#000000",
+      "shadowBlurRatio": 0.07,
+      "shadowDistanceRatio": 0.015,
+      "shadowAngle": 90.0,
+      "backgroundRadiusRatio": 0.0,
+      "backgroundPaddingXRatio": 0.0,
+      "backgroundPaddingYRatio": 0.0
+     },
+     "textAnimations": {
+      "inAnimationId": "c9c00437-e849-55d1-835a-db22e844ecaa",
+      "inAnimationDuration": 850
+     },
+     "loopable": false,
+     "duration": 0,
+     "cornerRadius": 0.0,
+     "filters": null,
+     "lutId": null,
+     "opacityFade": {
+      "opacityFadeIn": 0,
+      "opacityFadeOut": 0,
+      "interpolation": {
+       "value": [
+        0.0,
+        0.0,
+        0.67,
+        1.0
+       ],
+       "type": "BEZIER"
+      }
+     },
+     "keyframes": [],
+     "mask": null,
+     "audioEffects": null,
+     "flip": null,
+     "shapeConfig": null,
+     "path": null,
+     "baseStyle": null,
+     "lineStart": null,
+     "lineEnd": null,
+     "blendMode": null
+    }
+   ]
+  },
+  {
+   "trackId": "302176696779105",
+   "type": "TEXT",
+   "zindex": 14,
+   "visible": true,
+   "muted": null,
+   "clips": [
+    {
+     "type": "TEXT",
+     "clipId": "clip-cbb86891-d326-4e07-82ae-be69b08561d1",
+     "priority": 0,
+     "start": 840,
+     "end": 3700,
+     "speed": 1.0,
+     "trimStart": 0,
+     "trimEnd": 0,
+     "volume": 0.0,
+     "muted": false,
+     "visible": true,
+     "fadeIn": 0,
+     "fadeOut": 0,
+     "opacity": 1.0,
+     "file": null,
+     "originalFile": null,
+     "effectIntensity": null,
+     "crop": null,
+     "transformation": {
+      "size": 16.974534512921345,
+      "rotation": 360.0,
+      "position": {
+       "x": 0.5904526555949325,
+       "y": 0.3668291230909903
+      },
+      "maxWidth": 2.361164021164022,
+      "tiltX": 0,
+      "tiltY": 0
+     },
+     "value": "more",
+     "style": {
+      "fontId": "b15cf926-bbba-462c-81ac-e54f7475d608",
+      "italic": false,
+      "textAlign": "LEFT",
+      "textTransform": "NONE",
+      "color": "#FFFFFF",
+      "lineHeight": 1.0,
+      "letterSpacing": -0.02,
+      "fontWeight": 400,
+      "strokeWidthRatio": 0.0,
+      "shadowColor": "#000000",
+      "shadowBlurRatio": 0.07,
+      "shadowDistanceRatio": 0.015,
+      "shadowAngle": 90.0,
+      "backgroundRadiusRatio": 0.0,
+      "backgroundPaddingXRatio": 0.0,
+      "backgroundPaddingYRatio": 0.0
+     },
+     "textAnimations": {
+      "inAnimationId": "c9c00437-e849-55d1-835a-db22e844ecaa",
+      "inAnimationDuration": 850
+     },
+     "loopable": false,
+     "duration": 0,
+     "cornerRadius": 0.0,
+     "filters": null,
+     "lutId": null,
+     "opacityFade": {
+      "opacityFadeIn": 0,
+      "opacityFadeOut": 0,
+      "interpolation": {
+       "value": [
+        0.0,
+        0.0,
+        0.67,
+        1.0
+       ],
+       "type": "BEZIER"
+      }
+     },
+     "keyframes": [],
+     "mask": null,
+     "audioEffects": null,
+     "flip": null,
+     "shapeConfig": null,
+     "path": null,
+     "baseStyle": null,
+     "lineStart": null,
+     "lineEnd": null,
+     "blendMode": null
+    }
+   ]
+  },
+  {
+   "trackId": "833754621539902",
+   "type": "TEXT",
+   "zindex": 13,
+   "visible": true,
+   "muted": null,
+   "clips": [
+    {
+     "type": "TEXT",
+     "clipId": "clip-f57ba419-92b3-4913-97b9-6ff1ac015a3f",
+     "priority": 0,
+     "start": 251,
+     "end": 3700,
+     "speed": 1.0,
+     "trimStart": 0,
+     "trimEnd": 0,
+     "volume": 0.0,
+     "muted": false,
+     "visible": true,
+     "fadeIn": 0,
+     "fadeOut": 0,
+     "opacity": 1.0,
+     "file": null,
+     "originalFile": null,
+     "effectIntensity": null,
+     "crop": null,
+     "transformation": {
+      "size": 44.27573672903116,
+      "rotation": 360.0,
+      "position": {
+       "x": 0.13009259259259282,
+       "y": 0.34337829681868454
+      },
+      "maxWidth": 2.1389389389389386,
+      "tiltX": 0,
+      "tiltY": 0
+     },
+     "value": "Create",
+     "style": {
+      "fontId": "f47acd26-8766-496e-9053-4fe63e72cbc3",
+      "italic": false,
+      "textAlign": "LEFT",
+      "textTransform": "NONE",
+      "color": "#7F77DD",
+      "lineHeight": 1.0,
+      "letterSpacing": 0.0,
+      "fontWeight": 400,
+      "strokeWidthRatio": 0.0,
+      "shadowColor": "#000000",
+      "shadowBlurRatio": 0.07,
+      "shadowDistanceRatio": 0.015,
+      "shadowAngle": 90.0,
+      "backgroundRadiusRatio": 0.0,
+      "backgroundPaddingXRatio": 0.0,
+      "backgroundPaddingYRatio": 0.0,
+      "glowColor": "#7F77DD",
+      "glowIntensityRatio": 0.6,
+      "glowRangeRatio": 0.7,
+      "glowDirectionX": -1.0,
+      "glowDirectionY": 0.0
+     },
+     "textAnimations": {
+      "inAnimationId": "c9c00437-e849-55d1-835a-db22e844ecaa",
+      "inAnimationDuration": 850
+     },
+     "loopable": false,
+     "duration": 0,
+     "cornerRadius": 0.0,
+     "filters": null,
+     "lutId": null,
+     "opacityFade": {
+      "opacityFadeIn": 0,
+      "opacityFadeOut": 0,
+      "interpolation": {
+       "value": [
+        0.0,
+        0.0,
+        0.67,
+        1.0
+       ],
+       "type": "BEZIER"
+      }
+     },
+     "keyframes": [
+      {
+       "id": "694d74c1-26bf-41ad-a5d4-a96b414a64ec",
+       "property": "style.color",
+       "time": 0,
+       "data": {
+        "value": "#7F77DD",
+        "type": "COLOR"
+       },
+       "interpolation": {
+        "type": "LINEAR"
+       }
+      },
+      {
+       "id": "998874c6-55b9-45bc-952b-419a0d6a438d",
+       "property": "style.glowColor",
+       "time": 0,
+       "data": {
+        "value": "#7F77DD",
+        "type": "COLOR"
+       },
+       "interpolation": {
+        "type": "LINEAR"
+       }
+      },
+      {
+       "id": "6b60ef8c-f99f-4b08-9ec4-b5f0d81f2d8f",
+       "property": "style.glowDirectionX",
+       "time": 0,
+       "data": {
+        "value": -1.0,
+        "type": "NUMBER"
+       },
+       "interpolation": {
+        "type": "LINEAR"
+       }
+      },
+      {
+       "id": "5a572f66-90ba-431c-b073-d8b4e58760ed",
+       "property": "style.glowDirectionY",
+       "time": 0,
+       "data": {
+        "value": 0.0,
+        "type": "NUMBER"
+       },
+       "interpolation": {
+        "type": "LINEAR"
+       }
+      },
+      {
+       "id": "ef33be20-83b2-4aa9-a537-28d3d1320783",
+       "property": "style.glowIntensityRatio",
+       "time": 0,
+       "data": {
+        "value": 0.6,
+        "type": "NUMBER"
+       },
+       "interpolation": {
+        "type": "LINEAR"
+       }
+      },
+      {
+       "id": "43d7c341-fd02-4b42-a337-896050eb04c5",
+       "property": "style.glowRangeRatio",
+       "time": 0,
+       "data": {
+        "value": 0.7,
+        "type": "NUMBER"
+       },
+       "interpolation": {
+        "type": "LINEAR"
+       }
+      },
+      {
+       "id": "362a20a1-9537-48e7-abfb-744b4ee93770",
+       "property": "style.color",
+       "time": 2640,
+       "data": {
+        "value": "linear-gradient(270deg, #FFC6EB 0%, #F9FCDA 28%, #BEFF9E 50.2%, #70D4FF 75.1%, #5479FF 100%)",
+        "type": "COLOR"
+       },
+       "interpolation": {
+        "type": "LINEAR"
+       }
+      },
+      {
+       "id": "f75b5d62-efc1-4ca1-93df-460b9d12f7d5",
+       "property": "style.glowColor",
+       "time": 2640,
+       "data": {
+        "value": "#EC4899",
+        "type": "COLOR"
+       },
+       "interpolation": {
+        "type": "LINEAR"
+       }
+      },
+      {
+       "id": "80a34735-289b-4ff2-b1dd-336b368087e1",
+       "property": "style.glowDirectionX",
+       "time": 2640,
+       "data": {
+        "value": 10.0,
+        "type": "NUMBER"
+       },
+       "interpolation": {
+        "type": "LINEAR"
+       }
+      },
+      {
+       "id": "915cd3ed-24cf-47a2-8cc8-c72d1fb16d47",
+       "property": "style.glowDirectionY",
+       "time": 2640,
+       "data": {
+        "value": -34.0,
+        "type": "NUMBER"
+       },
+       "interpolation": {
+        "type": "LINEAR"
+       }
+      },
+      {
+       "id": "465351e2-dcfb-4a04-85e0-f88291b91ff0",
+       "property": "style.glowIntensityRatio",
+       "time": 2640,
+       "data": {
+        "value": 1.0,
+        "type": "NUMBER"
+       },
+       "interpolation": {
+        "type": "LINEAR"
+       }
+      },
+      {
+       "id": "bc1e696b-e8a4-4e64-933e-36348cea31fa",
+       "property": "style.glowRangeRatio",
+       "time": 2640,
+       "data": {
+        "value": 0.48,
+        "type": "NUMBER"
+       },
+       "interpolation": {
+        "type": "LINEAR"
+       }
+      }
+     ],
+     "mask": null,
+     "audioEffects": null,
+     "flip": null,
+     "shapeConfig": null,
+     "path": null,
+     "baseStyle": null,
+     "lineStart": null,
+     "lineEnd": null,
+     "blendMode": null
+    }
+   ]
+  },
+  {
+   "trackId": "820565649035860",
+   "type": "TEXT",
+   "zindex": 12,
+   "visible": true,
+   "muted": null,
+   "clips": [
+    {
+     "type": "TEXT",
+     "clipId": "clip-82ad957f-c105-43f0-9fa9-d663cd141f3e",
+     "priority": 0,
+     "start": 25280,
+     "end": 26060,
+     "speed": 1.0,
+     "trimStart": 0,
+     "trimEnd": 0,
+     "volume": 0.0,
+     "muted": false,
+     "visible": true,
+     "fadeIn": 0,
+     "fadeOut": 0,
+     "opacity": 1.0,
+     "file": null,
+     "originalFile": null,
+     "effectIntensity": null,
+     "crop": null,
+     "transformation": {
+      "size": 24.48,
+      "rotation": 0.0,
+      "position": {
+       "x": 0.6288888888888888,
+       "y": 0.3322093749999999
+      },
+      "maxWidth": 1.7685548293391429,
+      "tiltX": 0,
+      "tiltY": 0
+     },
+     "value": "life.",
+     "style": {
+      "fontId": "b15cf926-bbba-462c-81ac-e54f7475d608",
+      "italic": false,
+      "textAlign": "LEFT",
+      "textTransform": "NONE",
+      "color": "#FFFFFF",
+      "lineHeight": 1.0,
+      "letterSpacing": -0.025,
+      "fontWeight": 800,
+      "strokeWidthRatio": 0.0,
+      "shadowColor": "#000000",
+      "shadowBlurRatio": 0.07,
+      "shadowDistanceRatio": 0.015,
+      "shadowAngle": 90.0,
+      "backgroundRadiusRatio": 0.0,
+      "backgroundPaddingXRatio": 0.0,
+      "backgroundPaddingYRatio": 0.0
+     },
+     "textAnimations": {
+      "inAnimationId": "c9c00437-e849-55d1-835a-db22e844ecaa",
+      "inAnimationDuration": 850
+     },
+     "loopable": false,
+     "duration": 0,
+     "cornerRadius": 0.0,
+     "filters": null,
+     "lutId": null,
+     "opacityFade": {
+      "opacityFadeIn": 0,
+      "opacityFadeOut": 0,
+      "interpolation": {
+       "value": [
+        0.0,
+        0.0,
+        0.67,
+        1.0
+       ],
+       "type": "BEZIER"
+      }
+     },
+     "keyframes": [],
+     "mask": null,
+     "audioEffects": null,
+     "flip": null,
+     "shapeConfig": null,
+     "path": null,
+     "baseStyle": null,
+     "lineStart": null,
+     "lineEnd": null,
+     "blendMode": null
+    }
+   ]
+  },
+  {
+   "trackId": "459535302774315",
+   "type": "TEXT",
+   "zindex": 11,
+   "visible": true,
+   "muted": null,
+   "clips": [
+    {
+     "type": "TEXT",
+     "clipId": "clip-cd5284c2-a4f7-47c6-8c84-3f889444de4b",
+     "priority": 0,
+     "start": 25080,
+     "end": 26060,
+     "speed": 1.0,
+     "trimStart": 0,
+     "trimEnd": 0,
+     "volume": 0.0,
+     "muted": false,
+     "visible": true,
+     "fadeIn": 0,
+     "fadeOut": 0,
+     "opacity": 1.0,
+     "file": null,
+     "originalFile": null,
+     "effectIntensity": null,
+     "crop": null,
+     "transformation": {
+      "size": 16.8,
+      "rotation": 0.0,
+      "position": {
+       "x": 0.5153,
+       "y": 0.33992187499999993
+      },
+      "maxWidth": 1.0678306878306878,
+      "tiltX": 0,
+      "tiltY": 0
+     },
+     "value": "to",
+     "style": {
+      "fontId": "b15cf926-bbba-462c-81ac-e54f7475d608",
+      "italic": false,
+      "textAlign": "LEFT",
+      "textTransform": "NONE",
+      "color": "#FFFFFF",
+      "lineHeight": 1.0,
+      "letterSpacing": -0.02,
+      "fontWeight": 400,
+      "strokeWidthRatio": 0.0,
+      "shadowColor": "#000000",
+      "shadowBlurRatio": 0.07,
+      "shadowDistanceRatio": 0.015,
+      "shadowAngle": 90.0,
+      "backgroundRadiusRatio": 0.0,
+      "backgroundPaddingXRatio": 0.0,
+      "backgroundPaddingYRatio": 0.0
+     },
+     "textAnimations": {
+      "inAnimationId": "c9c00437-e849-55d1-835a-db22e844ecaa",
+      "inAnimationDuration": 850
+     },
+     "loopable": false,
+     "duration": 0,
+     "cornerRadius": 0.0,
+     "filters": null,
+     "lutId": null,
+     "opacityFade": {
+      "opacityFadeIn": 0,
+      "opacityFadeOut": 0,
+      "interpolation": {
+       "value": [
+        0.0,
+        0.0,
+        0.67,
+        1.0
+       ],
+       "type": "BEZIER"
+      }
+     },
+     "keyframes": [],
+     "mask": null,
+     "audioEffects": null,
+     "flip": null,
+     "shapeConfig": null,
+     "path": null,
+     "baseStyle": null,
+     "lineStart": null,
+     "lineEnd": null,
+     "blendMode": null
+    }
+   ]
+  },
+  {
+   "trackId": "675661048224507",
+   "type": "TEXT",
+   "zindex": 10,
+   "visible": true,
+   "muted": null,
+   "clips": [
+    {
+     "type": "TEXT",
+     "clipId": "clip-6d50ae49-34e4-4456-8041-d85167031661",
+     "priority": 0,
+     "start": 24720,
+     "end": 26060,
+     "speed": 1.0,
+     "trimStart": 0,
+     "trimEnd": 0,
+     "volume": 0.0,
+     "muted": false,
+     "visible": true,
+     "fadeIn": 0,
+     "fadeOut": 0,
+     "opacity": 1.0,
+     "file": null,
+     "originalFile": null,
+     "effectIntensity": null,
+     "crop": null,
+     "transformation": {
+      "size": 44.400000000000006,
+      "rotation": 0.0,
+      "position": {
+       "x": 0.19997777777777778,
+       "y": 0.32023437499999996
+      },
+      "maxWidth": 1.4944944944944942,
+      "tiltX": 0,
+      "tiltY": 0
+     },
+     "value": "ideas",
+     "style": {
+      "fontId": "f47acd26-8766-496e-9053-4fe63e72cbc3",
+      "italic": false,
+      "textAlign": "LEFT",
+      "textTransform": "NONE",
+      "color": "#7F77DD",
+      "lineHeight": 1.0,
+      "letterSpacing": 0.0,
+      "fontWeight": 400,
+      "strokeWidthRatio": 0.0,
+      "shadowColor": "#000000",
+      "shadowBlurRatio": 0.07,
+      "shadowDistanceRatio": 0.015,
+      "shadowAngle": 90.0,
+      "backgroundRadiusRatio": 0.0,
+      "backgroundPaddingXRatio": 0.0,
+      "backgroundPaddingYRatio": 0.0
+     },
+     "textAnimations": {
+      "inAnimationId": "c9c00437-e849-55d1-835a-db22e844ecaa",
+      "inAnimationDuration": 850
+     },
+     "loopable": false,
+     "duration": 0,
+     "cornerRadius": 0.0,
+     "filters": null,
+     "lutId": null,
+     "opacityFade": {
+      "opacityFadeIn": 0,
+      "opacityFadeOut": 0,
+      "interpolation": {
+       "value": [
+        0.0,
+        0.0,
+        0.67,
+        1.0
+       ],
+       "type": "BEZIER"
+      }
+     },
+     "keyframes": [],
+     "mask": null,
+     "audioEffects": null,
+     "flip": null,
+     "shapeConfig": null,
+     "path": null,
+     "baseStyle": null,
+     "lineStart": null,
+     "lineEnd": null,
+     "blendMode": null
+    }
+   ]
+  },
+  {
+   "trackId": "628478830948621",
+   "type": "TEXT",
+   "zindex": 9,
+   "visible": true,
+   "muted": null,
+   "clips": [
+    {
+     "type": "TEXT",
+     "clipId": "clip-750ec350-cec6-4b6e-9383-f314479ed788",
+     "priority": 0,
+     "start": 24560,
+     "end": 26060,
+     "speed": 1.0,
+     "trimStart": 0,
+     "trimEnd": 0,
+     "volume": 0.0,
+     "muted": false,
+     "visible": true,
+     "fadeIn": 0,
+     "fadeOut": 0,
+     "opacity": 1.0,
+     "file": null,
+     "originalFile": null,
+     "effectIntensity": null,
+     "crop": null,
+     "transformation": {
+      "size": 16.8,
+      "rotation": 0.0,
+      "position": {
+       "x": 0.6432466666666667,
+       "y": 0.25742812499999995
+      },
+      "maxWidth": 2.0944973544973546,
+      "tiltX": 0,
+      "tiltY": 0
+     },
+     "value": "your",
+     "style": {
+      "fontId": "b15cf926-bbba-462c-81ac-e54f7475d608",
+      "italic": false,
+      "textAlign": "LEFT",
+      "textTransform": "NONE",
+      "color": "#FFFFFF",
+      "lineHeight": 1.0,
+      "letterSpacing": -0.02,
+      "fontWeight": 400,
+      "strokeWidthRatio": 0.0,
+      "shadowColor": "#000000",
+      "shadowBlurRatio": 0.07,
+      "shadowDistanceRatio": 0.015,
+      "shadowAngle": 90.0,
+      "backgroundRadiusRatio": 0.0,
+      "backgroundPaddingXRatio": 0.0,
+      "backgroundPaddingYRatio": 0.0
+     },
+     "textAnimations": {
+      "inAnimationId": "c9c00437-e849-55d1-835a-db22e844ecaa",
+      "inAnimationDuration": 850
+     },
+     "loopable": false,
+     "duration": 0,
+     "cornerRadius": 0.0,
+     "filters": null,
+     "lutId": null,
+     "opacityFade": {
+      "opacityFadeIn": 0,
+      "opacityFadeOut": 0,
+      "interpolation": {
+       "value": [
+        0.0,
+        0.0,
+        0.67,
+        1.0
+       ],
+       "type": "BEZIER"
+      }
+     },
+     "keyframes": [],
+     "mask": null,
+     "audioEffects": null,
+     "flip": null,
+     "shapeConfig": null,
+     "path": null,
+     "baseStyle": null,
+     "lineStart": null,
+     "lineEnd": null,
+     "blendMode": null
+    }
+   ]
+  },
+  {
+   "trackId": "506855029773894",
+   "type": "TEXT",
+   "zindex": 8,
+   "visible": true,
+   "muted": null,
+   "clips": [
+    {
+     "type": "TEXT",
+     "clipId": "clip-ef702476-378d-42e8-8e5e-06f19373a368",
+     "priority": 0,
+     "start": 24320,
+     "end": 26060,
+     "speed": 1.0,
+     "trimStart": 0,
+     "trimEnd": 0,
+     "volume": 0.0,
+     "muted": false,
+     "visible": true,
+     "fadeIn": 0,
+     "fadeOut": 0,
+     "opacity": 1.0,
+     "file": null,
+     "originalFile": null,
+     "effectIntensity": null,
+     "crop": null,
+     "transformation": {
+      "size": 39.36,
+      "rotation": 0.0,
+      "position": {
+       "x": 0.21939777777777775,
+       "y": 0.23954062499999995
+      },
+      "maxWidth": 2.3809033423667567,
+      "tiltX": 0,
+      "tiltY": 0
+     },
+     "value": "Bring",
+     "style": {
+      "fontId": "b15cf926-bbba-462c-81ac-e54f7475d608",
+      "italic": false,
+      "textAlign": "LEFT",
+      "textTransform": "NONE",
+      "color": "#7F77DD",
+      "lineHeight": 1.0,
+      "letterSpacing": -0.03,
+      "fontWeight": 800,
+      "strokeWidthRatio": 0.0,
+      "shadowColor": "#000000",
+      "shadowBlurRatio": 0.07,
+      "shadowDistanceRatio": 0.015,
+      "shadowAngle": 90.0,
+      "backgroundRadiusRatio": 0.0,
+      "backgroundPaddingXRatio": 0.0,
+      "backgroundPaddingYRatio": 0.0
+     },
+     "textAnimations": {
+      "inAnimationId": "c9c00437-e849-55d1-835a-db22e844ecaa",
+      "inAnimationDuration": 850
+     },
+     "loopable": false,
+     "duration": 0,
+     "cornerRadius": 0.0,
+     "filters": null,
+     "lutId": null,
+     "opacityFade": {
+      "opacityFadeIn": 0,
+      "opacityFadeOut": 0,
+      "interpolation": {
+       "value": [
+        0.0,
+        0.0,
+        0.67,
+        1.0
+       ],
+       "type": "BEZIER"
+      }
+     },
+     "keyframes": [],
+     "mask": null,
+     "audioEffects": null,
+     "flip": null,
+     "shapeConfig": null,
+     "path": null,
+     "baseStyle": null,
+     "lineStart": null,
+     "lineEnd": null,
+     "blendMode": null
+    }
+   ]
+  },
+  {
+   "trackId": "61424772018791",
+   "type": "TEXT",
+   "zindex": 6,
+   "visible": true,
+   "muted": null,
+   "clips": [
+    {
+     "type": "TEXT",
+     "clipId": "clip-26bbd3ae-a1be-4c35-9149-e6f7264dc86d",
+     "priority": 0,
+     "start": 19000,
+     "end": 19980,
+     "speed": 1.0,
+     "trimStart": 0,
+     "trimEnd": 0,
+     "volume": 0.0,
+     "muted": false,
+     "visible": true,
+     "fadeIn": 0,
+     "fadeOut": 0,
+     "opacity": 1.0,
+     "file": null,
+     "originalFile": null,
+     "effectIntensity": null,
+     "crop": null,
+     "transformation": {
+      "size": 32.644127236580516,
+      "rotation": 0.0,
+      "position": {
+       "x": 0.11990750000000003,
+       "y": 0.5796571555044732
+      },
+      "maxWidth": 5.6569630697704065,
+      "tiltX": 0,
+      "tiltY": 0
+     },
+     "value": "everywhere.",
+     "style": {
+      "fontId": "b15cf926-bbba-462c-81ac-e54f7475d608",
+      "italic": false,
+      "textAlign": "LEFT",
+      "textTransform": "NONE",
+      "color": "#7F77DD",
+      "lineHeight": 1.0,
+      "letterSpacing": -0.03,
+      "fontWeight": 800,
+      "strokeWidthRatio": 0.0,
+      "shadowColor": "#000000",
+      "shadowBlurRatio": 0.07,
+      "shadowDistanceRatio": 0.015,
+      "shadowAngle": 90.0,
+      "backgroundRadiusRatio": 0.0,
+      "backgroundPaddingXRatio": 0.0,
+      "backgroundPaddingYRatio": 0.0
+     },
+     "textAnimations": {
+      "inAnimationId": "c9c00437-e849-55d1-835a-db22e844ecaa",
+      "inAnimationDuration": 850
+     },
+     "loopable": false,
+     "duration": 0,
+     "cornerRadius": 0.0,
+     "filters": null,
+     "lutId": null,
+     "opacityFade": {
+      "opacityFadeIn": 0,
+      "opacityFadeOut": 0,
+      "interpolation": {
+       "value": [
+        0.0,
+        0.0,
+        0.67,
+        1.0
+       ],
+       "type": "BEZIER"
+      }
+     },
+     "keyframes": [],
+     "mask": null,
+     "audioEffects": null,
+     "flip": null,
+     "shapeConfig": null,
+     "path": null,
+     "baseStyle": null,
+     "lineStart": null,
+     "lineEnd": null,
+     "blendMode": null
+    }
+   ]
+  },
+  {
+   "trackId": "271776101785964",
+   "type": "TEXT",
+   "zindex": 5,
+   "visible": true,
+   "muted": null,
+   "clips": [
+    {
+     "type": "TEXT",
+     "clipId": "clip-f74b770a-507f-4fb3-94f5-beff3c3e5622",
+     "priority": 0,
+     "start": 18680,
+     "end": 19980,
+     "speed": 1.0,
+     "trimStart": 0,
+     "trimEnd": 0,
+     "volume": 0.0,
+     "muted": false,
+     "visible": true,
+     "fadeIn": 0,
+     "fadeOut": 0,
+     "opacity": 1.0,
+     "file": null,
+     "originalFile": null,
+     "effectIntensity": null,
+     "crop": null,
+     "transformation": {
+      "size": 16.8,
+      "rotation": 0.0,
+      "position": {
+       "x": 0.7847194444444444,
+       "y": 0.5163
+      },
+      "maxWidth": 1.4700529100529107,
+      "tiltX": 0,
+      "tiltY": 0
+     },
+     "value": "are",
+     "style": {
+      "fontId": "b15cf926-bbba-462c-81ac-e54f7475d608",
+      "italic": false,
+      "textAlign": "LEFT",
+      "textTransform": "NONE",
+      "color": "#FFFFFF",
+      "lineHeight": 1.0,
+      "letterSpacing": -0.02,
+      "fontWeight": 400,
+      "strokeWidthRatio": 0.0,
+      "shadowColor": "#000000",
+      "shadowBlurRatio": 0.07,
+      "shadowDistanceRatio": 0.015,
+      "shadowAngle": 90.0,
+      "backgroundRadiusRatio": 0.0,
+      "backgroundPaddingXRatio": 0.0,
+      "backgroundPaddingYRatio": 0.0
+     },
+     "textAnimations": {
+      "inAnimationId": "c9c00437-e849-55d1-835a-db22e844ecaa",
+      "inAnimationDuration": 850
+     },
+     "loopable": false,
+     "duration": 0,
+     "cornerRadius": 0.0,
+     "filters": null,
+     "lutId": null,
+     "opacityFade": {
+      "opacityFadeIn": 0,
+      "opacityFadeOut": 0,
+      "interpolation": {
+       "value": [
+        0.0,
+        0.0,
+        0.67,
+        1.0
+       ],
+       "type": "BEZIER"
+      }
+     },
+     "keyframes": [],
+     "mask": null,
+     "audioEffects": null,
+     "flip": null,
+     "shapeConfig": null,
+     "path": null,
+     "baseStyle": null,
+     "lineStart": null,
+     "lineEnd": null,
+     "blendMode": null
+    }
+   ]
+  },
+  {
+   "trackId": "445255529083476",
+   "type": "TEXT",
+   "zindex": 4,
+   "visible": true,
+   "muted": null,
+   "clips": [
+    {
+     "type": "TEXT",
+     "clipId": "clip-a4c43f87-27c8-4c44-af24-453f9ba87785",
+     "priority": 0,
+     "start": 18120,
+     "end": 19980,
+     "speed": 1.0,
+     "trimStart": 0,
+     "trimEnd": 0,
+     "volume": 0.0,
+     "muted": false,
+     "visible": true,
+     "fadeIn": 0,
+     "fadeOut": 0,
+     "opacity": 1.0,
+     "file": null,
+     "originalFile": null,
+     "effectIntensity": null,
+     "crop": null,
+     "transformation": {
+      "size": 44.400000000000006,
+      "rotation": 0.0,
+      "position": {
+       "x": 0.41595277777777784,
+       "y": 0.5004875
+      },
+      "maxWidth": 1.7833833833833832,
+      "tiltX": 0,
+      "tiltY": 0
+     },
+     "value": "stories",
+     "style": {
+      "fontId": "f47acd26-8766-496e-9053-4fe63e72cbc3",
+      "italic": false,
+      "textAlign": "LEFT",
+      "textTransform": "NONE",
+      "color": "#7F77DD",
+      "lineHeight": 1.0,
+      "letterSpacing": 0.0,
+      "fontWeight": 400,
+      "strokeWidthRatio": 0.0,
+      "shadowColor": "#000000",
+      "shadowBlurRatio": 0.07,
+      "shadowDistanceRatio": 0.015,
+      "shadowAngle": 90.0,
+      "backgroundRadiusRatio": 0.0,
+      "backgroundPaddingXRatio": 0.0,
+      "backgroundPaddingYRatio": 0.0
+     },
+     "textAnimations": {
+      "inAnimationId": "c9c00437-e849-55d1-835a-db22e844ecaa",
+      "inAnimationDuration": 850
+     },
+     "loopable": false,
+     "duration": 0,
+     "cornerRadius": 0.0,
+     "filters": null,
+     "lutId": null,
+     "opacityFade": {
+      "opacityFadeIn": 0,
+      "opacityFadeOut": 0,
+      "interpolation": {
+       "value": [
+        0.0,
+        0.0,
+        0.67,
+        1.0
+       ],
+       "type": "BEZIER"
+      }
+     },
+     "keyframes": [],
+     "mask": null,
+     "audioEffects": null,
+     "flip": null,
+     "shapeConfig": null,
+     "path": null,
+     "baseStyle": null,
+     "lineStart": null,
+     "lineEnd": null,
+     "blendMode": null
+    }
+   ]
+  },
+  {
+   "trackId": "305274336359663",
+   "type": "TEXT",
+   "zindex": 3,
+   "visible": true,
+   "muted": null,
+   "clips": [
+    {
+     "type": "TEXT",
+     "clipId": "clip-880d1313-0bde-4694-8ca9-5f7013cfdb2a",
+     "priority": 0,
+     "start": 17800,
+     "end": 19980,
+     "speed": 1.0,
+     "trimStart": 0,
+     "trimEnd": 0,
+     "volume": 0.0,
+     "muted": false,
+     "visible": true,
+     "fadeIn": 0,
+     "fadeOut": 0,
+     "opacity": 1.0,
+     "file": null,
+     "originalFile": null,
+     "effectIntensity": null,
+     "crop": null,
+     "transformation": {
+      "size": 24.48,
+      "rotation": 0.0,
+      "position": {
+       "x": 0.12163611111111113,
+       "y": 0.5061625000000001
+      },
+      "maxWidth": 2.5046659404502543,
+      "tiltX": 0,
+      "tiltY": 0
+     },
+     "value": "Good",
+     "style": {
+      "fontId": "b15cf926-bbba-462c-81ac-e54f7475d608",
+      "italic": false,
+      "textAlign": "LEFT",
+      "textTransform": "NONE",
+      "color": "#FFFFFF",
+      "lineHeight": 1.0,
+      "letterSpacing": -0.025,
+      "fontWeight": 800,
+      "strokeWidthRatio": 0.0,
+      "shadowColor": "#000000",
+      "shadowBlurRatio": 0.07,
+      "shadowDistanceRatio": 0.015,
+      "shadowAngle": 90.0,
+      "backgroundRadiusRatio": 0.0,
+      "backgroundPaddingXRatio": 0.0,
+      "backgroundPaddingYRatio": 0.0
+     },
+     "textAnimations": {
+      "inAnimationId": "c9c00437-e849-55d1-835a-db22e844ecaa",
+      "inAnimationDuration": 850
+     },
+     "loopable": false,
+     "duration": 0,
+     "cornerRadius": 0.0,
+     "filters": null,
+     "lutId": null,
+     "opacityFade": {
+      "opacityFadeIn": 0,
+      "opacityFadeOut": 0,
+      "interpolation": {
+       "value": [
+        0.0,
+        0.0,
+        0.67,
+        1.0
+       ],
+       "type": "BEZIER"
+      }
+     },
+     "keyframes": [],
+     "mask": null,
+     "audioEffects": null,
+     "flip": null,
+     "shapeConfig": null,
+     "path": null,
+     "baseStyle": null,
+     "lineStart": null,
+     "lineEnd": null,
+     "blendMode": null
+    }
+   ]
+  },
+  {
+   "trackId": "989492344915407",
+   "type": "TEXT",
+   "zindex": 2,
+   "visible": true,
+   "muted": null,
+   "clips": [
+    {
+     "type": "TEXT",
+     "clipId": "418297655244224",
+     "priority": 2,
+     "start": 12471,
+     "end": 17471,
+     "speed": 1.0,
+     "trimStart": 0,
+     "trimEnd": 0,
+     "volume": 0.0,
+     "muted": false,
+     "visible": true,
+     "fadeIn": 0,
+     "fadeOut": 0,
+     "opacity": 1.0,
+     "file": null,
+     "originalFile": null,
+     "effectIntensity": null,
+     "crop": null,
+     "transformation": {
+      "size": 24.000000000000004,
+      "rotation": 0.0,
+      "position": {
+       "x": 0.5,
+       "y": 0.5079693418560606
+      },
+      "maxWidth": 4.170095954895021,
+      "tiltX": 0,
+      "tiltY": 0
+     },
+     "value": "Minimal.",
+     "style": {
+      "fontId": "d7106596-ddef-4dc0-afdb-88e063d22007",
+      "italic": true,
+      "textAlign": "CENTER",
+      "textTransform": "NONE",
+      "color": "#111111",
+      "lineHeight": 1.0086595117845119,
+      "letterSpacing": -0.02,
+      "fontWeight": 400,
+      "strokeWidthRatio": 0.0,
+      "shadowBlurRatio": 0.0,
+      "shadowDistanceRatio": 0.0,
+      "shadowAngle": 45.0,
+      "backgroundRadiusRatio": 0.0,
+      "backgroundPaddingXRatio": 0.0,
+      "backgroundPaddingYRatio": 0.0
+     },
+     "textAnimations": null,
+     "loopable": false,
+     "duration": 0,
+     "cornerRadius": 0.0,
+     "filters": null,
+     "lutId": null,
+     "opacityFade": {
+      "opacityFadeIn": 0,
+      "opacityFadeOut": 0,
+      "interpolation": {
+       "value": [
+        0.0,
+        0.0,
+        0.67,
+        1.0
+       ],
+       "type": "BEZIER"
+      }
+     },
+     "keyframes": [],
+     "mask": null,
+     "audioEffects": null,
+     "flip": null,
+     "shapeConfig": null,
+     "path": null,
+     "baseStyle": null,
+     "lineStart": null,
+     "lineEnd": null,
+     "blendMode": "normal"
+    }
+   ]
+  },
+  {
+   "trackId": "840564188517863",
+   "type": "VISUAL_MEDIA",
+   "zindex": 1,
+   "visible": true,
+   "muted": false,
+   "clips": [
+    {
+     "type": "VIDEO",
+     "clipId": "66140279151741",
+     "priority": 3,
+     "start": -3,
+     "end": 42997,
+     "speed": 1.0,
+     "trimStart": 0,
+     "trimEnd": 16937,
+     "volume": 1.0,
+     "muted": false,
+     "visible": true,
+     "fadeIn": 0,
+     "fadeOut": 0,
+     "opacity": 1.0,
+     "file": {
+      "audio": {
+       "fileId": "22b0e02c-2b13-457e-9a42-cf1b5f036c85",
+       "fileUrl": "https://storage.googleapis.com/dev-file-storage-service/e29e4ae7-ebb8-48f4-865b-ccae51c101f6.wav?X-Goog-Algorithm=GOOG4-RSA-SHA256&X-Goog-Credential=file-storage-service%40podcastle-dev.iam.gserviceaccount.com%2F20260930%2Fauto%2Fstorage%2Fgoog4_request&X-Goog-Date=20260930T103316Z&X-Goog-Expires=86400&X-Goog-SignedHeaders=host&response-content-disposition=attachment%3B%20filename%3D%22sticker.wav%22%3B%20filename%2A%3DUTF-8%27%27sticker.wav&X-Goog-Signature=9b504714b3190ce615b6468efb4ef7c1caee521e75302605bfc4eba75427d5f66bda91f2c1fdcd0e83e6f5bc4a8ca9b5b8f4ec55a31028def88bf2bea9c9c932795b8409b968a6ddc5adaaf1a9222d54565e6a9c60d047118b55c9198dc107c5519cc70613b47b80286b14cbe0a9fd642ff7d08d282775ba06433e42c79eb86e2ad2dc70509027d439bf0facb88ad11737ac526f2cfb62a00cc1e362732b7d0bb84bde56832bd4b353f5a728b487eab2164a5f2a5a2d132f6d36dca5fb66f7a22736efb7ffa4ddefea723a9fd28a6a12014ecdbbd400cb5df2956289d8a3e6782a0ba7ee33215533be0ab017522e197edec53de49386e9d0d250d07f24f02a65"
+      },
+      "video": {
+       "fileId": "4ebcb143-7775-45f8-ba75-bb5d205ca099",
+       "fileUrl": "https://storage.googleapis.com/dev-file-storage-service/69225684-4090-4504-8302-e7254fdcd5d8.mp4?X-Goog-Algorithm=GOOG4-RSA-SHA256&X-Goog-Credential=file-storage-service%40podcastle-dev.iam.gserviceaccount.com%2F20260930%2Fauto%2Fstorage%2Fgoog4_request&X-Goog-Date=20260930T103316Z&X-Goog-Expires=86400&X-Goog-SignedHeaders=host&response-content-disposition=attachment%3B%20filename%3D%22sticker.mp4%22%3B%20filename%2A%3DUTF-8%27%27sticker.mp4&X-Goog-Signature=7528cb8d732fd7fc7ce0fc24807ff3a3187f496b1364e505d2e5e2b555618763099f5054aba182f08bce09e42fef3cf606313f6244e6e145460dd1cb31638e8620f4577ef131fb9fe5802bed37f6108a0724ed6234a0d64cbf5fb159358ef7912772b17b22e3ef80c1621d0ee8ef68bd85945e774cf276489d2136bfaf91cace03454f484909a57519829bf7b990eb836203428c0943439751e7bbe16a328c9a13a5b08f8cda7ac175b0a1cdd4ffe69ad92360bdf0913d7081e15d110a564b6884718b8d9f45f4a7a910b6e9286d6533f875d8354a2fdc8894da298fd787b4d31dfaadd562a552e751ba6b58735193f8ecbd1affe8567cf185964d19f7fefd70"
+      },
+      "image": null
+     },
+     "originalFile": null,
+     "effectIntensity": 100,
+     "crop": {
+      "x": null,
+      "y": null,
+      "w": 1.0,
+      "h": 1.0,
+      "cy": 0.5,
+      "cx": 0.5
+     },
+     "transformation": {
+      "boundingBox": {
+       "x": null,
+       "y": null,
+       "h": 0.6666666666666666,
+       "w": 0.6666666666666666,
+       "cx": 0.5,
+       "cy": 0.5
+      },
+      "scale": {
+       "horizontalScale": 1.5013888888888887,
+       "verticalScale": 1.5013888888888887
+      },
+      "rotation": 0
+     },
+     "value": null,
+     "style": null,
+     "textAnimations": null,
+     "loopable": false,
+     "duration": 26063,
+     "cornerRadius": 0.0,
+     "filters": [],
+     "lutId": null,
+     "opacityFade": {
+      "opacityFadeIn": 0,
+      "opacityFadeOut": 0,
+      "interpolation": {
+       "value": [
+        0.0,
+        0.0,
+        0.67,
+        1.0
+       ],
+       "type": "BEZIER"
+      }
+     },
+     "keyframes": [],
+     "mask": null,
+     "audioEffects": [],
+     "flip": {
+      "horizontal": false,
+      "vertical": false
+     },
+     "shapeConfig": null,
+     "path": null,
+     "baseStyle": null,
+     "lineStart": null,
+     "lineEnd": null,
+     "blendMode": null
+    }
+   ]
+  }
+ ],
+ "watermarkUrl": null,
+ "background": {
+  "type": "COLOR",
+  "color": "#222326"
+ },
+ "subtitles": null,
+ "transitions": [],
+ "animations": [],
+ "systemFilesBucket": "system-public-files",
+ "source": "PROJECT",
+ "fontUrls": {
+  "f47acd26-8766-496e-9053-4fe63e72cbc3": "https://storage.googleapis.com/async-fonts-dev/system-fonts/carattere/400.woff",
+  "6a616077-cb80-4d7f-b376-5793f88b60cb": "https://storage.googleapis.com/async-fonts-dev/system-fonts/josefin_sans/400.woff",
+  "b15cf926-bbba-462c-81ac-e54f7475d608": "https://storage.googleapis.com/async-fonts-dev/system-fonts/figtree/400.woff",
+  "d7106596-ddef-4dc0-afdb-88e063d22007": "https://storage.googleapis.com/async-fonts-dev/system-fonts/dm_serif_display/400_italic.woff"
+ },
+ "lutFileUrls": {},
+ "textAnimationPresets": {
+  "c9c00437-e849-55d1-835a-db22e844ecaa": {
+   "textAnimationId": "c9c00437-e849-55d1-835a-db22e844ecaa",
+   "name": "Ledger Focus",
+   "thumbnail": "animations/in-animations-2.gif",
+   "thumbnailIndex": 46,
+   "priority": 116,
+   "level": "line",
+   "type": "IN",
+   "keyframes": {
+    "tracks": {
+     "opacity": [
+      {
+       "pct": 0,
+       "value": 0
+      },
+      {
+       "pct": 100,
+       "value": 1
+      }
+     ],
+     "sx": [
+      {
+       "pct": 0,
+       "value": 0.78
+      },
+      {
+       "pct": 100,
+       "value": 1
+      }
+     ],
+     "sy": [
+      {
+       "pct": 0,
+       "value": 0.78
+      },
+      {
+       "pct": 100,
+       "value": 1
+      }
+     ],
+     "blur": [
+      {
+       "pct": 0,
+       "value": 0.14511911241012881
+      },
+      {
+       "pct": 100,
+       "value": 0
+      }
+     ]
+    },
+    "easing": {
+     "x1": 0.22,
+     "y1": 0.75,
+     "x2": 0.25,
+     "y2": 1
+    },
+    "pivotY": 0.22,
+    "staggerFrom": "first",
+    "staggerSeed": 193,
+    "unitFraction": 0.9174311926605505
+   }
+  }
+ }
+}

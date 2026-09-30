@@ -89,6 +89,21 @@ namespace openshot
 
 		Stats stats() const;
 
+		/// Every pool in the process at once, from counters kept as surfaces come
+		/// and go (no pool is walked, so any thread may ask while others render).
+		/// @c misses counts release() calls that matched nothing: a surface given
+		/// back on a thread other than the one whose pool made it, which that pool
+		/// then holds as in use until clear() or thread exit.
+		struct GlobalStats
+		{
+			std::size_t pools = 0;
+			std::size_t created = 0;
+			std::size_t in_use = 0;
+			std::size_t bytes = 0;
+			std::size_t misses = 0;
+		};
+		static GlobalStats Global();
+
 		GpuSurfacePool(const GpuSurfacePool&) = delete;
 		GpuSurfacePool& operator=(const GpuSurfacePool&) = delete;
 

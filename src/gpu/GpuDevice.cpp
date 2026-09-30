@@ -593,6 +593,27 @@ void GpuDevice::ReleaseThreadResources()
 #endif
 }
 
+GpuDevice::MemoryStats GpuDevice::Memory()
+{
+	MemoryStats stats;
+#ifdef OPENSHOT_HAVE_SKIA_GPU
+	std::lock_guard<std::mutex> slot_lock(deviceSlotMutex());
+	GpuDevice* device = deviceSlot().get();
+	if (!device || !device->impl || !device->impl->context)
+		return stats;
+	stats.context_bytes = device->impl->context->currentBudgetedBytes();
+	std::lock_guard<std::mutex> lock(device->impl->recorder_mutex);
+	stats.recorders = device->impl->recorders.size();
+	for (const auto& [id, recorder] : device->impl->recorders) {
+		if (!recorder)
+			continue;
+		stats.recorder_bytes += recorder->currentBudgetedBytes();
+		stats.recorder_purgeable_bytes += recorder->currentPurgeableBytes();
+	}
+#endif
+	return stats;
+}
+
 std::size_t GpuDevice::RecorderCount()
 {
 #ifdef OPENSHOT_HAVE_SKIA_GPU

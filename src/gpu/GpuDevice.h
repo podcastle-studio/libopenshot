@@ -127,6 +127,18 @@ namespace openshot
 		/// How many threads hold a recorder now. For tests and leak checks.
 		static std::size_t RecorderCount();
 
+		/// What Skia holds on the GPU right now: the context's resource cache and
+		/// every recorder's, in bytes. Surfaces in GpuSurfacePool are inside the
+		/// recorders' figures. Any thread may ask; the numbers are a snapshot.
+		struct MemoryStats
+		{
+			std::size_t context_bytes = 0;
+			std::size_t recorder_bytes = 0;
+			std::size_t recorder_purgeable_bytes = 0;
+			std::size_t recorders = 0;
+		};
+		static MemoryStats Memory();
+
 		/// Hand this thread's recorded work to the GPU. When @a syncToCpu, block
 		/// until it has finished. Returns false when unavailable or on failure.
 		bool submit(bool syncToCpu);

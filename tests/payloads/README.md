@@ -79,6 +79,12 @@ app and capture the fresh message.
 and W19–W21's effect on a real job. Its prod-rendered reference is
 `tmp/payloads/prod-2026-09-16/` → `Untitled video - Sep 16, 2026, 15_40PM.mp4` (kept in `tmp/`).
 
+| `dev-2026-09-30-4k-45text-glow-gradient.json` | 2026-09-30 10:33 UTC (dev) | 2160x3840 / 26 s · **45 text clips** (max 8 visible), text in-animations, one clip with glow and a solid→**gradient colour keyframe**, 4 fonts, one video. The GPU-memory case: ~17.5 GB peak on an RTX 4000 Ada. |
+| `dev-2026-09-30-1080p-12clips-19transitions.json` | 2026-09-30 12:19 UTC (dev) | 1920x1080 / 102 s · **12 video clips cut from one file**, 8 images, **19 transitions** incl. two overlay clips and five sound effects. The concurrency case: four at once corrupted the heap before `7333fc01`. |
+
+Both share the archive `tmp/payloads/dev-2026-09-30/`. They are dev captures, not production, and
+have no hashes recorded yet.
+
 **Still wanted** (the corpus should be six): text animations, subtitles, a transition-heavy timeline, a
 chroma-key job, and a 4K source. The three shapes this capture exercises that `tests/golden` does
 *not* cover: a clip rotated and split across a trim

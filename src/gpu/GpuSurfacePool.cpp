@@ -4,6 +4,7 @@
 
 #include "GpuDevice.h"
 
+#include <atomic>
 #include <mutex>
 
 #include "skia/include/core/SkAlphaType.h"
@@ -37,6 +38,13 @@ namespace
 	// The calling thread's pool once Instance() has built it. A plain pointer, so
 	// DiscardCurrentThread() can ask during thread exit without constructing one.
 	thread_local GpuSurfacePool* tThisThreadPool = nullptr;
+
+	std::atomic<std::size_t> gCreated{0}, gInUse{0}, gBytes{0}, gMisses{0};
+
+	std::size_t entryBytes(int width, int height)
+	{
+		return static_cast<std::size_t>(width) * static_cast<std::size_t>(height) * 4u;
+	}
 }
 
 GpuSurfacePool::GpuSurfacePool()
@@ -48,6 +56,7 @@ GpuSurfacePool::GpuSurfacePool()
 
 GpuSurfacePool::~GpuSurfacePool()
 {
+	discardAll();   // keeps the global counters true for a pool that dies with its thread
 	if (tThisThreadPool == this)
 		tThisThreadPool = nullptr;
 	std::lock_guard<std::mutex> lock(poolRegistryMutex());
@@ -89,6 +98,11 @@ void GpuSurfacePool::DiscardCurrentThread()
 
 void GpuSurfacePool::discardAll()
 {
+	for (const Entry& entry : entries) {
+		gBytes -= entryBytes(entry.width, entry.height);
+		if (entry.in_use)
+			gInUse--;
+	}
 	entries.clear();
 }
 
@@ -101,7 +115,7 @@ void GpuSurfacePool::discardIfStale()
 	// context is still alive, which is the path that actually has to work; this
 	// only catches a pool that somehow missed that sweep, and by now its surfaces
 	// are already dangling, so there is nothing better to do than drop them.
-	entries.clear();
+	discardAll();
 	generation = current;
 }
 
@@ -118,6 +132,7 @@ sk_sp<SkSurface> GpuSurfacePool::acquire(int width, int height, SkColorType colo
 			entry.color_type == color_type &&
 			SkColorSpace::Equals(entry.color_space.get(), color_space.get())) {
 			entry.in_use = true;
+			gInUse++;
 			counters.reused++;
 			resetCanvas(entry.surface.get());
 			return entry.surface;
@@ -144,6 +159,9 @@ sk_sp<SkSurface> GpuSurfacePool::acquire(int width, int height, SkColorType colo
 	entry.in_use = true;
 	entries.push_back(entry);
 	counters.created++;
+	gCreated++;
+	gInUse++;
+	gBytes += entryBytes(width, height);
 	return surface;
 #else
 	return nullptr;
@@ -180,20 +198,39 @@ void GpuSurfacePool::release(sk_sp<SkSurface> surface)
 	discardIfStale();
 	for (Entry& entry : entries) {
 		if (entry.surface == surface) {
+			if (entry.in_use)
+				gInUse--;
 			entry.in_use = false;
 			return;
 		}
 	}
+	gMisses++;
 }
 
 void GpuSurfacePool::clear()
 {
 	for (auto it = entries.begin(); it != entries.end();) {
-		if (it->in_use)
+		if (it->in_use) {
 			++it;
-		else
+		} else {
+			gBytes -= entryBytes(it->width, it->height);
 			it = entries.erase(it);
+		}
 	}
+}
+
+GpuSurfacePool::GlobalStats GpuSurfacePool::Global()
+{
+	GlobalStats result;
+	{
+		std::lock_guard<std::mutex> lock(poolRegistryMutex());
+		result.pools = poolRegistry().size();
+	}
+	result.created = gCreated.load();
+	result.in_use = gInUse.load();
+	result.bytes = gBytes.load();
+	result.misses = gMisses.load();
+	return result;
 }
 
 GpuSurfacePool::Stats GpuSurfacePool::stats() const

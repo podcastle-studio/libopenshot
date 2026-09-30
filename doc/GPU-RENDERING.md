@@ -449,12 +449,15 @@ four exports in one process held 706 → 1122 MB before, 285 → 269 MB after.
 
 ### 4. Worth doing, not blocking
 
-- **Peak VRAM of one export scales with canvas × text clips.** The same 45-text-clip project
-  peaked at 1.3 GB at 1080×1920 and 17.5 GB at 2160×3840 (RTX 4000 Ada, 2026-09-30), so two such 4K
-  exports at once do not fit a 20 GB card. Not profiled yet; the likely cause is full-canvas
-  surfaces per text clip, which sizing to the text's bounds (or releasing a clip's surfaces while
-  it is off screen) would fix.
-  Until then the service's concurrency has to be sized for its largest export, not its average.
+- **Peak VRAM of one export scales with canvas × text clips — now the top item.** Measured
+  2026-09-30 (`../video-rendering-service/doc/HANDOFF-2026-09-30.md`, payload
+  `tests/payloads/dev-2026-09-30-4k-45text-glow-gradient.json`): at 4K the surface pool held 2.7 GB in
+  ~90 full-canvas surfaces with 8–11 in use, the Graphite context cache 1.3 GB, ~3.6 GB outside
+  Skia; the card filled, draws were dropped and NVENC failed to open. Fix order: text surfaces sized
+  to the text, pool eviction/trim, context budget, then the non-Skia share.
+  `GpuSurfacePool::Global()` and `GpuDevice::Memory()` measure it.
+  Until then the service's concurrency has to be sized for its largest export, not its average
+  (pod 2 runs at 2).
 
 - **Look for the next grain.** The production payload's GPU gain was capped at ~1.5× by one CPU
   effect on one clip for a third of the export (`doc/PERFORMANCE-BASELINE.md`, 2026-09-24). The
