@@ -188,6 +188,28 @@ void golden::registerTextScenarios() {
         one(s, t);
     }, text);
 
+    // A solid fill keyframed to a multi-stop gradient, with glow on: the "Create" clip of the
+    // 2026-09-30 report. The sampler blends into the gradient; each glyph must then show its own
+    // part of the ramp -- a canvas translate per glyph once restarted the shader at every letter,
+    // so the whole word came out as the ramp's x=0 colour.
+    add("text.style_keyframes_color_to_gradient", {"text", "style-keyframes", "glow"}, A, [](Scene& s) {
+        auto t = spec(s, "Create", 22.0);
+        t.style.fontFamily = s.font("NotoSans-Bold.ttf");
+        t.style.fontWeight = 700;
+        t.style.textAlign = TextAlignment::LEFT;
+        t.style.color = "#7F77DD";
+        t.style.glowColor = "#7F77DD";
+        t.style.glowIntensityRatio = 0.6;
+        t.style.glowRangeRatio = 0.7;
+        TextStyleKeyframes kf;
+        kf.color.points = {
+            {0.0, "#7F77DD", openshot::LINEAR},
+            {2.0, "linear-gradient(270deg, #FFC6EB 0%, #F9FCDA 28%, #BEFF9E 50.2%, #70D4FF 75.1%, #5479FF 100%)",
+             openshot::LINEAR}};
+        t.styleKeyframes = kf;
+        one(s, t);
+    }, text);
+
     add("text.over_video_with_fade", {"text", "compositing"}, {1, 10, 45, 80, 89}, [](Scene& s) {
         auto& tl = s.makeTimeline();
         tl.AddClip(backgroundClip(s, s.media("background_960x540.png")));

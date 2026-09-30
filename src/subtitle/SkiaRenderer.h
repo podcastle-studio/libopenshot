@@ -148,10 +148,10 @@ public:
         if (count != 1) return false;
         const std::optional<SkPath> path = font.getPath(glyphs[0]);
         if (!path.has_value()) return false;
-        canvas->save();
-        canvas->translate(x, y);
-        canvas->drawPath(*path, paint);
-        canvas->restore();
+        // Offset the outline, not the canvas: a translated canvas moves the paint's shader with
+        // it, so a gradient fill (in block space) restarted at every glyph's origin and each
+        // letter showed only the colour at x=0 of the ramp (2026-09-30).
+        canvas->drawPath(path->makeOffset(x, y), paint);
         return true;
     }
 
