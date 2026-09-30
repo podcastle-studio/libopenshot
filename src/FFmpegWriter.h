@@ -209,6 +209,7 @@ namespace openshot {
 		bool encode_on_device = false;
 		std::shared_ptr<openshot::GpuImage> encode_packed;   ///< NV12, packed; see CudaInterop
 		std::set<AVFrame *> device_frames;                    ///< av_frames that are CUDA frames
+		AVBufferRef *hw_device_ctx = nullptr;                 ///< this writer's encode device (was a process global)
 		std::shared_ptr<void> EncodeOnDevice(openshot::GpuFrame& gpu);
 		struct DeviceFrame;
 

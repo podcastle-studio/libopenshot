@@ -121,8 +121,9 @@ int hw_en_on = 1;					// Is set in UI
 int hw_en_supported = 0;	// Is set by FFmpegWriter
 AVPixelFormat hw_en_av_pix_fmt = AV_PIX_FMT_NONE;
 AVHWDeviceType hw_en_av_device_type = AV_HWDEVICE_TYPE_VAAPI;
-static AVBufferRef *hw_device_ctx = NULL;
-AVFrame *hw_frame = NULL;
+// hw_device_ctx and the frame sent to the encoder used to be globals here, shared by every
+// writer in the process: two exports encoding at once overwrote each other's frame and freed it
+// twice (AddressSanitizer, 2026-09-30). The device is now a member and the frame a local.
 
 static int set_hwframe_ctx(AVCodecContext *ctx, AVBufferRef *hw_device_ctx, int64_t width, int64_t height)
 {
@@ -2862,6 +2863,7 @@ bool FFmpegWriter::write_video_packet(std::shared_ptr<Frame> frame, AVFrame *fra
 		// Assign the initial AVFrame PTS from the frame counter
 		frame_final->pts = video_timestamp;
 #if USE_HW_ACCEL
+		AVFrame *hw_frame = NULL;
 		if (hw_en_on && hw_en_supported && device_frames.count(frame_final)) {
 			// Already a CUDA frame from the encoder's own pool: send it as it is.
 			hw_frame = av_frame_clone(frame_final);
