@@ -33,16 +33,23 @@ namespace
 		static std::vector<GpuSurfacePool*> pools;
 		return pools;
 	}
+
+	// The calling thread's pool once Instance() has built it. A plain pointer, so
+	// DiscardCurrentThread() can ask during thread exit without constructing one.
+	thread_local GpuSurfacePool* tThisThreadPool = nullptr;
 }
 
 GpuSurfacePool::GpuSurfacePool()
 {
+	tThisThreadPool = this;
 	std::lock_guard<std::mutex> lock(poolRegistryMutex());
 	poolRegistry().push_back(this);
 }
 
 GpuSurfacePool::~GpuSurfacePool()
 {
+	if (tThisThreadPool == this)
+		tThisThreadPool = nullptr;
 	std::lock_guard<std::mutex> lock(poolRegistryMutex());
 	std::vector<GpuSurfacePool*>& pools = poolRegistry();
 	for (auto it = pools.begin(); it != pools.end(); ++it) {
@@ -71,6 +78,12 @@ void GpuSurfacePool::DiscardAllPools()
 {
 	std::lock_guard<std::mutex> lock(poolRegistryMutex());
 	for (GpuSurfacePool* pool : poolRegistry())
+		pool->discardAll();
+}
+
+void GpuSurfacePool::DiscardCurrentThread()
+{
+	if (GpuSurfacePool* pool = tThisThreadPool)
 		pool->discardAll();
 }
 

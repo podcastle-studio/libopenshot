@@ -26,10 +26,11 @@ namespace openshot
 	 * created it, and GpuDevice hands out one recorder per thread, so Instance()
 	 * returns a thread-local pool. Never move a surface between threads.
 	 *
-	 * The pool holds surfaces until clear() or thread exit. Nothing here is a
-	 * cache with an eviction policy yet: the render path uses a handful of distinct
-	 * sizes per export, so the working set is small and bounded. If that stops
-	 * being true (many resolutions in one process), add a cap here.
+	 * The pool holds surfaces until clear(), GpuDevice::ReleaseThreadResources()
+	 * or thread exit (which calls it). Nothing here is a cache with an eviction
+	 * policy: the render path uses a handful of distinct sizes per export, and a
+	 * thread that outlives its export (a service's worker thread) should call
+	 * ReleaseThreadResources() when the export is done rather than keep them.
 	 */
 	class GpuSurfacePool
 	{
@@ -52,6 +53,11 @@ namespace openshot
 		/// that made it crashes when it is finally released. Carries the same
 		/// requirement as DestroyInstance(): no other thread may be rendering.
 		static void DiscardAllPools();
+
+		/// Empty the calling thread's pool, if it has one, without creating it.
+		/// GpuDevice::ReleaseThreadResources() calls it just before that thread's
+		/// recorder goes, because every surface in the pool belongs to it.
+		static void DiscardCurrentThread();
 
 		/// Construct the statics DiscardAllPools() uses, taking no lock. GpuDevice calls it before
 		/// registering its exit-time teardown, so they are destroyed after that teardown runs.

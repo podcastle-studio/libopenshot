@@ -111,8 +111,21 @@ namespace openshot
 		skgpu::graphite::Context* context();
 
 		/// This thread's Graphite recorder, or null when unavailable. Owned by
-		/// the device; do not delete. Created on first use per thread.
+		/// the device; do not delete. Created on first use per thread, and
+		/// released by ReleaseThreadResources() — at the latest when the thread exits.
 		skgpu::graphite::Recorder* recorder();
+
+		/// Drop the calling thread's recorder and its pooled surfaces, and with
+		/// them every GPU resource the recorder cached. The next GPU call on this
+		/// thread starts afresh. Runs by itself when a thread that drew exits;
+		/// a thread that outlives its work (a service's worker, which renders one
+		/// export after another) calls it when the work is done, or it keeps the
+		/// largest export's resources for good. Nothing this thread recorded may
+		/// still be in use: no GpuFrame or pooled surface of its alive.
+		static void ReleaseThreadResources();
+
+		/// How many threads hold a recorder now. For tests and leak checks.
+		static std::size_t RecorderCount();
 
 		/// Hand this thread's recorded work to the GPU. When @a syncToCpu, block
 		/// until it has finished. Returns false when unavailable or on failure.

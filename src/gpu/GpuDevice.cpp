@@ -539,6 +539,74 @@ unsigned long long GpuDevice::Generation()
 	return deviceGeneration().load();
 }
 
+#ifdef OPENSHOT_HAVE_SKIA_GPU
+namespace
+{
+	// The lookup cache recorder() keeps, at namespace scope so that
+	// ReleaseThreadResources() can clear it.
+	thread_local unsigned long long tCachedGeneration = 0;
+	thread_local skgpu::graphite::Recorder* tCachedRecorder = nullptr;
+
+	// Releases the thread's recorder when the thread exits. Without it the device
+	// kept a recorder, and every resource cached in it, for each thread that ever
+	// drew, until the device went — and an export's pipeline threads are new every
+	// time. One 1080p export left ~420 MB behind this way; with the service's own
+	// reader leak, its RTX 4000 Ada pod held the whole card idle (2026-09-30).
+	struct ThreadRecorderRelease
+	{
+		bool armed = false;
+		~ThreadRecorderRelease()
+		{
+			if (armed)
+				GpuDevice::ReleaseThreadResources();
+		}
+	};
+	thread_local ThreadRecorderRelease tRecorderRelease;
+}
+
+#endif  // OPENSHOT_HAVE_SKIA_GPU
+
+void GpuDevice::ReleaseThreadResources()
+{
+#ifdef OPENSHOT_HAVE_SKIA_GPU
+	// Surfaces first: each one belongs to the recorder about to go.
+	GpuSurfacePool::DiscardCurrentThread();
+	tCachedRecorder = nullptr;
+	tCachedGeneration = 0;
+
+	// Under the slot lock, so the device cannot be torn down mid-way; after a
+	// teardown there is no device and its recorders are already gone.
+	std::lock_guard<std::mutex> slot_lock(deviceSlotMutex());
+	GpuDevice* device = deviceSlot().get();
+	if (!device || !device->impl)
+		return;
+	std::unique_ptr<skgpu::graphite::Recorder> doomed;
+	{
+		std::lock_guard<std::mutex> lock(device->impl->recorder_mutex);
+		auto it = device->impl->recorders.find(std::this_thread::get_id());
+		if (it == device->impl->recorders.end())
+			return;
+		doomed = std::move(it->second);
+		device->impl->recorders.erase(it);
+	}
+	doomed.reset();
+#endif
+}
+
+std::size_t GpuDevice::RecorderCount()
+{
+#ifdef OPENSHOT_HAVE_SKIA_GPU
+	std::lock_guard<std::mutex> slot_lock(deviceSlotMutex());
+	GpuDevice* device = deviceSlot().get();
+	if (!device || !device->impl)
+		return 0;
+	std::lock_guard<std::mutex> lock(device->impl->recorder_mutex);
+	return device->impl->recorders.size();
+#else
+	return 0;
+#endif
+}
+
 bool GpuDevice::available()
 {
 	return impl->initialise();
@@ -575,22 +643,24 @@ skgpu::graphite::Recorder* GpuDevice::recorder()
 
 	// One recorder per thread, which is the unit Graphite expects to be
 	// per-thread — but owned by the device, not by the thread, so that a device
-	// teardown destroys it while its context is still alive. The thread_local here
-	// is only a lookup cache, keyed on the generation so it cannot survive one.
-	thread_local unsigned long long cached_generation = 0;
-	thread_local skgpu::graphite::Recorder* cached_recorder = nullptr;
+	// teardown destroys it while its context is still alive. The thread_locals
+	// are only a lookup cache, keyed on the generation so they cannot survive one.
 	const unsigned long long generation = Generation();
-	if (cached_recorder && cached_generation == generation)
-		return cached_recorder;
+	if (tCachedRecorder && tCachedGeneration == generation)
+		return tCachedRecorder;
 
 	std::lock_guard<std::mutex> lock(impl->recorder_mutex);
 	std::unique_ptr<skgpu::graphite::Recorder>& slot =
 		impl->recorders[std::this_thread::get_id()];
 	if (!slot)
 		slot = impl->context->makeRecorder();
-	cached_recorder = slot.get();
-	cached_generation = generation;
-	return cached_recorder;
+	tCachedRecorder = slot.get();
+	tCachedGeneration = generation;
+	// First touch constructs the guard on this thread, now: it is destroyed at
+	// thread exit, and before the surface pool only if the pool was built first,
+	// which is the order ReleaseThreadResources() needs anyway (pool, then recorder).
+	tRecorderRelease.armed = true;
+	return tCachedRecorder;
 }
 
 bool GpuDevice::submit(bool syncToCpu)

@@ -355,6 +355,19 @@ teardown touches. Those statics are built without taking a lock (`GpuSurfacePool
 the fastest, and the L4 the choice on GCP, at ~3× the Ada's cost per video-hour. New bench scenarios
 `worst_case_4k` and `long_many_clips` size concurrency.
 
+**Also done 2026-09-30: a thread's GPU recorder no longer outlives it.** `GpuDevice` kept one
+Graphite `Recorder` per thread that ever drew, in a map only a device teardown emptied, and each
+recorder keeps the GPU resources it has cached. An export's pipeline threads are new every time, so
+a service process grew with every export: the RTX 4000 Ada dev pod held 19.8 of 20.5 GB idle after a
+few 4K exports, and later exports quietly fell back to the CPU (987 readbacks, 915 frames encoded
+from host, GPU 2.5 % busy). A thread-local guard now calls the new
+`GpuDevice::ReleaseThreadResources()` at thread exit — this thread's pooled surfaces first, then its
+recorder — and a thread that outlives its work calls it itself (the service does, per export).
+`GpuDevice::RecorderCount()` exposes the count; `unit.gpu_recorder_release` checks both paths. The
+service had its own share: it never deleted the readers it gives `Clip` and `Mask` (~135 MB of NVDEC
+state per export with one video clip); fixed there. Together: 1080×1920, 45 text clips + 1 video,
+four exports in one process held 706 → 1122 MB before, 285 → 269 MB after.
+
 **What is left is decisions, infrastructure and final checks.** In the order they should happen:
 
 ### 1. Owner decisions
@@ -435,6 +448,13 @@ the fastest, and the L4 the choice on GCP, at ~3× the Ada's cost per video-hour
     editor's `text-glow-shader.ts` (64 steps) until the editor takes the same step schedule.
 
 ### 4. Worth doing, not blocking
+
+- **Peak VRAM of one export scales with canvas × text clips.** The same 45-text-clip project
+  peaked at 1.3 GB at 1080×1920 and 17.5 GB at 2160×3840 (RTX 4000 Ada, 2026-09-30), so two such 4K
+  exports at once do not fit a 20 GB card. Not profiled yet; the likely cause is full-canvas
+  surfaces per text clip, which sizing to the text's bounds (or releasing a clip's surfaces while
+  it is off screen) would fix.
+  Until then the service's concurrency has to be sized for its largest export, not its average.
 
 - **Look for the next grain.** The production payload's GPU gain was capped at ~1.5× by one CPU
   effect on one clip for a third of the export (`doc/PERFORMANCE-BASELINE.md`, 2026-09-24). The

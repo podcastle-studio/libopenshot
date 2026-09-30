@@ -41,6 +41,7 @@ extern "C" {
 #include "gpu/GpuDevice.h"
 #include "gpu/GpuYuv.h"
 #include "gpu/GpuOverlay.h"
+#include "gpu/GpuSurfacePool.h"
 
 #include "effects/image-processing-lib/src/Effects/effects.h"
 #include "effects/image-processing-lib/src/Planner/EffectPlan.h"
@@ -53,6 +54,7 @@ extern "C" {
 
 #include <memory>
 #include <string>
+#include <thread>
 #include <cmath>
 #include <algorithm>
 #include <chrono>
@@ -384,6 +386,49 @@ void golden::registerUnitScenarios() {
                                   passes == 0 ? counts
                                               : "no GPU, so nothing should have run as a shader: "
                                                 + counts});
+        });
+
+    // A thread that drew must not leave its recorder behind. The device kept one per thread for
+    // good, and an export's pipeline threads are new every time, so a service process gained the
+    // recorder and every GPU resource cached in it with each export until the card was full
+    // (2026-09-30). The thread-exit release and ReleaseThreadResources() are what prevent that.
+    addCustom("unit.gpu_recorder_release", {"unit", "gpu"},
+        [](Scene& s) {
+            s.makeTimeline().Open();
+        },
+        [](Scene&, std::vector<Captured>&, std::vector<Check>& checks) {
+            openshot::GpuDevice& device = openshot::GpuDevice::Instance();
+            if (!device.available()) {
+                checks.push_back({"no_gpu_no_recorders", openshot::GpuDevice::RecorderCount() == 0,
+                                  "recorders=" + std::to_string(openshot::GpuDevice::RecorderCount())});
+                return;
+            }
+            const std::size_t before = openshot::GpuDevice::RecorderCount();
+            std::size_t during = 0;
+            std::thread drawer([&during] {
+                openshot::GpuSurfacePool& pool = openshot::GpuSurfacePool::Instance();
+                sk_sp<SkSurface> surface = pool.acquire(64, 64, kRGBA_8888_SkColorType);
+                pool.release(surface);
+                during = openshot::GpuDevice::RecorderCount();
+            });
+            drawer.join();
+            const std::size_t after_exit = openshot::GpuDevice::RecorderCount();
+            checks.push_back({"thread_exit_releases_recorder", during == before + 1 && after_exit == before,
+                              "before=" + std::to_string(before) + " during=" + std::to_string(during) +
+                              " after_exit=" + std::to_string(after_exit)});
+
+            // A thread that stays (a service worker) releases explicitly, and can draw again after.
+            openshot::GpuSurfacePool::Instance().release(
+                openshot::GpuSurfacePool::Instance().acquire(64, 64, kRGBA_8888_SkColorType));
+            const std::size_t held = openshot::GpuDevice::RecorderCount();
+            openshot::GpuDevice::ReleaseThreadResources();
+            const std::size_t released = openshot::GpuDevice::RecorderCount();
+            sk_sp<SkSurface> again = openshot::GpuSurfacePool::Instance().acquire(64, 64, kRGBA_8888_SkColorType);
+            const bool draws_again = static_cast<bool>(again);
+            openshot::GpuSurfacePool::Instance().release(again);
+            checks.push_back({"explicit_release", released + 1 == held && draws_again,
+                              "held=" + std::to_string(held) + " released=" + std::to_string(released) +
+                              " draws_again=" + std::to_string(draws_again)});
         });
 
     addCustom("unit.gpu_effect_path", {"unit", "gpu"},
