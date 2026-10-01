@@ -654,10 +654,20 @@ void GpuDevice::PerformDeferredCleanup(std::chrono::milliseconds not_used_for)
 		return;
 	if (not_used_for.count() < 0)
 		not_used_for = std::chrono::milliseconds(0);
-	// Under the slot lock, so the device cannot be torn down mid-way.
-	std::lock_guard<std::mutex> slot_lock(deviceSlotMutex());
-	GpuDevice* device = deviceSlot().get();
-	if (!device || !device->impl || !device->impl->context)
+	// The slot lock only to read the pointer, and released before any other lock is taken.
+	// LOCK ORDER: the context mutex is taken with the slot lock already held by nobody --
+	// QueueGuard holds the context mutex (lockQueue) across a barrier submit, and until
+	// 2026-10-01 its destructor called Instance(), which takes the slot lock; this function
+	// held the slot lock while waiting for the context mutex, and four concurrent exports
+	// deadlocked on exactly that pair within a minute (the service's pod 2 sat wedged for 11
+	// hours). The device pointer is stable without the lock for the same reason submit() may
+	// use it: DestroyInstance() requires that no thread be rendering.
+	GpuDevice* device = nullptr;
+	{
+		std::lock_guard<std::mutex> slot_lock(deviceSlotMutex());
+		device = deviceSlot().get();
+	}
+	if (!device || !device->impl || !device->impl->context || !device->impl->usable)
 		return;
 	{
 		std::lock_guard<std::mutex> lock(device->impl->recorder_mutex);
@@ -892,12 +902,16 @@ void GpuDevice::unlockQueue() {}
 
 #endif
 
-GpuDevice::QueueGuard::QueueGuard()
+GpuDevice::QueueGuard::QueueGuard() : device(&GpuDevice::Instance())
 {
-	GpuDevice::Instance().lockQueue();
+	// Instance() takes the slot lock and releases it before lockQueue() takes the context
+	// mutex, so this never holds both. The device is remembered so the destructor does not
+	// call Instance() -- taking the slot lock while holding the context mutex -- which is the
+	// order that deadlocked against PerformDeferredCleanup() (see there).
+	device->lockQueue();
 }
 
 GpuDevice::QueueGuard::~QueueGuard()
 {
-	GpuDevice::Instance().unlockQueue();
+	device->unlockQueue();
 }

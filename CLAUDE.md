@@ -196,6 +196,15 @@ Rules that are easy to get wrong and crash in the NVIDIA driver rather than anyw
   an `SkSurface` only makes its texture purgeable: `GpuDevice::PerformDeferredCleanup` is what gives
   the VRAM back. Anything that holds a `GpuFrame` across frames (a reader's resting frame) must
   release it in `Close()`.
+- **Lock order in `GpuDevice`: never hold the device-slot lock while taking the recorder or
+  context mutex.** `Instance()` takes the slot lock; `QueueGuard` holds the context mutex across
+  a barrier submit. A helper that held the slot lock and then waited for the context mutex
+  (`PerformDeferredCleanup`, 2026-09-30) deadlocked against a `QueueGuard` destructor that called
+  `Instance()`: four concurrent exports wedged within a minute, 401 threads in futex waits, and
+  the pod sat like that for 11 hours with its four Pub/Sub slots held. Read the slot, release the
+  lock, then lock what you need -- as `submit()` does -- and never call `Instance()` under a
+  Skia lock. `tools/local-service-stress.sh <payload> 4 4` in the service repo, three runs, is
+  the test; a hang shows as export files that stop growing with the GPU at 0 %.
 - **A clip set at the canvas's base save level survives the surface's return to the pool.**
   `resetCanvas` restores to the base level and resets the matrix, which is all SkCanvas allows, so
   a base-level `clipRect` cuts the surface's next user down to your size — one golden run painted

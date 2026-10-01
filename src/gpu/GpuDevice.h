@@ -212,6 +212,8 @@ namespace openshot
 			~QueueGuard();
 			QueueGuard(const QueueGuard&) = delete;
 			QueueGuard& operator=(const QueueGuard&) = delete;
+		private:
+			GpuDevice* device;   ///< taken once, so the destructor never re-enters Instance()
 		};
 
 		GpuDevice(const GpuDevice&) = delete;
