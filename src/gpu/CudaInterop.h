@@ -150,6 +150,26 @@ namespace openshot
 		/// The @c CUstream copies run on by default. Null when unavailable.
 		void* cudaStream();
 
+		/// A @c CUstream of the caller's own, in the interop's context, or null when
+		/// unavailable. Every NVDEC decoder gets one (FFmpegReader hands it to its
+		/// AVCUDADeviceContext and to copyNV12): with 48 decoders of four exports on the one
+		/// shared stream, a finished export's decoder teardown with the others' work still
+		/// queued on that stream crashed inside libnvcuvid's own thread, about one run in
+		/// eight (2026-10-01). FFmpeg's own av_hwdevice_ctx_create gives each device context
+		/// a stream of its own for the same reason. Destroy it with destroyStream().
+		void* createStream();
+
+		/// Wait for everything queued on a createStream() stream, then destroy it. Null is ignored.
+		void destroyStream(void* stream);
+
+		/// Wait for everything queued on a createStream() stream. Null is ignored (false).
+		bool synchronizeStream(void* stream);
+
+		/// Wait for every piece of work in the interop's CUDA context. Never call it while
+		/// holding a lock other threads need to make progress: queued GPU work may depend on
+		/// Vulkan submits those threads have yet to make, and the wait then never ends.
+		bool synchronizeContext();
+
 		/// The @c VkSemaphore that copyNV12 into @a y signals, as an integer handle —
 		/// pass it to GpuDevice::submit() so the drawing that samples the images
 		/// waits for the copy. Binary, and one per image pair (it lives on the luma
@@ -170,6 +190,18 @@ namespace openshot
 		/// signals waitSemaphore().
 		bool copyNV12(const AVFrame* cuda_frame, GpuImage& y, GpuImage& uv,
 					  void* stream = nullptr);
+
+		/// Block until the last copyNV12 into @a y has actually run on the GPU.
+		///
+		/// copyNV12 reads the decoder's mapped frame asynchronously, and the semaphore it
+		/// signals orders only the Vulkan side. The CPU gets no such order: a reader that
+		/// frees (unmaps) the AVFrame as soon as copyNV12 has returned races the copy, and
+		/// with several exports keeping the shared stream busy the unmap won -- the decoder
+		/// reused or freed the surface under the copy and its own thread crashed in
+		/// libnvcuvid (2026-10-01, four concurrent exports, one run in eight; nothing for
+		/// AddressSanitizer to see). FFmpeg's own download path synchronises before it
+		/// unmaps; so must we. False when the interop is unavailable or no copy was made.
+		bool waitForNV12Copy(const GpuImage& y);
 
 		/// Make @a y and @a uv writable by CUDA again — the layout barrier and the
 		/// semaphore signal the next copyNV12 would otherwise have to do first.

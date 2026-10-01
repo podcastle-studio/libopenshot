@@ -26,6 +26,7 @@
 #include <QTransform>
 
 #include "FFmpegUtilities.h"
+#include "HardwareCodecLock.h"
 #include "effects/CropHelpers.h"
 
 #include "FFmpegReader.h"
@@ -84,6 +85,9 @@ extern "C" {
 using namespace openshot;
 
 int hw_de_on = 0;
+// Serialises every reader's copy -> draw -> submit -> re-arm step on the device (see
+// ConvertOnDevice), and a hardware decoder's destruction against it (see Close).
+static std::mutex gConvertSequence;
 #if USE_HW_ACCEL
 	AVPixelFormat hw_de_av_pix_fmt_global = AV_PIX_FMT_NONE;
 	AVHWDeviceType hw_de_av_device_type_global = AV_HWDEVICE_TYPE_NONE;
@@ -501,6 +505,9 @@ void FFmpegReader::Open() {
 
 			AVDictionary *opts = NULL;
 			int retry_decode_open = 2;
+			// One codec opens at a time, process-wide (HardwareCodecLock.h): concurrent NVDEC
+			// opens and closes from several exports corrupted the driver's state.
+			const std::lock_guard<std::mutex> codec_lock(HardwareCodecMutex());
 			// If hw accel is selected but hardware cannot handle repeat with software decoding
 			do {
 				pCodecCtx = AV_GET_CODEC_CONTEXT(pStream, pCodec);
@@ -518,6 +525,16 @@ void FFmpegReader::Open() {
 
 				// Set number of threads equal to number of processors (not to exceed 16)
 				pCodecCtx->thread_count = std::min(FF_VIDEO_NUM_PROCESSORS, 16);
+				// A hardware decoder does the work on the device; FFmpeg's frame threads would only
+				// parse the bitstream and each one carries a copy of the codec context, a frame of
+				// latency and, with NVDEC, a hwaccel context that four exports times twelve clips
+				// times sixteen threads made 768 of on one CUDA context. One run in eight of that
+				// crashed inside libnvcuvid's own thread at a decoder's teardown (2026-10-01),
+				// invisible to AddressSanitizer. One thread per hardware decoder.
+				if (hw_de_on && hw_de_supported) {
+					pCodecCtx->thread_count = 1;
+					pCodecCtx->thread_type &= ~FF_THREAD_FRAME;
+				}
 
 				if (pCodec == NULL) {
 					throw InvalidCodec("A valid video codec could not be found for this file.", path);
@@ -633,9 +650,13 @@ void FFmpegReader::Open() {
 								reinterpret_cast<AVHWDeviceContext *>(device->data)->hwctx);
 							openshot::CudaInterop &interop = openshot::CudaInterop::Instance();
 							cuda->cuda_ctx = static_cast<CUcontext>(interop.cudaContext());
-							// The interop's own stream: NVDEC's output copy and copyNV12 then queue
-							// in order on one stream, with nothing to synchronise between them.
-							cuda->stream = static_cast<CUstream>(interop.cudaStream());
+							// A stream of this decoder's own: NVDEC's output copy and copyNV12 queue
+							// in order on it with nothing to synchronise between them, and no other
+							// decoder's work shares it (see CudaInterop::createStream for the crash
+							// the shared stream caused). The interop's stream is the fallback.
+							if (!decode_stream)
+								decode_stream = interop.createStream();
+							cuda->stream = static_cast<CUstream>(decode_stream ? decode_stream : interop.cudaStream());
 							if (av_hwdevice_ctx_init(device) >= 0) {
 								hw_device_ctx = device;
 								hw_frames_on_device = true;
@@ -964,8 +985,24 @@ void FFmpegReader::Close() {
 			RemoveAVPacket(recent_packet);
 		}
 
-		// Close the video codec
+		// Close the video codec -- one at a time, process-wide (HardwareCodecLock.h). A hardware
+		// decoder is destroyed with its own stream drained and under the conversion sequence
+		// lock, so no reader is between its copy and its submit while a decoder goes away.
+		// (Not under a reader-writer lock around all decoding: readers wait on GPU work that
+		// other readers have yet to submit, and with a writer queued those readers never get
+		// in -- three exports hung that way, 2026-10-01.)
 		if (info.has_video) {
+			const std::lock_guard<std::mutex> codec_lock(HardwareCodecMutex());
+			std::unique_lock<std::mutex> sequence_guard(gConvertSequence, std::defer_lock);
+#if USE_HW_ACCEL
+			if (hw_de_on && hw_de_supported) {
+#if OPENSHOT_NVDEC_ON_DEVICE
+				if (hw_frames_on_device && decode_stream)
+					openshot::CudaInterop::Instance().synchronizeStream(decode_stream);
+#endif
+				sequence_guard.lock();
+			}
+#endif
 			if(avcodec_is_open(pCodecCtx)) {
 				avcodec_flush_buffers(pCodecCtx);
 			}
@@ -980,6 +1017,13 @@ void FFmpegReader::Close() {
 			hw_frames_on_device = false;
 			device_luma.reset();
 			device_chroma.reset();
+#if OPENSHOT_NVDEC_ON_DEVICE
+			// After the decoder is gone (above) and the images with it: nothing else queues on it.
+			if (decode_stream) {
+				openshot::CudaInterop::Instance().destroyStream(decode_stream);
+				decode_stream = nullptr;
+			}
+#endif
 #endif // USE_HW_ACCEL
 			if (img_convert_ctx) {
 				sws_freeContext(img_convert_ctx);
@@ -990,17 +1034,20 @@ void FFmpegReader::Close() {
 			}
 		}
 
-		// Close the audio codec
-		if (info.has_audio) {
+		// Close the audio codec. By what was opened, not by info.has_audio: a reader with
+		// DecodeAudio(false) opens the codec and then reports has_audio false, and keying on the
+		// flag leaked one AVCodecContext per Open()/Close() cycle (2026-10-01).
+		if (aCodecCtx) {
 			if(avcodec_is_open(aCodecCtx)) {
 				avcodec_flush_buffers(aCodecCtx);
 			}
 			AV_FREE_CONTEXT(aCodecCtx);
-			if (avr_ctx) {
-				SWR_CLOSE(avr_ctx);
-				SWR_FREE(&avr_ctx);
-				avr_ctx = nullptr;
-			}
+			aCodecCtx = nullptr;
+		}
+		if (avr_ctx) {
+			SWR_CLOSE(avr_ctx);
+			SWR_FREE(&avr_ctx);
+			avr_ctx = nullptr;
 		}
 
 		// Clear final cache
@@ -2202,10 +2249,10 @@ std::shared_ptr<openshot::GpuFrame> FFmpegReader::ConvertOnDevice(int out_width,
 
 	// Each copy must be waited on by exactly the next submit that names its semaphore, and a
 	// submit takes everything this thread's recorder holds, so copy, draw, submit and re-arm
-	// happen as one step whichever reader, on whichever thread, gets here first.
-	static std::mutex sequence;
-	const std::lock_guard<std::mutex> lock(sequence);
-	if (!interop.copyNV12(pFrame, *device_luma, *device_chroma))
+	// happen as one step whichever reader, on whichever thread, gets here first. Close() takes
+	// the same lock to destroy a hardware decoder.
+	const std::lock_guard<std::mutex> lock(gConvertSequence);
+	if (!interop.copyNV12(pFrame, *device_luma, *device_chroma, decode_stream))
 		return nullptr;
 
 	std::shared_ptr<openshot::GpuFrame> converted = openshot::GpuYuv::Convert(
@@ -2222,6 +2269,11 @@ std::shared_ptr<openshot::GpuFrame> FFmpegReader::ConvertOnDevice(int out_width,
 	// the RGBA frame it drew -- so this is the submit prepareForCopy() has to follow. Re-arming
 	// them now takes the Vulkan-to-CUDA handshake off the next frame's critical path.
 	interop.prepareForCopy(*device_luma, *device_chroma);
+	// The caller frees pFrame -- which unmaps the decoder's surface -- as soon as this returns,
+	// so the copy out of it must have run by then (CudaInterop::waitForNV12Copy). Microseconds
+	// on an idle stream; on a busy one this is exactly the wait that keeps the decoder's surface
+	// alive under the copy.
+	interop.waitForNV12Copy(*device_luma);
 	if (converted)
 		openshot::GpuCounters::Add(openshot::GpuCounters::DecodedOnDevice);
 	return converted;

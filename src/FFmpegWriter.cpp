@@ -29,6 +29,7 @@
 #include "FFmpegUtilities.h"
 
 #include "FFmpegWriter.h"
+#include "HardwareCodecLock.h"
 #include "gpu/CudaInterop.h"
 #include "gpu/GpuDevice.h"
 #include "gpu/GpuFrame.h"
@@ -1257,6 +1258,7 @@ void FFmpegWriter::flush_encoders() {
 // Close the video codec
 void FFmpegWriter::close_video(AVFormatContext *oc, AVStream *st)
 {
+	const std::lock_guard<std::mutex> codec_lock(HardwareCodecMutex());   // see open_video
 #if USE_HW_ACCEL
 	if (hw_en_on && hw_en_supported) {
 		if (hw_device_ctx) {
@@ -1785,6 +1787,9 @@ void FFmpegWriter::open_audio(AVFormatContext *oc, AVStream *st) {
 
 // open video codec
 void FFmpegWriter::open_video(AVFormatContext *oc, AVStream *st) {
+	// One codec opens at a time, process-wide (HardwareCodecLock.h): four writers opening NVENC
+	// together aborted in malloc inside this function.
+	const std::lock_guard<std::mutex> codec_lock(HardwareCodecMutex());
 	const AVCodec *codec;
 	AV_GET_CODEC_FROM_STREAM(st, video_codec_ctx)
 

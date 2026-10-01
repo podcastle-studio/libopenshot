@@ -72,6 +72,7 @@ struct CudaApi
 	decltype(&cuDevicePrimaryCtxRetain) PrimaryCtxRetain = nullptr;
 	decltype(&cuDevicePrimaryCtxRelease) PrimaryCtxRelease = nullptr;
 	decltype(&cuCtxPushCurrent) CtxPushCurrent = nullptr;
+	decltype(&cuCtxSynchronize) CtxSynchronize = nullptr;
 	decltype(&cuCtxPopCurrent) CtxPopCurrent = nullptr;
 	decltype(&cuStreamCreate) StreamCreate = nullptr;
 	decltype(&cuStreamDestroy) StreamDestroy = nullptr;
@@ -79,6 +80,7 @@ struct CudaApi
 	decltype(&cuEventCreate) EventCreate = nullptr;
 	decltype(&cuEventRecord) EventRecord = nullptr;
 	decltype(&cuEventDestroy) EventDestroy = nullptr;
+	decltype(&cuEventSynchronize) EventSynchronize = nullptr;
 	decltype(&cuStreamWaitEvent) StreamWaitEvent = nullptr;
 	decltype(&cuImportExternalMemory) ImportExternalMemory = nullptr;
 	decltype(&cuDestroyExternalMemory) DestroyExternalMemory = nullptr;
@@ -136,12 +138,14 @@ bool loadCuda(CudaApi& api, std::string& error)
 	OPENSHOT_CU_LOAD(PrimaryCtxRelease, cuDevicePrimaryCtxRelease);
 	OPENSHOT_CU_LOAD(CtxPushCurrent, cuCtxPushCurrent);
 	OPENSHOT_CU_LOAD(CtxPopCurrent, cuCtxPopCurrent);
+	OPENSHOT_CU_LOAD(CtxSynchronize, cuCtxSynchronize);
 	OPENSHOT_CU_LOAD(StreamCreate, cuStreamCreate);
 	OPENSHOT_CU_LOAD(StreamDestroy, cuStreamDestroy);
 	OPENSHOT_CU_LOAD(StreamSynchronize, cuStreamSynchronize);
 	OPENSHOT_CU_LOAD(EventCreate, cuEventCreate);
 	OPENSHOT_CU_LOAD(EventRecord, cuEventRecord);
 	OPENSHOT_CU_LOAD(EventDestroy, cuEventDestroy);
+	OPENSHOT_CU_LOAD(EventSynchronize, cuEventSynchronize);
 	OPENSHOT_CU_LOAD(StreamWaitEvent, cuStreamWaitEvent);
 	OPENSHOT_CU_LOAD(ImportExternalMemory, cuImportExternalMemory);
 	OPENSHOT_CU_LOAD(DestroyExternalMemory, cuDestroyExternalMemory);
@@ -198,6 +202,9 @@ struct ImageState
 	CUexternalSemaphore ready_cu = nullptr;
 	VkSemaphore done = VK_NULL_HANDLE;
 	CUexternalSemaphore done_cu = nullptr;
+	/// Recorded on the stream right after copyNV12's memcpys, so a caller can wait for the
+	/// copy out of a decoder's mapped frame before it frees (unmaps) that frame.
+	CUevent copied = nullptr;
 	/// ready has been signalled and not yet waited on, for this chroma image.
 	/// Binary semaphores take one signal per wait.
 	bool ready_signalled = false;
@@ -675,8 +682,11 @@ void InteropState::releaseImage(ImageState& state)
 		cu.DestroyExternalSemaphore(state.ready_cu);
 	if (state.done_cu && cu.DestroyExternalSemaphore)
 		cu.DestroyExternalSemaphore(state.done_cu);
+	if (state.copied && cu.EventDestroy)
+		cu.EventDestroy(state.copied);   // safe while still pending: the stream was drained above
 	state.ready_cu = nullptr;
 	state.done_cu = nullptr;
+	state.copied = nullptr;
 	if (device != VK_NULL_HANDLE) {
 		if (state.ready != VK_NULL_HANDLE)
 			vkDestroySemaphore(device, state.ready, nullptr);
@@ -880,6 +890,18 @@ bool InteropState::copyNV12(const AVFrame* frame, ImageState& y, ImageState& uv,
 		}
 	}
 
+	// Mark the copy's completion on the stream: waitForNV12Copy() blocks on this before the
+	// caller frees the frame it read from. The semaphore below orders only the Vulkan side.
+	if (!y.copied && cu.EventCreate &&
+		cu.EventCreate(&y.copied, CU_EVENT_DISABLE_TIMING) != CUDA_SUCCESS)
+		y.copied = nullptr;
+	if (y.copied && cu.EventRecord) {
+		result = cu.EventRecord(y.copied, on_stream);
+		if (result != CUDA_SUCCESS) {
+			error = cu.message("cuEventRecord after copyNV12", result);
+			return false;
+		}
+	}
 	CUDA_EXTERNAL_SEMAPHORE_SIGNAL_PARAMS signal{};
 	result = cu.SignalExternalSemaphores(&y.done_cu, &signal, 1, on_stream);
 	if (result != CUDA_SUCCESS) {
@@ -1107,6 +1129,65 @@ void* CudaInterop::cudaStream()
 	return available() ? impl->state.stream : nullptr;
 }
 
+void* CudaInterop::createStream()
+{
+	std::lock_guard<std::mutex> lock(impl->state.mutex);
+	InteropState& state = impl->state;
+	if (!state.initialise() || !state.cu.StreamCreate)
+		return nullptr;
+	cuda_detail::ContextGuard guard(state.cu, state.context);
+	if (!guard.ok())
+		return nullptr;
+	CUstream created = nullptr;
+	if (state.cu.StreamCreate(&created, CU_STREAM_NON_BLOCKING) != CUDA_SUCCESS)
+		return nullptr;
+	return created;
+}
+
+bool CudaInterop::synchronizeStream(void* stream)
+{
+	if (!stream)
+		return false;
+	std::lock_guard<std::mutex> lock(impl->state.mutex);
+	InteropState& state = impl->state;
+	if (!state.initialise() || !state.cu.StreamSynchronize)
+		return false;
+	cuda_detail::ContextGuard guard(state.cu, state.context);
+	if (!guard.ok())
+		return false;
+	return state.cu.StreamSynchronize(static_cast<CUstream>(stream)) == CUDA_SUCCESS;
+}
+
+bool CudaInterop::synchronizeContext()
+{
+	std::lock_guard<std::mutex> lock(impl->state.mutex);
+	InteropState& state = impl->state;
+	if (!state.initialise() || !state.cu.CtxSynchronize)
+		return false;
+	cuda_detail::ContextGuard guard(state.cu, state.context);
+	if (!guard.ok())
+		return false;
+	return state.cu.CtxSynchronize() == CUDA_SUCCESS;
+}
+
+void CudaInterop::destroyStream(void* stream)
+{
+	if (!stream)
+		return;
+	std::lock_guard<std::mutex> lock(impl->state.mutex);
+	InteropState& state = impl->state;
+	if (!state.initialise())
+		return;
+	cuda_detail::ContextGuard guard(state.cu, state.context);
+	if (!guard.ok())
+		return;
+	CUstream s = static_cast<CUstream>(stream);
+	if (state.cu.StreamSynchronize)
+		state.cu.StreamSynchronize(s);
+	if (state.cu.StreamDestroy)
+		state.cu.StreamDestroy(s);
+}
+
 unsigned long long CudaInterop::waitSemaphore(const GpuImage& y) const
 {
 	unsigned long long handle = 0;
@@ -1141,6 +1222,24 @@ bool CudaInterop::copyNV12(const AVFrame* cuda_frame, GpuImage& y, GpuImage& uv,
 		return false;
 	return impl->state.copyNV12(cuda_frame, *y.impl, *uv.impl,
 								stream ? static_cast<CUstream>(stream) : impl->state.stream);
+}
+
+bool CudaInterop::waitForNV12Copy(const GpuImage& y)
+{
+	// The event handle is read under the lock; the wait itself is not, because it blocks for
+	// however long the shared stream is busy and every other interop call needs the lock
+	// meanwhile. The event lives as long as the image, which the caller owns.
+	CUevent event = nullptr;
+	{
+		std::lock_guard<std::mutex> lock(impl->state.mutex);
+		if (!impl->state.initialise() || !y.impl->copied)
+			return false;
+		event = y.impl->copied;
+	}
+	cuda_detail::ContextGuard guard(impl->state.cu, impl->state.context);
+	if (!guard.ok() || !impl->state.cu.EventSynchronize)
+		return false;
+	return impl->state.cu.EventSynchronize(event) == CUDA_SUCCESS;
 }
 
 unsigned long long CudaInterop::drawnSemaphore(const GpuImage& packed) const
@@ -1264,6 +1363,11 @@ std::string CudaInterop::deviceName() const { return std::string(); }
 void* CudaInterop::cudaContext() { return nullptr; }
 void* CudaInterop::cudaStream() { return nullptr; }
 unsigned long long CudaInterop::waitSemaphore(const GpuImage&) const { return 0; }
+bool CudaInterop::waitForNV12Copy(const GpuImage&) { return false; }
+void* CudaInterop::createStream() { return nullptr; }
+void CudaInterop::destroyStream(void*) {}
+bool CudaInterop::synchronizeContext() { return false; }
+bool CudaInterop::synchronizeStream(void*) { return false; }
 
 std::shared_ptr<GpuImage> CudaInterop::createImage(int, int, GpuImage::Format)
 {

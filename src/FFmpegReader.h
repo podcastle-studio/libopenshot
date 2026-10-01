@@ -185,6 +185,9 @@ namespace openshot {
 		bool hw_frames_on_device = false;
 		std::shared_ptr<openshot::GpuImage> device_luma;
 		std::shared_ptr<openshot::GpuImage> device_chroma;
+		/// This decoder's own CUDA stream (CudaInterop::createStream): NVDEC decodes on it and
+		/// copyNV12 copies on it, so no other decoder's work shares a queue with this one.
+		void* decode_stream = nullptr;
 		std::shared_ptr<openshot::GpuFrame> ConvertOnDevice(int out_width, int out_height);
 
 		// Read-ahead (W24): one worker per reader decodes the frames after the last one asked

@@ -30,6 +30,7 @@ default (2026-09-24). Every GPU path falls back to the CPU by itself when its re
 | stage | on the GPU | CPU fallback / notes |
 |---|---|---|
 | decode | NVDEC for H.264, HEVC, VP8, VP9, AV1 (and MPEG-2/VC-1); 8-bit 4:2:0 frames stay on the device through `CudaInterop` into `GpuYuv` (YUV→RGBA on the GPU), bit-exact against software decode (`unit.nvdec_on_device`, all five codecs) | software decode + swscale: ProRes (the watermark), alpha VP9 (libvpx), and a stream NVDEC refuses (> 4096 wide, 4:4:4) reopens in software. 10-bit (P010) is decoded by NVDEC but downloaded and converted by swscale |
+| decoder threads | one FFmpeg thread per hardware decoder (NVDEC does the work); software decoders keep up to 16 frame threads | n/a |
 | read-ahead | one decode worker per `FFmpegReader` (`READ_AHEAD_FRAMES`, default 2) | host-memory frames only: with `GPU_DECODE` on, only for a stream that can never reach the GPU (no NVDEC, a layout `GpuYuv` does not convert — the ProRes 4444 watermark), since 2026-09-24 |
 | compositing | `Timeline::GetFrame` on a pooled Graphite surface; `Clip::draw_to_canvas` in one transformed draw; all 16 blend modes; clip shadow, blur, flip on the paint; the opacity curve as an exact pre-pass; overlay-clip transitions (the overlay composited onto the source frame, the overlay clip transformed on the GPU); a host-memory source (still image, held last frame) uploaded once (`Clip::HostTextureCache`) | a clip that cannot draw on the GPU — a frame-number overlay, a waveform, an effect after keyframes, none of which the service uses — puts the whole frame on QPainter only if its blend mode is not `NORMAL` (`Timeline.cpp:1099`); a `NORMAL` one reads the canvas back mid-frame in `apply_background` |
 | text, subtitles | the whole Skia text engine incl. the glow ray-march; the resting text frame is kept on the GPU; subtitles draw on whatever canvas they are given | raster Skia |
@@ -410,6 +411,32 @@ share) and two new counters, `allocation_failures` (`GpuSurfacePool::acquire`: S
 target, the GPU is full) and `submit_failures` (`GpuDevice::submit`: a recording could not be inserted
 -- "Failed to instantiate RenderPassTask target" -- and its draws are gone). Both are in the
 telemetry line; the service fails the export when either moved.
+
+**Also done 2026-10-01: four concurrent exports no longer deadlock or crash.** The service's
+dev pod sat wedged for 11 hours with four exports of one payload in flight. Three faults, found
+with `tools/local-service-stress.sh <payload> 4 4` in the service repo (hang → gdb stacks; crash →
+AddressSanitizer builds of both the service and this library): **(1)** a lock-order inversion
+between the new `GpuDevice::PerformDeferredCleanup` (slot lock, then context mutex) and
+`QueueGuard` (context mutex, then `Instance()`'s slot lock) — the rule is in `CLAUDE.md`;
+**(2)** `FFmpegReader::ConvertOnDevice` freed the decoder's mapped frame as soon as the CUDA copy
+out of it was *queued* — `CudaInterop::waitForNV12Copy` now waits for the copy, as FFmpeg's own
+download does before unmapping; **(3)** every NVDEC decoder in the process (48 for four exports of
+twelve clips) and NVENC shared the interop's one CUDA stream, and about one run in eight crashed
+inside libnvcuvid's own thread as a finished export tore its decoders down with the others' work
+still queued on that stream -- nothing for the sanitizer to report, and under gdb the timing
+never lined up. Each reader now has a stream of its own (`CudaInterop::createStream`, handed to
+its `AVCUDADeviceContext` and to `copyNV12`), as FFmpeg's own device setup does; the copy out of
+a mapped frame is waited for before the frame is unmapped (`waitForNV12Copy`); hardware decoders
+run with one FFmpeg thread (NVDEC does the work, and 16 frame threads per decoder were 768 hwaccel
+contexts); hardware codecs open and close one at a time (`HardwareCodecLock.h`), and a hardware
+decoder is destroyed with its stream drained and under the conversion sequence lock, so no reader
+is between its copy and its submit at that moment. A reader-writer lock around all decoding was
+tried and must not come back: readers wait on GPU work other readers have yet to submit, and
+with a writer queued those readers never get in. The crash
+handler re-raises the signal instead of calling `exit()`, so a crash is a crash to gdb, cores and
+the container runtime, and ASan reports the real fault rather than a double free in the exit
+handlers. Also fixed on the way: a reader with `DecodeAudio(false)` leaked its audio codec context
+on every close.
 
 **What is left is decisions, infrastructure and final checks.** In the order they should happen:
 

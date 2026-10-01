@@ -236,6 +236,27 @@ Rules that are easy to get wrong and crash in the NVIDIA driver rather than anyw
   nothing. The driver is dlopen'd: only `cuda.h` is a build dependency, `available()` is false
   without it, and lavapipe declines (no `external_semaphore_fd`). Gate:
   `openshot-gpu-cuda-interop`.
+- **Every NVDEC decoder gets its own CUDA stream** (`CudaInterop::createStream`, owned by the
+  `FFmpegReader`, given to its `AVCUDADeviceContext` and to `copyNV12`; 2026-10-01). Sharing the
+  interop's one stream across 48 decoders crashed libnvcuvid's own thread when a finished export
+  tore its decoders down with other exports' work queued on that stream -- one run in eight,
+  invisible to ASan, gone under gdb. FFmpeg's `av_hwdevice_ctx_create` gives each device context
+  its own stream for the same reason. Hardware codecs also open and close one at a time
+  (`HardwareCodecLock.h`), a hardware decoder runs with one FFmpeg thread, and it is destroyed
+  under the conversion sequence lock with its stream drained. **Never wrap decoding in a
+  reader-writer lock to keep destruction apart**: a reader inside the driver waits on GPU work
+  another reader has yet to submit, and once a writer is queued that reader is refused the shared
+  side -- the whole process stalls. Test with `tools/local-service-stress.sh <payload> 4 4` in the
+  service repo, eight runs of an ASan build (`BUILD_DIR=cmake-build-asan`,
+  `LIBOPENSHOT_DIR=.../cmake-build-asan/src`); make sure no earlier stress run is still alive,
+  or its service eats the new run's messages and looks like a hang.
+- **A CUDA copy out of a decoder's mapped frame must be waited for before the frame is freed**
+  (`CudaInterop::waitForNV12Copy`, called by `FFmpegReader::ConvertOnDevice`; 2026-10-01). The
+  semaphores order only the Vulkan side; the CPU freed the `AVFrame` -- which unmaps the NVDEC
+  surface -- while the async memcpy was still queued, and with four exports sharing the stream
+  the decoder reused the surface under the copy and crashed its own thread in libnvcuvid,
+  about one run in eight, invisible to AddressSanitizer. FFmpeg's own download path
+  synchronises before unmapping for the same reason.
 - **The interop's two binary semaphores are per image pair** (they live on the luma image;
   `waitSemaphore(y)`), never process-wide. One pair's cycle is self-ordered; two pairs sharing
   one semaphore re-signal it before it is waited on, and the CUDA wait that loses its signal

@@ -104,8 +104,13 @@ void CrashHandler::abortHandler( int signum, siginfo_t* si, void* unused )
 	// Dump a stack trace.
 	printStackTrace(stderr, 63);
 
-	// Quit
-	exit( signum );
+	// Die by the signal itself, not exit(): exit() runs every atexit handler and static
+	// destructor on a heap that has just proved itself corrupt -- under AddressSanitizer that
+	// reported a meaningless double free in __run_exit_handlers instead of the real fault
+	// (2026-10-01) -- and it hid the crash from gdb, core dumps and the container runtime,
+	// which all see a plain exit code. The default disposition gives all of them the truth.
+	signal( signum, SIG_DFL );
+	raise( signum );
 }
 #endif
 
