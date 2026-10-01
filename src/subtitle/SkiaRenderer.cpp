@@ -135,6 +135,19 @@ struct FaceKey {
     }
 };
 
+// The typeface itself, whatever character it is asked for.
+struct StyleKey {
+    std::string familyOrPath;
+    int weight;
+    int slant;
+
+    bool operator<(const StyleKey& o) const {
+        if (weight != o.weight) return weight < o.weight;
+        if (slant != o.slant) return slant < o.slant;
+        return familyOrPath < o.familyOrPath;
+    }
+};
+
 // Process-wide font resources, shared by every SkiaRenderer.
 //
 // WHY THIS IS A SINGLETON: both callers of SkiaRenderer construct one *per rendered frame*
@@ -183,8 +196,8 @@ public:
 
         const std::lock_guard<std::mutex> lock(mutex);
         // Bound the cache so a long-lived service that renders many different fonts cannot grow
-        // without limit (each entry pins a font file's tables in memory). Entries are cheap to
-        // rebuild, so a wholesale clear is a fine eviction policy for something this rare.
+        // without limit. Entries are cheap to rebuild, so a wholesale clear is a fine eviction
+        // policy for something this rare.
         if (cache.size() >= kMaxEntries) cache.clear();
         cache[key] = resolved;
         return resolved;
@@ -203,19 +216,36 @@ private:
     // closely matches `style`. For an installed family this returns the real bold / italic
     // cut when the family ships one; for a variable-font file it pins the weight axis to
     // the requested weight. No synthetic styling happens here.
-    sk_sp<SkTypeface> matchTypeface(const std::string& familyOrPath, const SkFontStyle& style) const {
+    //
+    // One typeface per (family or path, weight, slant), shared by every character of it (review M4,
+    // 2026-10-01). The cache above is per character, because whether a face covers a character
+    // decides the fallback; but a font *file* went through makeFromFile once per distinct character,
+    // so a subtitle track with a few hundred distinct characters held a few hundred copies of the
+    // same font's tables, up to kMaxEntries of them.
+    sk_sp<SkTypeface> matchTypeface(const std::string& familyOrPath, const SkFontStyle& style) {
+        const StyleKey key{familyOrPath, style.weight(), static_cast<int>(style.slant())};
+        {
+            const std::lock_guard<std::mutex> lock(mutex);
+            if (const auto it = faces.find(key); it != faces.end()) return it->second;
+        }
+        sk_sp<SkTypeface> typeface;
         if (std::filesystem::is_regular_file(familyOrPath)) {
             // A font *file* is a fixed face. The exception is a variable font that exposes a
             // weight axis — pin it to the requested weight so we get a genuine heavier cut
             // instead of falling back to synthetic emboldening later.
-            return applyWeightVariation(mgr->makeFromFile(familyOrPath.c_str()), style.weight());
+            typeface = applyWeightVariation(mgr->makeFromFile(familyOrPath.c_str()), style.weight());
+        } else {
+            // matchFamilyStyle returns the installed face closest to `style`; when a real bold (or
+            // italic) cut exists in the family it is returned here.
+            typeface = mgr->matchFamilyStyle(familyOrPath.c_str(), style);
         }
-        // matchFamilyStyle returns the installed face closest to `style`; when a real bold (or
-        // italic) cut exists in the family it is returned here.
-        return mgr->matchFamilyStyle(familyOrPath.c_str(), style);
+        const std::lock_guard<std::mutex> lock(mutex);
+        if (faces.size() >= kMaxFaces) faces.clear();
+        // Whoever inserted first wins, so racing threads still end up sharing one face.
+        return faces.emplace(key, std::move(typeface)).first->second;
     }
 
-    sk_sp<SkTypeface> matchAny(const std::string& familyOrPath, const SkFontStyle& style) const {
+    sk_sp<SkTypeface> matchAny(const std::string& familyOrPath, const SkFontStyle& style) {
         sk_sp<SkTypeface> typeface = matchTypeface(familyOrPath, style);
         if (!typeface) { // last-chance fallback
             typeface = mgr->matchFamilyStyle(nullptr, style);
@@ -224,7 +254,7 @@ private:
     }
 
     sk_sp<SkTypeface> matchCovering(const std::string& familyOrPath, const SkFontStyle& style,
-                                    const SkUnichar character) const {
+                                    const SkUnichar character) {
         auto covers = [character](const sk_sp<SkTypeface>& typeface) {
             return typeface && SkFont(typeface).unicharToGlyph(character) != 0;
         };
@@ -246,10 +276,12 @@ private:
     }
 
     static constexpr size_t kMaxEntries = 4096;
+    static constexpr size_t kMaxFaces = 256;
 
     sk_sp<SkFontMgr> mgr;
     std::mutex mutex;
     std::map<FaceKey, ResolvedFace> cache;
+    std::map<StyleKey, sk_sp<SkTypeface>> faces;
 };
 
 } // namespace

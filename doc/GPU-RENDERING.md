@@ -110,7 +110,7 @@ The two Skia builds, what the GPU installer adds and why, and the Vulkan 1.4 hea
 
 | gate | command | what it proves |
 |---|---|---|
-| four-way golden sweep | `tools/golden.sh check` (CPU Skia); `BUILD_DIR=$PWD/cmake-build-gpu tools/golden.sh check` with `OPENSHOT_GPU` unset, `=vulkan`, `=lavapipe` (give the GPU arms their own `GOLDEN_OUT`/`GOLDEN_REPORT`) | 132 scenarios, 331 frames; 53 checks with the GPU off, 80 with it on (2026-10-01); all four green |
+| four-way golden sweep | `tools/golden.sh check` (CPU Skia); `BUILD_DIR=$PWD/cmake-build-gpu tools/golden.sh check` with `OPENSHOT_GPU` unset, `=vulkan`, `=lavapipe` (give the GPU arms their own `GOLDEN_OUT`/`GOLDEN_REPORT`) | 133 scenarios, 336 frames; 53 checks with the GPU off, 80 with it on (2026-10-01); all four green |
 | GPU unit checks | `OPENSHOT_GPU=vulkan cmake-build-gpu/tests/gpu/openshot-gpu-checks` (and `=lavapipe`) | device lifetime, pools, the single control, readback |
 | effect parity | `OPENSHOT_GPU=vulkan cmake-build-gpu/tests/gpu/openshot-gpu-effect-parity` (and `=lavapipe`, ~45 min) | every fragment against its C++ twin over eight alpha-edge images; refuses a case that never reached the GPU. Exits non-zero today on the per-pass cost gate only (see "What is left", 4) |
 | CUDA interop | `cmake-build-gpu/tests/gpu/openshot-gpu-cuda-interop` | NVDEC/NVENC hand-off, per-pair semaphores |
@@ -251,8 +251,10 @@ without the "revisit if" condition being true.
 - **The opacity curve on the GPU is a pre-pass, not paint alpha** (2026-09-24): `floor(byte * alpha)`
   before the transform, exactly the CPU loop, so a fade is bit-exact on the GPU where paint alpha
   was an LSB off.
-- **Glow quality is fixed**: in-motion glow matches resting glow; speed comes from the GPU and the
-  composited-glow cache, never from fewer steps or a lower resolution.
+- **Glow quality is fixed per path**: in-motion glow matches resting glow; on the GPU speed comes
+  from the GPU and the composited-glow cache, never from fewer steps or a lower resolution. The CPU
+  path alone runs at half resolution and at most 64 steps (owner, 2026-10-01, review NEW-6): at full
+  quality a CPU-fallback node rendered a glow payload ~100x slower than real time.
 - **No CPU frame-level parallelism**: Graphite parallelises through pipeline depth (decode-ahead,
   encode on the device); width is the process manager's job. *Revisit if* the CPU fallback becomes
   a product requirement at scale.
@@ -490,6 +492,12 @@ Context under the context mutex, `malloc_trim` runs after the cache lock (P5), `
 for the process (NEW-2). `unit.hardware_decode` restores `HARDWARE_DECODER` through a scope guard
 (NEW-8). The payload corpus renders byte-identical to the library before these changes (both
 payloads), and its one recorded hash is still the stale one (10 below).
+
+**Also done 2026-10-01 (night, text):** the CPU glow is capped by cost (NEW-6, "Decisions"); the
+subtitle renderer's font cache keeps one `SkTypeface` per (font, weight, slant), so every character
+of a font file shares one face instead of a `makeFromFile` each (M4; the per-character key stays for
+the coverage decision); and `text.style_keyframes_glow_range_direction_color` keyframes the glow's
+range, direction and colour over 60 frames (F2's per-frame path; baselined at full glow quality).
 
 **What is left is decisions, infrastructure and final checks.** In the order they should happen:
 

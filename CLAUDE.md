@@ -403,11 +403,14 @@ GPU to take over. Earlier, lower figures in the docs were measured on an Intel i
 - The glow is ~99 % of an animated glow frame on the raster path, and the ray-march is ~91 % of
   that (sweep `OPENSHOT_GLOW_STEPS` to measure — it changes only the step count). Optimise the
   march or skip it; nothing else in the text engine is worth measuring against it.
-- **The glow runs at full resolution with smooth-limit step counts** (owner, 2026-09-25, both
-  paths): `GLOW_RENDER_SCALE` 1.0 (was 0.40), steps raised until samples are one beam-blur sigma
-  apart (up to `GLOW_MAX_STEPS` 512; was capped at 24). GPU ~-10 %, CPU ~24x slower (0.1 fps at
-  1080p on `text_animated_glow_3`), accepted. `OPENSHOT_GLOW_SCALE=0.4 OPENSHOT_GLOW_STEPS=24`
-  reproduces the old glow. The front end's glow (text-glow-shader.ts) is still 64 steps at most.
+- **The glow runs at full resolution with smooth-limit step counts on the GPU** (owner, 2026-09-25):
+  `GLOW_RENDER_SCALE` 1.0 (was 0.40), steps raised until samples are one beam-blur sigma apart (up
+  to `GLOW_MAX_STEPS` 512; was capped at 24), GPU ~-10 %. **The CPU path is capped by cost** (owner,
+  2026-10-01, review NEW-6): with no GPU device `GLOW_CPU_RENDER_SCALE` 0.5 and `GLOW_CPU_MAX_STEPS`
+  64 -- full quality was 458 s for 96 frames of the F2 payload at 720p, capped 73 s (no glow 4.5 s),
+  indistinguishable by eye, the CPU glow goldens 48-57 dB from the full-quality baselines (Loose is
+  38). The env overrides win on both paths: `OPENSHOT_GLOW_SCALE=1 OPENSHOT_GLOW_STEPS=512` is the
+  full CPU glow (baseline new glow goldens with it), `=0.4`/`=24` the pre-2026-09-25 one. The front end's glow (text-glow-shader.ts) is still 64 steps at most.
 - A **block-mode** animation concats its transform onto the canvas, so the glow is marched in
   block-local space and is frame-invariant. `text::GlowFrameCache` on `TextClipReader` reuses the
   composited image — bit-identical, raster only (a pooled GPU snapshot must not outlive its frame).

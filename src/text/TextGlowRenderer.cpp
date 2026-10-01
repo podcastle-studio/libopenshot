@@ -31,27 +31,40 @@ namespace text {
 namespace {
 // Glow quality, read once from the environment for easy A/B tuning (no rebuild). Applied
 // UNIFORMLY to resting and in-motion frames so the glow never changes quality mid-clip (no
-// pop). Defaults are full resolution and uncapped steps (see GLOW_RENDER_SCALE); lowering trades
-// smoothness for speed.
-//   OPENSHOT_GLOW_SCALE  silhouette/ray-march render scale (0.05..1.0, default GLOW_RENDER_SCALE)
-//   OPENSHOT_GLOW_STEPS  ray-march step cap (4..GLOW_MAX_STEPS, default GLOW_MAX_STEPS: no cap)
-double glowScaleSetting() {
+// pop). Defaults are full resolution and uncapped steps on the GPU (see GLOW_RENDER_SCALE) and
+// the cost cap on the CPU (GLOW_CPU_RENDER_SCALE); lowering trades smoothness for speed.
+//   OPENSHOT_GLOW_SCALE  silhouette/ray-march render scale (0.05..1.0), both paths
+//   OPENSHOT_GLOW_STEPS  ray-march step cap (4..GLOW_MAX_STEPS), both paths
+double glowScaleEnv() {
     static const double v = [] {
         if (const char* e = std::getenv("OPENSHOT_GLOW_SCALE")) {
             try { double d = std::stod(e); if (d >= 0.05 && d <= 1.0) return d; } catch (...) {}
         }
-        return GLOW_RENDER_SCALE;
+        return 0.0;
     }();
     return v;
 }
-double glowStepCapSetting() {
+double glowStepCapEnv() {
     static const double v = [] {
         if (const char* e = std::getenv("OPENSHOT_GLOW_STEPS")) {
             try { double d = std::stod(e); if (d >= 4.0 && d <= GLOW_MAX_STEPS) return d; } catch (...) {}
         }
-        return static_cast<double>(GLOW_MAX_STEPS);
+        return 0.0;
     }();
     return v;
+}
+// The CPU path is the one with no GPU device: with one, the ray-march runs on a GPU surface even
+// when the destination canvas is raster (paintGlowFromSilhouette).
+bool glowOnCpu() {
+    return !GpuDevice::Instance().available();
+}
+double glowScaleSetting() {
+    if (const double env = glowScaleEnv(); env > 0.0) return env;
+    return glowOnCpu() ? GLOW_CPU_RENDER_SCALE : GLOW_RENDER_SCALE;
+}
+double glowStepCapSetting() {
+    if (const double env = glowStepCapEnv(); env > 0.0) return env;
+    return static_cast<double>(glowOnCpu() ? GLOW_CPU_MAX_STEPS : GLOW_MAX_STEPS);
 }
 } // namespace
 

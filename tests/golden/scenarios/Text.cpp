@@ -188,6 +188,30 @@ void golden::registerTextScenarios() {
         one(s, t);
     }, text);
 
+    // The glow's geometry and colour keyframed together over 60 frames: range (the beam length,
+    // so the ray-march's step count and its working surface change every frame), light direction
+    // and colour. The 2026-10-01 flicker (export 6abe06b829f1ddf8a4e5f9a7) was beams vanishing on
+    // single frames for some step counts; unit.glow_steps_finite gates the shader, this gates the
+    // per-frame path that feeds it (review F2 coverage).
+    add("text.style_keyframes_glow_range_direction_color", {"text", "style-keyframes", "glow"}, A, [](Scene& s) {
+        auto t = spec(s, "GLOW", 26.0);
+        t.style.fontFamily = s.font("NotoSans-Bold.ttf");
+        t.style.fontWeight = 700;
+        t.style.glowColor = "#40C0FF";
+        t.style.glowIntensityRatio = 0.9;
+        t.style.glowRangeRatio = 0.2;
+        TextStyleKeyframes kf;
+        openshot::Keyframe range; range.AddPoint(1, 0.2, openshot::LINEAR); range.AddPoint(60, 0.9, openshot::LINEAR);
+        kf.glowRangeRatio = range;
+        openshot::Keyframe dirX; dirX.AddPoint(1, -30, openshot::LINEAR); dirX.AddPoint(60, 30, openshot::LINEAR);
+        kf.glowDirectionX = dirX;
+        openshot::Keyframe dirY; dirY.AddPoint(1, 20, openshot::LINEAR); dirY.AddPoint(60, -25, openshot::LINEAR);
+        kf.glowDirectionY = dirY;
+        kf.glowColor.points = {{0.0, "#40C0FF", openshot::LINEAR}, {2.0, "#FF6030", openshot::LINEAR}};
+        t.styleKeyframes = kf;
+        one(s, t);
+    }, text);
+
     // A solid fill keyframed to a multi-stop gradient, with glow on: the "Create" clip of the
     // 2026-09-30 report. The sampler blends into the gradient; each glyph must then show its own
     // part of the ramp -- a canvas translate per glyph once restarted the shader at every letter,

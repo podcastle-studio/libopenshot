@@ -56,6 +56,14 @@ constexpr int GLOW_MAX_TEXTURE_DIM = 1024;
 // OPENSHOT_GLOW_SCALE=0.4 OPENSHOT_GLOW_STEPS=24 reproduces the old glow exactly.
 constexpr double GLOW_RENDER_SCALE = 1.0;
 
+// The CPU path's glow (no GPU device), capped by cost (owner, 2026-10-01, review NEW-6): at full
+// resolution and smooth-limit steps a keyframed glow took 7.9 s per 720p frame on the raster
+// path (762 s against 3.2 s without it for 96 frames), so a CPU-fallback node ran a glow payload
+// ~240x slower than real time. The GPU path keeps GLOW_RENDER_SCALE and GLOW_MAX_STEPS. The env
+// overrides above apply to both paths and win over these.
+constexpr double GLOW_CPU_RENDER_SCALE = 0.5;
+constexpr int GLOW_CPU_MAX_STEPS = 64;
+
 // Compile (once) and return the glow runtime effect, or null if unsupported.
 SkRuntimeEffect* getGlowEffect();
 
