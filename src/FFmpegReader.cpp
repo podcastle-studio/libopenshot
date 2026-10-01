@@ -87,14 +87,6 @@ using namespace openshot;
 // Serialises every reader's copy -> draw -> submit -> re-arm step on the device (see
 // ConvertOnDevice), and a hardware decoder's destruction against it (see Close).
 static std::mutex gConvertSequence;
-#if USE_HW_ACCEL
-	// What get_hw_dec_format (FFmpeg's get_format callback, which has no reader to write to)
-	// picked, read back by the same decode call on the same thread -- a hardware decoder runs
-	// with one FFmpeg thread. Thread-local, not process-wide: every reader of every export wrote
-	// these (ThreadSanitizer, 2026-10-01). hw_de_on, the third such global, is a member now.
-	thread_local AVPixelFormat hw_de_av_pix_fmt_global = AV_PIX_FMT_NONE;
-	thread_local AVHWDeviceType hw_de_av_device_type_global = AV_HWDEVICE_TYPE_NONE;
-#endif
 
 // Normalize deprecated JPEG-range YUVJ formats before creating swscale contexts.
 // swscale expects non-YUVJ formats plus explicit color-range metadata.
@@ -307,15 +299,11 @@ static enum AVPixelFormat get_hw_dec_format(AVCodecContext *ctx, const enum AVPi
 			// Linux pix formats
 			case AV_PIX_FMT_VAAPI:
 				if (selected == 1) {
-					hw_de_av_pix_fmt_global = AV_PIX_FMT_VAAPI;
-					hw_de_av_device_type_global = AV_HWDEVICE_TYPE_VAAPI;
 					return *p;
 				}
 				break;
 			case AV_PIX_FMT_VDPAU:
 				if (selected == 6) {
-					hw_de_av_pix_fmt_global = AV_PIX_FMT_VDPAU;
-					hw_de_av_device_type_global = AV_HWDEVICE_TYPE_VDPAU;
 					return *p;
 				}
 				break;
@@ -324,15 +312,11 @@ static enum AVPixelFormat get_hw_dec_format(AVCodecContext *ctx, const enum AVPi
 			// Windows pix formats
 			case AV_PIX_FMT_DXVA2_VLD:
 				if (selected == 3) {
-					hw_de_av_pix_fmt_global = AV_PIX_FMT_DXVA2_VLD;
-					hw_de_av_device_type_global = AV_HWDEVICE_TYPE_DXVA2;
 					return *p;
 				}
 				break;
 			case AV_PIX_FMT_D3D11:
 				if (selected == 4) {
-					hw_de_av_pix_fmt_global = AV_PIX_FMT_D3D11;
-					hw_de_av_device_type_global = AV_HWDEVICE_TYPE_D3D11VA;
 					return *p;
 				}
 				break;
@@ -341,8 +325,6 @@ static enum AVPixelFormat get_hw_dec_format(AVCodecContext *ctx, const enum AVPi
 			// Apple pix formats
 			case AV_PIX_FMT_VIDEOTOOLBOX:
 				if (selected == 5) {
-					hw_de_av_pix_fmt_global = AV_PIX_FMT_VIDEOTOOLBOX;
-					hw_de_av_device_type_global = AV_HWDEVICE_TYPE_VIDEOTOOLBOX;
 					return *p;
 				}
 				break;
@@ -350,15 +332,11 @@ static enum AVPixelFormat get_hw_dec_format(AVCodecContext *ctx, const enum AVPi
 				// Cross-platform pix formats
 			case AV_PIX_FMT_CUDA:
 				if (selected == 2) {
-					hw_de_av_pix_fmt_global = AV_PIX_FMT_CUDA;
-					hw_de_av_device_type_global = AV_HWDEVICE_TYPE_CUDA;
 					return *p;
 				}
 				break;
 			case AV_PIX_FMT_QSV:
 				if (selected == 7) {
-					hw_de_av_pix_fmt_global = AV_PIX_FMT_QSV;
-					hw_de_av_device_type_global = AV_HWDEVICE_TYPE_QSV;
 					return *p;
 				}
 				break;
@@ -451,6 +429,37 @@ void FFmpegReader::ReleaseFailedOpen() {
 	if (pFormatCtx)
 		avformat_close_input(&pFormatCtx);
 	pFormatCtx = nullptr;
+}
+
+bool FFmpegReader::RewindFreshOpen() {
+	if (!is_open || !pFormatCtx)
+		return false;
+	if (packet) {
+		RemoveAVPacket(packet);
+		packet = nullptr;
+	}
+	avformat_close_input(&pFormatCtx);
+	pFormatCtx = nullptr;
+	if (avformat_open_input(&pFormatCtx, path.c_str(), NULL, NULL) != 0 ||
+		avformat_find_stream_info(pFormatCtx, NULL) < 0 ||
+		(videoStream >= 0 && videoStream >= (int) pFormatCtx->nb_streams) ||
+		(audioStream >= 0 && audioStream >= (int) pFormatCtx->nb_streams)) {
+		// Leave a state Close() can free: it closes a null format context fine.
+		if (pFormatCtx)
+			avformat_close_input(&pFormatCtx);
+		pFormatCtx = nullptr;
+		return false;
+	}
+	if (videoStream >= 0)
+		pStream = pFormatCtx->streams[videoStream];
+	if (audioStream >= 0)
+		aStream = pFormatCtx->streams[audioStream];
+	// Nothing was decoded, but packets the scans sent are dropped all the same.
+	if (pCodecCtx && avcodec_is_open(pCodecCtx))
+		avcodec_flush_buffers(pCodecCtx);
+	if (aCodecCtx && avcodec_is_open(aCodecCtx))
+		avcodec_flush_buffers(aCodecCtx);
+	return true;
 }
 
 void FFmpegReader::OpenStreams() {
@@ -761,7 +770,25 @@ void FFmpegReader::OpenStreams() {
 						*/
 					}
 					else {
-						  throw InvalidCodec("Hardware device create failed.", path);
+						// No device (CUDA gone after an Xid, a driver without NVDEC): decode in
+						// software instead of failing the open. Throwing here failed every later
+						// export at its first reader (review NEW-9, 2026-10-01). Same retry as the
+						// size constraints below; the second pass sees hw_de_supported == 0.
+						ZmqLogger::Instance()->AppendDebugMethod(
+							"FFmpegReader::Open (hardware device create failed, decoding in software)",
+							"hw_de_av_device_type", (int) hw_de_av_device_type);
+						openshot::GpuCounters::Add(openshot::GpuCounters::HardwareDecodeFallback);
+						hw_de_supported = 0;
+						retry_decode_open = 1;
+						AV_FREE_CONTEXT(pCodecCtx);
+						pCodecCtx = nullptr;
+#if OPENSHOT_NVDEC_ON_DEVICE
+						if (decode_stream) {
+							openshot::CudaInterop::Instance().destroyStream(decode_stream);
+							decode_stream = nullptr;
+						}
+#endif
+						continue;
 					}
 				}
 #endif // USE_HW_ACCEL
@@ -995,9 +1022,12 @@ void FFmpegReader::OpenStreams() {
 		// Mark as "open"
 		is_open = true;
 
-		// Seek back to beginning of file (if not already seeking)
+		// Seek back to beginning of file (if not already seeking). UpdatePTSOffset and CheckFPS
+		// above read packets but decode none, so Seek can rewind the demuxer alone (see Seek).
 		if (!is_seeking) {
+			fresh_open = true;
 			Seek(1);
+			fresh_open = false;
 		}
 	}
 }
@@ -1999,9 +2029,12 @@ bool FFmpegReader::GetAVFrame() {
 	}
 
 	#if USE_HW_ACCEL
-		// Get the format from the variables set in get_hw_dec_format
-		hw_de_av_pix_fmt = hw_de_av_pix_fmt_global;
-		hw_de_av_device_type = hw_de_av_device_type_global;
+		// What get_hw_dec_format chose: FFmpeg stores the callback's answer in the codec context.
+		// It used to come back through globals (thread-local since 2026-10-01), which were empty
+		// on any thread other than the one that decoded the first packet: a reader decoded by the
+		// read-ahead worker and the caller in turn passed its CUDA frames on undownloaded
+		// (decoded_on_device > 0 with GPU_DECODE off; review verification NEW-1).
+		hw_de_av_pix_fmt = pCodecCtx->pix_fmt;
 	#endif // USE_HW_ACCEL
 		if (send_packet_err < 0 && send_packet_err != AVERROR_EOF) {
 			ZmqLogger::Instance()->AppendDebugMethod("FFmpegReader::GetAVFrame (send packet: Not sent [" + av_err2string(send_packet_err) + "])", "send_packet_err", send_packet_err, "send_packet_pts", send_packet_pts);
@@ -2083,7 +2116,8 @@ bool FFmpegReader::GetAVFrame() {
 #endif
 				if (keep_on_device) {
 					decoded_frame = next_frame2;
-				} else if (next_frame2->format == hw_de_av_pix_fmt) {
+				} else if (next_frame2->hw_frames_ctx) {
+					// A hardware frame (its format is the device's, hw_de_av_pix_fmt): bring it down.
 					if ((err = av_hwframe_transfer_data(next_frame, next_frame2, 0)) < 0) {
 						ZmqLogger::Instance()->AppendDebugMethod(
 							"FFmpegReader::GetAVFrame (Failed to transfer data to output frame)",
@@ -2329,10 +2363,18 @@ std::shared_ptr<openshot::GpuFrame> FFmpegReader::ConvertOnDevice(int out_width,
 	// the same lock to destroy a hardware decoder.
 	std::shared_ptr<openshot::GpuFrame> converted;
 	bool submitted = false;
+	bool inserted = false;
 	{
 		const std::lock_guard<std::mutex> lock(gConvertSequence);
-		if (!interop.copyNV12(pFrame, *device_luma, *device_chroma, decode_stream))
+		if (!interop.copyNV12(pFrame, *device_luma, *device_chroma, decode_stream)) {
+			// It can fail after queuing part of its work (the semaphore wait, a plane's copy):
+			// drain it before the caller downloads and frees pFrame, and take new images, since
+			// whether their semaphores were consumed or signalled is no longer known.
+			interop.synchronizeStream(decode_stream ? decode_stream : interop.cudaStream());
+			device_luma.reset();
+			device_chroma.reset();
 			return nullptr;
+		}
 
 		converted = openshot::GpuYuv::Convert(
 			*device_luma, *device_chroma,
@@ -2342,7 +2384,7 @@ std::shared_ptr<openshot::GpuFrame> FFmpegReader::ConvertOnDevice(int out_width,
 		// Submitted even if the conversion declined: the copy has signalled, and only a submit
 		// that waits on it clears the semaphore for the next frame.
 		const unsigned long long copied = interop.waitSemaphore(*device_luma);
-		submitted = openshot::GpuDevice::Instance().submit(false, &copied, 1);
+		submitted = openshot::GpuDevice::Instance().submit(false, &copied, 1, nullptr, 0, nullptr, &inserted);
 		// The conversion above is the only thing that samples these images -- the compositor
 		// gets the RGBA frame it drew -- so this is the submit prepareForCopy() has to follow.
 		// Re-arming them now takes the Vulkan-to-CUDA handshake off the next frame's critical
@@ -2355,12 +2397,22 @@ std::shared_ptr<openshot::GpuFrame> FFmpegReader::ConvertOnDevice(int out_width,
 	// or not. Outside the sequence lock (review P1, 2026-10-01): the copy and its event are this
 	// reader's own, and holding the process-wide lock across a host wait made every NVDEC reader
 	// of every export take turns through it.
-	interop.waitForNV12Copy(*device_luma);
+	//
+	// A false return means the event could not be recorded or waited on: then drain the whole
+	// stream, which is this reader's own (review C6, 2026-10-01: the result used to be ignored).
+	if (!interop.waitForNV12Copy(*device_luma))
+		interop.synchronizeStream(decode_stream ? decode_stream : interop.cudaStream());
 	if (!submitted) {
-		// The copy's semaphore is signalled and nothing will ever wait on it; the next copy into
-		// these images would signal it a second time (review C8). New images, new semaphores.
-		device_luma.reset();
-		device_chroma.reset();
+		// Inserted but not submitted: the recording that waits on the copy's semaphore is queued
+		// and the next submit (anyone's) sends it, which consumes the signal -- the images stay.
+		// Not inserted: the semaphore is signalled and nothing will ever wait on it, so the next
+		// copy into these images would signal it a second time (review C8). New images, new
+		// semaphores; the copy event above was recorded after the signal, so nothing is pending
+		// on them any more.
+		if (!inserted) {
+			device_luma.reset();
+			device_chroma.reset();
+		}
 		return nullptr;
 	}
 	if (converted)
@@ -2929,9 +2981,16 @@ void FFmpegReader::Seek(int64_t requested_frame) {
 		// prevent Open() from seeking again
 		is_seeking = true;
 
-		// Close and re-open file (basically seeking to frame 1)
-		Close();
-		Open();
+		// Close and re-open file (basically seeking to frame 1). Straight after Open() only the
+		// demuxer has moved, so only the demuxer is reopened: a full Close()/Open() here destroyed
+		// and created every hardware decoder a second time per clip, each under the process-wide
+		// codec lock (review P2, 2026-10-01).
+		const bool rewound = fresh_open && RewindFreshOpen();
+		fresh_open = false;
+		if (!rewound) {
+			Close();
+			Open();
+		}
 
 		// Update overrides (since closing and re-opening might update these)
 		info.has_audio = has_audio_override;

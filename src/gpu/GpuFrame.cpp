@@ -1,6 +1,8 @@
 // One texture-backed drawing surface with CPU transfers both ways. See GpuFrame.h.
 
 #include "GpuFrame.h"
+
+#include <atomic>
 #include "GpuTelemetry.h"
 
 #include "GpuDevice.h"
@@ -133,7 +135,10 @@ namespace
 	struct ReadbackState
 	{
 		std::unique_ptr<const SkImage::AsyncReadResult> result;
-		bool done = false;
+		// The callback runs on whichever thread drives the Context (any export's submit or
+		// poll), and the waiting thread reads this between polls without the context mutex:
+		// release/acquire publishes `result` with it.
+		std::atomic<bool> done{false};
 	};
 
 	void onReadbackComplete(SkImage::ReadPixelsContext context,
@@ -141,7 +146,7 @@ namespace
 	{
 		auto* state = static_cast<ReadbackState*>(context);
 		state->result = std::move(result);
-		state->done = true;
+		state->done.store(true, std::memory_order_release);
 	}
 }
 #endif
@@ -187,12 +192,12 @@ bool GpuFrame::readback(const SkPixmap& dst, bool count)
 	// Bounded by time, not by a spin count: 10 000 unslept spins were 10-50 ms, short of what
 	// a busy GPU needs, and a timeout silently dropped the frame's pixels (review F2).
 	const auto give_up = std::chrono::steady_clock::now() + std::chrono::seconds(10);
-	for (int spins = 0; !state->done; ++spins) {
+	for (int spins = 0; !state->done.load(std::memory_order_acquire); ++spins) {
 		{
 			GpuDevice::QueueGuard guard;
 			context->checkAsyncWorkCompletion();
 		}
-		if (state->done)
+		if (state->done.load(std::memory_order_acquire))
 			break;
 		if (std::chrono::steady_clock::now() > give_up)
 			break;
@@ -201,7 +206,7 @@ bool GpuFrame::readback(const SkPixmap& dst, bool count)
 		else
 			std::this_thread::sleep_for(std::chrono::microseconds(50));
 	}
-	if (!state->done) {
+	if (!state->done.load(std::memory_order_acquire)) {
 		// Leaked on purpose: the callback has yet to run and will write into it.
 		GpuCounters::Add(GpuCounters::ReadbackFailure);
 		return false;

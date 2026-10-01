@@ -178,9 +178,13 @@ namespace openshot
 		/// and leave @a hand_to_cuda (if any) in @c VK_IMAGE_LAYOUT_GENERAL -- the
 		/// layout CUDA reads an imported image in. The writer's side of CudaInterop
 		/// (W25): draw into an interop image, signal, and CUDA copies it out.
+		///
+		/// @a inserted, when given, says whether the recording reached the Context. A false return
+		/// with *inserted true means the semaphores are queued and will be waited on and signalled
+		/// by a later submit; with *inserted false nothing of this call is queued.
 		bool submit(bool syncToCpu, const unsigned long long* wait_semaphores,
 					unsigned int wait_count, const unsigned long long* signal_semaphores,
-					unsigned int signal_count, SkSurface* hand_to_cuda);
+					unsigned int signal_count, SkSurface* hand_to_cuda, bool* inserted = nullptr);
 
 		/// The raw Vulkan handles behind the Graphite context, or null when the
 		/// device is unavailable or this build has no GPU Skia.

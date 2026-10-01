@@ -45,9 +45,13 @@ namespace
 
 	std::atomic<std::size_t> gCreated{0}, gInUse{0}, gBytes{0}, gMisses{0}, gEvicted{0};
 
-	std::size_t entryBytes(int width, int height)
+	// By the surface's own pixel size: the ColorMap LUT atlas is F16, 8 bytes a pixel, and was
+	// counted as 4 (review M3, 2026-10-01).
+	std::size_t entryBytes(int width, int height, SkColorType color_type)
 	{
-		return static_cast<std::size_t>(width) * static_cast<std::size_t>(height) * 4u;
+		const int bpp = color_type == kUnknown_SkColorType ? 4 : SkColorTypeBytesPerPixel(color_type);
+		return static_cast<std::size_t>(width) * static_cast<std::size_t>(height) *
+			   static_cast<std::size_t>(bpp > 0 ? bpp : 4);
 	}
 
 	// OPENSHOT_GPU_POOL_TRACE=1: log every surface the pool allocates or evicts (size, colour
@@ -158,7 +162,7 @@ void GpuSurfacePool::DiscardCurrentThread()
 void GpuSurfacePool::discardAll()
 {
 	for (const Entry& entry : entries) {
-		gBytes -= entryBytes(entry.width, entry.height);
+		gBytes -= entryBytes(entry.width, entry.height, entry.color_type);
 		if (entry.in_use)
 			gInUse--;
 	}
@@ -242,7 +246,7 @@ sk_sp<SkSurface> GpuSurfacePool::acquire(int width, int height, SkColorType colo
 	counters.created++;
 	gCreated++;
 	gInUse++;
-	gBytes += entryBytes(width, height);
+	gBytes += entryBytes(width, height, color_type);
 	if (traceEnabled()) {
 		// One line per allocation, so a memory trace can say which sizes fill the pool.
 		std::size_t idle = 0;
@@ -250,7 +254,7 @@ sk_sp<SkSurface> GpuSurfacePool::acquire(int width, int height, SkColorType colo
 			if (!e.in_use)
 				idle++;
 		std::fprintf(stderr, "GpuSurfacePool: new %dx%d ct=%d (%zu MiB) pool: %zu entries, %zu idle, %zu MiB\n",
-					 width, height, static_cast<int>(color_type), entryBytes(width, height) >> 20,
+					 width, height, static_cast<int>(color_type), entryBytes(width, height, color_type) >> 20,
 					 entries.size(), idle, gBytes.load() >> 20);
 	}
 	return surface;
@@ -308,7 +312,7 @@ void GpuSurfacePool::clear()
 		if (it->in_use) {
 			++it;
 		} else {
-			gBytes -= entryBytes(it->width, it->height);
+			gBytes -= entryBytes(it->width, it->height, it->color_type);
 			it = entries.erase(it);
 		}
 	}
@@ -324,11 +328,11 @@ void GpuSurfacePool::evictIdle(std::chrono::steady_clock::time_point now)
 	std::size_t idle_bytes = 0;
 	for (const Entry& entry : entries)
 		if (!entry.in_use)
-			idle_bytes += entryBytes(entry.width, entry.height);
+			idle_bytes += entryBytes(entry.width, entry.height, entry.color_type);
 
 	std::size_t evicted = 0;
 	auto drop = [&](std::vector<Entry>::iterator it) {
-		const std::size_t bytes = entryBytes(it->width, it->height);
+		const std::size_t bytes = entryBytes(it->width, it->height, it->color_type);
 		if (traceEnabled())
 			std::fprintf(stderr, "GpuSurfacePool: evict %dx%d ct=%d (%zu MiB) idle %lld ms\n",
 						 it->width, it->height, static_cast<int>(it->color_type), bytes >> 20,
@@ -392,7 +396,7 @@ GpuSurfacePool::Stats GpuSurfacePool::stats() const
 	result.idle = 0;
 	result.bytes = 0;
 	for (const Entry& entry : entries) {
-		const std::size_t bytes = entryBytes(entry.width, entry.height);
+		const std::size_t bytes = entryBytes(entry.width, entry.height, entry.color_type);
 		if (entry.in_use) {
 			result.in_use++;
 		} else {

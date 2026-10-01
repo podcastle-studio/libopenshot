@@ -15,6 +15,8 @@
 #include <omp.h>
 #include "Settings.h"
 
+#include <mutex>
+
 using namespace openshot;
 
 // Global reference to Settings
@@ -33,17 +35,17 @@ int Settings::MaxAllowedThreads() const
 void Settings::ApplyOpenMPSettings()
 {
 	const int requested_threads = EffectiveOMPThreads();
-	if (applied_omp_threads != requested_threads) {
+	if (applied_omp_threads.exchange(requested_threads, std::memory_order_relaxed) != requested_threads)
 		omp_set_num_threads(requested_threads);
-		applied_omp_threads = requested_threads;
-	}
 }
 
 // Create or Get an instance of the settings singleton
 Settings *Settings::Instance()
 {
-	if (!m_pInstance) {
-		// Create the actual instance of Settings only once
+	// Once, under call_once: four exports constructing their first Timeline together raced on
+	// the check-then-create and could build two (ThreadSanitizer, 2026-10-01).
+	static std::once_flag created;
+	std::call_once(created, [] {
 		m_pInstance = new Settings;
 		const int machine_threads = std::max(2, omp_get_num_procs());
 		m_pInstance->default_omp_threads = machine_threads;
@@ -53,7 +55,7 @@ Settings *Settings::Instance()
 		auto env_debug = std::getenv("LIBOPENSHOT_DEBUG");
 		if (env_debug != nullptr)
 			m_pInstance->DEBUG_TO_STDERR = true;
-	}
+	});
 
 	m_pInstance->ApplyOpenMPSettings();
 

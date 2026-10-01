@@ -67,7 +67,8 @@ The service has **one** switch, `GPU_RENDERING` (owner, 2026-09-25): `on` by def
 to `vulkan`, picks `h264_nvenc` if the probe answers, and — only when the device came up — turns on
 `GPU_DECODE`, `GPU_CROP`, `GPU_ENCODE` when NVENC is the encoder, and `HARDWARE_DECODER=2` when a
 CUDA device can be created (probed once: a Vulkan device may be another vendor's, or the driver may
-have lost the card, and `FFmpegReader` throws on a failed device create instead of falling back). `off`
+have lost the card; since 2026-10-01 `FFmpegReader` decodes in software when the device create fails,
+counting `nvdec_fallbacks`, where it used to throw and fail the export). `off`
 is the CPU pipeline with libx264. The rows below are the library's switches and defaults, which the
 golden suite and the bench rely on.
 
@@ -466,6 +467,29 @@ the PAN_DIAGONAL presets were tuned against before 2026-09-25 (export `6abe00012
 looked unblurred at 4K); `transitions.diagonal_blur` re-baselined, the editor needs a WASM from after
 this. The 9-node COG that orbits as it spins (export `6abe057f29f1ddf8a4e5f9a5`) is the frontend's
 shape generator: the payload's teeth are centred 4.2 path units below the hole.
+
+**Also done 2026-10-01 (night): what the review's verification found left** (`../gpu-review-verification-2026-10-01.md`,
+"Fix results"). **NEW-1**, a regression from the evening's W3 fix: the `get_format` result came back
+through `thread_local`s, empty on any thread but the one that decoded the first packet, so a reader
+decoded by the read-ahead worker and the caller in turn passed NVDEC frames on undownloaded --
+`GPU_RENDERING_DISABLE=decode` did not stop GPU conversion, and those frames went through the interop
+on its shared stream. The globals are gone: the reader reads `pCodecCtx->pix_fmt` and downloads any
+frame with a `hw_frames_ctx`. **NEW-9**: a failed CUDA device create (after an Xid) now decodes in
+software and counts `nvdec_fallbacks` instead of throwing at every reader open. **C6/C8**: a
+`waitForNV12Copy` that fails drains the reader's stream; the copy's event is recorded after its
+semaphore signal, and `GpuDevice::submit` reports whether the recording was inserted, so images
+whose semaphore wait is queued are kept and only un-inserted ones replaced (and a failed `copyNV12`
+drains and replaces them). **P2**: the `Seek(1)` at the end of `OpenStreams` reopens only the demuxer
+(`RewindFreshOpen`) instead of `Close()`/`Open()`, which created and destroyed every NVDEC decoder a
+second time per clip under the codec lock; `CudaInterop::synchronizeStream`/`destroyStream` wait
+outside the interop lock; `releaseImage` waits on a fence of an empty submit instead of
+`vkQueueWaitIdle` under the context mutex. Also: `ReadbackState::done` is atomic (C1), the pool
+counts bytes per colour type (M3, the F16 LUT atlas was half-counted), `GpuDevice::Memory` reads the
+Context under the context mutex, `malloc_trim` runs after the cache lock (P5), `Settings`/`ZmqLogger`/
+`CrashHandler` singletons are `call_once` (NEW-5), and the crash handler no longer claims SIGPIPE
+for the process (NEW-2). `unit.hardware_decode` restores `HARDWARE_DECODER` through a scope guard
+(NEW-8). The payload corpus renders byte-identical to the library before these changes (both
+payloads), and its one recorded hash is still the stale one (10 below).
 
 **What is left is decisions, infrastructure and final checks.** In the order they should happen:
 

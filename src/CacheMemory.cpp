@@ -224,16 +224,20 @@ void CacheMemory::Touch(int64_t frame_number)
 // Clear the cache of all frames
 void CacheMemory::Clear()
 {
-	// Create a scoped lock, to protect the cache from multiple threads
-	const std::lock_guard<std::recursive_mutex> lock(*cacheMutex);
+	{
+		// Create a scoped lock, to protect the cache from multiple threads
+		const std::lock_guard<std::recursive_mutex> lock(*cacheMutex);
 
-	frames.clear();
-	frame_numbers.clear();
-	frame_numbers.shrink_to_fit();
-	ordered_frame_numbers.clear();
-	ordered_frame_numbers.shrink_to_fit();
-	needs_range_processing = true;
-	// Trim freed arenas back to OS after large clears (debounced)
+		frames.clear();
+		frame_numbers.clear();
+		frame_numbers.shrink_to_fit();
+		ordered_frame_numbers.clear();
+		ordered_frame_numbers.shrink_to_fit();
+		needs_range_processing = true;
+	}
+	// Trim freed arenas back to OS after large clears (debounced, process-wide). After the cache
+	// lock, not under it: malloc_trim walks every arena under its lock, and this cache's readers
+	// waited behind it for nothing (review P5, 2026-10-01).
 	TrimMemoryToOS();
 }
 

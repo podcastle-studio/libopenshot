@@ -12,6 +12,8 @@
 
 #include "CrashHandler.h"
 
+#include <mutex>
+
 #include <unistd.h>
 
 #include <iostream>
@@ -28,8 +30,10 @@ CrashHandler *CrashHandler::m_pInstance = NULL;
 // Create or Get an instance of the logger singleton
 CrashHandler *CrashHandler::Instance()
 {
-	if (!m_pInstance) {
-		// Create the actual instance of crash handler only once
+	// call_once: every Timeline constructor calls this, and four exports constructing their first
+	// Timeline together raced on the check-then-create (ThreadSanitizer, 2026-10-01).
+	static std::once_flag installed;
+	std::call_once(installed, [] {
 		m_pInstance = new CrashHandler;
 
 #ifdef __MINGW32__
@@ -55,9 +59,11 @@ CrashHandler *CrashHandler::Instance()
 		sigaction( SIGBUS,  &sa, NULL );
 		sigaction( SIGILL,  &sa, NULL );
 		sigaction( SIGFPE,  &sa, NULL );
-		sigaction( SIGPIPE, &sa, NULL );
+		// Not SIGPIPE: a write to a closed socket or pipe is not a crash, and the library has no
+		// business choosing that disposition for the process. Installed here it turned a peer
+		// resetting an upload into a dead service with four exports in it (2026-10-01).
 #endif
-	}
+	});
 
 	return m_pInstance;
 }

@@ -305,9 +305,10 @@ GPU to take over. Earlier, lower figures in the docs were measured on an Intel i
   (`on` default in code, `off`, `lavapipe`; owner, 2026-09-25 — the image sets no GPU env).
   `RenderBackend::applyLibrarySettings` turns `on` into `GpuDevice::SetBackend(Vulkan)`, and sets
   `GPU_DECODE` and `GPU_CROP` **only when the GPU came up**, `GPU_ENCODE` only if NVENC is the
-  encoder too, `HARDWARE_DECODER=2` only if a CUDA device can be created (`FFmpegReader` *throws*
-  on a failed CUDA device create rather than decoding in software — found 2026-09-25 when the
-  laptop's NVIDIA card needed a reset and Vulkan came up on the Intel iGPU); the encoder is `h264_nvenc`, probed once, libx264 if no device
+  encoder too, `HARDWARE_DECODER=2` only if a CUDA device can be created (every reader would try it
+  first; a failed create decodes in software and counts `nvdec_fallbacks` since 2026-10-01 -- it used
+  to throw, found 2026-09-25 when the laptop's NVIDIA card needed a reset and Vulkan came up on the
+  Intel iGPU, and again after an Xid); the encoder is `h264_nvenc`, probed once, libx264 if no device
   answers (always libx264 under `off`). So a node with no GPU runs byte-for-byte the CPU pipeline,
   and `GPU_RENDERING=off` forces it anywhere. **`vulkan` never takes a software (CPU-type) Vulkan device** — lavapipe only by name —
   or a CPU node with Mesa installed (the image has it) would render through a software rasteriser

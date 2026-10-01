@@ -1377,7 +1377,14 @@ void golden::registerUnitScenarios() {
     addCustom("unit.hardware_decode", {"unit"}, unitScene,
         [](Scene& s, std::vector<Captured>&, std::vector<Check>& checks) {
             openshot::Settings* settings = openshot::Settings::Instance();
-            const int previous = settings->HARDWARE_DECODER;
+            // Restored on every way out, a throw past the catch below included: Settings is
+            // process-wide, and a CUDA failure here once left every later scenario decoding with
+            // NVDEC asked for -- 43 unrelated failures for one broken GPU (review NEW-8).
+            struct Restore {
+                openshot::Settings* settings;
+                int previous;
+                ~Restore() { settings->HARDWARE_DECODER = previous; }
+            } restore{settings, settings->HARDWARE_DECODER};
             settings->HARDWARE_DECODER = 2;   // CUDA / NVDEC
 
             const int wanted = 8;
@@ -1397,10 +1404,6 @@ void golden::registerUnitScenarios() {
                 threw = true;
                 detail = "threw a non-std exception";
             }
-            // Restore before anything else runs: Settings is process-wide and every later
-            // scenario would otherwise decode with hardware acceleration asked for.
-            settings->HARDWARE_DECODER = previous;
-
             const bool ok = !threw && decoded == wanted;
             if (!threw)
                 detail = std::to_string(decoded) + " of " + std::to_string(wanted) +

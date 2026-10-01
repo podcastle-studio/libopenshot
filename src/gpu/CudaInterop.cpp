@@ -669,10 +669,32 @@ void InteropState::releaseImage(ImageState& state)
 {
 	// Nothing queued may still name this image or its semaphores. Only a reader
 	// closing gets here outside release(), so a full drain costs nothing.
+	//
+	// An empty submit with a fence signals once everything submitted before it has finished
+	// (a fence's first synchronisation scope covers all earlier work on the queue). The submit
+	// needs the queue lock; the wait does not, so every export's submits are no longer held up
+	// for a whole queue drain each time a reader closes (review P2, 2026-10-01). vkQueueWaitIdle,
+	// which must hold the lock throughout, is the fallback.
 	if (!draining && state.image != VK_NULL_HANDLE && device != VK_NULL_HANDLE &&
 		queue != VK_NULL_HANDLE) {
-		GpuDevice::QueueGuard guard;
-		vkQueueWaitIdle(queue);
+		bool drained = false;
+		VkFence fence = VK_NULL_HANDLE;
+		VkFenceCreateInfo fence_info{};
+		fence_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+		if (vkCreateFence(device, &fence_info, nullptr, &fence) == VK_SUCCESS) {
+			VkResult submitted;
+			{
+				GpuDevice::QueueGuard guard;
+				submitted = vkQueueSubmit(queue, 0, nullptr, fence);
+			}
+			drained = submitted == VK_SUCCESS &&
+					  vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX) == VK_SUCCESS;
+			vkDestroyFence(device, fence, nullptr);
+		}
+		if (!drained) {
+			GpuDevice::QueueGuard guard;
+			vkQueueWaitIdle(queue);
+		}
 	}
 	if (state.external && stream && cu.StreamSynchronize)
 		cu.StreamSynchronize(stream);
@@ -890,23 +912,26 @@ bool InteropState::copyNV12(const AVFrame* frame, ImageState& y, ImageState& uv,
 		}
 	}
 
+	CUDA_EXTERNAL_SEMAPHORE_SIGNAL_PARAMS signal{};
+	result = cu.SignalExternalSemaphores(&y.done_cu, &signal, 1, on_stream);
+	if (result != CUDA_SUCCESS) {
+		error = cu.message("cuSignalExternalSemaphoresAsync", result);
+		return false;
+	}
 	// Mark the copy's completion on the stream: waitForNV12Copy() blocks on this before the
-	// caller frees the frame it read from. The semaphore below orders only the Vulkan side.
+	// caller frees the frame it read from. After the signal, not before it (2026-10-01): a
+	// caller that then drops these images destroys the semaphore, which must not still have a
+	// signal pending on this stream.
 	if (!y.copied && cu.EventCreate &&
 		cu.EventCreate(&y.copied, CU_EVENT_DISABLE_TIMING) != CUDA_SUCCESS)
 		y.copied = nullptr;
 	if (y.copied && cu.EventRecord) {
 		result = cu.EventRecord(y.copied, on_stream);
 		if (result != CUDA_SUCCESS) {
-			error = cu.message("cuEventRecord after copyNV12", result);
-			return false;
+			if (cu.EventDestroy)
+				cu.EventDestroy(y.copied);
+			y.copied = nullptr;   // waitForNV12Copy() then reports false and the caller drains the stream
 		}
-	}
-	CUDA_EXTERNAL_SEMAPHORE_SIGNAL_PARAMS signal{};
-	result = cu.SignalExternalSemaphores(&y.done_cu, &signal, 1, on_stream);
-	if (result != CUDA_SUCCESS) {
-		error = cu.message("cuSignalExternalSemaphoresAsync", result);
-		return false;
 	}
 	return true;
 }
@@ -1148,10 +1173,15 @@ bool CudaInterop::synchronizeStream(void* stream)
 {
 	if (!stream)
 		return false;
-	std::lock_guard<std::mutex> lock(impl->state.mutex);
 	InteropState& state = impl->state;
-	if (!state.initialise() || !state.cu.StreamSynchronize)
-		return false;
+	{
+		std::lock_guard<std::mutex> lock(state.mutex);
+		if (!state.initialise() || !state.cu.StreamSynchronize)
+			return false;
+	}
+	// The wait itself outside the interop lock, as waitForNV12Copy does: it lasts as long as the
+	// stream is busy, and every other reader's copy needs that lock meanwhile (review P2). The
+	// function table and context are fixed once initialise() has succeeded.
 	cuda_detail::ContextGuard guard(state.cu, state.context);
 	if (!guard.ok())
 		return false;
@@ -1174,10 +1204,14 @@ void CudaInterop::destroyStream(void* stream)
 {
 	if (!stream)
 		return;
-	std::lock_guard<std::mutex> lock(impl->state.mutex);
 	InteropState& state = impl->state;
-	if (!state.initialise())
-		return;
+	{
+		std::lock_guard<std::mutex> lock(state.mutex);
+		if (!state.initialise())
+			return;
+	}
+	// Drained and destroyed outside the interop lock (see synchronizeStream): the stream is the
+	// caller's alone.
 	cuda_detail::ContextGuard guard(state.cu, state.context);
 	if (!guard.ok())
 		return;

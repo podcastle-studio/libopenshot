@@ -245,6 +245,12 @@ namespace openshot {
 		void OpenStreams();
 		void ReleaseFailedOpen();
 
+		/// Rewind a reader that was opened a moment ago and has decoded nothing: reopen the
+		/// demuxer only, keeping the codecs (and an NVDEC decoder) that a full Close()/Open() would
+		/// destroy and create again. False if the demuxer could not be reopened.
+		bool RewindFreshOpen();
+		bool fresh_open = false;   ///< opened, packets read by OpenStreams' scans, nothing decoded
+
 		/// Get the next packet (if any)
 		int GetNextPacket();
 

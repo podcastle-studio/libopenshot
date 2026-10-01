@@ -600,11 +600,21 @@ GpuDevice::MemoryStats GpuDevice::Memory()
 {
 	MemoryStats stats;
 #ifdef OPENSHOT_HAVE_SKIA_GPU
-	std::lock_guard<std::mutex> slot_lock(deviceSlotMutex());
-	GpuDevice* device = deviceSlot().get();
+	// The slot lock only to read the pointer, as PerformDeferredCleanup does (lock order: never
+	// the context mutex with the slot lock held). The Context is read under the context mutex
+	// like every other call into it (review M3, 2026-10-01). Other threads' recorders are read
+	// under recorder_mutex only: those two figures are a snapshot, not exact.
+	GpuDevice* device = nullptr;
+	{
+		std::lock_guard<std::mutex> slot_lock(deviceSlotMutex());
+		device = deviceSlot().get();
+	}
 	if (!device || !device->impl || !device->impl->context)
 		return stats;
-	stats.context_bytes = device->impl->context->currentBudgetedBytes();
+	{
+		std::lock_guard<std::mutex> context_lock(device->impl->context_mutex);
+		stats.context_bytes = device->impl->context->currentBudgetedBytes();
+	}
 	std::lock_guard<std::mutex> lock(device->impl->recorder_mutex);
 	stats.recorders = device->impl->recorders.size();
 	for (const auto& [id, recorder] : device->impl->recorders) {
@@ -765,8 +775,10 @@ bool GpuDevice::submit(bool syncToCpu, const unsigned long long* wait_semaphores
 
 bool GpuDevice::submit(bool syncToCpu, const unsigned long long* wait_semaphores,
 					   unsigned int wait_count, const unsigned long long* signal_semaphores,
-					   unsigned int signal_count, SkSurface* hand_to_cuda)
+					   unsigned int signal_count, SkSurface* hand_to_cuda, bool* inserted)
 {
+	if (inserted)
+		*inserted = false;
 	skgpu::graphite::Recorder* rec = recorder();
 	if (!rec)
 		return false;
@@ -819,6 +831,8 @@ bool GpuDevice::submit(bool syncToCpu, const unsigned long long* wait_semaphores
 		GpuCounters::Add(GpuCounters::SubmitFailure);
 		return false;
 	}
+	if (inserted)
+		*inserted = true;
 	const bool submitted = impl->context->submit(syncToCpu ? skgpu::graphite::SyncToCpu::kYes
 														   : skgpu::graphite::SyncToCpu::kNo);
 	if (!submitted)
@@ -893,8 +907,10 @@ bool GpuDevice::submit(bool, const unsigned long long*, unsigned int)
 }
 
 bool GpuDevice::submit(bool, const unsigned long long*, unsigned int, const unsigned long long*,
-					   unsigned int, SkSurface*)
+					   unsigned int, SkSurface*, bool* inserted)
 {
+	if (inserted)
+		*inserted = false;
 	return false;
 }
 

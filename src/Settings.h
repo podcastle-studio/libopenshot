@@ -13,6 +13,7 @@
 #ifndef OPENSHOT_SETTINGS_H
 #define OPENSHOT_SETTINGS_H
 
+#include <atomic>
 #include <string>
 
 namespace openshot {
@@ -47,7 +48,7 @@ namespace openshot {
 		static Settings * m_pInstance;
 
 		/// Last OMP thread count applied to the OpenMP runtime
-		int applied_omp_threads = 0;
+		std::atomic<int> applied_omp_threads{0};
 
 		/// Machine default OpenMP thread count detected at startup
 		int default_omp_threads = 2;
