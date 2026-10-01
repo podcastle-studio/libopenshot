@@ -12,6 +12,8 @@
 
 #include "Mask.h"
 
+#include <mutex>
+
 #include "../gpu/GpuDevice.h"
 #include "../gpu/GpuFrame.h"
 
@@ -103,8 +105,8 @@ std::shared_ptr<openshot::Frame> Mask::GetFrame(std::shared_ptr<openshot::Frame>
 
 	if (maskType == CUSTOM) {
 		// Check if mask reader is open
-		#pragma omp critical (open_mask_reader)
 		{
+			const std::lock_guard<std::mutex> reader_lock(reader_mutex);
 			if (reader && !reader->IsOpen()) reader->Open();
 		}
 
@@ -113,8 +115,8 @@ std::shared_ptr<openshot::Frame> Mask::GetFrame(std::shared_ptr<openshot::Frame>
 
 		// Get mask image (if missing or different size than frame image)
 		gpu_mask_current = false;
-		#pragma omp critical (open_mask_reader)
 		{
+			const std::lock_guard<std::mutex> reader_lock(reader_mutex);
 			if (!original_mask || !reader->info.has_single_image || needs_refresh ||
 				(original_mask && original_mask->size() != QSize(frame_width, frame_height))) {
 
@@ -411,8 +413,8 @@ void Mask::SetJsonValue(const Json::Value root) {
 	if (!root["end_frame"].isNull())   endFrame   = root["end_frame"].asInt();
 	if (!root["reader"].isNull()) // does Json contain a reader?
 	{
-		#pragma omp critical (open_mask_reader)
 		{
+			const std::lock_guard<std::mutex> reader_lock(reader_mutex);
 			// This reader has changed, so refresh cached assets
 			needs_refresh = true;
 
@@ -502,4 +504,21 @@ std::string Mask::PropertiesJSON(int64_t requested_frame) const {
 
 	// Return formatted string
 	return root.toStyledString();
+}
+
+// The matte reader was opened in GetFrame and never closed with its clip: its decoder, NVDEC
+// session and GPU frames stayed alive until the export ended, one set per video matte (review
+// M2, 2026-10-01). Clip::Close() calls this; GetFrame reopens it if the clip comes back.
+void Mask::ReleaseGpuResources()
+{
+	const std::lock_guard<std::mutex> reader_lock(reader_mutex);
+	mask_texture.reset();
+	gpu_matte.reset();
+	gpu_mask_current = false;
+	if (reader && reader->IsOpen()) {
+		reader->Close();
+		original_mask.reset();
+		needs_refresh = true;
+	}
+	GpuEffect::ReleaseGpuResources();
 }

@@ -99,6 +99,11 @@ struct GpuEffect::HostSourceCache
 GpuEffect::GpuEffect() = default;
 GpuEffect::~GpuEffect() = default;
 
+void GpuEffect::ReleaseGpuResources()
+{
+	host_source.reset();
+}
+
 long long GpuEffect::GpuPasses() { return gpuPassCounter().load(std::memory_order_relaxed); }
 long long GpuEffect::CpuFallbacks() { return cpuFallbackCounter().load(std::memory_order_relaxed); }
 

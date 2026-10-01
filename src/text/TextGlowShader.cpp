@@ -23,7 +23,12 @@ half4 main(float2 p) {
   for (int i = 0; i < 512; i++) {       // loop bound MUST be a compile-time constant (GLOW_MAX_STEPS)
     if (float(i) >= steps) { break; }   // dynamic count via early-out
     float t     = steps > 1.0 ? float(i) / (steps - 1.0) : 0.0;  // 0..1 along the ray
-    float w     = pow(1.0 - t, falloff);                         // steep near-sample weight
+    // max(): a GPU divides by multiplying with a reciprocal, so for some step counts the last
+    // sample's t comes out a hair above 1, pow() of a negative base is NaN, and the NaN wiped
+    // the whole ray layer -- the beams vanished on single frames as a keyframed glow changed
+    // its step count (export 6abe06b829f1ddf8a4e5f9a7, steps 194/210/220; 2026-10-01). The CPU
+    // divides exactly, which is why only the GPU path flickered.
+    float w     = pow(max(1.0 - t, 0.0), falloff);               // steep near-sample weight
     float scale = 1.0 + rayLen * t;                              // contract more as t grows
     float2 sp   = lightPos + (p - lightPos) / scale;             // sample toward the source
     acc  += silhouette.eval(sp) * w;                             // accumulate weighted light

@@ -46,6 +46,9 @@ namespace openshot
         std::unique_ptr<Impl> pimpl;
 
     public:
+        /// Drops the LUT atlas and the host-source upload (EffectBase::ReleaseGpuResources).
+        void ReleaseGpuResources() override;
+
         // ── LUT mode keyframes ──────────────────────────────────────────────
         Keyframe intensity;
         Keyframe intensity_r;

@@ -195,6 +195,12 @@ namespace openshot
 		/// Set the order that this effect should be executed.
 		void Order(int new_order) { order = new_order; }
 
+		/// Drop what this effect caches on the GPU for its clip -- a still's upload, a mask
+		/// texture, a LUT atlas -- and close readers it opened itself. Clip::Close() calls it:
+		/// these caches are exact-size, marked in use, and lived until the export ended, ~33 MB
+		/// each at 4K per finished clip (review M1, 2026-10-01). Rebuilt on next use.
+		virtual void ReleaseGpuResources() {}
+
 		virtual ~EffectBase();
 	};
 

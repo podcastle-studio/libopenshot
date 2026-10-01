@@ -68,6 +68,9 @@ namespace openshot
 	public:
 		~GpuEffect() override;
 
+		/// Drops the host-source upload; subclasses with caches of their own extend it.
+		void ReleaseGpuResources() override;
+
 		/// How many frames have run as a shader, and how many fell back to the CPU
 		/// twin, process-wide since the counters were last reset.
 		///

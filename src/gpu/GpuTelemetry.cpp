@@ -34,10 +34,32 @@ namespace
 	}
 }
 
+namespace
+{
+	std::shared_ptr<GpuCounters::Block>& threadBlock()
+	{
+		thread_local std::shared_ptr<GpuCounters::Block> block;
+		return block;
+	}
+}
+
 void GpuCounters::Add(Counter counter, unsigned long long n)
 {
-	if (counter >= 0 && counter < Count)
+	if (counter >= 0 && counter < Count) {
 		counterSlots()[counter].fetch_add(n, std::memory_order_relaxed);
+		if (Block* block = threadBlock().get())
+			block->values[counter].fetch_add(n, std::memory_order_relaxed);
+	}
+}
+
+std::shared_ptr<GpuCounters::Block> GpuCounters::ThreadBlock()
+{
+	return threadBlock();
+}
+
+void GpuCounters::SetThreadBlock(std::shared_ptr<Block> block)
+{
+	threadBlock() = std::move(block);
 }
 
 unsigned long long GpuCounters::Get(Counter counter)
@@ -61,6 +83,7 @@ const char* GpuCounters::Name(Counter counter)
 	case UploadCached: return "uploads_cached";
 	case AllocationFailure: return "allocation_failures";
 	case SubmitFailure: return "submit_failures";
+	case ReadbackFailure: return "readback_failures";
 	default: return "?";
 	}
 }
@@ -180,6 +203,8 @@ public:
 	bool running = false;
 	std::chrono::steady_clock::time_point started;
 	unsigned long long counters_at_start[GpuCounters::Count] = {};
+	std::shared_ptr<GpuCounters::Block> block;      ///< this export's own events
+	std::shared_ptr<GpuCounters::Block> previous;   ///< the starting thread's block before Start()
 	Report report;
 	double gpu_sum = 0, encoder_sum = 0, decoder_sum = 0;
 
@@ -273,6 +298,9 @@ void ExportTelemetry::Start()
 	impl->gpu_sum = impl->encoder_sum = impl->decoder_sum = 0;
 	for (int i = 0; i < GpuCounters::Count; ++i)
 		impl->counters_at_start[i] = GpuCounters::Get(static_cast<GpuCounters::Counter>(i));
+	impl->block = std::make_shared<GpuCounters::Block>();
+	impl->previous = GpuCounters::ThreadBlock();
+	GpuCounters::SetThreadBlock(impl->block);
 	impl->started = std::chrono::steady_clock::now();
 	impl->running = true;
 	impl->sampler = std::thread([this] { impl->sample(); });
@@ -304,8 +332,15 @@ ExportTelemetry::Report ExportTelemetry::Stop()
 		r.encoder_mean = impl->encoder_sum / r.samples;
 		r.decoder_mean = impl->decoder_sum / r.samples;
 	}
-	for (int i = 0; i < GpuCounters::Count; ++i)
-		r.counters[i] = GpuCounters::Get(static_cast<GpuCounters::Counter>(i)) - impl->counters_at_start[i];
+	for (int i = 0; i < GpuCounters::Count; ++i) {
+		r.process_counters[i] = GpuCounters::Get(static_cast<GpuCounters::Counter>(i)) - impl->counters_at_start[i];
+		r.counters[i] = impl->block ? impl->block->values[i].load(std::memory_order_relaxed) : 0;
+	}
+	// Only if this thread still attributes to us: a Stop() from another thread must not
+	// replace that thread's block.
+	if (GpuCounters::ThreadBlock() == impl->block)
+		GpuCounters::SetThreadBlock(std::move(impl->previous));
+	impl->previous.reset();
 	return r;
 }
 
@@ -336,5 +371,17 @@ std::string ExportTelemetry::Report::Summary() const
 	}
 	if (!any)
 		out << " no GPU-path events";
+	// Other exports' failures in the same process, for whoever reads the line: not this
+	// export's, but the reason the GPU was full may be there.
+	const GpuCounters::Counter failures[] = {GpuCounters::AllocationFailure, GpuCounters::SubmitFailure,
+											 GpuCounters::ReadbackFailure};
+	bool others = false;
+	for (GpuCounters::Counter c : failures) {
+		if (process_counters[c] > counters[c]) {
+			out << (others ? " " : " | other exports: ") << GpuCounters::Name(c) << "="
+				<< process_counters[c] - counters[c];
+			others = true;
+		}
+	}
 	return out.str();
 }

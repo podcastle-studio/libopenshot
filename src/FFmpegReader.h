@@ -174,6 +174,7 @@ namespace openshot {
 		SWRCONTEXT *avr_ctx = nullptr;                ///< Cached audio resample context
 		AVFrame *pFrameRGB_cached = nullptr;          ///< Temporary frame used for video conversion
 
+		int hw_de_on = 0;		// HARDWARE_DECODER != 0 and not forced to software; was a process global
 		int hw_de_supported = 0;	// Is set by FFmpegReader
 		bool force_sw_decode = false;
 		bool hw_decode_failed = false;
@@ -239,6 +240,10 @@ namespace openshot {
 
 		/// Reopen the current reader with software decode after hardware decode fails
 		bool ReopenWithoutHardwareDecode(int64_t requested_frame);
+
+		/// Open()'s body; Open() frees what it allocated when it throws (ReleaseFailedOpen)
+		void OpenStreams();
+		void ReleaseFailedOpen();
 
 		/// Get the next packet (if any)
 		int GetNextPacket();

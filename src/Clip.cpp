@@ -385,6 +385,7 @@ Clip::~Clip()
 	for (const auto effect : effects) {
 		delete effect;
 	}
+	effects.clear();   // Close() below releases each effect's GPU caches; these are gone
 
 	// Close clip
 	Close();
@@ -503,6 +504,14 @@ void Clip::Close()
 
 	// Clear cache
 	final_cache.Clear();
+	// GPU caches held for this clip -- the still's texture, each effect's uploads, masks and
+	// LUTs -- are exact-size and marked in use, so the pool's idle eviction never reached them
+	// and they lived until the export ended (review M1, 2026-10-01). Rebuilt if the clip is
+	// opened again.
+	host_texture.reset();
+	for (EffectBase* effect : effects)
+		if (effect)
+			effect->ReleaseGpuResources();
 	is_open = false;
 }
 

@@ -5,6 +5,9 @@
 
 #include "GpuDevice.h"
 #include "GpuSurfacePool.h"
+#include <chrono>
+#include <memory>
+#include <thread>
 
 #include "skia/include/core/SkBlendMode.h"
 #include "skia/include/core/SkPaint.h"
@@ -156,31 +159,71 @@ bool GpuFrame::readback(const SkPixmap& dst, bool count)
 
 	// Everything recorded into this surface has to reach the GPU before the read
 	// is queued behind it.
-	if (!device.submit(false))
+	if (!device.submit(false)) {
+		GpuCounters::Add(GpuCounters::ReadbackFailure);
 		return false;
+	}
 
-	ReadbackState state;
-	context->asyncRescaleAndReadPixels(frame_surface.get(), dst.info(),
-									   SkIRect::MakeWH(frame_width, frame_height),
-									   SkImage::RescaleGamma::kSrc,
-									   SkImage::RescaleMode::kNearest,
-									   onReadbackComplete, &state);
-	if (!device.submit(true))
+	// The Context is single-owner: every call into it holds the context mutex, as submit()
+	// does. These two ran unlocked until 2026-10-01 (review C1), while other exports'
+	// threads inserted and submitted recordings on the same Context.
+	//
+	// The state is on the heap and outlives a wait that gives up: the callback still fires
+	// once the GPU gets there, and on the stack it would write into a dead frame.
+	auto* state = new ReadbackState;
+	{
+		GpuDevice::QueueGuard guard;
+		context->asyncRescaleAndReadPixels(frame_surface.get(), dst.info(),
+										   SkIRect::MakeWH(frame_width, frame_height),
+										   SkImage::RescaleGamma::kSrc,
+										   SkImage::RescaleMode::kNearest,
+										   onReadbackComplete, state);
+		// kNo, then poll: kYes waited for every export's outstanding work with the context
+		// mutex held, collapsing the whole process's pipeline to one submission at every
+		// readback (review P3).
+		if (!context->submit(skgpu::graphite::SyncToCpu::kNo))
+			GpuCounters::Add(GpuCounters::SubmitFailure);
+	}
+	// Bounded by time, not by a spin count: 10 000 unslept spins were 10-50 ms, short of what
+	// a busy GPU needs, and a timeout silently dropped the frame's pixels (review F2).
+	const auto give_up = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+	for (int spins = 0; !state->done; ++spins) {
+		{
+			GpuDevice::QueueGuard guard;
+			context->checkAsyncWorkCompletion();
+		}
+		if (state->done)
+			break;
+		if (std::chrono::steady_clock::now() > give_up)
+			break;
+		if (spins < 64)
+			std::this_thread::yield();
+		else
+			std::this_thread::sleep_for(std::chrono::microseconds(50));
+	}
+	if (!state->done) {
+		// Leaked on purpose: the callback has yet to run and will write into it.
+		GpuCounters::Add(GpuCounters::ReadbackFailure);
 		return false;
-	for (int spins = 0; !state.done && spins < 10000; ++spins)
-		context->checkAsyncWorkCompletion();
-	if (!state.done || !state.result)
+	}
+	std::unique_ptr<ReadbackState> owned(state);
+	if (!owned->result) {
+		GpuCounters::Add(GpuCounters::ReadbackFailure);
 		return false;
+	}
 
-	const SkPixmap source(dst.info(), state.result->data(0), state.result->rowBytes(0));
+	const SkPixmap source(dst.info(), owned->result->data(0), owned->result->rowBytes(0));
 	const bool copied = source.readPixels(dst);
-	if (copied)
+	if (copied) {
 		if (count)
 			GpuCounters::Add(GpuCounters::Readback);
+	} else {
+		GpuCounters::Add(GpuCounters::ReadbackFailure);
+	}
 
 	// The result's pixels belong to the context and are invalidated when it goes
 	// away; drop them here rather than letting them outlive this call.
-	state.result.reset();
+	owned->result.reset();
 	return copied;
 #else
 	(void)dst;

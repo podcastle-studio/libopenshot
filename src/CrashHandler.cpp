@@ -12,6 +12,8 @@
 
 #include "CrashHandler.h"
 
+#include <unistd.h>
+
 #include <iostream>
 #include <iomanip>
 #include <sstream>
@@ -35,8 +37,15 @@ CrashHandler *CrashHandler::Instance()
 		signal(SIGSEGV, CrashHandler::abortHandler);
 
 #else
+		// backtrace() loads libgcc's unwinder -- a malloc -- the first time it runs; do that
+		// now, not inside a handler that may have been entered with the malloc lock held.
+		{
+			void* warm[2];
+			backtrace(warm, 2);
+		}
 		struct sigaction sa;
-		sa.sa_flags = SA_SIGINFO;
+		// SA_RESETHAND: a fault inside the handler itself takes the default action at once.
+		sa.sa_flags = SA_SIGINFO | SA_RESETHAND;
 		sa.sa_sigaction = CrashHandler::abortHandler;
 		sigemptyset( &sa.sa_mask );
 
@@ -81,10 +90,24 @@ void CrashHandler::abortHandler(int signum)
 }
 #else
 // Linux and Mac Exception Handler
+//
+// Async-signal-safe (review C4, 2026-10-01): write() and backtrace_symbols_fd() only. The old
+// handler went through fprintf, ZmqLogger, std::stringstream, backtrace_symbols and
+// __cxa_demangle -- all of which allocate -- and a SIGABRT raised by glibc's malloc is raised
+// with the arena lock held, so the handler blocked on it for ever: the process hung instead of
+// dying, holding every export slot until the stuck-worker monitor acted. Symbols come out
+// mangled; c++filt reads them.
 void CrashHandler::abortHandler( int signum, siginfo_t* si, void* unused )
 {
-	// Associate each signal with a signal name string.
-	const char* name = NULL;
+	static volatile sig_atomic_t entered = 0;
+	if (entered) {
+		signal( signum, SIG_DFL );
+		raise( signum );
+		return;
+	}
+	entered = 1;
+
+	const char* name = "signal";
 	switch( signum )
 	{
 		case SIGABRT: name = "SIGABRT";  break;
@@ -94,15 +117,19 @@ void CrashHandler::abortHandler( int signum, siginfo_t* si, void* unused )
 		case SIGFPE:  name = "SIGFPE";   break;
 		case SIGPIPE:  name = "SIGPIPE";   break;
 	}
-
-	// Notify the user which signal was caught
-	if ( name )
-		fprintf( stderr, "Caught signal %d (%s)\n", signum, name );
-	else
-		fprintf( stderr, "Caught signal %d\n", signum );
-
-	// Dump a stack trace.
-	printStackTrace(stderr, 63);
+	auto say = [](const char* text) {
+		size_t n = 0;
+		while (text[n]) ++n;
+		ssize_t ignored = write(STDERR_FILENO, text, n);
+		(void) ignored;
+	};
+	say("Caught ");
+	say(name);
+	say("\n---- Unhandled Exception: Stack Trace ----\n");
+	void* frames[64];
+	const int count = backtrace(frames, 64);
+	backtrace_symbols_fd(frames, count, STDERR_FILENO);
+	say("---- End of Stack Trace ----\n");
 
 	// Die by the signal itself, not exit(): exit() runs every atexit handler and static
 	// destructor on a heap that has just proved itself corrupt -- under AddressSanitizer that

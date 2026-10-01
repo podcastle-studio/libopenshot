@@ -52,8 +52,16 @@ namespace
 	// Both fragments are the shared ones in image-processing-lib/shaders/ (additive_blend.sksl,
 	// displacement_map.sksl), concatenated onto the same prelude as every effect fragment -- the
 	// bytes the editor compiles through CanvasKit.
+	//
+	// Every cache it fills is shared by all threads of the process, so the fill is locked here
+	// (review C3, 2026-10-01): two exports reaching their first LIGHT_LEAK or displacement frame
+	// together both compiled and both assigned, and one kept a raw pointer the other's
+	// assignment had just released. A cache is assigned once and never again, so the pointer
+	// returned stays valid without the lock.
 	SkRuntimeEffect* compiled(const char* body, sk_sp<SkRuntimeEffect>& cache)
 	{
+		static std::mutex mutex;
+		std::lock_guard<std::mutex> lock(mutex);
 		if (!cache) {
 			SkString source(openshot::shaders::kPrelude);
 			source.append(body);

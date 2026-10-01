@@ -114,19 +114,14 @@ private:
 
 } // namespace
 
-// Multiplexer parameters temporary storage
-AVDictionary *mux_dict = NULL;
-
 #if USE_HW_ACCEL
-int hw_en_on = 1;					// Is set in UI
-int hw_en_supported = 0;	// Is set by FFmpegWriter
-AVPixelFormat hw_en_av_pix_fmt = AV_PIX_FMT_NONE;
-AVHWDeviceType hw_en_av_device_type = AV_HWDEVICE_TYPE_VAAPI;
-// hw_device_ctx and the frame sent to the encoder used to be globals here, shared by every
-// writer in the process: two exports encoding at once overwrote each other's frame and freed it
-// twice (AddressSanitizer, 2026-09-30). The device is now a member and the frame a local.
+// hw_device_ctx, the frame sent to the encoder, the muxer dictionary and the hw_en_* flags used to
+// be globals here, shared by every writer in the process: two exports encoding at once overwrote
+// each other's frame and freed it twice (AddressSanitizer, 2026-09-30), and one writer's
+// WriteHeader freed the muxer dictionary while another's SetOption reallocated it -- heap
+// corruption at writer start-up (2026-10-01). All of them are members now.
 
-static int set_hwframe_ctx(AVCodecContext *ctx, AVBufferRef *hw_device_ctx, int64_t width, int64_t height)
+static int set_hwframe_ctx(AVCodecContext *ctx, AVBufferRef *hw_device_ctx, AVPixelFormat hw_en_av_pix_fmt, int64_t width, int64_t height)
 {
 	AVBufferRef *hw_frames_ref;
 	AVHWFramesContext *frames_ctx = NULL;
@@ -987,7 +982,9 @@ void FFmpegWriter::WriteFrame(ReaderBase *reader, int64_t start, int64_t length)
 	std::exception_ptr consumer_exception;
 
 	const int64_t total_frames = length - start + 1;
-	std::thread consumer([this, &queue, &consumer_exception, total_frames]() {
+	std::thread consumer([this, &queue, &consumer_exception, total_frames,
+						  block = openshot::GpuCounters::ThreadBlock()]() {
+		const openshot::GpuCounters::Inherit attribution(block);   // this export's counters
 		try {
 			int64_t written = 0;
 			for (;;) {
@@ -1259,20 +1256,26 @@ void FFmpegWriter::flush_encoders() {
 void FFmpegWriter::close_video(AVFormatContext *oc, AVStream *st)
 {
 	const std::lock_guard<std::mutex> codec_lock(HardwareCodecMutex());   // see open_video
-#if USE_HW_ACCEL
-	if (hw_en_on && hw_en_supported) {
-		if (hw_device_ctx) {
-			av_buffer_unref(&hw_device_ctx);
-			hw_device_ctx = NULL;
-		}
-	}
-#endif // USE_HW_ACCEL
-
 	// Free any previous memory allocations
 	if (video_codec_ctx != nullptr) {
 		AV_FREE_CONTEXT(video_codec_ctx);
 		av_free(video_codec_ctx);
 	}
+	video_codec_ctx = nullptr;
+#if USE_HW_ACCEL
+	// Unconditionally: the flags were process globals once, and a device kept because another
+	// writer's flags said "software" leaked it.
+	if (hw_device_ctx)
+		av_buffer_unref(&hw_device_ctx);
+	hw_device_ctx = NULL;
+#endif // USE_HW_ACCEL
+#if defined(OPENSHOT_HAVE_SKIA_GPU) && defined(OPENSHOT_HAVE_CUDA)
+	// After the encoder and its device: both may still have work queued on it.
+	if (encode_stream)
+		openshot::CudaInterop::Instance().destroyStream(encode_stream);
+	encode_stream = nullptr;
+	encode_on_device = false;
+#endif
 }
 
 // Close the audio codec
@@ -1304,6 +1307,7 @@ void FFmpegWriter::close_audio(AVFormatContext *oc, AVStream *st)
 		AV_FREE_CONTEXT(audio_codec_ctx);
 		av_free(audio_codec_ctx);
 	}
+	audio_codec_ctx = nullptr;
 }
 
 // Close the writer
@@ -1312,11 +1316,49 @@ void FFmpegWriter::Close() {
 	if (!write_trailer)
 		WriteTrailer();
 
+	release();
+
+	ZmqLogger::Instance()->AppendDebugMethod("FFmpegWriter::Close");
+}
+
+// A writer destroyed without Close() -- an export that threw half way -- used to keep its NVENC
+// session, CUDA device, hardware frame pool (~60 MB of VRAM at 1080p), output context and audio
+// buffers for the life of the process (review L1, 2026-10-01). Release them without a trailer:
+// the file is being abandoned.
+FFmpegWriter::~FFmpegWriter() {
+	try {
+		release();
+	} catch (...) {
+	}
+}
+
+// Free everything Open() and the constructor allocated. Safe to call on a writer that was never
+// opened, half opened, or already released.
+void FFmpegWriter::release() {
+	// Frames queued but never written (an export that threw); freed as write_frame does.
+	for (auto& entry : av_frames) {
+		AVFrame *frame_final = entry.second;
+		if (device_frames.erase(frame_final)) {
+			av_frame_free(&frame_final);
+		} else {
+			av_freep(&(frame_final->data[0]));
+			AV_FREE_FRAME(&frame_final);
+		}
+	}
+	av_frames.clear();
+	device_frames.clear();
+
 	// Close each codec
-	if (video_st)
+	if (video_st || video_codec_ctx)
 		close_video(oc, video_st);
-	if (audio_st)
+	if (audio_st || audio_codec_ctx)
 		close_audio(oc, audio_st);
+	video_st = nullptr;
+	audio_st = nullptr;
+	encode_packed.reset();
+	last_frame.reset();
+	if (mux_dict)
+		av_dict_free(&mux_dict);
 
 	// Remove single software scaler. Nulled, or a writer opened again would reuse the freed one.
 	if (img_convert_ctx)
@@ -1332,9 +1374,9 @@ void FFmpegWriter::Close() {
 	av_freep(&persistent_dst_buffer);
 	persistent_dst_size = 0;
 
-	if (!(oc->oformat->flags & AVFMT_NOFILE)) {
+	if (oc && !(oc->oformat->flags & AVFMT_NOFILE) && oc->pb) {
 		/* close the output file */
-		avio_close(oc->pb);
+		avio_closep(&oc->pb);
 	}
 
 	// Reset frame counters
@@ -1342,7 +1384,8 @@ void FFmpegWriter::Close() {
 	audio_timestamp = 0;
 
 	// Free the context which frees the streams too
-	avformat_free_context(oc);
+	if (oc)
+		avformat_free_context(oc);
 	oc = NULL;
 
 	// Close writer
@@ -1350,8 +1393,6 @@ void FFmpegWriter::Close() {
 	prepare_streams = false;
 	write_header = false;
 	write_trailer = false;
-
-	ZmqLogger::Instance()->AppendDebugMethod("FFmpegWriter::Close");
 }
 
 // Add an AVFrame to the cache
@@ -1834,11 +1875,13 @@ void FFmpegWriter::open_video(AVFormatContext *oc, AVStream *st) {
 		}
 		encode_on_device = false;
 #if defined(OPENSHOT_HAVE_SKIA_GPU) && defined(OPENSHOT_HAVE_CUDA)
-		// NVENC in the CUDA context and stream that share memory with the Vulkan device, so
-		// the compositor's frame can be converted and copied into its input without leaving
-		// the GPU (W25). The stream matters: the copy into the frame and NVENC's read of it are
-		// then queued in order on one stream. Anything short of this is the ordinary device
-		// below and the readback path.
+		// NVENC in the CUDA context that shares memory with the Vulkan device, so the
+		// compositor's frame can be converted and copied into its input without leaving the
+		// GPU (W25). The copies run on the interop's stream; NVENC's own stream waits on a
+		// per-frame event (waitForCopy). That stream is this writer's alone (2026-10-01): one
+		// stream for every encoder and decoder in the process let a finished export's codec
+		// teardown run with the other exports' work queued on it. Anything short of this is
+		// the ordinary device below and the readback path.
 		if (hw_en_av_device_type == AV_HWDEVICE_TYPE_CUDA &&
 			openshot::Settings::Instance()->GPU_ENCODE &&
 			openshot::GpuDevice::Instance().available() &&
@@ -1849,7 +1892,9 @@ void FFmpegWriter::open_video(AVFormatContext *oc, AVStream *st) {
 					reinterpret_cast<AVHWDeviceContext *>(device->data)->hwctx);
 				openshot::CudaInterop &interop = openshot::CudaInterop::Instance();
 				cuda->cuda_ctx = static_cast<CUcontext>(interop.cudaContext());
-				cuda->stream = static_cast<CUstream>(interop.cudaStream());
+				if (!encode_stream)
+					encode_stream = interop.createStream();
+				cuda->stream = static_cast<CUstream>(encode_stream ? encode_stream : interop.cudaStream());
 				if (av_hwdevice_ctx_init(device) >= 0) {
 					hw_device_ctx = device;
 					encode_on_device = true;
@@ -1975,7 +2020,7 @@ void FFmpegWriter::open_video(AVFormatContext *oc, AVStream *st) {
 
 		// set hw_frames_ctx for encoder's AVCodecContext
 		int err;
-		if ((err = set_hwframe_ctx(video_codec_ctx, hw_device_ctx, info.width, info.height)) < 0)
+		if ((err = set_hwframe_ctx(video_codec_ctx, hw_device_ctx, hw_en_av_pix_fmt, info.width, info.height)) < 0)
 		{
 			ZmqLogger::Instance()->AppendDebugMethod(
 				"FFmpegWriter::open_video (set_hwframe_ctx) ERROR faled to set hwframe context",
@@ -2646,9 +2691,9 @@ void FFmpegWriter::process_video_packet(std::shared_ptr<Frame> frame) {
 	// queue it. The clone takes its own reference to the CUDA buffer.
 	if (frame->EncoderFrame()) {
 		auto *device = static_cast<DeviceFrame *>(frame->EncoderFrame().get());
-		// NVENC reads on the interop's stream; order it after this frame's copy, on the GPU.
+		// NVENC reads on this writer's stream; order it after this frame's copy, on the GPU.
 #if defined(OPENSHOT_HAVE_SKIA_GPU) && defined(OPENSHOT_HAVE_CUDA)
-		openshot::CudaInterop::Instance().waitForCopy(device->copied);
+		openshot::CudaInterop::Instance().waitForCopy(device->copied, encode_stream);
 		device->copied = nullptr;
 #endif
 		AVFrame *encoded = av_frame_clone(device->frame);

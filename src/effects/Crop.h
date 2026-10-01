@@ -65,6 +65,9 @@ namespace openshot
 		/// Blank constructor, useful when using Json to load the effect properties
 		Crop();
 
+		/// Drops the host-source upload (EffectBase::ReleaseGpuResources).
+		void ReleaseGpuResources() override { host_source.reset(); }
+
 		/// Default constructor, which takes 4 curves. These curves animate the crop over time.
 		///
 		/// @param left The curve to adjust the left bar size (between 0 and 1)

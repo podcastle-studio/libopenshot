@@ -23,6 +23,11 @@ extern "C" {
 #include <libswscale/swscale.h>
 }
 #include "gpu/GpuFrame.h"
+#include "text/TextGlowShader.h"
+#include "skia/include/core/SkBitmap.h"
+#include "skia/include/core/SkCanvas.h"
+#include "skia/include/core/SkData.h"
+#include "skia/include/effects/SkRuntimeEffect.h"
 #include "skia/include/core/SkPixmap.h"
 
 #include "Color.h"
@@ -429,6 +434,90 @@ void golden::registerUnitScenarios() {
             checks.push_back({"explicit_release", released + 1 == held && draws_again,
                               "held=" + std::to_string(held) + " released=" + std::to_string(released) +
                               " draws_again=" + std::to_string(draws_again)});
+        });
+
+    // The text glow's ray-march divided by (steps - 1), and on the GPU, which divides through a
+    // reciprocal, the last sample's t came out a hair above 1 for some step counts; pow() of the
+    // negative 1 - t is NaN and the whole ray layer went blank. A keyframed glow changes its step
+    // count every frame, so the beams vanished on single frames (export 6abe06b829f1ddf8a4e5f9a7,
+    // steps 194/210/220 on an RTX A2000; 2026-10-01). Every step count the renderer can ask for.
+    addCustom("unit.glow_steps_finite", {"unit", "gpu", "text"},
+        [](Scene& s) {
+            s.makeTimeline().Open();
+        },
+        [](Scene&, std::vector<Captured>&, std::vector<Check>& checks) {
+            constexpr int kSize = 32;
+            std::shared_ptr<openshot::GpuFrame> silhouette = openshot::GpuFrame::Create(kSize, kSize);
+            if (!silhouette) {
+                checks.push_back({"glow_steps_finite", true, "skipped: no GPU"});
+                return;
+            }
+            silhouette->canvas()->clear(SK_ColorWHITE);
+            const sk_sp<SkImage> child_image = silhouette->snapshot();
+            SkRuntimeEffect* effect = openshot::text::getGlowEffect();
+            std::string blank;
+            int tested = 0;
+            for (int steps = 2; steps <= 512; ++steps) {
+                const float uniforms[6] = {kSize / 2.0f, kSize / 2.0f, 1.8f, float(steps),
+                                           float(openshot::text::GLOW_GAIN), float(openshot::text::GLOW_FALLOFF)};
+                SkRuntimeEffect::ChildPtr children[1] = {
+                    SkRuntimeEffect::ChildPtr(child_image->makeShader(SkSamplingOptions()))};
+                sk_sp<SkShader> shader = effect->makeShader(SkData::MakeWithCopy(uniforms, sizeof(uniforms)),
+                                                            SkSpan<const SkRuntimeEffect::ChildPtr>(children, 1));
+                std::shared_ptr<openshot::GpuFrame> target = openshot::GpuFrame::Create(kSize, kSize);
+                if (!shader || !target)
+                    continue;
+                target->canvas()->clear(SK_ColorTRANSPARENT);
+                SkPaint paint;
+                paint.setShader(shader);
+                target->canvas()->drawRect(SkRect::MakeWH(kSize, kSize), paint);
+                SkBitmap pixels;
+                pixels.allocN32Pixels(kSize, kSize);
+                SkPixmap pm;
+                pixels.peekPixels(&pm);
+                if (!target->readback(pm, false))
+                    continue;
+                ++tested;
+                if (SkColorGetA(pixels.getColor(kSize / 2, kSize / 2)) == 0)
+                    blank += (blank.empty() ? "" : ",") + std::to_string(steps);
+            }
+            checks.push_back({"glow_steps_finite", tested == 511 && blank.empty(),
+                              "tested=" + std::to_string(tested) + (blank.empty() ? "" : " blank at steps " + blank)});
+        });
+
+    // GpuCounters are process-wide, and the service failed every concurrent export when one of
+    // them ran out of memory. ExportTelemetry now attributes the counting thread's events (and
+    // the library threads it starts) to its own export (2026-10-01).
+    addCustom("unit.gpu_counter_attribution", {"unit"},
+        [](Scene& s) {
+            s.makeTimeline().Open();
+        },
+        [](Scene&, std::vector<Captured>&, std::vector<Check>& checks) {
+            using openshot::GpuCounters;
+            openshot::ExportTelemetry mine;
+            mine.Start();
+            GpuCounters::Add(GpuCounters::AllocationFailure, 2);
+            std::thread other([] {
+                openshot::ExportTelemetry theirs;
+                theirs.Start();
+                GpuCounters::Add(GpuCounters::AllocationFailure, 5);
+                theirs.Stop();
+            });
+            other.join();
+            std::thread inherited([block = GpuCounters::ThreadBlock()] {
+                const GpuCounters::Inherit scope(block);
+                GpuCounters::Add(GpuCounters::SubmitFailure, 1);
+            });
+            inherited.join();
+            const openshot::ExportTelemetry::Report r = mine.Stop();
+            const bool ok = r.counters[GpuCounters::AllocationFailure] == 2 &&
+                            r.counters[GpuCounters::SubmitFailure] == 1 &&
+                            r.process_counters[GpuCounters::AllocationFailure] == 7 &&
+                            !GpuCounters::ThreadBlock();
+            checks.push_back({"own_events_only", ok,
+                              "own alloc=" + std::to_string(r.counters[GpuCounters::AllocationFailure]) +
+                              " own submit=" + std::to_string(r.counters[GpuCounters::SubmitFailure]) +
+                              " process alloc=" + std::to_string(r.process_counters[GpuCounters::AllocationFailure])});
         });
 
     addCustom("unit.gpu_effect_path", {"unit", "gpu"},

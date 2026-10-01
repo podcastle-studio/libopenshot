@@ -188,6 +188,9 @@ namespace openshot {
 		/// Close the video codec
 		void close_video(AVFormatContext *oc, AVStream *st);
 
+		/// Free everything Open() and the constructor allocated, without writing a trailer
+		void release();
+
 		/// Flush encoders
 		void flush_encoders();
 
@@ -210,6 +213,14 @@ namespace openshot {
 		std::shared_ptr<openshot::GpuImage> encode_packed;   ///< NV12, packed; see CudaInterop
 		std::set<AVFrame *> device_frames;                    ///< av_frames that are CUDA frames
 		AVBufferRef *hw_device_ctx = nullptr;                 ///< this writer's encode device (was a process global)
+		void *encode_stream = nullptr;                        ///< CUstream of its own for NVENC (CudaInterop::createStream)
+		AVDictionary *mux_dict = nullptr;                      ///< muxer options from SetOption (was a process global)
+		// Was process-global: one export on libx264 while another used NVENC sent each down the
+		// other's encode branch.
+		int hw_en_on = 1;
+		int hw_en_supported = 0;
+		AVPixelFormat hw_en_av_pix_fmt = AV_PIX_FMT_NONE;
+		AVHWDeviceType hw_en_av_device_type = AV_HWDEVICE_TYPE_VAAPI;
 		std::shared_ptr<void> EncodeOnDevice(openshot::GpuFrame& gpu);
 		struct DeviceFrame;
 
@@ -235,6 +246,9 @@ namespace openshot {
 		///
 		/// @param path The file path of the video file you want to open and read
 		FFmpegWriter(const std::string& path);
+
+		/// Releases the encoder, devices and output context of a writer that was not closed
+		~FFmpegWriter() override;
 
 		/// Close the writer
 		void Close();

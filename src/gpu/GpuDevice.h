@@ -109,6 +109,13 @@ namespace openshot
 		/// Why the device is unavailable, empty when it is available
 		std::string lastError() const;
 
+		/// Has the driver reported the device lost (Graphite's Context::isDeviceLost)? Once
+		/// it has, every later submit fails and the process cannot recover the device while
+		/// anything renders: a caller that sees submit failures asks this to tell a lost GPU
+		/// from a full one, and restarts the process (review W2, 2026-10-01). False when
+		/// there is no device.
+		bool deviceLost();
+
 		/// The process-wide Graphite context, or null when unavailable
 		skgpu::graphite::Context* context();
 

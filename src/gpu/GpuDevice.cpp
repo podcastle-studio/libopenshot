@@ -848,6 +848,14 @@ const GpuDevice::VulkanHandles* GpuDevice::vulkanHandles()
 	return &impl->handles;
 }
 
+bool GpuDevice::deviceLost()
+{
+	if (!impl->usable || !impl->context)
+		return false;
+	std::lock_guard<std::mutex> lock(impl->context_mutex);
+	return impl->context->isDeviceLost();
+}
+
 void GpuDevice::lockQueue()
 {
 	if (available())
@@ -895,6 +903,8 @@ const GpuDevice::VulkanHandles* GpuDevice::vulkanHandles()
 	available();
 	return nullptr;
 }
+
+bool GpuDevice::deviceLost() { return false; }
 
 void GpuDevice::lockQueue() {}
 

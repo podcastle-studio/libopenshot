@@ -241,9 +241,11 @@ namespace openshot
 		/// waitForCopy(), which must be passed there or to releaseCopy() once.
 		bool copyToNV12(GpuImage& packed, AVFrame* cuda_frame, void** copied = nullptr);
 
-		/// Make cudaStream() wait, on the GPU, for the copy behind @a copied, and
-		/// release it. Any thread.
-		bool waitForCopy(void* copied);
+		/// Make @a stream (cudaStream() when null) wait, on the GPU, for the copy behind
+		/// @a copied, and release it. Any thread. Each writer passes the createStream()
+		/// stream its encoder was given (2026-10-01): one stream shared by every NVENC
+		/// session in the process is the pattern that crashed NVDEC teardown.
+		bool waitForCopy(void* copied, void* stream = nullptr);
 
 		/// Release an event from copyToNV12 that will not be waited on.
 		void releaseCopy(void* copied);

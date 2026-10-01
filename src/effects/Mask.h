@@ -20,6 +20,7 @@
 
 #include <string>
 #include <memory>
+#include <mutex>
 
 namespace openshot
 {
@@ -37,6 +38,10 @@ namespace openshot
 	{
 	private:
 		ReaderBase *reader;
+		/// Guards reader and the mask built from it. Per mask: it was a process-wide OpenMP
+		/// critical section around the whole matte decode, so every video matte of every export
+		/// in the process decoded one at a time (review P4, 2026-10-01).
+		std::mutex reader_mutex;
 		std::shared_ptr<QImage> original_mask;
 		bool needs_refresh;
         int roundedRadiusX;
@@ -153,6 +158,9 @@ namespace openshot
 
 		/// Set a new reader to be used by the mask effect (grayscale image)
 		void Reader(ReaderBase *new_reader);
+
+		/// Drops the mask texture and closes the matte reader (EffectBase::ReleaseGpuResources).
+		void ReleaseGpuResources() override;
 	};
 
 }

@@ -84,13 +84,16 @@ extern "C" {
 
 using namespace openshot;
 
-int hw_de_on = 0;
 // Serialises every reader's copy -> draw -> submit -> re-arm step on the device (see
 // ConvertOnDevice), and a hardware decoder's destruction against it (see Close).
 static std::mutex gConvertSequence;
 #if USE_HW_ACCEL
-	AVPixelFormat hw_de_av_pix_fmt_global = AV_PIX_FMT_NONE;
-	AVHWDeviceType hw_de_av_device_type_global = AV_HWDEVICE_TYPE_NONE;
+	// What get_hw_dec_format (FFmpeg's get_format callback, which has no reader to write to)
+	// picked, read back by the same decode call on the same thread -- a hardware decoder runs
+	// with one FFmpeg thread. Thread-local, not process-wide: every reader of every export wrote
+	// these (ThreadSanitizer, 2026-10-01). hw_de_on, the third such global, is a member now.
+	thread_local AVPixelFormat hw_de_av_pix_fmt_global = AV_PIX_FMT_NONE;
+	thread_local AVHWDeviceType hw_de_av_device_type_global = AV_HWDEVICE_TYPE_NONE;
 #endif
 
 // Normalize deprecated JPEG-range YUVJ formats before creating swscale contexts.
@@ -397,15 +400,71 @@ int FFmpegReader::IsHardwareDecodeSupported(int codecid)
 #endif // USE_HW_ACCEL
 
 void FFmpegReader::Open() {
+	if (is_open)
+		return;
+	// Prevent async calls to the following code
+	const std::lock_guard<std::recursive_mutex> lock(getFrameMutex);
+	try {
+		OpenStreams();
+	} catch (...) {
+		// A throw half way used to leave is_open false with everything opened so far still
+		// allocated -- format context, codec contexts, the hardware device and this decoder's
+		// CUDA stream -- and neither Close() nor the destructor would free it (review L2,
+		// 2026-10-01). Past "is_open = true" (the Seek) Close() owns the cleanup.
+		if (is_open) {
+			try {
+				Close();
+			} catch (...) {
+			}
+		} else {
+			ReleaseFailedOpen();
+		}
+		throw;
+	}
+}
+
+// Free whatever a failed OpenStreams() allocated before it marked the reader open.
+void FFmpegReader::ReleaseFailedOpen() {
+	{
+		const std::lock_guard<std::mutex> codec_lock(HardwareCodecMutex());
+		if (pCodecCtx)
+			AV_FREE_CONTEXT(pCodecCtx);
+		pCodecCtx = nullptr;
+		if (aCodecCtx)
+			AV_FREE_CONTEXT(aCodecCtx);
+		aCodecCtx = nullptr;
+#if USE_HW_ACCEL
+		if (hw_device_ctx)
+			av_buffer_unref(&hw_device_ctx);
+		hw_device_ctx = nullptr;
+		hw_frames_on_device = false;
+		device_luma.reset();
+		device_chroma.reset();
+#if OPENSHOT_NVDEC_ON_DEVICE
+		if (decode_stream) {
+			openshot::CudaInterop::Instance().destroyStream(decode_stream);
+			decode_stream = nullptr;
+		}
+#endif
+#endif // USE_HW_ACCEL
+	}
+	if (pFormatCtx)
+		avformat_close_input(&pFormatCtx);
+	pFormatCtx = nullptr;
+}
+
+void FFmpegReader::OpenStreams() {
 	// Open reader if not already open
 	if (!is_open) {
-		// Prevent async calls to the following code
-		const std::lock_guard<std::recursive_mutex> lock(getFrameMutex);
 
 		// Initialize format context
 		pFormatCtx = NULL;
 		{
-			hw_de_on = (openshot::Settings::Instance()->HARDWARE_DECODER == 0 ? 0 : 1);
+			// force_sw_decode: a reopen after the hardware decoder refused this stream must not
+			// pick the hardware decoder again (it did: hw_de_supported is recomputed below).
+			hw_de_on = (!force_sw_decode && openshot::Settings::Instance()->HARDWARE_DECODER != 0 ? 1 : 0);
+			hw_decode_failed = false;
+			hw_decode_error_count = 0;
 			ZmqLogger::Instance()->AppendDebugMethod("Decode hardware acceleration settings", "hw_de_on", hw_de_on, "HARDWARE_DECODER", openshot::Settings::Instance()->HARDWARE_DECODER);
 		}
 
@@ -504,6 +563,7 @@ void FFmpegReader::Open() {
 			}
 
 			AVDictionary *opts = NULL;
+			struct DictGuard { AVDictionary **d; ~DictGuard() { av_dict_free(d); } } opts_guard{&opts};
 			int retry_decode_open = 2;
 			// One codec opens at a time, process-wide (HardwareCodecLock.h): concurrent NVDEC
 			// opens and closes from several exports corrupted the driver's state.
@@ -835,6 +895,7 @@ void FFmpegReader::Open() {
 
 			// Init options
 			AVDictionary *opts = NULL;
+			struct DictGuard { AVDictionary **d; ~DictGuard() { av_dict_free(d); } } opts_guard{&opts};
 			av_dict_set(&opts, "strict", "experimental", 0);
 
 			// Open audio codec
@@ -991,6 +1052,10 @@ void FFmpegReader::Close() {
 		// (Not under a reader-writer lock around all decoding: readers wait on GPU work that
 		// other readers have yet to submit, and with a writer queued those readers never get
 		// in -- three exports hung that way, 2026-10-01.)
+		// The interop images outlive the locks below on purpose (review P2, 2026-10-01): releasing
+		// one drains the Vulkan queue and the interop's streams, and doing that under the
+		// process-wide codec lock stalled every other export's codec opens and closes behind it.
+		std::shared_ptr<openshot::GpuImage> released_luma, released_chroma;
 		if (info.has_video) {
 			const std::lock_guard<std::mutex> codec_lock(HardwareCodecMutex());
 			std::unique_lock<std::mutex> sequence_guard(gConvertSequence, std::defer_lock);
@@ -1015,15 +1080,16 @@ void FFmpegReader::Close() {
 				}
 			}
 			hw_frames_on_device = false;
-			device_luma.reset();
-			device_chroma.reset();
 #if OPENSHOT_NVDEC_ON_DEVICE
-			// After the decoder is gone (above) and the images with it: nothing else queues on it.
+			// After the decoder is gone (above): nothing else queues on it. Before the images
+			// (review C6): the last copy into them ran on this stream, and destroyStream drains it.
 			if (decode_stream) {
 				openshot::CudaInterop::Instance().destroyStream(decode_stream);
 				decode_stream = nullptr;
 			}
 #endif
+			released_luma = std::move(device_luma);
+			released_chroma = std::move(device_chroma);
 #endif // USE_HW_ACCEL
 			if (img_convert_ctx) {
 				sws_freeContext(img_convert_ctx);
@@ -1033,6 +1099,8 @@ void FFmpegReader::Close() {
 				AV_FREE_FRAME(&pFrameRGB_cached);
 			}
 		}
+		released_luma.reset();
+		released_chroma.reset();
 
 		// Close the audio codec. By what was opened, not by info.has_audio: a reader with
 		// DecodeAudio(false) opens the codec and then reports has_audio false, and keying on the
@@ -1531,7 +1599,10 @@ void FFmpegReader::ScheduleReadAhead(int64_t requested_frame) {
 	}
 	if (!read_ahead_thread.joinable()) {
 		read_ahead_running = true;
-		read_ahead_thread = std::thread(&FFmpegReader::ReadAheadLoop, this);
+		read_ahead_thread = std::thread([this, block = openshot::GpuCounters::ThreadBlock()] {
+			const openshot::GpuCounters::Inherit attribution(block);   // the opening export's counters
+			ReadAheadLoop();
+		});
 	}
 	read_ahead_wake.notify_one();
 }
@@ -1754,6 +1825,11 @@ std::shared_ptr<Frame> FFmpegReader::ReadStream(int64_t requested_frame) {
 			(info.has_video && !packet && !packet_status.video_eof)) {
 			// Process Video Packet
 			ProcessVideoPacket(requested_frame);
+			// A stream the hardware decoder refuses (three AVERROR_INVALIDDATA before its first
+			// frame) reopens in software here. The call was lost between upstream's d0ef5961 and
+			// this fork, so the fallback the comments promised never ran (review C7, 2026-10-01).
+			if (ReopenWithoutHardwareDecode(requested_frame))
+				continue;
 		}
 		// Audio packet
 		if ((info.has_audio && packet && packet->stream_index == audioStream) ||
@@ -2251,29 +2327,42 @@ std::shared_ptr<openshot::GpuFrame> FFmpegReader::ConvertOnDevice(int out_width,
 	// submit takes everything this thread's recorder holds, so copy, draw, submit and re-arm
 	// happen as one step whichever reader, on whichever thread, gets here first. Close() takes
 	// the same lock to destroy a hardware decoder.
-	const std::lock_guard<std::mutex> lock(gConvertSequence);
-	if (!interop.copyNV12(pFrame, *device_luma, *device_chroma, decode_stream))
-		return nullptr;
+	std::shared_ptr<openshot::GpuFrame> converted;
+	bool submitted = false;
+	{
+		const std::lock_guard<std::mutex> lock(gConvertSequence);
+		if (!interop.copyNV12(pFrame, *device_luma, *device_chroma, decode_stream))
+			return nullptr;
 
-	std::shared_ptr<openshot::GpuFrame> converted = openshot::GpuYuv::Convert(
-		*device_luma, *device_chroma,
-		openshot::GpuYuv::MatrixOf((int) pFrame->colorspace, width, height),
-		pFrame->color_range == AVCOL_RANGE_JPEG, out_width, out_height);
+		converted = openshot::GpuYuv::Convert(
+			*device_luma, *device_chroma,
+			openshot::GpuYuv::MatrixOf((int) pFrame->colorspace, width, height),
+			pFrame->color_range == AVCOL_RANGE_JPEG, out_width, out_height);
 
-	// Submitted even if the conversion declined: the copy has signalled, and only a submit that
-	// waits on it clears the semaphore for the next frame.
-	const unsigned long long copied = interop.waitSemaphore(*device_luma);
-	if (!openshot::GpuDevice::Instance().submit(false, &copied, 1))
-		return nullptr;
-	// The conversion above is the only thing that samples these images -- the compositor gets
-	// the RGBA frame it drew -- so this is the submit prepareForCopy() has to follow. Re-arming
-	// them now takes the Vulkan-to-CUDA handshake off the next frame's critical path.
-	interop.prepareForCopy(*device_luma, *device_chroma);
+		// Submitted even if the conversion declined: the copy has signalled, and only a submit
+		// that waits on it clears the semaphore for the next frame.
+		const unsigned long long copied = interop.waitSemaphore(*device_luma);
+		submitted = openshot::GpuDevice::Instance().submit(false, &copied, 1);
+		// The conversion above is the only thing that samples these images -- the compositor
+		// gets the RGBA frame it drew -- so this is the submit prepareForCopy() has to follow.
+		// Re-arming them now takes the Vulkan-to-CUDA handshake off the next frame's critical
+		// path.
+		if (submitted)
+			interop.prepareForCopy(*device_luma, *device_chroma);
+	}
 	// The caller frees pFrame -- which unmaps the decoder's surface -- as soon as this returns,
-	// so the copy out of it must have run by then (CudaInterop::waitForNV12Copy). Microseconds
-	// on an idle stream; on a busy one this is exactly the wait that keeps the decoder's surface
-	// alive under the copy.
+	// so the copy out of it must have run by then (CudaInterop::waitForNV12Copy), failed submit
+	// or not. Outside the sequence lock (review P1, 2026-10-01): the copy and its event are this
+	// reader's own, and holding the process-wide lock across a host wait made every NVDEC reader
+	// of every export take turns through it.
 	interop.waitForNV12Copy(*device_luma);
+	if (!submitted) {
+		// The copy's semaphore is signalled and nothing will ever wait on it; the next copy into
+		// these images would signal it a second time (review C8). New images, new semaphores.
+		device_luma.reset();
+		device_chroma.reset();
+		return nullptr;
+	}
 	if (converted)
 		openshot::GpuCounters::Add(openshot::GpuCounters::DecodedOnDevice);
 	return converted;

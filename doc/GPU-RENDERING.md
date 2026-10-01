@@ -109,7 +109,7 @@ The two Skia builds, what the GPU installer adds and why, and the Vulkan 1.4 hea
 
 | gate | command | what it proves |
 |---|---|---|
-| four-way golden sweep | `tools/golden.sh check` (CPU Skia); `BUILD_DIR=$PWD/cmake-build-gpu tools/golden.sh check` with `OPENSHOT_GPU` unset, `=vulkan`, `=lavapipe` (give the GPU arms their own `GOLDEN_OUT`/`GOLDEN_REPORT`) | 128 scenarios, 326 frames; 50 checks with the GPU off, 76 with it on (2026-09-25); all four green |
+| four-way golden sweep | `tools/golden.sh check` (CPU Skia); `BUILD_DIR=$PWD/cmake-build-gpu tools/golden.sh check` with `OPENSHOT_GPU` unset, `=vulkan`, `=lavapipe` (give the GPU arms their own `GOLDEN_OUT`/`GOLDEN_REPORT`) | 132 scenarios, 331 frames; 53 checks with the GPU off, 80 with it on (2026-10-01); all four green |
 | GPU unit checks | `OPENSHOT_GPU=vulkan cmake-build-gpu/tests/gpu/openshot-gpu-checks` (and `=lavapipe`) | device lifetime, pools, the single control, readback |
 | effect parity | `OPENSHOT_GPU=vulkan cmake-build-gpu/tests/gpu/openshot-gpu-effect-parity` (and `=lavapipe`, ~45 min) | every fragment against its C++ twin over eight alpha-edge images; refuses a case that never reached the GPU. Exits non-zero today on the per-pass cost gate only (see "What is left", 4) |
 | CUDA interop | `cmake-build-gpu/tests/gpu/openshot-gpu-cuda-interop` | NVDEC/NVENC hand-off, per-pair semaphores |
@@ -322,7 +322,7 @@ without the "revisit if" condition being true.
   machine where CUDA cannot start every later scenario that decodes video fails too (seen under
   ASan before `protect_shadow_gap=0`). The harness should restore Settings with a guard.
 
-## Status (2026-09-25) and what is left
+## Status (2026-10-01) and what is left
 
 **Done.** Every render stage the service uses can run on the GPU, under one control, with the CPU
 path intact and bit-exact to what shipped: decode (NVDEC → GPU YUV), read-ahead, compositing, text
@@ -437,6 +437,35 @@ handler re-raises the signal instead of calling `exit()`, so a crash is a crash 
 the container runtime, and ASan reports the real fault rather than a double free in the exit
 handlers. Also fixed on the way: a reader with `DecodeAudio(false)` leaked its audio codec context
 on every close.
+
+**Also done 2026-10-01 (evening): the concurrency and leak review, and three reported defects.**
+The review (`../video-rendering-service/doc/GPU-REVIEW-2026-10-01.md`, with the status of every
+finding) found process-wide state shared by concurrent exports. Fixed: the muxer dictionary and the
+`hw_en_*` flags were `FFmpegWriter` file globals, freed by one writer while another wrote them
+(the top candidate for the `malloc(): unaligned tcache chunk` at writer start-up), now members;
+`GpuFrame::readback` called the Graphite `Context` without the context mutex, and waited with
+`SyncToCpu::kYes` (every export's work) under it, now locked per call and polled with a 10 s
+bound instead of 10 000 unslept spins; the overlay transitions' two shader caches filled without a
+lock; NVENC shared the interop's CUDA stream across writers, now a stream per writer. Leaks on
+failure paths: `FFmpegWriter` has a destructor (a failed export kept its NVENC session and ~60 MB of
+VRAM), `FFmpegReader::Open` frees what it opened when it throws. Per-clip GPU caches (a still's
+texture, effect uploads, mask textures, LUT atlases, a video matte's reader) are released in
+`Clip::Close` through `EffectBase::ReleaseGpuResources`. `GpuCounters` are attributed per export
+(`GpuCounters::Block`, set by `ExportTelemetry::Start` and inherited by the writer and read-ahead
+threads), so one export filling the GPU no longer fails its neighbours; `ReadbackFailure` is a new
+counter and `GpuDevice::deviceLost()` tells a lost device from a full one. The NVDEC conversion's
+host wait moved out of the process-wide sequence lock, a failed submit there no longer leaves a
+semaphore signalled twice, interop images are released outside the codec lock and after their
+stream, the lost hardware-decode fallback call is back (and the reopen really is software), Mask's
+process-wide OpenMP critical section is a per-mask mutex, and the crash handler is async-signal-safe.
+Defects: **the text glow's beams vanished on single frames** on the GPU (export
+`6abe06b829f1ddf8a4e5f9a7`): the ray-march's last sample computed `t` a hair above 1 for some step
+counts, `pow` of a negative base is NaN, and the NaN blanked the ray layer -- `unit.glow_steps_finite`
+gates every step count. **The diagonal blur doubled** (`diagonalBlurChain`), restoring the strength
+the PAN_DIAGONAL presets were tuned against before 2026-09-25 (export `6abe000129f1ddf8a4e5f996`
+looked unblurred at 4K); `transitions.diagonal_blur` re-baselined, the editor needs a WASM from after
+this. The 9-node COG that orbits as it spins (export `6abe057f29f1ddf8a4e5f9a5`) is the frontend's
+shape generator: the payload's teeth are centred 4.2 path units below the hole.
 
 **What is left is decisions, infrastructure and final checks.** In the order they should happen:
 

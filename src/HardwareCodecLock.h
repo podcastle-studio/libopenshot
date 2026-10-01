@@ -20,8 +20,16 @@ namespace openshot
 	 * rare (once per clip, once per export), so it costs nothing measurable.
 	 *
 	 * Held by FFmpegReader::Open/Close around the video codec and FFmpegWriter::open_video /
-	 * close_video. Do not take any GpuDevice or CudaInterop lock while holding it: those paths
-	 * run under this one.
+	 * close_video. GpuDevice and CudaInterop locks ARE taken under it (device and stream
+	 * creation and teardown), so the order is fixed, and nothing may take this lock while
+	 * holding any of them:
+	 *
+	 *   Timeline.getFrameMutex -> Reader.getFrameMutex -> HardwareCodecMutex
+	 *     -> gConvertSequence (FFmpegReader.cpp) -> interop state.mutex -> GpuDevice context mutex
+	 *
+	 * and on the decode path Reader.getFrameMutex -> gConvertSequence -> {recorder mutex,
+	 * interop state.mutex -> context mutex}. Keep host waits on the GPU (vkQueueWaitIdle, stream
+	 * synchronises) out from under this lock where possible: it is process-wide.
 	 */
 	inline std::mutex& HardwareCodecMutex()
 	{

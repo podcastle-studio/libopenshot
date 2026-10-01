@@ -362,6 +362,13 @@ ColorMap::ColorMap()
 
 ColorMap::~ColorMap() = default;
 
+void ColorMap::ReleaseGpuResources()
+{
+    if (pimpl)
+        pimpl->atlas.reset();
+    GpuEffect::ReleaseGpuResources();
+}
+
 ColorMap::ColorMap(const std::string &path,
                    const Keyframe &i,
                    const Keyframe &iR,

@@ -73,6 +73,9 @@ namespace openshot
         mutable std::shared_ptr<ContrastLutCache> contrast_lut;
 
     public:
+        /// Drops the contrast LUT and the host-source upload (EffectBase::ReleaseGpuResources).
+        void ReleaseGpuResources() override { contrast_lut.reset(); GpuEffect::ReleaseGpuResources(); }
+
         // Light adjustment keyframes
         Keyframe brightness;    ///< Brightness keyframe (-100 to 100, 0 is default)
         Keyframe contrast;      ///< Contrast keyframe (-100 to 100, 0 is default)

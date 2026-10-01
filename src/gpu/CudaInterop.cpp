@@ -1283,7 +1283,7 @@ bool CudaInterop::copyToNV12(GpuImage& packed, AVFrame* cuda_frame, void** copie
 	return true;
 }
 
-bool CudaInterop::waitForCopy(void* copied)
+bool CudaInterop::waitForCopy(void* copied, void* stream)
 {
 	if (!copied)
 		return false;
@@ -1293,7 +1293,8 @@ bool CudaInterop::waitForCopy(void* copied)
 	bool ok = false;
 	if (state.initialise()) {
 		cuda_detail::ContextGuard guard(state.cu, state.context);
-		ok = state.cu.StreamWaitEvent(state.stream, event, 0) == CUDA_SUCCESS;
+		CUstream target = stream ? static_cast<CUstream>(stream) : state.stream;
+		ok = state.cu.StreamWaitEvent(target, event, 0) == CUDA_SUCCESS;
 	}
 	releaseCopy(copied);
 	return ok;
@@ -1387,7 +1388,7 @@ bool CudaInterop::prepareForCopy(GpuImage&, GpuImage&)
 unsigned long long CudaInterop::drawnSemaphore(const GpuImage&) const { return 0; }
 bool CudaInterop::takeDrawWait(GpuImage&, unsigned long long*) { return false; }
 bool CudaInterop::copyToNV12(GpuImage&, AVFrame*, void**) { return false; }
-bool CudaInterop::waitForCopy(void*) { return false; }
+bool CudaInterop::waitForCopy(void*, void*) { return false; }
 void CudaInterop::releaseCopy(void*) {}
 
 #endif  // OPENSHOT_CUDA_INTEROP

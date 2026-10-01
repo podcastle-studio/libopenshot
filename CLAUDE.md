@@ -205,6 +205,22 @@ Rules that are easy to get wrong and crash in the NVIDIA driver rather than anyw
   lock, then lock what you need -- as `submit()` does -- and never call `Instance()` under a
   Skia lock. `tools/local-service-stress.sh <payload> 4 4` in the service repo, three runs, is
   the test; a hang shows as export files that stop growing with the GPU at 0 %.
+- **Every call into the Graphite `Context` holds the context mutex** (`submit()` does, and
+  `GpuDevice::QueueGuard` for anything else -- `GpuFrame::readback` ran unlocked until 2026-10-01
+  while other exports submitted). Never hold it across a host wait for the GPU: poll
+  (`checkAsyncWorkCompletion`) with the lock released between polls.
+- **No mutable file-scope state in the codec classes.** `FFmpegWriter`'s muxer dictionary and
+  `hw_en_*` flags were globals and four exports corrupted the heap through them (2026-10-01).
+  Shared state of any kind (a shader cache, a static map) is filled under a lock.
+- **GPU counters are per export**: `GpuCounters::Add` also counts into the calling thread's
+  `GpuCounters::Block` (`ExportTelemetry::Start` sets it). A new library thread that renders for an
+  export inherits the starting thread's block (`GpuCounters::Inherit`), as the writer's encode
+  thread and the reader's read-ahead do.
+- **A per-clip GPU cache is released in `Clip::Close`**: an effect that keeps a texture, an upload
+  or a reader of its own overrides `EffectBase::ReleaseGpuResources()`.
+- **A GPU divides through a reciprocal**: `i / (n - 1)` at `i = n - 1` can come out above 1. Clamp
+  before `pow`, `sqrt` or `log` of anything derived from it -- the glow's `pow(1 - t, falloff)` was
+  NaN for 18 of the 511 step counts and blanked its ray layer on single frames (2026-10-01).
 - **A clip set at the canvas's base save level survives the surface's return to the pool.**
   `resetCanvas` restores to the base level and resets the matrix, which is all SkCanvas allows, so
   a base-level `clipRect` cuts the surface's next user down to your size — one golden run painted

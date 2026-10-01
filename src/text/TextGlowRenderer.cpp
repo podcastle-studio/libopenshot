@@ -3,6 +3,7 @@
 #include "../gpu/GpuDevice.h"
 #include "../gpu/GpuFrame.h"
 #include "../gpu/GpuOffscreen.h"
+#include "../gpu/GpuTelemetry.h"
 #include "../subtitle/SkiaRenderer.h"
 #include "TextAnimationRenderer.h"
 #include "TextClipRenderer.h"
@@ -384,8 +385,17 @@ sk_sp<SkImage> TextGlowRenderer::paintGlowFromSilhouette(
         poolW = (gsw + kSurfaceStep - 1) / kSurfaceStep * kSurfaceStep;
         poolH = (gsh + kSurfaceStep - 1) / kSurfaceStep * kSurfaceStep;
     }
-    if (GpuDevice::Instance().available())
+    if (GpuDevice::Instance().available()) {
         gpuFrame = GpuFrame::Create(poolW, poolH);
+        // The padded size can be what does not fit; the exact one may.
+        if (!gpuFrame && gpuDestination && (poolW != gsw || poolH != gsh)) {
+            gpuFrame = GpuFrame::Create(gsw, gsh);
+            if (gpuFrame) {
+                poolW = gsw;
+                poolH = gsh;
+            }
+        }
+    }
     if (gpuFrame) {
         // Graphite will not upload the raster silhouette on our behalf: a raster image
         // used as a shader is dropped with "Couldn't convert SkImage to a
@@ -417,6 +427,19 @@ sk_sp<SkImage> TextGlowRenderer::paintGlowFromSilhouette(
     SkCanvas* gc = nullptr;
     if (gpuFrame) {
         gc = gpuFrame->canvas();
+    } else if (gpuDestination) {
+        // No pooled surface, and the silhouette is a GPU texture: a raster surface here drew
+        // nothing at all (a Graphite image cannot be a raster shader's child), so the glow
+        // vanished, uncounted, for any frame the pool was refused (review F2, 2026-10-01; the
+        // flicker that review chased was the shader's NaN, TextGlowShader.cpp). Ask the destination's own
+        // recorder for a surface; if even that is refused, say so instead of drawing the text
+        // without its glow.
+        glowSurface = canvas->makeSurface(canvas->imageInfo().makeWH(gsw, gsh));
+        if (!glowSurface) {
+            GpuCounters::Add(GpuCounters::AllocationFailure);
+            return nullptr;
+        }
+        gc = glowSurface->getCanvas();
     } else {
         glowSurface = SkSurfaces::Raster(SkImageInfo::MakeN32Premul(gsw, gsh));
         if (!glowSurface) return nullptr;
