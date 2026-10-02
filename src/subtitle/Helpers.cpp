@@ -215,6 +215,16 @@ std::vector<WordAnimation> processSegmentAnimation(const std::vector<WordDetail>
 
     const float segStart = wordDetails.front().startMs;
 
+    // ONE_WORD draws every word at the same spot, so a word may not show before the one it replaces
+    // is gone. The in-animation is centred on the word's start, which puts its first half inside
+    // the previous word's (fully opaque) last frames: for inDuration/2 two words were drawn on top
+    // of each other at every word boundary (2026-10-02). The incoming word's in-animation therefore
+    // starts no earlier than the frame before the outgoing word's end frame: still invisible there
+    // (it is at its initial value), visible from the very frame the previous word disappears on,
+    // so the swap neither overlaps nor leaves a blank frame. PER_TIME lays words side by side, so
+    // overlapping in time is how it is meant to look there and it is left alone.
+    int64_t prevEndFrame = 0;
+
     for (size_t idx = 0; idx < wordDetails.size(); ++idx) {
         const WordDetail& wd = wordDetails[idx];
         WordAnimation anim;  anim.word = wd.word;
@@ -243,6 +253,13 @@ std::vector<WordAnimation> processSegmentAnimation(const std::vector<WordDetail>
             inDur = outDur = duration * 0.5f;
         }
 
+        const bool afterPrevWord = oneWord && idx > 0;
+        auto clampOneWordIn = [&](int64_t& fS, int64_t& fInEnd) {
+            if (!afterPrevWord || fS >= prevEndFrame - 1) return;
+            fS = prevEndFrame - 1;
+            fInEnd = std::max(fInEnd, fS + 1);
+        };
+
         for (const std::string& key : numKeys) {
             double init  = getBaseValue(key, baseStyle);
             double animV = animSet.inStyles.count(key)  ? animSet.inStyles[key]  : init;
@@ -251,6 +268,7 @@ std::vector<WordAnimation> processSegmentAnimation(const std::vector<WordDetail>
             int64_t f0        = msToFrame(0, fps);
             int64_t fS        = msToFrame(relStart - inDur / 2, fps);
             int64_t fInEnd    = msToFrame(relStart + inDur / 2, fps);
+            clampOneWordIn(fS, fInEnd);
             int64_t fOutStart = msToFrame(relEnd   - outDur, fps);
             int64_t fEnd      = msToFrame(relEnd, fps);
 
@@ -286,6 +304,7 @@ std::vector<WordAnimation> processSegmentAnimation(const std::vector<WordDetail>
             int64_t f0        = msToFrame(0, fps);
             int64_t fS        = msToFrame(relStart, fps);
             int64_t fInEnd    = msToFrame(relStart + inDur, fps);
+            clampOneWordIn(fS, fInEnd);
             int64_t fOutStart = msToFrame(relEnd   - outDur, fps);
             int64_t fEnd      = msToFrame(relEnd, fps);
 
@@ -312,6 +331,7 @@ std::vector<WordAnimation> processSegmentAnimation(const std::vector<WordDetail>
             add(".b", ib, ab, fb);
         }
         animations.emplace_back(std::move(anim));
+        prevEndFrame = msToFrame(relEnd, fps);
     }
     return animations;
 }
