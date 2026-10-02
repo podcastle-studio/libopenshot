@@ -260,6 +260,20 @@ std::vector<WordAnimation> processSegmentAnimation(const std::vector<WordDetail>
             fInEnd = std::max(fInEnd, fS + 1);
         };
 
+        // Holds the initial value up to fS, then animates to the in value by fInEnd. With no
+        // in-animation (inDuration 0, or one shorter than a frame) both land on the same frame and
+        // Keyframe::AddPoint overwrites the hold point with the in point, so the value ramped from
+        // the segment's start to the word's: every ONE_WORD word faded in under all the words
+        // before it (2026-10-02). Such a change is a jump at fS instead.
+        auto addIn = [&](openshot::Keyframe& k, int64_t fS, int64_t fInEnd, double i, double a) {
+            if (fInEnd > fS) {
+                k.AddPoint(fS, i, CONSTANT);
+                k.AddPoint(fInEnd, a, animSet.inInterpolation);
+            } else {
+                k.AddPoint(fS, a, CONSTANT);
+            }
+        };
+
         for (const std::string& key : numKeys) {
             double init  = getBaseValue(key, baseStyle);
             double animV = animSet.inStyles.count(key)  ? animSet.inStyles[key]  : init;
@@ -275,8 +289,7 @@ std::vector<WordAnimation> processSegmentAnimation(const std::vector<WordDetail>
             AnimationParam p;
             p.name = key;
             p.keyframe.AddPoint(f0, init, CONSTANT);
-            p.keyframe.AddPoint(fS, init, CONSTANT);
-            p.keyframe.AddPoint(fInEnd, animV, animSet.inInterpolation);
+            addIn(p.keyframe, fS, fInEnd, init, animV);
 
             if (outDur > 0) {
                 if (fOutStart > fInEnd) {
@@ -311,8 +324,7 @@ std::vector<WordAnimation> processSegmentAnimation(const std::vector<WordDetail>
             auto add = [&](const char* suf, double i, double a, double f){
                 AnimationParam p; p.name = key + suf;
                 p.keyframe.AddPoint(f0, i, CONSTANT);
-                p.keyframe.AddPoint(fS, i, CONSTANT);
-                p.keyframe.AddPoint(fInEnd, a, animSet.inInterpolation);
+                addIn(p.keyframe, fS, fInEnd, i, a);
                 if (outDur>0) {
                     if (fOutStart>fInEnd) {
                         p.keyframe.AddPoint(fOutStart, a, CONSTANT);
