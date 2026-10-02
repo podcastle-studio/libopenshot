@@ -4,6 +4,7 @@
 #include "Timeline.h"
 #include "subtitle/Helpers.h"
 
+#include <map>
 #include <string>
 
 using namespace golden;
@@ -21,47 +22,68 @@ void subtitleScene(Scene& s, SubtitleVariant v) {
 }
 
 // ONE_WORD draws every word at the same spot, so at most one word may be visible on any frame.
-// The in-animation is centred on the word's start; before 2026-10-02 its first half ran while the
-// previous word was still fully opaque, stacking two words at every boundary. Word timings are
-// the production payload's from that report (contiguous words, a gap, a 100 ms fade-in + slide).
+// Two production payloads (2026-10-02), each stacking words at boundaries before its fix:
+//  - a 100 ms fade-in + slide, centred on the word's start, whose first half ran while the
+//    previous word was still fully opaque;
+//  - no in-animation at all (inDuration 0): the word's hold-hidden point and its in point fell
+//    on the same frame, Keyframe::AddPoint overwrote the first with the second, and every word
+//    faded in linearly from the segment's start, under all the words before it.
 void checkOneWordNeverOverlaps(std::vector<Check>& checks) {
     using namespace openshot::subtitle;
-    SegmentSettings set;
-    set.containerStyle.appearance = TextAppearance::ONE_WORD;
-    set.defaultStyle.opacity = 0;
-    set.defaultStyle.translateY = 24;
-    set.animationSettings.inDuration = 100;
-    set.animationSettings.outDuration = 0;
-    set.animationSettings.inStyles = {{"opacity", 1}, {"strokeOpacity", 1}, {"translateY", 0}};
-    const std::vector<WordDetail> words = {{"Let's", 2560, 2800}, {"talk", 2800, 2920},
-        {"about", 2960, 3200}, {"creativity.", 3200, 4120}};
-    const float segStart = 2560, segEnd = 4120;
+    struct Case {
+        const char* name;
+        float inDuration;
+        std::map<std::string, double> inStyles;
+        std::vector<WordDetail> words;
+        float segStart, segEnd;
+        std::vector<std::pair<float, float>> gaps;  // real pauses between words, blank frames allowed
+    };
+    const std::vector<Case> cases = {
+        {"one_word_overlap_", 100, {{"opacity", 1}, {"strokeOpacity", 1}, {"translateY", 0}},
+         {{"Let's", 2560, 2800}, {"talk", 2800, 2920}, {"about", 2960, 3200}, {"creativity.", 3200, 4120}},
+         2560, 4120, {{2920, 2960}}},
+        {"one_word_no_in_animation_", 0, {},
+         {{"People", 0, 400}, {"have", 400, 640}, {"strong", 640, 1000}, {"reactions", 1000, 1600},
+          {"when", 1600, 1800}, {"they", 1800, 2000}, {"think,", 2000, 2400}, {"oh,", 2440, 2640},
+          {"the", 2680, 2800}},
+         0, 2800, {{2400, 2440}, {2640, 2680}}},
+    };
 
-    for (const float fps : {23.976f, 25.f, 30.f, 50.f, 60.f}) {
-        const auto anim = processSegmentAnimation(words, set, fps);
-        int overlapping = 0, gaps = 0;
-        std::string first;
-        for (int64_t f = 1;; ++f) {
-            const float t = frameToMs(f, fps);
-            if (t < segStart) continue;
-            if (t >= segEnd) break;
-            int visible = 0;
-            for (const auto& a : anim)
-                if (applyAnimationParams(a.params, t - segStart, fps, set.defaultStyle).opacity > 0) ++visible;
-            if (visible > 1 && overlapping++ == 0) first = "frame " + std::to_string(f);
-            // Nor may a swap between contiguous words leave a blank frame. Exempt, one frame
-            // either side for quantisation: the segment's first frame (its fade-in starts at
-            // 0), its last (the last word ends there), and the one real gap, talk -> about.
-            const float frame = 1000.f / fps;
-            const bool exempt = t < segStart + frame || t >= segEnd - frame ||
-                                (t >= 2920 - frame && t < 2960 + frame);
-            if (visible == 0 && !exempt && gaps++ == 0) first = "frame " + std::to_string(f);
+    for (const Case& c : cases) {
+        SegmentSettings set;
+        set.containerStyle.appearance = TextAppearance::ONE_WORD;
+        set.defaultStyle.opacity = c.inStyles.empty() ? 1 : 0;
+        set.defaultStyle.translateY = c.inStyles.empty() ? 0 : 24;
+        set.animationSettings.inDuration = c.inDuration;
+        set.animationSettings.outDuration = 0;
+        set.animationSettings.inStyles = c.inStyles;
+
+        for (const float fps : {23.976f, 25.f, 30.f, 50.f, 60.f}) {
+            const auto anim = processSegmentAnimation(c.words, set, fps);
+            int overlapping = 0, gaps = 0;
+            std::string first;
+            for (int64_t f = 1;; ++f) {
+                const float t = frameToMs(f, fps);
+                if (t < c.segStart) continue;
+                if (t >= c.segEnd) break;
+                int visible = 0;
+                for (const auto& a : anim)
+                    if (applyAnimationParams(a.params, t - c.segStart, fps, set.defaultStyle).opacity > 0) ++visible;
+                if (visible > 1 && overlapping++ == 0) first = "frame " + std::to_string(f);
+                // Nor may a swap between contiguous words leave a blank frame. Exempt, one frame
+                // either side for quantisation: the segment's first frame (its fade-in starts at
+                // 0), its last (the last word ends there), and the real pauses.
+                const float frame = 1000.f / fps;
+                bool exempt = t < c.segStart + frame || t >= c.segEnd - frame;
+                for (const auto& [g0, g1] : c.gaps) exempt |= t >= g0 - frame && t < g1 + frame;
+                if (visible == 0 && !exempt && gaps++ == 0) first = "frame " + std::to_string(f);
+            }
+            const std::string name = c.name + std::to_string(static_cast<int>(fps * 1000 + 0.5f));
+            checks.push_back({name, overlapping == 0 && gaps == 0,
+                              overlapping ? std::to_string(overlapping) + " frames with two words, first " + first
+                              : gaps      ? std::to_string(gaps) + " blank frames between contiguous words, first " + first
+                                          : "one word per frame"});
         }
-        const std::string name = "one_word_overlap_" + std::to_string(static_cast<int>(fps * 1000 + 0.5f));
-        checks.push_back({name, overlapping == 0 && gaps == 0,
-                          overlapping ? std::to_string(overlapping) + " frames with two words, first " + first
-                          : gaps      ? std::to_string(gaps) + " blank frames between contiguous words, first " + first
-                                      : "one word per frame"});
     }
 }
 
