@@ -308,7 +308,7 @@ void BlockAnimationRenderer::renderBlockAnimated(
         SkPaint layerPaint;
         layerPaint.setAlphaf(static_cast<float>(opacity));
         if (blurSigma > 0.0) {
-            layerPaint.setImageFilter(SkImageFilters::Blur(blurSigma, blurSigma, SkTileMode::kClamp, nullptr));
+            layerPaint.setImageFilter(SkImageFilters::Blur(blurSigma, blurSigma, SkTileMode::kDecal, nullptr));
         }
         const double margin = content.margin(blurSigma);
         const SkRect bounds = SkRect::MakeLTRB(
@@ -424,7 +424,7 @@ void BlockAnimationRenderer::drawBlockTexture(
         paint.setAntiAlias(true);
         paint.setAlphaf(static_cast<float>(opacity));
         if (motionBlurSigma > 0.0) {
-            paint.setImageFilter(SkImageFilters::Blur(motionBlurSigma, motionBlurSigma, SkTileMode::kClamp, nullptr));
+            paint.setImageFilter(SkImageFilters::Blur(motionBlurSigma, motionBlurSigma, SkTileMode::kDecal, nullptr));
         }
         if (exactBlit) {
             // Integer device translate + nearest sampling = a straight copy of the baked pixels.
