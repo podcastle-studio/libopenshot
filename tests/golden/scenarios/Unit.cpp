@@ -1655,4 +1655,73 @@ void golden::registerUnitScenarios() {
                               round_trip_failures == 0 ? "all match"
                                                        : std::to_string(round_trip_failures) + " differ"});
         });
+
+    // A box-level in-animation that starts far zoomed in and blurred, at 4K. Hyper Zoom (the
+    // editor's preset, verbatim) opens at sx = sy = 10 with blur 2.67 font sizes; on "Life" at
+    // size 30 that asked for a blur of ~12,800 device pixels over a ~13,000 x 8,000 block. Each
+    // frame then took ~20 s and gigabytes of host memory, and one export OOM-killed every prod
+    // pod it reached (2026-10-22). The frames must render in bounded memory and time.
+    addCustom("unit.text_box_zoom_blur_4k", {"unit", "text"}, unitScene,
+        [](Scene& s, std::vector<Captured>&, std::vector<Check>& checks) {
+            using namespace openshot::text;
+            TextClipData data;
+            data.value = "Life";
+            data.style = recipes::baseStyle(s.font("NotoSans-Bold.ttf"));
+            data.style.fontWeight = 700;
+            data.style.color = "#F5C66B";
+            data.style.strokeColor = "#000000";
+            data.style.strokeWidthRatio = 0.04;
+            data.style.shadowColor = "#000000";
+            data.style.shadowBlurRatio = 0.05;
+            data.style.shadowDistanceRatio = 0.1;
+            data.style.shadowAngle = 40.0;
+            data.transformation.size = 30.0;
+            data.transformation.maxWidth = 8.0;
+
+            TextAnimations animations;
+            animations.inAnimationId = "hyper-zoom";
+            animations.inAnimationDuration = 1.5;
+
+            const double fps = 30.0;
+            openshot::TextClipReader reader(3840, 2160, data);
+            reader.SetAnimations(animations, recipes::presets(), fps, 5.0);
+            reader.Open();
+
+            auto rssMiB = [] {
+                std::ifstream status("/proc/self/status");
+                std::string line;
+                while (std::getline(status, line))
+                    if (line.rfind("VmRSS:", 0) == 0) return std::stol(line.substr(6)) / 1024;
+                return 0L;
+            };
+            const auto allocFailures0 = openshot::GpuCounters::Get(openshot::GpuCounters::AllocationFailure);
+            const long before = rssMiB();
+            long peak = before;
+            double slowest = 0.0;
+            int64_t slowestFrame = 0;
+            for (int64_t f = 1; f <= 46; ++f) {   // the whole 1.5 s in-animation at 30 fps
+                const auto t0 = std::chrono::steady_clock::now();
+                reader.GetFrame(f);
+                const double sec = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+                if (sec > slowest) { slowest = sec; slowestFrame = f; }
+                peak = std::max(peak, rssMiB());
+            }
+            reader.Close();
+
+            const long growth = peak - before;
+            // The visible bound at 4K: twice the project diagonal, 8,812 px -- inside a GPU texture.
+            const int maxSide = static_cast<int>(std::ceil(2.0 * std::hypot(3840.0, 2160.0)));
+            const auto allocFailures =
+                openshot::GpuCounters::Get(openshot::GpuCounters::AllocationFailure) - allocFailures0;
+            checks.push_back({"frame_size",
+                              reader.FrameWidth() <= maxSide && reader.FrameHeight() <= maxSide && allocFailures == 0,
+                              std::to_string(reader.FrameWidth()) + " x " + std::to_string(reader.FrameHeight()) +
+                              " (limit " + std::to_string(maxSide) + "), GPU allocation failures " +
+                              std::to_string(allocFailures)});
+            checks.push_back({"host_memory", growth < 1024,
+                              "peak RSS +" + std::to_string(growth) + " MiB over the in-animation (limit 1024)"});
+            checks.push_back({"frame_time", slowest < 2.0,
+                              "slowest frame " + std::to_string(slowest) + " s (frame " +
+                              std::to_string(slowestFrame) + ", limit 2 s)"});
+        });
 }

@@ -353,6 +353,19 @@ const text::AnimationPresetMap& presets() {
             p.keyframes.staggerFrom = StaggerFrom::LAST;
             m["drop-words"] = p;
         }
+        {   // the editor's Hyper Zoom, verbatim: the box opens 10x zoomed and blurred, then settles
+            AnimationPreset p; p.level = AnimationPresetLevel::BOX;
+            p.keyframes.tracks[(size_t)AnimProp::blur] =
+                track({{0, 2.666667}, {15, 1.333333}, {30, 0.533333}, {42, 0.133333}, {50, 0.033333}, {55, 0}, {100, 0}});
+            p.keyframes.tracks[(size_t)AnimProp::brightness] =
+                track({{0, 3}, {15, 2}, {30, 1.5}, {42, 1.2}, {50, 1}, {55, 1}, {100, 1}});
+            p.keyframes.tracks[(size_t)AnimProp::opacity] = track({{0, 0}, {15, 0.4}, {30, 0.85}, {42, 1}, {100, 1}});
+            p.keyframes.tracks[(size_t)AnimProp::sx] =
+                track({{0, 10}, {15, 5}, {30, 2}, {42, 0.85}, {50, 1.06}, {55, 1}, {100, 1}});
+            p.keyframes.tracks[(size_t)AnimProp::sy] = p.keyframes.tracks[(size_t)AnimProp::sx];
+            p.keyframes.easing = CubicBezier{0.22, 0.61, 0.36, 1.0};
+            m["hyper-zoom"] = p;
+        }
         return m;
     }();
     return map;

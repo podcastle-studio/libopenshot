@@ -140,6 +140,26 @@ void golden::registerTextScenarios() {
         one(s, t);
     }, text);
 
+    // A box zoom whose reach is far beyond the canvas (10x on a large word, off-centre): the
+    // frame buffer is capped to what can be seen, and the visible part must not change.
+    add("text.anim_in_box_zoom_blur", {"text", "animation"}, {1, 4, 8, 13, 20, 30}, [](Scene& s) {
+        auto t = spec(s, "Life", 30.0);
+        t.style.fontFamily = s.font("NotoSans-Bold.ttf");
+        t.style.fontWeight = 700;
+        t.style.color = "#F5C66B";
+        t.style.strokeColor = "#000000";
+        t.style.strokeWidthRatio = 0.04;
+        t.style.shadowColor = "#000000";
+        t.style.shadowBlurRatio = 0.05;
+        t.style.shadowDistanceRatio = 0.1;
+        t.style.shadowAngle = 40.0;
+        t.transformation.maxWidth = 8.0;
+        t.posX = 0.71f; t.posY = 0.55f;
+        TextAnimations a; a.inAnimationId = "hyper-zoom"; a.inAnimationDuration = 1.5;
+        t.animations = a;
+        one(s, t);
+    }, text);
+
     add("text.anim_out_drop_words", {"text", "animation"}, {30, 60, 70, 80, 89}, [](Scene& s) {
         auto t = spec(s, "Words drop away", 16.0);
         TextAnimations a; a.outAnimationId = "drop-words"; a.outAnimationDuration = 1.0;

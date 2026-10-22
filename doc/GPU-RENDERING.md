@@ -324,6 +324,18 @@ without the "revisit if" condition being true.
 - **`unit.hardware_decode` leaves `HARDWARE_DECODER=2` set when the reader throws**, so on a
   machine where CUDA cannot start every later scenario that decodes video fails too (seen under
   ASan before `protect_shadow_gap=0`). The harness should restore Settings with a guard.
+- **A surface the GPU refuses falls back to a raster surface of the same size, with no cap**
+  (`TextClipReader::renderToQImage`, `GpuOffscreen::Match`). Before 2026-10-22 a box zoom (Hyper
+  Zoom, sx 10 + blur) sized one word's frame to 46,321 x 11,701 at 4K; every frame became a 2 GB
+  QImage drawn on one CPU thread, and one prod export OOM-killed every worker it reached. The text
+  frame is now capped to what can be seen (below), but nothing stops another path asking for an
+  oversized raster. A size cap on the fallback (fail the frame, count it) is the general fix.
+- **Scale-animated text at rest differs between the GPU and the CPU by more than the text bound**
+  (found 2026-10-22, before and after the cap, identical): Hyper Zoom's settled frame (46) of
+  `text.anim_in_box_zoom_blur` measures 31.3 dB on Vulkan against the CPU golden, the edges of the
+  word and its shadow outlined in the diff, like a sub-pixel offset. The block-texture path
+  (`drawBlockTexture`, exact blit) is the place to start. The scenario captures frames 1-30 until
+  then.
 
 ## Status (2026-10-01) and what is left
 
@@ -498,6 +510,17 @@ subtitle renderer's font cache keeps one `SkTypeface` per (font, weight, slant),
 of a font file shares one face instead of a `makeFromFile` each (M4; the per-character key stays for
 the coverage decision); and `text.style_keyframes_glow_range_direction_color` keyframes the glow's
 range, direction and colour over 60 frames (F2's per-frame path; baselined at full glow quality).
+
+**Also done 2026-10-22: a text frame is never larger than can be seen.** `TextClipReader` sizes
+its buffer to the worst case across the animation; a box zoom made that unbounded (Hyper Zoom on
+"Life" at size 30, 4K: 46,321 x 11,701). No GPU texture holds it, so every frame fell back to a
+2 GB raster QImage on one CPU thread (~20 s a frame, RAM growing ~1 GB/s with the GPU idle) and the
+export OOM-killed six prod workers in turn. The buffer is now capped at twice the project diagonal
+(8,812 px at 4K): the Clip draws it centred at a scale of at most 1, so nothing beyond that can
+land on the canvas, and the symmetric crop keeps placement. `unit.text_box_zoom_blur_4k` (peak RSS
++2,124 MiB and 2.2 s a frame before; +71 MiB, 0.18 s, no GPU allocation failure after, on the A2000)
+and `text.anim_in_box_zoom_blur` (baselined on the old code, byte-identical on the CPU, old and new
+identical on Vulkan) gate it. The service must rebuild against the new library.
 
 **What is left is decisions, infrastructure and final checks.** In the order they should happen:
 

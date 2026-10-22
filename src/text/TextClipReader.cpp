@@ -488,6 +488,18 @@ void TextClipReader::buildPlan() {
         }
     }
 
+    // 6. Never larger than can be seen. The Clip draws this buffer centred on the text's project
+    // position, at a scale of at most 1 (the service renders at the largest keyframed size and
+    // only scales down), so no pixel farther than the project diagonal from the centre can land on
+    // the canvas -- whatever the position or rotation. A box zoom can reach far past that: Hyper
+    // Zoom (sx 10 + blur) on one word at 4K asked for 46,321 x 11,701, more than any GPU texture,
+    // so every frame fell back to a 2 GB raster QImage and OOM-killed the worker. Cropping
+    // symmetrically keeps the centre, so placement does not move.
+    const double visibleSpan = 2.0 * std::hypot(static_cast<double>(project_width),
+                                                static_cast<double>(project_height));
+    aabbW = std::min(aabbW, visibleSpan);
+    aabbH = std::min(aabbH, visibleSpan);
+
     frame_width  = std::max(1, static_cast<int>(std::ceil(aabbW)));
     frame_height = std::max(1, static_cast<int>(std::ceil(aabbH)));
 }
