@@ -82,6 +82,14 @@ enum BlendMode
 	BLEND_LUMINOSITY    ///< Source luminosity, with the backdrop's hue and saturation
 };
 
+/// Which pixels a clip's drop-shadow and blur sizes (shadow_blur, shadow_distance,
+/// blur_amount) are measured in.
+enum EffectSizeSpace
+{
+	EFFECT_SIZE_SOURCE, ///< Pixels of the clip's source image, before the clip transform (the default): the effect scales and rotates with the clip
+	EFFECT_SIZE_CANVAS  ///< Pixels of the timeline canvas: the same values look the same whatever the source's resolution or the clip's scale, and the shadow keeps its direction on the canvas
+};
+
 /// This enumeration determines which duration source to favor.
 enum class DurationStrategy {
 	LongestStream,   ///< Use the longest value from video, audio, or container

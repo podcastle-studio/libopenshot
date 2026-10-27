@@ -208,11 +208,26 @@ namespace openshot {
 		QTransform get_transform(std::shared_ptr<Frame> frame, int width, int height,
 								 float* deferred_alpha = nullptr);
 
+		/// The clip blur and drop shadow of one frame, in source-image pixels: what
+		/// draw_to_canvas() and apply_keyframes() draw before the clip transform.
+		struct EffectSizes {
+			double blur_sigma = 0;     ///< Gaussian sigma of the clip blur (0 = none)
+			double shadow_sigma = 0;   ///< Gaussian sigma of the shadow blur (0 = sharp)
+			int shadow_pad = 0;        ///< Room around the shadow silhouette for its blur
+			double shadow_dx = 0;      ///< Shadow offset along the source's X axis
+			double shadow_dy = 0;      ///< Shadow offset along the source's Y axis
+		};
+
+		/// effect_size_space's sizes for this frame, carried into source pixels through @a t,
+		/// the clip transform (source -> canvas) of the same frame.
+		EffectSizes effect_sizes(const QTransform& t, int64_t frame_number) const;
+
 		/// Build a blurred, tinted drop-shadow image from a source image (in the source
-		/// image's own coordinate space). The returned image is padded on all sides to make
-		/// room for the blur; offset_x and offset_y receive the position (in source-image
-		/// coordinates) at which the shadow image should be drawn so it lines up with the source.
-		std::shared_ptr<QImage> get_shadow_image(std::shared_ptr<QImage> source_image, int64_t frame_number, int& offset_x, int& offset_y);
+		/// image's own coordinate space). The returned image is padded on all sides by
+		/// @a pad to make room for the blur of @a sigma; offset_x and offset_y receive the
+		/// position (in source-image coordinates) at which the shadow image should be drawn
+		/// so it lines up with the source.
+		std::shared_ptr<QImage> get_shadow_image(std::shared_ptr<QImage> source_image, int64_t frame_number, double sigma, int pad, int& offset_x, int& offset_y);
 
 		/// Get file extension
 		static std::string get_file_extension(std::string path);
@@ -438,6 +453,15 @@ namespace openshot {
 
 		// Blur curve (only used when Blur() is enabled)
 		openshot::Keyframe blur_amount; ///< Curve representing the clip blur radius in pixels (0 = none)
+
+		/// Which pixels shadow_blur, shadow_distance and blur_amount are measured in.
+		/// EFFECT_SIZE_SOURCE (the default) draws them in the source image's pixels, so the
+		/// same values reach further on a small source than on a large one shown at the same
+		/// size. EFFECT_SIZE_CANVAS takes them as timeline-canvas pixels and converts them
+		/// into source pixels every frame from the clip transform, so they stay the same on
+		/// the canvas whatever the source's resolution and however the clip is scaled, and
+		/// the shadow offset keeps its canvas direction when the clip rotates or flips.
+		openshot::EffectSizeSpace effect_size_space;
 
 		/// Blend mode used when this clip's image is flattened onto the layers beneath it.
 		/// Follows the W3C "Compositing and Blending Level 1" spec (the same one behind CSS

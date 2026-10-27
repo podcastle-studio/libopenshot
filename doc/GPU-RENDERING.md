@@ -270,6 +270,16 @@ without the "revisit if" condition being true.
   delegates to image-processing-lib, is a deliberate fork feature, or the golden suite encodes the
   behaviour; upstream wins on decode correctness, new APIs and build files. The 2026-09-14 merge is
   done; `USE_QT6` stays `OFF` until moved deliberately.
+- **Clip shadow and blur sizes are in canvas pixels for the service** (2026-10-27,
+  `Clip::effect_size_space`). The default, `EFFECT_SIZE_SOURCE`, draws `shadow_blur`,
+  `shadow_distance` and `blur_amount` in source-image pixels, so the same values reached 3x further
+  on a 560 px image than on a 2560 px one shown at the same size. `EFFECT_SIZE_CANVAS` (the service
+  sets it on every image, video and shape clip) converts them each frame from the clip transform:
+  sigma = `sigma_for_box(value)` on the canvas divided by the transform's area scale, and the
+  shadow offset is a canvas vector taken back through the inverse of the transform's linear part,
+  so it keeps its canvas direction when the clip rotates or flips (product to confirm; dropping
+  the inverse makes it turn with the clip). Gates: `unit.clip_effect_size_space`,
+  `clipfx.canvas_effect_size`; the `SOURCE` goldens are unchanged byte for byte.
 
 ## Known issues and divergences
 

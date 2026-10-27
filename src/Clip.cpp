@@ -81,21 +81,19 @@ namespace {
 	// the matching variance has the same spread, smooth instead of boxy. The CPU
 	// (cv::GaussianBlur) and GPU (SkImageFilters) paths share this one mapping so the two
 	// blur the same amount.
-	double sigma_for_box(int box_size) {
-		const double w = std::max(1, box_size);
+	double sigma_for_box(double box_size) {
+		const double w = std::max(1.0, box_size);
 		return std::sqrt(std::max(0.0, (w * w - 1.0) / 12.0));
 	}
 
 	// High-quality Gaussian blur over a cv::Mat, in place.
-	void gaussian_blur(cv::Mat& image, int horizontal, int vertical) {
+	void gaussian_blur(cv::Mat& image, double sigma_x, double sigma_y) {
 		// Smallest odd kernel covering ~+/-3 sigma (1 = no blur along that axis).
 		auto kernel_for_sigma = [](double sigma) -> int {
 			if (sigma <= 0.0) return 1;
 			return std::max(1, static_cast<int>(std::ceil(sigma * 6.0)) | 1);
 		};
 
-		const double sigma_x = sigma_for_box(horizontal);
-		const double sigma_y = sigma_for_box(vertical);
 		if (sigma_x <= 0.0 && sigma_y <= 0.0)
 			return;
 
@@ -182,6 +180,7 @@ void Clip::init_settings()
 	// Init clip blur curve
 	blur = false;
 	blur_amount = Keyframe(10.0);
+	effect_size_space = EFFECT_SIZE_SOURCE;
 
 	// Init shear and perspective curves
 	shear_x = Keyframe(0.0);
@@ -1305,6 +1304,7 @@ Json::Value Clip::JsonValue() const {
 	clip_blur["enabled"] = blur;
 	clip_blur["amount"] = blur_amount.JsonValue();
 	root["blur"] = clip_blur;
+	root["effect_size_space"] = effect_size_space == EFFECT_SIZE_CANVAS ? "canvas" : "source";
 
 	root["waveform_mode"] = waveform_mode;
 	switch (reader_orientation_mode) {
@@ -1471,6 +1471,15 @@ void Clip::SetJsonValue(const Json::Value root) {
 			blur = clip_blur["enabled"].asBool();
 		if (!clip_blur["amount"].isNull())
 			blur_amount.SetJsonValue(clip_blur["amount"]);
+	}
+
+	// Units of the shadow and blur sizes: "source" / "canvas", or the enum's number.
+	if (!root["effect_size_space"].isNull()) {
+		const Json::Value space = root["effect_size_space"];
+		if (space.isString())
+			effect_size_space = space.asString() == "canvas" ? EFFECT_SIZE_CANVAS : EFFECT_SIZE_SOURCE;
+		else if (space.isNumeric())
+			effect_size_space = space.asInt() == EFFECT_SIZE_CANVAS ? EFFECT_SIZE_CANVAS : EFFECT_SIZE_SOURCE;
 	}
 
 	// Flat keys (used by the OpenShot editor's property panel; see PropertiesJSON)
@@ -1930,10 +1939,10 @@ bool Clip::draw_to_canvas(std::shared_ptr<openshot::Frame> frame,
 	// as the clip. The CPU equivalents -- apply_keyframes()' cv::GaussianBlur and
 	// get_shadow_image() -- are untouched and still run whenever this draw is not taken.
 	const SkRect source_rect = SkRect::MakeWH((SkScalar) source_w, (SkScalar) source_h);
+	const EffectSizes sizes = (blur || shadow) ? effect_sizes(t, frame->number) : EffectSizes();
 	sk_sp<SkImageFilter> filter;
 	if (blur) {
-		const int blur_radius = std::max(0, (int) std::lround(blur_amount.GetValue(frame->number)));
-		const SkScalar sigma = (SkScalar) sigma_for_box(blur_radius);
+		const SkScalar sigma = (SkScalar) sizes.blur_sigma;
 		if (sigma > 0.0f) {
 			// kClamp is the nearest Skia has to the BORDER_REFLECT_101 cv::GaussianBlur
 			// uses (kMirror is not implemented), and cropping to the source rect keeps the
@@ -1943,12 +1952,7 @@ bool Clip::draw_to_canvas(std::shared_ptr<openshot::Frame> frame,
 		}
 	}
 	if (shadow) {
-		const int shadow_box = std::max(0, (int) std::lround(shadow_blur.GetValue(frame->number)));
-		const SkScalar sigma = (SkScalar) sigma_for_box(shadow_box);
-		// Polar (distance, angle) -> source-space x/y, the same conversion the CPU path
-		// makes: degrees clockwise from +X with +Y pointing down.
-		const double distance = shadow_distance.GetValue(frame->number);
-		const double angle_rad = shadow_angle.GetValue(frame->number) * M_PI / 180.0;
+		const SkScalar sigma = (SkScalar) sizes.shadow_sigma;
 		const auto channel = [](double v) {
 			return (U8CPU) std::min(255, std::max(0, (int) std::lround(v)));
 		};
@@ -1962,8 +1966,7 @@ bool Clip::draw_to_canvas(std::shared_ptr<openshot::Frame> frame,
 		// the one filter, which is the order apply_keyframes() paints them in. Chaining it
 		// on top of the blur filter reproduces the CPU path's ordering too: the shadow's
 		// silhouette is taken from the *blurred* source.
-		filter = SkImageFilters::DropShadow((SkScalar) (distance * std::cos(angle_rad)),
-											(SkScalar) (distance * std::sin(angle_rad)),
+		filter = SkImageFilters::DropShadow((SkScalar) sizes.shadow_dx, (SkScalar) sizes.shadow_dy,
 											sigma, sigma, color, std::move(filter));
 	}
 	if (filter)
@@ -2047,14 +2050,52 @@ bool Clip::isNear(double a, double b)
 	return fabs(a - b) < 0.000001;
 }
 
-// Build a blurred, tinted drop-shadow image from the source image's alpha silhouette
-std::shared_ptr<QImage> Clip::get_shadow_image(std::shared_ptr<QImage> source_image, int64_t frame_number, int& offset_x, int& offset_y) {
-	// Shadow blur amount, passed to the shared image-processing-lib Gaussian blur using the
-	// same units as the clip blur (box-equivalent kernel size in pixels). Pad the canvas so
-	// the Gaussian has room to spread past the silhouette edge (~3 sigma ≈ 0.87·amount).
-	const int blur_amount = std::max(0, (int) std::lround(shadow_blur.GetValue(frame_number)));
-	const int pad = blur_amount > 0 ? blur_amount + 1 : 0;
+// The clip blur and drop shadow of one frame, in the source pixels both paths draw them in
+Clip::EffectSizes Clip::effect_sizes(const QTransform& t, int64_t frame_number) const {
+	EffectSizes sizes;
+	// Polar (distance, angle) -> x/y: degrees clockwise from +X with +Y pointing down.
+	const double distance = shadow_distance.GetValue(frame_number);
+	const double angle_rad = shadow_angle.GetValue(frame_number) * M_PI / 180.0;
+	const double dx = distance * std::cos(angle_rad);
+	const double dy = distance * std::sin(angle_rad);
 
+	// Canvas pixels per source pixel: the linear part of the clip transform (Qt stores it
+	// row-vector style, canvas = (x*m11 + y*m21, x*m12 + y*m22)), its area scale.
+	const double det = t.m11() * t.m22() - t.m21() * t.m12();
+	if (effect_size_space == EFFECT_SIZE_CANVAS && std::abs(det) > 1e-12) {
+		const double s = std::sqrt(std::abs(det));
+		// The blur's spread is set on the canvas and carried into source pixels; the sigma
+		// is scaled rather than the box size so it is exactly sigma_for_box(value) on the
+		// canvas, whatever the source's resolution.
+		const double blur_box = std::max(0.0, blur_amount.GetValue(frame_number));
+		const double shadow_box = std::max(0.0, shadow_blur.GetValue(frame_number));
+		sizes.blur_sigma = sigma_for_box(blur_box) / s;
+		sizes.shadow_sigma = sigma_for_box(shadow_box) / s;
+		// Room for ~3.5 sigma, as the box + 1 of the source-pixel case leaves.
+		sizes.shadow_pad = sizes.shadow_sigma > 0.0
+			? (int) std::ceil(std::sqrt(12.0 * sizes.shadow_sigma * sizes.shadow_sigma + 1.0)) + 1 : 0;
+		// The offset is a canvas vector: back through the inverse of the linear part, which
+		// also undoes rotation and flip, so the shadow keeps its direction on the canvas.
+		sizes.shadow_dx = ( t.m22() * dx - t.m21() * dy) / det;
+		sizes.shadow_dy = (-t.m12() * dx + t.m11() * dy) / det;
+		return sizes;
+	}
+
+	// Source pixels: the values are box sizes in whole pixels.
+	const int blur_box = std::max(0, (int) std::lround(blur_amount.GetValue(frame_number)));
+	const int shadow_box = std::max(0, (int) std::lround(shadow_blur.GetValue(frame_number)));
+	sizes.blur_sigma = blur_box > 0 ? sigma_for_box(blur_box) : 0.0;
+	sizes.shadow_sigma = shadow_box > 0 ? sigma_for_box(shadow_box) : 0.0;
+	// Pad the shadow so the Gaussian has room to spread past the silhouette edge
+	// (~3 sigma ≈ 0.87·box).
+	sizes.shadow_pad = shadow_box > 0 ? shadow_box + 1 : 0;
+	sizes.shadow_dx = dx;
+	sizes.shadow_dy = dy;
+	return sizes;
+}
+
+// Build a blurred, tinted drop-shadow image from the source image's alpha silhouette
+std::shared_ptr<QImage> Clip::get_shadow_image(std::shared_ptr<QImage> source_image, int64_t frame_number, double sigma, int pad, int& offset_x, int& offset_y) {
 	const int src_w = source_image->width();
 	const int src_h = source_image->height();
 	const int w = src_w + pad * 2;
@@ -2072,8 +2113,8 @@ std::shared_ptr<QImage> Clip::get_shadow_image(std::shared_ptr<QImage> source_im
 	}
 
 	// Blur the alpha silhouette with a high-quality Gaussian (local helper)
-	if (blur_amount > 0)
-		gaussian_blur(alpha_mat, blur_amount, blur_amount);
+	if (sigma > 0.0)
+		gaussian_blur(alpha_mat, sigma, sigma);
 
 	// Tint the blurred silhouette with the shadow color. The color's alpha acts as an
 	// overall shadow-opacity multiplier on top of the source's (blurred) alpha.
@@ -2116,13 +2157,14 @@ void Clip::apply_keyframes(std::shared_ptr<Frame> frame, QSize timeline_size) {
 	// Get transform from clip's keyframes
 	QTransform transform = get_transform(frame, background_canvas->width(), background_canvas->height());
 
+	const EffectSizes sizes = (blur || shadow) ? effect_sizes(transform, frame->number) : EffectSizes();
+
 	// Blur the clip's image (if enabled). Done before the shadow is generated and before
 	// compositing, so both the shadow silhouette and the drawn clip reflect the blur.
 	if (blur) {
-		const int blur_radius = std::max(0, (int) std::lround(blur_amount.GetValue(frame->number)));
-		if (blur_radius > 0) {
+		if (sizes.blur_sigma > 0.0) {
 			auto imageCv = frame->GetImageCV();
-			gaussian_blur(imageCv, blur_radius, blur_radius);
+			gaussian_blur(imageCv, sizes.blur_sigma, sizes.blur_sigma);
 			frame->SetImageCV(imageCv);
 			// Re-fetch the (now blurred) image, since SetImageCV replaces it
 			source_image = frame->GetImage();
@@ -2142,13 +2184,10 @@ void Clip::apply_keyframes(std::shared_ptr<Frame> frame, QSize timeline_size) {
 	if (shadow) {
 		int shadow_offset_x = 0;
 		int shadow_offset_y = 0;
-		std::shared_ptr<QImage> shadow_image = get_shadow_image(source_image, frame->number, shadow_offset_x, shadow_offset_y);
-		// Convert polar (distance, angle) offset into source-image x/y offset.
-		// Angle is in degrees, clockwise from +X, with +Y pointing down.
-		const double distance = shadow_distance.GetValue(frame->number);
-		const double angle_rad = shadow_angle.GetValue(frame->number) * M_PI / 180.0;
-		const float dx = (float) (distance * std::cos(angle_rad));
-		const float dy = (float) (distance * std::sin(angle_rad));
+		std::shared_ptr<QImage> shadow_image = get_shadow_image(source_image, frame->number, sizes.shadow_sigma,
+																sizes.shadow_pad, shadow_offset_x, shadow_offset_y);
+		const float dx = (float) sizes.shadow_dx;
+		const float dy = (float) sizes.shadow_dy;
 		painter.setCompositionMode(QPainter::CompositionMode_SourceOver);
 		painter.drawImage(QPointF(dx + shadow_offset_x, dy + shadow_offset_y), *shadow_image);
 	}
