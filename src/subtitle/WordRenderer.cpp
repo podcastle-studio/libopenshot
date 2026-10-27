@@ -167,10 +167,28 @@ std::vector<WordRenderer::CharRenderInfo> WordRenderer::buildCharRenderInfo(
             continue;
         }
 
+        // An emoji sequence (❤️ 👍🏽 👨‍👩‍👧 🇺🇸 1️⃣) stays together as the one glyph it renders as;
+        // anything else is one codepoint, as before.
+        charLen = std::max(charLen, emojiClusterLen(text, i));
+
         CharRenderInfo info;
         info.utf8Char = text.substr(i, charLen);
         info.font = getFontForCharacter(info.utf8Char, style);
         info.x = currentX;
+
+        const sk_sp<SkTypeface>& emojiFace = SkiaRenderer::emojiFont().typeface();
+        if (isEmojiCluster(info.utf8Char) || (emojiFace && info.font.getTypeface() == emojiFace.get())) {
+            const double shaped = renderer->measureEmojiCluster(info.utf8Char, style.fontSize);
+            if (shaped > 0.0) {
+                info.emoji = true;
+                info.advance = static_cast<float>(shaped);
+                charInfos.push_back(info);
+                currentX += info.advance;
+                if (i + charLen < text.length()) currentX += style.letterSpacing;
+                i += charLen;
+                continue;
+            }
+        }
 
         // Get the glyph and its width
         SkGlyphID glyphs[10]; // Support for complex scripts that might produce multiple glyphs
@@ -337,8 +355,14 @@ void WordRenderer::drawWordText(const std::string& word, float wordWidth, const 
     const float startX = -wordWidth / 2;
 
     for (const auto& info : charInfos) {
-        renderer->drawText(info.utf8Char, startX + info.x, 0, *textPaint, info.font);
+        drawChar(info, startX + info.x, 0, *textPaint, style, {EmojiPass::Kind::Colour});
     }
+}
+
+void WordRenderer::drawChar(const CharRenderInfo& info, const float x, const float y, const SkPaint& paint,
+                            const SubtitleTextStyle& style, const EmojiPass& pass) const {
+    if (info.emoji && renderer->drawEmojiCluster(info.utf8Char, x, y, paint, style.fontSize, pass)) return;
+    renderer->drawText(info.utf8Char, x, y, paint, info.font);
 }
 
 void WordRenderer::drawWordShadow(const std::string& word, const float wordWidth, const SubtitleTextStyle& style) const {
@@ -362,9 +386,12 @@ void WordRenderer::drawWordShadow(const std::string& word, const float wordWidth
     const auto charInfos = buildCharRenderInfo(word, style);
     const float startX = -wordWidth / 2 + shadowX;
 
+    // An emoji has no outline for the stroke-expanded pass; the fill pass carries its whole
+    // shadow, flattened to the shadow colour and blurred by the same sigma.
+    const EmojiPass emojiShadow{EmojiPass::Kind::Silhouette, style.shadowBlur.value_or(0.0)};
     for (const auto& info : charInfos) {
-        renderer->drawText(info.utf8Char, startX + info.x, shadowY, *strokePaint, info.font);
-        renderer->drawText(info.utf8Char, startX + info.x, shadowY, *shadowPaint, info.font);
+        drawChar(info, startX + info.x, shadowY, *strokePaint, style, {EmojiPass::Kind::Skip});
+        drawChar(info, startX + info.x, shadowY, *shadowPaint, style, emojiShadow);
     }
 }
 
@@ -379,7 +406,7 @@ void WordRenderer::drawWordStroke(const std::string& word, float wordWidth, cons
     const float startX = -wordWidth / 2;
 
     for (const auto& info : charInfos) {
-        renderer->drawText(info.utf8Char, startX + info.x, 0, *strokePaint, info.font);
+        drawChar(info, startX + info.x, 0, *strokePaint, style, {EmojiPass::Kind::Skip});
     }
 }
 

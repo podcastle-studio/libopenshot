@@ -99,6 +99,7 @@ void golden::registerSubtitleScenarios() {
     // SSIM 0.9999, confined to the subtitle band -- so these stay bit-exact on the CPU path,
     // which is untouched, and take the "close" class only when a GPU is actually compositing.
     add("subtitles.per_time", {"subtitles", "exact", "gpu-composite"}, F, [](Scene& s) { subtitleScene(s, SubtitleVariant::PerTime); }, text);
+    add("subtitles.emoji", {"subtitles", "emoji", "exact", "gpu-composite"}, {5}, [](Scene& s) { subtitleScene(s, SubtitleVariant::Emoji); }, text);
     add("subtitles.one_word_container", {"subtitles", "exact", "gpu-composite"}, F, [](Scene& s) { subtitleScene(s, SubtitleVariant::OneWordContainer); }, text);
     add("subtitles.animated_in_out", {"subtitles", "animation", "exact", "gpu-composite"}, {1, 3, 6, 16, 18, 46, 68},
         [](Scene& s) { subtitleScene(s, SubtitleVariant::AnimatedInOut); }, text);

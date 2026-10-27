@@ -58,4 +58,5 @@ ffmpeg -y -hide_banner -v error -f lavfi -i "nullsrc=size=640x360,geq=lum='255*(
 ffmpeg -y -hide_banner -v error -f lavfi -i "gradients=size=960x540:c0=0x102040:c1=0x40A0C0:nb_colors=2:x0=0:y0=0:x1=960:y1=540" -frames:v 1 background_960x540.png
 ls -la *.mp4 *.png *.jpg | awk '{print $5, $9}'
 # Hand-authored, not generated: shape_arrow.svg, shape_dashed_line.svg (mimic the service's
-# ShapeRenderer output), lut_example.cube (copy of examples/example-lut.cube), fonts/ (Noto Sans, OFL).
+# ShapeRenderer output), lut_example.cube (copy of examples/example-lut.cube), fonts/ (Noto Sans, OFL; NotoColorEmoji-COLRv1.ttf is noto-emoji v2.047, OFL,
+# byte-identical to ../video-rendering-service/fonts/).

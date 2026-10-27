@@ -54,6 +54,7 @@ set(OPENSHOT_SOURCES
   gpu/GpuSurfacePool.cpp
   gpu/GpuYuv.cpp
   gpu/GpuTelemetry.cpp
+  subtitle/EmojiFont.cpp
   subtitle/Helpers.cpp
   subtitle/SkiaRenderer.cpp
   subtitle/SubtitleManager.cpp
@@ -729,6 +730,22 @@ endif()
 
 target_include_directories(openshot PUBLIC ${SKIA_INCLUDE_DIRS})
 target_link_libraries(openshot PUBLIC ${SKIA_LIBRARIES})
+
+# Colour-emoji cluster shaping (subtitle/EmojiFont.cpp) calls HarfBuzz. libskia.a bundles it and
+# exports the hb_* symbols, so only the declarations are needed (FindSkia.cmake locates them).
+# Without them the library still builds, but every multi-codepoint emoji (skin tone, ZWJ family,
+# flag, keycap) degrades to its base codepoint -- so that is opt-in, never silent.
+option(OPENSHOT_ALLOW_NO_HARFBUZZ "Build without HarfBuzz headers (multi-codepoint emoji degrade)" OFF)
+if(SKIA_HARFBUZZ_INCLUDE_DIR)
+  target_include_directories(openshot PRIVATE ${SKIA_HARFBUZZ_INCLUDE_DIR})
+  target_compile_definitions(openshot PRIVATE OPENSHOT_HAVE_HARFBUZZ=1)
+elseif(OPENSHOT_ALLOW_NO_HARFBUZZ)
+  message(WARNING "HarfBuzz headers not found: multi-codepoint emoji will fall back to their base codepoint")
+else()
+  message(FATAL_ERROR "HarfBuzz headers (hb.h) not found; apt install libharfbuzz-dev, "
+                      "or configure with -DOPENSHOT_ALLOW_NO_HARFBUZZ=ON to accept degraded emoji")
+endif()
+add_feature_info("Emoji shaping (HarfBuzz)" SKIA_HARFBUZZ_INCLUDE_DIR "colour-emoji sequences shaped as one glyph")
 
 # src/gpu compiles either way. With a Graphite-capable Skia (installed by
 # install_skia_gpu.sh, selected with -DSkia_ROOT=/usr/local/skia-gpu) it is the

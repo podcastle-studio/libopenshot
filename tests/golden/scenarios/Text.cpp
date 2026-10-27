@@ -133,6 +133,33 @@ void golden::registerTextScenarios() {
         one(s, t);
     }, text);
 
+    // Colour emoji (noto-emoji COLRv1, pinned by main.cpp): one of each sequence kind -- plain,
+    // VS16, skin tone, ZWJ family, flag, keycap -- among Latin and Arabic. Each sequence must be ONE
+    // colour glyph, never tofu or its codepoints side by side; the styled variant checks that the
+    // stroke pass skips emoji and the shadow pass flattens them to the shadow colour.
+    static const char* kEmojiText = "Hi \U0001F600 \u2764\uFE0F \U0001F44D\U0001F3FD "
+                                    "\U0001F468\u200D\U0001F469\u200D\U0001F467 \U0001F1FA\U0001F1F8 "
+                                    "1\uFE0F\u20E3 \u0645\u0631\u062D\u0628\u0627";
+    add("text.emoji_static", {"text", "emoji"}, S, [](Scene& s) { one(s, spec(s, kEmojiText, 12.0)); }, text);
+
+    add("text.emoji_stroke_shadow", {"text", "emoji", "style"}, S, [](Scene& s) {
+        auto t = spec(s, kEmojiText, 12.0);
+        t.style.strokeColor = "#C8271B";
+        t.style.strokeWidthRatio = 0.12;
+        t.style.shadowColor = "#1D4ED8";
+        t.style.shadowBlurRatio = 0.3;
+        t.style.shadowDistanceRatio = 0.15;
+        t.style.shadowAngle = 40.0;
+        one(s, t);
+    }, text);
+
+    add("text.emoji_anim_rise_chars", {"text", "emoji", "animation"}, A, [](Scene& s) {
+        auto t = spec(s, kEmojiText, 12.0);
+        TextAnimations a; a.inAnimationId = "rise-chars"; a.inAnimationDuration = 1.5;
+        t.animations = a;
+        one(s, t);
+    }, text);
+
     add("text.anim_in_rise_chars", {"text", "animation"}, A, [](Scene& s) {
         auto t = spec(s, "Rise and shine", 16.0);
         TextAnimations a; a.inAnimationId = "rise-chars"; a.inAnimationDuration = 1.5;

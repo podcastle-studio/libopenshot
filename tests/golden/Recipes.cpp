@@ -608,7 +608,11 @@ std::string subtitlesJson(const std::string& fontPath, int exportWidth, Subtitle
     }
     o << "},\"segments\":["
       << "{\"id\":\"s1\",\"startTime\":0,\"endTime\":1500,\"visible\":true,\"attached\":true,\"wordDetails\":["
-         "{\"word\":\"Golden\",\"startTime\":0,\"endTime\":500},{\"word\":\"frames\",\"startTime\":500,\"endTime\":1000},"
+         << (v == SubtitleVariant::Emoji
+                 // Colour emoji in a subtitle word: plain, VS16, ZWJ family, flag (see text.emoji_*).
+                 ? "{\"word\":\"Hi\U0001F600\u2764\uFE0F\U0001F468\u200D\U0001F469\u200D\U0001F467\U0001F1FA\U0001F1F8\",\"startTime\":0,\"endTime\":500},"
+                 : "{\"word\":\"Golden\",\"startTime\":0,\"endTime\":500},")
+      << "{\"word\":\"frames\",\"startTime\":500,\"endTime\":1000},"
          "{\"word\":\"stay\",\"startTime\":1000,\"endTime\":1500}]},"
       << "{\"id\":\"s2\",\"startTime\":1500,\"endTime\":3000,\"visible\":true,\"attached\":true,\"wordDetails\":["
          "{\"word\":\"on\",\"startTime\":1500,\"endTime\":1900},{\"word\":\"the\",\"startTime\":1900,\"endTime\":2200},"

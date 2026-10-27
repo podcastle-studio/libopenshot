@@ -4,7 +4,11 @@
 #include "skia/include/core/SkFontArguments.h"
 #include "skia/include/core/SkFontParameters.h"
 #include "skia/include/core/SkFourByteTag.h"
+#include "skia/include/core/SkColorFilter.h"
 #include "skia/include/core/SkMaskFilter.h"
+#include "skia/include/core/SkTextBlob.h"
+#include "skia/include/effects/SkColorMatrix.h"
+#include "skia/include/effects/SkImageFilters.h"
 #include "skia/include/core/SkBlurTypes.h"
 #include "skia/include/core/SkSpan.h"
 #include "skia/include/ports/SkFontMgr_fontconfig.h"
@@ -203,13 +207,16 @@ public:
         return resolved;
     }
 
+    EmojiFont& emojiFont() { return emoji; }
+
 private:
-    SkiaFontResources() {
+    // `emoji` is built from `mgr`, so both are initialised here in declaration order.
+    SkiaFontResources() : mgr(makeFontMgr()), emoji(mgr) {}
+
+    static sk_sp<SkFontMgr> makeFontMgr() {
         // M147: SkFontMgr_New_FontConfig now requires an explicit font scanner.
-        mgr = SkFontMgr_New_FontConfig(nullptr, SkFontScanner_Make_FreeType());
-        if (!mgr) {
-            mgr = SkFontMgr::RefEmpty();
-        }
+        sk_sp<SkFontMgr> fontMgr = SkFontMgr_New_FontConfig(nullptr, SkFontScanner_Make_FreeType());
+        return fontMgr ? fontMgr : SkFontMgr::RefEmpty();
     }
 
     // Resolve a single family name or font-file path to the typeface whose design most
@@ -259,19 +266,38 @@ private:
             return typeface && SkFont(typeface).unicharToGlyph(character) != 0;
         };
 
-        // 1) The requested family name or explicit file-path, at the requested style. When the
+        // 1) Colour emoji, for codepoints that are emoji BY DEFAULT (Emoji_Presentation=Yes,
+        //    regional indicators). This tier is FIRST on purpose. Plenty of text fonts ship
+        //    monochrome outlines for emoji codepoints — DejaVu Sans has one for U+1F600,
+        //    FreeSerif for the skin-tone modifiers — so any later position lets a text font win
+        //    and silently render black-and-white emoji. It also keeps this chain's answer
+        //    consistent with isEmojiCluster(), which routes the same codepoints to the emoji
+        //    face; the two must not disagree, or the same emoji would look different in a text
+        //    clip and in a subtitle. Codepoints that are emoji only WITH a variation selector
+        //    (❤ without U+FE0F) are not in the table and stay with the text font, which is what
+        //    browsers do.
+        if ((isEmojiPresentation(character) || isRegionalIndicator(character)) &&
+            covers(emoji.typeface())) {
+            return emoji.typeface();
+        }
+
+        // 2) The requested family name or explicit file-path, at the requested style. When the
         //    family ships a real bold / italic cut (or the file is a variable font) this is it.
         sk_sp<SkTypeface> typeface = matchTypeface(familyOrPath, style);
         if (covers(typeface)) return typeface;
 
-        // 2) Preferred fallback: Noto Sans Arabic, 3) Secondary fallback: FreeSans.
+        // 3) Preferred fallback: Noto Sans Arabic, 4) Secondary fallback: FreeSans.
         //    Matched at the same style so fallback glyphs keep the requested weight / slant.
         for (const char* fallback : {"Noto Sans Arabic", "FreeSans"}) {
             typeface = mgr->matchFamilyStyle(fallback, style);
             if (covers(typeface)) return typeface;
         }
 
-        // 4) Last-chance fallback: whatever FontConfig thinks best for this style
+        // 5) Colour emoji again, now for anything the text fonts could not draw. Catches emoji
+        //    added to Unicode after the classification table in EmojiFont.cpp was written.
+        if (covers(emoji.typeface())) return emoji.typeface();
+
+        // 6) Last-chance fallback: whatever FontConfig thinks best for this style
         return mgr->matchFamilyStyle(nullptr, style);
     }
 
@@ -282,6 +308,7 @@ private:
     std::mutex mutex;
     std::map<FaceKey, ResolvedFace> cache;
     std::map<StyleKey, sk_sp<SkTypeface>> faces;
+    EmojiFont emoji;
 };
 
 } // namespace
@@ -339,6 +366,99 @@ SkFont SkiaRenderer::getFontForCharacter(const FontProps& fontProps, const SkUni
 
     fontCharCache[key] = skFont;
     return skFont;
+}
+
+// ---------------------------------------------------------------------------
+// Colour emoji
+// ---------------------------------------------------------------------------
+
+EmojiFont& SkiaRenderer::emojiFont() {
+    return SkiaFontResources::Instance().emojiFont();
+}
+
+bool SkiaRenderer::drawEmojiCluster(const std::string& cluster, const float x, const float y,
+                                    const SkPaint& paint, const float fontSize, const EmojiPass& pass) {
+    EmojiFont& emoji = emojiFont();
+    const std::optional<ShapedEmoji> shaped = emoji.shape(cluster, fontSize);
+    if (!shaped) return false;   // no emoji face, or this face cannot draw the cluster
+
+    // The stroke pass has nothing to add to a colour glyph (there is no outline to trace, and the
+    // emoji is already drawn by the fill pass at the same position). Report the cluster handled so
+    // the caller does not fall through and draw a second copy of it.
+    if (pass.kind == EmojiPass::Kind::Skip) return true;
+    if (!canvas) return true;
+
+    // Start from a clean paint: a colour glyph ignores the paint's colour, shader, stroke style
+    // and mask filter, so carrying them over would only be misleading.
+    SkPaint emojiPaint;
+    emojiPaint.setAntiAlias(true);
+    emojiPaint.setBlendMode(paint.getBlendMode_or(SkBlendMode::kSrcOver));
+
+    if (pass.kind == EmojiPass::Kind::Silhouette) {
+        // Flatten the emoji to the pass colour, keeping its own alpha as the mask: SrcIn gives
+        // rgb = colour.rgb, a = colour.a * glyph.a. This is what makes an emoji cast a shadow /
+        // feed a glow in the shadow or glow colour instead of dropping a colour duplicate. The
+        // paint's colour is already in this renderer's convention.
+        emojiPaint.setColorFilter(SkColorFilters::Blend(paint.getColor(), SkBlendMode::kSrcIn));
+    } else {
+        // Fill pass: the emoji keeps its own colours, but must still follow the pass opacity
+        // (animation fades, the softened core-text opacity under glow).
+        emojiPaint.setAlphaf(paint.getAlphaf());
+
+        // A colour glyph's artwork comes from the font and never passes through
+        // parseColorString, so under QImageBytes it needs the same R/B swap every parsed colour
+        // gets, or emoji come out cyan-faced and blue-hearted. Logical needs none.
+        if (convention == ColorConvention::QImageBytes) {
+            emojiPaint.setColorFilter(SkColorFilters::Matrix(SkColorMatrix(
+                0, 0, 1, 0, 0,
+                0, 1, 0, 0, 0,
+                1, 0, 0, 0, 0,
+                0, 0, 0, 1, 0)));
+        }
+    }
+
+    // Mask filters do not apply to colour glyphs; an image filter does. Same sigma, so the emoji
+    // blurs by the same amount as the surrounding text.
+    if (pass.blurSigma > 0.0) {
+        const auto sigma = static_cast<SkScalar>(pass.blurSigma);
+        emojiPaint.setImageFilter(SkImageFilters::Blur(sigma, sigma, nullptr));
+    }
+
+    const SkFont font = emoji.font(fontSize);
+    const sk_sp<SkTextBlob> blob = SkTextBlob::MakeFromPosText(
+        shaped->glyphs.data(), shaped->glyphs.size() * sizeof(SkGlyphID),
+        SkSpan<const SkPoint>(shaped->positions), font, SkTextEncoding::kGlyphID);
+    if (!blob) return true;
+
+    canvas->drawTextBlob(blob, x, y, emojiPaint);
+    return true;
+}
+
+double SkiaRenderer::measureEmojiCluster(const std::string& cluster, const float fontSize) {
+    const std::optional<ShapedEmoji> shaped = emojiFont().shape(cluster, fontSize);
+    return shaped ? static_cast<double>(shaped->advance) : 0.0;
+}
+
+bool SkiaRenderer::emojiClusterBounds(const std::string& cluster, const float fontSize, SkRect* bounds) {
+    EmojiFont& emoji = emojiFont();
+    const std::optional<ShapedEmoji> shaped = emoji.shape(cluster, fontSize);
+    if (!shaped || !bounds) return false;
+
+    const SkFont font = emoji.font(fontSize);
+    std::vector<SkRect> glyphBounds(shaped->glyphs.size());
+    font.getBounds(SkSpan<const SkGlyphID>(shaped->glyphs.data(), shaped->glyphs.size()),
+                   SkSpan<SkRect>(glyphBounds.data(), glyphBounds.size()), nullptr);
+
+    SkRect out = SkRect::MakeEmpty();
+    bool first = true;
+    for (size_t g = 0; g < glyphBounds.size(); ++g) {
+        SkRect r = glyphBounds[g];
+        r.offset(shaped->positions[g].x(), shaped->positions[g].y());
+        if (first) { out = r; first = false; } else { out.join(r); }
+    }
+    if (first) return false;
+    *bounds = out;
+    return true;
 }
 
 SkPaint* SkiaRenderer::getPaint(const PaintProps& paintProps) {

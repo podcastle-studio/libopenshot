@@ -24,6 +24,9 @@ extern "C" {
 }
 #include "gpu/GpuFrame.h"
 #include "text/TextGlowShader.h"
+#include "text/TextDrawShared.h"
+#include "subtitle/EmojiFont.h"
+#include "subtitle/SkiaRenderer.h"
 #include "skia/include/core/SkBitmap.h"
 #include "skia/include/core/SkCanvas.h"
 #include "skia/include/core/SkData.h"
@@ -341,6 +344,59 @@ protected:
 } // namespace
 
 void golden::registerUnitScenarios() {
+    // Colour emoji: segmentation, routing and HarfBuzz shaping. The pixel scenarios
+    // (text.emoji_*) show what an emoji looks like; this pins the two things a picture hides --
+    // that every sequence is ONE letter (the char-stagger animations index letters, and the
+    // editor counts them the same way), and that the build really shapes (without HarfBuzz each
+    // sequence quietly degrades to its base codepoint and still looks plausible).
+    addCustom("unit.emoji_clusters", {"unit", "text", "emoji"},
+        [](Scene& s) { s.makeTimeline().Open(); },
+        [](Scene&, std::vector<Captured>&, std::vector<Check>& checks) {
+            using namespace openshot;
+            struct Case { const char* name; std::string text; size_t letters; bool emoji; };
+            const std::vector<Case> cases = {
+                {"simple",   "\U0001F600", 1, true},
+                {"vs16",     "\u2764\uFE0F", 1, true},
+                {"vs15",     "\u2764\uFE0E", 1, false},
+                {"bare_text_presentation", "\u2764", 1, false},
+                {"skin_tone", "\U0001F44D\U0001F3FD", 1, true},
+                {"zwj_family", "\U0001F468\u200D\U0001F469\u200D\U0001F467", 1, true},
+                {"flag",     "\U0001F1FA\U0001F1F8", 1, true},
+                {"two_flags", "\U0001F1FA\U0001F1F8\U0001F1E9\U0001F1EA", 2, true},
+                {"keycap",   "1\uFE0F\u20E3", 1, true},
+                {"latin",    "Hi", 2, false},
+                {"arabic",   "\u0645\u0631\u062D\u0628\u0627", 5, false},
+                {"mixed",    "a\U0001F600b", 3, false},
+            };
+            for (const Case& c : cases) {
+                const size_t n = text::clusterCount(c.text);
+                bool emoji = false;   // is the FIRST letter drawn from the emoji face
+                text::forEachCluster(c.text, [&, first = true](const std::string& letter, SkUnichar) mutable {
+                    if (first) emoji = subtitle::isEmojiCluster(letter);
+                    first = false;
+                });
+                checks.push_back({"segment_" + std::string(c.name), n == c.letters && emoji == c.emoji,
+                                  "letters=" + std::to_string(n) + " (want " + std::to_string(c.letters) +
+                                  ") emoji=" + std::to_string(emoji)});
+            }
+
+            subtitle::EmojiFont& font = subtitle::SkiaRenderer::emojiFont();
+            checks.push_back({"face", font.available() && font.shapes(),
+                              "source=" + font.source() + " shapes=" + std::to_string(font.shapes())});
+            // Each sequence must shape to exactly one glyph (Noto Color Emoji advances are ~1.245
+            // em; anything near 2+ em means the codepoints came out separately).
+            for (const Case& c : cases) {
+                if (!c.emoji || c.letters != 1) continue;   // whole-string sequences only
+                const std::optional<subtitle::ShapedEmoji> shaped = font.shape(c.text, 100.0f);
+                const bool ok = shaped && shaped->glyphs.size() == 1 &&
+                                shaped->advance > 100.0f && shaped->advance < 150.0f;
+                checks.push_back({"shape_" + std::string(c.name), ok,
+                                  shaped ? "glyphs=" + std::to_string(shaped->glyphs.size()) +
+                                           " advance=" + std::to_string(shaped->advance)
+                                         : std::string("not shaped")});
+            }
+        });
+
     // Does a GPU effect actually run as a shader in the real render path?
     //
     // This is not a pixel check and cannot be one. GpuEffect::ApplyOnGpu declining is a normal

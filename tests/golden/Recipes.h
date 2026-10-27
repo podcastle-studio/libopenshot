@@ -188,7 +188,7 @@ void addCameraMovement(openshot::Clip& clip, double startSec, double endSec, dou
                        const std::vector<RampKf>& moveX, const std::vector<RampKf>& moveY);
 
 // ── subtitles (Subtitles.cpp output shape) ───────────────────────────────────────────────────
-enum class SubtitleVariant { PerTime, OneWordContainer, AnimatedInOut };
+enum class SubtitleVariant { PerTime, OneWordContainer, AnimatedInOut, Emoji };
 std::string subtitlesJson(const std::string& fontPath, int exportWidth, SubtitleVariant v);
 
 // ── writer (renderVideo) ─────────────────────────────────────────────────────────────────────

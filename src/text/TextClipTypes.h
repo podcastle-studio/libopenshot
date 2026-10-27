@@ -1,11 +1,16 @@
 #pragma once
 
+#include "../subtitle/EmojiPass.h"
+
 #include <optional>
 #include <string>
 #include <vector>
 
 namespace openshot {
 namespace text {
+
+// How a colour-emoji cluster takes part in the pass being drawn — see subtitle::EmojiPass.
+using EmojiPass = subtitle::EmojiPass;
 
 // z-band selector for painting a text block. The flat block order is
 // background → shadow → glow → stroke → fill. Under a 3D tilt the block is baked into offscreen
@@ -205,8 +210,9 @@ struct TextClipBackgroundStyle {
 struct TextClipLine {
     std::string text;
     double width = 0.0;
-    // Per-codepoint advance: glyphWidth + letterSpacing for every codepoint except the
-    // last (which carries no trailing letter-spacing). Populated by layoutText from
+    // Per-LETTER advance: glyphWidth + letterSpacing for every letter except the last (which
+    // carries no trailing letter-spacing). One entry per letter as forEachCluster counts them,
+    // so an emoji sequence has ONE advance, not one per codepoint. Populated by layoutText from
     // measurements taken at the layout (reference-size) paint, then scaled into actual
     // pixel space by scaleLayout. Renderer consumes these instead of re-measuring.
     std::vector<double> letterAdvances;

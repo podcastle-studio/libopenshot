@@ -293,6 +293,14 @@ without the "revisit if" condition being true.
   run, and between two 4-thread runs. Nothing is red — the affected scenarios were rebuilt on 1:1
   clips — but the instability is real. Start with whether anything caches a scaled image per path
   rather than per reader.
+- **`openshot-gpu-checks` and the golden harness segfault at process exit on Vulkan** on
+  `gpu-server` (RTX 3090, driver 595.99, 2026-10-27): every check and frame passes, then
+  `GpuDevice::DestroyInstance` (an exit handler) crashes in Graphite's
+  `VulkanCommandBuffer::waitUntilFinished`, presumably because the driver has already torn down.
+  Reproduces on 170977f2 without any change; lavapipe and GPU-off exit cleanly. Read the summary
+  line, not the exit code, on that arm until it is fixed.
+- **Arabic in text clips is drawn per codepoint, unshaped** (isolated forms, left to right). Only
+  colour-emoji clusters go through HarfBuzz (`subtitle/EmojiFont`, 2026-10-27).
 - **The editor leaves some LUTs ungraded** (1-D-only cubes, a 3-D cube with a 1-D shaper, any
   non-WebGL2 renderer) where the export grades them.
 - **Film grain never matches across paths, by construction** (see "Parity"): a grain clip measures

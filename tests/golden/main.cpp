@@ -64,6 +64,9 @@ int main(int argc, char** argv) {
         else { std::cerr << "unknown option " << a << "\n"; usage(); return 2; }
     }
     if (!opts.mediaDir.empty() && opts.mediaDir.back() != '/') opts.mediaDir += '/';
+    // Pin the colour-emoji face to the suite's copy (the same file the service image ships) so
+    // the emoji scenarios never depend on which emoji font this machine happens to have.
+    setenv("OPENSHOT_EMOJI_FONT", (opts.mediaDir + "fonts/NotoColorEmoji-COLRv1.ttf").c_str(), 0);
 
     golden::registerReaderScenarios();
     golden::registerTransformScenarios();

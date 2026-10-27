@@ -28,9 +28,9 @@ constexpr double MIN_CURVE_ANGLE = 0.5;
 
 double sign(double v) { return v > 0.0 ? 1.0 : (v < 0.0 ? -1.0 : 0.0); }
 
-std::vector<std::string> codepoints(const std::string& text) {
+std::vector<std::string> letters(const std::string& text) {
     std::vector<std::string> out;
-    forEachUtf8(text, [&](const std::string& letter, SkUnichar) { out.push_back(letter); });
+    forEachCluster(text, [&](const std::string& letter, SkUnichar) { out.push_back(letter); });
     return out;
 }
 
@@ -56,7 +56,7 @@ CurvedTextGeometry buildStraightGeometry(
 bool isSpaceGlyph(const std::string& letter) { return letter == " "; }
 
 CurvedTextGeometry computeCurvedGeometry(const TextClipLine& line, double curveAngleDeg) {
-    const std::vector<std::string> letters = codepoints(line.text);
+    const std::vector<std::string> letters = openshot::text::letters(line.text);
     const std::vector<double>& advances = line.letterAdvances;
     const double ascent = line.ascent;
     const double descent = line.descent;
@@ -134,7 +134,9 @@ void forEachCurvedGlyph(
     double originY,
     const TextClipPaintStyle& style,
     const SkPaint* underPaint,
-    const SkPaint& mainPaint)
+    const SkPaint& mainPaint,
+    const EmojiPass& mainEmoji,
+    const EmojiPass& underEmoji)
 {
     SkCanvas* canvas = renderer->getCanvas();
     if (!canvas) return;
@@ -144,8 +146,8 @@ void forEachCurvedGlyph(
         canvas->save();
         canvas->translate(static_cast<float>(originX + p.cx), static_cast<float>(originY + p.cy));
         canvas->rotate(static_cast<float>(p.rotation * 180.0 / M_PI));
-        if (underPaint) drawLetter(renderer, p.letter, -p.advance / 2.0, 0.0, *underPaint, style);
-        drawLetter(renderer, p.letter, -p.advance / 2.0, 0.0, mainPaint, style);
+        if (underPaint) drawLetter(renderer, p.letter, -p.advance / 2.0, 0.0, *underPaint, style, underEmoji);
+        drawLetter(renderer, p.letter, -p.advance / 2.0, 0.0, mainPaint, style, mainEmoji);
         canvas->restore();
     }
 }
@@ -187,7 +189,8 @@ void CurvedTextPainter::drawCurvedShadowOnly(
 
     canvas->save();
     canvas->translate(static_cast<float>(dx), static_cast<float>(dy));
-    forEachCurvedGlyph(renderer, geometry, originX, originY, style, shadowStroke, *shadowFill);
+    forEachCurvedGlyph(renderer, geometry, originX, originY, style, shadowStroke, *shadowFill,
+                       {EmojiPass::Kind::Silhouette, shadowBlur});
     canvas->restore();
 }
 
@@ -238,7 +241,10 @@ void CurvedTextPainter::drawCurvedStatic(
         const std::optional<double> blurOpt = textBlur > 0.0 ? std::optional<double>(textBlur) : std::nullopt;
         const SkPaint* strokePaint = renderer->getPaint(
             subtitle::PaintProps{style.stroke->color, 1.0, style.stroke->width, blurOpt});
-        auto drawStroke = [&] { forEachCurvedGlyph(renderer, geometry, originX, originY, style, nullptr, *strokePaint); };
+        auto drawStroke = [&] {
+            forEachCurvedGlyph(renderer, geometry, originX, originY, style, nullptr, *strokePaint,
+                               {EmojiPass::Kind::Skip});
+        };
         if (style.stroke->gradient.has_value()) {
             const PaintGradient g = gradientFill(*style.stroke->gradient, originX, originY, geometry.width, geometry.height);
             withGradientCoverage(renderer, g, coverageBox, drawStroke);
@@ -253,7 +259,10 @@ void CurvedTextPainter::drawCurvedStatic(
     const std::optional<double> fillBlurOpt = fillBlur > 0.0 ? std::optional<double>(fillBlur) : std::nullopt;
     const SkPaint* fillPaint = renderer->getPaint(subtitle::PaintProps{
         style.color, style.glow.has_value() ? GLOW_CORE_TEXT_OPACITY : 1.0, std::nullopt, fillBlurOpt});
-    auto drawFill = [&] { forEachCurvedGlyph(renderer, geometry, originX, originY, style, nullptr, *fillPaint); };
+    auto drawFill = [&] {
+        forEachCurvedGlyph(renderer, geometry, originX, originY, style, nullptr, *fillPaint,
+                           {EmojiPass::Kind::Colour, fillBlur});
+    };
     if (style.colorGradient.has_value()) {
         const PaintGradient g = gradientFill(*style.colorGradient, originX, originY, geometry.width, geometry.height);
         withGradientCoverage(renderer, g, coverageBox, drawFill);

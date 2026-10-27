@@ -81,6 +81,16 @@ if(PKG_CONFIG_FOUND)
     pkg_check_modules(ICU icu-uc)
 endif()
 
+# HarfBuzz headers for colour-emoji shaping (src/subtitle/EmojiFont.cpp). Skia builds HarfBuzz
+# into libskia.a and exports the hb_* symbols, so only the declarations are needed; the system
+# headers serve, since EmojiFont uses only HarfBuzz's long-stable core API.
+#   SKIA_HARFBUZZ_INCLUDE_DIR - the directory holding hb.h (unset when not found)
+find_path(SKIA_HARFBUZZ_INCLUDE_DIR
+        NAMES hb.h
+        HINTS ${HARFBUZZ_INCLUDE_DIRS}
+        PATHS /usr/include/harfbuzz /usr/local/include/harfbuzz
+)
+
 # Handle REQUIRED argument
 include(FindPackageHandleStandardArgs)
 find_package_handle_standard_args(Skia
@@ -185,4 +195,4 @@ if(SKIA_FOUND)
     endif()
 endif()
 
-mark_as_advanced(SKIA_INCLUDE_DIR SKIA_LIBRARY)
+mark_as_advanced(SKIA_INCLUDE_DIR SKIA_LIBRARY SKIA_HARFBUZZ_INCLUDE_DIR)

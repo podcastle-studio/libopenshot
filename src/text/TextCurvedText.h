@@ -42,6 +42,8 @@ CurvedTextGeometry computeCurvedGeometry(const TextClipLine& line, double curveA
 // Walk the curved glyphs, drawing each one rotated about its baseline-centre. `underPaint`
 // (if non-null) is drawn first (used by the shadow/glow passes that stroke + fill in one go),
 // then `mainPaint`. Skips space glyphs.
+// `underEmoji` / `mainEmoji` say what each pass does with a colour-emoji cluster (the under pass
+// is a stroke expansion, which an emoji has no use for — see subtitle::EmojiPass).
 void forEachCurvedGlyph(
     subtitle::SkiaRenderer* renderer,
     const CurvedTextGeometry& geometry,
@@ -49,7 +51,9 @@ void forEachCurvedGlyph(
     double originY,
     const TextClipPaintStyle& style,
     const SkPaint* underPaint,
-    const SkPaint& mainPaint);
+    const SkPaint& mainPaint,
+    const EmojiPass& mainEmoji = {},
+    const EmojiPass& underEmoji = {EmojiPass::Kind::Skip});
 
 // Block safety margin for curved text (shadow/stroke/glow/blur extent).
 double curvedBlockMargin(const TextClipPaintStyle& style, const CurvedTextGeometry& geometry, double blurSigma);

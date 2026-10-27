@@ -1,5 +1,6 @@
 #pragma once
 
+#include "EmojiFont.h"
 #include "SubtitleTypes.h"
 
 #include <skia/include/core/SkCanvas.h>
@@ -12,6 +13,7 @@
 #include <skia/include/core/SkTypeface.h>
 #include <skia/include/core/SkFontMgr.h>
 #include <skia/include/core/SkRRect.h>
+#include <skia/include/core/SkRect.h>
 
 #include <map>
 #include <memory>
@@ -95,6 +97,24 @@ public:
     SkFont getFontForCharacter(const FontProps& fontProps, const SkUnichar character);
 
     SkPaint* getPaint(const PaintProps& paintProps);
+
+    // ---- Colour emoji ----------------------------------------------------------------
+    // The process-wide colour-emoji face (may be unavailable; check available()).
+    static EmojiFont& emojiFont();
+
+    // Draw one emoji cluster, shaped, at the given baseline-left position. Returns false when
+    // the cluster cannot be drawn from the emoji face, so the caller falls back to the text font;
+    // returns true when the cluster was handled — including for EmojiPass::Kind::Skip, where
+    // "handled" means deliberately nothing drawn.
+    bool drawEmojiCluster(const std::string& cluster, float x, float y, const SkPaint& paint,
+                          float fontSize, const EmojiPass& pass);
+
+    // Advance width of a shaped emoji cluster, or 0 when the emoji face cannot draw it.
+    double measureEmojiCluster(const std::string& cluster, float fontSize);
+
+    // Vertical ink bounds of a shaped emoji cluster, in the same top/bottom convention as
+    // SkFont::getBounds. False when the emoji face cannot draw the cluster.
+    bool emojiClusterBounds(const std::string& cluster, float fontSize, SkRect* bounds);
 
     // Build a linear-gradient shader between two points. `stops` are (CSS colour, position 0..1)
     // pairs, parsed with the same parseColorString used everywhere else (so this renderer's
