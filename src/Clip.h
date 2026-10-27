@@ -222,6 +222,12 @@ namespace openshot {
 		/// the clip transform (source -> canvas) of the same frame.
 		EffectSizes effect_sizes(const QTransform& t, int64_t frame_number) const;
 
+		/// Where the clip blur clamps on a @a width x @a height source at @a frame_number: the
+		/// whole image, or the part a Crop effect (applied before the clip, without resize)
+		/// leaves visible, so a crop's cut edge blurs like the image's own edge instead of
+		/// fading into the transparent margin the crop leaves around it.
+		QRectF blur_bounds(int64_t frame_number, int width, int height) const;
+
 		/// Build a blurred, tinted drop-shadow image from a source image (in the source
 		/// image's own coordinate space). The returned image is padded on all sides by
 		/// @a pad to make room for the blur of @a sigma; offset_x and offset_y receive the

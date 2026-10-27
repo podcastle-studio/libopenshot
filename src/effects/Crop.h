@@ -23,6 +23,8 @@
 #include <memory>
 #include <string>
 
+#include <QRectF>
+
 
 namespace openshot
 {
@@ -78,6 +80,10 @@ namespace openshot
 		/// @param y y-offset of original image in output frame (-1.0 - 1.0)
 		Crop(Keyframe left, Keyframe top, Keyframe right, Keyframe bottom, Keyframe radius = 0,
 			 Keyframe x=0.0, Keyframe y=0.0);
+
+		/// The part of a @a width x @a height frame this crop leaves visible at @a frame_number:
+		/// the rect GetFrame paints into, with the same clamping. Empty when nothing is.
+		QRectF VisibleRect(int64_t frame_number, int width, int height) const;
 
 		/// @brief This method is required for all derived classes of ClipBase, and returns a
 		/// new openshot::Frame object. All Clip keyframes and effects are resolved into

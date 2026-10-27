@@ -70,6 +70,31 @@ void Crop::init_effect_details()
 #include <QPainterPath>
 #include <algorithm> // std::clamp, std::min
 
+QRectF Crop::VisibleRect(int64_t frame_number, int width, int height) const
+{
+    const double left_value   = left.GetValue(frame_number);
+    const double top_value    = top.GetValue(frame_number);
+    const double right_value  = right.GetValue(frame_number);
+    const double bottom_value = bottom.GetValue(frame_number);
+    const double x_shift = x.GetValue(frame_number);
+    const double y_shift = y.GetValue(frame_number);
+
+    double pl = left_value * width, pt = top_value * height;
+    double pr = pl + std::max(0.0, 1.0 - left_value - right_value) * width;
+    double pb = pt + std::max(0.0, 1.0 - top_value - bottom_value) * height;
+    if (pr - pl <= 0.0 || pb - pt <= 0.0)
+        return QRectF();
+
+    // The copy rect is the paint rect shifted; where it leaves the image, the paint rect shrinks.
+    const double cl = pl + x_shift * width, ct = pt + y_shift * height;
+    const double cr = pr + x_shift * width, cb = pb + y_shift * height;
+    if (cl < 0) pl -= cl;
+    if (cr > width) pr -= cr - width;
+    if (ct < 0) pt -= ct;
+    if (cb > height) pb -= cb - height;
+    return QRectF(QPointF(pl, pt), QPointF(pr, pb));
+}
+
 std::shared_ptr<openshot::Frame> Crop::GetFrame(std::shared_ptr<openshot::Frame> frame, int64_t frame_number)
 {
     // A frame already on the GPU is cropped there (Settings::GPU_CROP, W29), with the same

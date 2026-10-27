@@ -25,6 +25,7 @@
 #include "ZmqLogger.h"
 #include "effects/image-processing-lib/src/Effects/effects.h"
 #include "effects/AudioVisualization.h"
+#include "effects/Crop.h"
 
 #include <algorithm>
 #include <cmath>
@@ -87,7 +88,7 @@ namespace {
 	}
 
 	// High-quality Gaussian blur over a cv::Mat, in place.
-	void gaussian_blur(cv::Mat& image, double sigma_x, double sigma_y) {
+	void gaussian_blur(cv::Mat& image, double sigma_x, double sigma_y, int border = cv::BORDER_DEFAULT) {
 		// Smallest odd kernel covering ~+/-3 sigma (1 = no blur along that axis).
 		auto kernel_for_sigma = [](double sigma) -> int {
 			if (sigma <= 0.0) return 1;
@@ -99,7 +100,7 @@ namespace {
 
 		cv::GaussianBlur(image, image,
 		                 cv::Size(kernel_for_sigma(sigma_x), kernel_for_sigma(sigma_y)),
-		                 sigma_x, sigma_y);
+		                 sigma_x, sigma_y, border);
 	}
 	struct CompositeChoice { const char* name; CompositeType value; };
 	const CompositeChoice composite_choices[] = {
@@ -1945,10 +1946,23 @@ bool Clip::draw_to_canvas(std::shared_ptr<openshot::Frame> frame,
 		const SkScalar sigma = (SkScalar) sizes.blur_sigma;
 		if (sigma > 0.0f) {
 			// kClamp is the nearest Skia has to the BORDER_REFLECT_101 cv::GaussianBlur
-			// uses (kMirror is not implemented), and cropping to the source rect keeps the
+			// uses (kMirror is not implemented), and cropping to the visible rect keeps the
 			// blur inside the image the way an in-place blur on the source does, instead of
-			// letting it bleed 3 sigma past every edge.
-			filter = SkImageFilters::Blur(sigma, sigma, SkTileMode::kClamp, nullptr, source_rect);
+			// letting it bleed 3 sigma past every edge. The input is clamped from the whole
+			// pixels inside a crop's cut edge, so its antialiased fringe does not smear in.
+			const QRectF bounds = blur_bounds(frame->number, source_w, source_h);
+			const QRect inner(QPoint((int) std::ceil(bounds.left()), (int) std::ceil(bounds.top())),
+							  QPoint((int) std::floor(bounds.right()) - 1, (int) std::floor(bounds.bottom()) - 1));
+			if (bounds == QRectF(0, 0, source_w, source_h) || inner.isEmpty()) {
+				filter = SkImageFilters::Blur(sigma, sigma, SkTileMode::kClamp, nullptr, source_rect);
+			} else {
+				const SkRect inner_rect = SkRect::MakeXYWH((SkScalar) inner.x(), (SkScalar) inner.y(),
+														   (SkScalar) inner.width(), (SkScalar) inner.height());
+				const SkRect outer_rect = SkRect::Make(SkRect::MakeLTRB((SkScalar) bounds.left(), (SkScalar) bounds.top(),
+																		(SkScalar) bounds.right(), (SkScalar) bounds.bottom()).roundOut());
+				filter = SkImageFilters::Blur(sigma, sigma, SkTileMode::kClamp,
+											  SkImageFilters::Crop(inner_rect, SkTileMode::kClamp, nullptr), outer_rect);
+			}
 		}
 	}
 	if (shadow) {
@@ -2094,6 +2108,17 @@ Clip::EffectSizes Clip::effect_sizes(const QTransform& t, int64_t frame_number) 
 	return sizes;
 }
 
+// Where the clip blur clamps: the whole image, or what the crop effects leave visible
+QRectF Clip::blur_bounds(int64_t frame_number, int width, int height) const {
+	QRectF bounds(0, 0, width, height);
+	for (EffectBase* effect : effects) {
+		const Crop* crop = dynamic_cast<const Crop*>(effect);
+		if (crop && crop->info.apply_before_clip && !crop->resize)
+			bounds = bounds.intersected(crop->VisibleRect(frame_number, width, height));
+	}
+	return bounds;
+}
+
 // Build a blurred, tinted drop-shadow image from the source image's alpha silhouette
 std::shared_ptr<QImage> Clip::get_shadow_image(std::shared_ptr<QImage> source_image, int64_t frame_number, double sigma, int pad, int& offset_x, int& offset_y) {
 	const int src_w = source_image->width();
@@ -2164,7 +2189,18 @@ void Clip::apply_keyframes(std::shared_ptr<Frame> frame, QSize timeline_size) {
 	if (blur) {
 		if (sizes.blur_sigma > 0.0) {
 			auto imageCv = frame->GetImageCV();
-			gaussian_blur(imageCv, sizes.blur_sigma, sizes.blur_sigma);
+			// Inside a crop, blur only the whole pixels it leaves visible, as if they were the
+			// image: BORDER_ISOLATED keeps the transparent margin out of the kernel.
+			const QRectF bounds = blur_bounds(frame->number, imageCv.cols, imageCv.rows);
+			const QRect inner(QPoint((int) std::ceil(bounds.left()), (int) std::ceil(bounds.top())),
+							  QPoint((int) std::floor(bounds.right()) - 1, (int) std::floor(bounds.bottom()) - 1));
+			if (bounds == QRectF(0, 0, imageCv.cols, imageCv.rows) || inner.isEmpty()) {
+				gaussian_blur(imageCv, sizes.blur_sigma, sizes.blur_sigma);
+			} else {
+				cv::Mat visible = imageCv(cv::Rect(inner.x(), inner.y(), inner.width(), inner.height()));
+				gaussian_blur(visible, sizes.blur_sigma, sizes.blur_sigma,
+							  cv::BORDER_REFLECT_101 | cv::BORDER_ISOLATED);
+			}
 			frame->SetImageCV(imageCv);
 			// Re-fetch the (now blurred) image, since SetImageCV replaces it
 			source_image = frame->GetImage();

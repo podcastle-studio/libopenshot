@@ -220,4 +220,39 @@ void golden::registerClipFxScenarios() {
             expect("canvas_scale_full", gap(late, 0.5f, 0.75f), 30);
             expect("source_default_scales_with_clip", gap(first, 0.8f, 0.75f), 20);
         });
+
+    // A crop's cut edge blurs like the image's own edge: the clip blur clamps at what the crop
+    // leaves visible, so the white half stays white up to the cut and the margin stays clear.
+    // Before, the blur pulled in the transparent margin and the cut edge faded out over ~2 sigma.
+    addCustom("unit.clip_blur_crop_edge", {"unit", "clipfx", "crop"},
+        [](Scene& s) {
+            auto& tl = s.makeTimeline();
+            for (const auto mode : {openshot::EFFECT_SIZE_CANVAS, openshot::EFFECT_SIZE_SOURCE}) {
+                auto* c = squareClip(s, 120, mode == openshot::EFFECT_SIZE_CANVAS ? 0.3f : 0.7f, 0.5f);
+                c->effect_size_space = mode;
+                c->Blur(true);
+                c->blur_amount = openshot::Keyframe(16.0);
+                c->AddEffect(cropEffect(0.25, 0.0, 0.25, 0.0));
+                tl.AddClip(c);
+            }
+            tl.Open();
+        },
+        [](Scene& s, std::vector<Captured>&, std::vector<Check>& checks) {
+            const Image img = fromFrame(s.timeline->GetFrame(1));
+            const int y = s.height / 2;
+            for (const float cx : {0.3f, 0.7f}) {
+                const std::string name = cx < 0.5f ? "canvas" : "source";
+                const int x = int(cx * s.width);
+                const int quarter = kSquareOnCanvas / 4;
+                int darkest = 255;
+                for (int px = x - quarter + 2; px <= x + quarter - 3; ++px)
+                    darkest = std::min<int>(darkest, img.px(px, y)[0]);
+                checks.push_back({name + "_visible_part_stays_white", darkest > 200,
+                                  "darkest red " + std::to_string(darkest) + " inside the crop"});
+                const uint8_t* bg = img.px(x, 4);
+                const uint8_t* margin = img.px(x - quarter - 3, y);
+                checks.push_back({name + "_margin_stays_clear", std::abs(int(margin[0]) - int(bg[0])) <= 8,
+                                  "margin " + std::to_string(margin[0]) + ", background " + std::to_string(bg[0])});
+            }
+        });
 }
