@@ -26,7 +26,7 @@ name: golden
 on:
   pull_request:
   push:
-    branches: [feature/gpu-rendering, develop]
+    branches: [develop]
   workflow_dispatch:
 
 concurrency:
