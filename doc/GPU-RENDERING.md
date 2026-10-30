@@ -170,7 +170,14 @@ two GPUs through two APIs never agree to the bit.
 
 Per-clip effects the editor does not share (chroma key, colour/light adjustment, enhancement, mask,
 LUT) have their fragments in `src/shaders/`; LUT parsing and colour match are `src/effects/
-ColorGradingCore`.
+ColorGradingCore`. The editor previews those with its own pixi GLSL (podcastle-frontend,
+`libs/video-project/src/preview/filters/`), so nothing makes the two agree by construction: the
+LIGHT and COLOR filters are held to the editor by `unit.editor_filters`, which transcribes
+`light.frag` and `color.frag` and checks both effects against them on a colour lattice (max 3
+levels). Until 2026-10-30 they had drifted in four places (negative contrast at full strength
+instead of half, highlights 0.5/0.3 instead of 0.2/0.45, a different vibrance, saturation before
+vibrance), identically on CPU and GPU, so exports at contrast -1 turned skin pink. A change to
+either fragment in the frontend has to be made here too, CPU and SkSL.
 
 ## Decisions that constrain the code
 

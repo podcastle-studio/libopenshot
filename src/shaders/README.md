@@ -3,7 +3,9 @@
 The SkSL fragments of the per-clip effects libopenshot runs on the GPU and the web editor does not
 share: `chroma_key`, `color_adjustment`, `color_map` (the LUT), `enhancement`, `light_adjustment`,
 `mask`. Each is the GPU twin of its effect class in `src/effects/` and is held to it by
-`tests/gpu/openshot-gpu-effect-parity`.
+`tests/gpu/openshot-gpu-effect-parity`. The editor runs its own GLSL for these, not this SkSL;
+`color_adjustment` and `light_adjustment` are held to that GLSL by the golden suite's
+`unit.editor_filters` (doc/GPU-RENDERING.md, "Editor vs export").
 
 They follow the contract of the shared transition shaders in
 `src/effects/image-processing-lib/shaders/README.md` — the same `_prelude.sksl` is prepended, the

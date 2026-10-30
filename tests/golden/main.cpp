@@ -80,6 +80,7 @@ int main(int argc, char** argv) {
     golden::registerTimeScenarios();
     golden::registerExportScenarios();
     golden::registerUnitScenarios();
+    golden::registerEditorFilterScenarios();
 
     if (opts.list) {
         for (const auto& s : golden::registry()) {

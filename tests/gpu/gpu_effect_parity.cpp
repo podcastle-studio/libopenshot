@@ -289,8 +289,8 @@ std::vector<Case> cases() {
                                            openshot::Color("#000000"), Keyframe(0.2), Keyframe(0.2),
                                            Keyframe(0.2), Keyframe(0.2)); }},
 
-        // One of each stage on its own, then all three together, because vibrance
-        // reads the saturation that saturation left behind.
+        // One of each stage on its own, then all three together, because saturation
+        // reads what vibrance left behind (the editor's order).
         {"coloradj(temp+tint)",   [] { return std::make_shared<openshot::ColorAdjustment>(
                                            Keyframe(0.6), Keyframe(-0.4), Keyframe(0.0), Keyframe(0.0)); }},
         {"coloradj(saturation)",  [] { return std::make_shared<openshot::ColorAdjustment>(
@@ -299,6 +299,9 @@ std::vector<Case> cases() {
                                            Keyframe(0.0), Keyframe(0.0), Keyframe(0.8), Keyframe(0.0)); }},
         {"coloradj(all)",         [] { return std::make_shared<openshot::ColorAdjustment>(
                                            Keyframe(0.3), Keyframe(0.25), Keyframe(-0.5), Keyframe(0.45)); }},
+        // The dev export that turned a face pink (6ae48eb4, 2026-10-30), at its exact values.
+        {"coloradj(dev export)",  [] { return std::make_shared<openshot::ColorAdjustment>(
+                                           Keyframe(-0.46), Keyframe(-0.08), Keyframe(0.15), Keyframe(0.0)); }},
 
         // The service's configuration exactly: green key, fuzz 70, halo 20, YCbCr. Then a wide
         // halo, because the halo branch is the only part with any arithmetic in it, and a zero
@@ -332,6 +335,13 @@ std::vector<Case> cases() {
                                            0, 0, 0, 0, Keyframe(0.55), 0); }},
         {"light(blacks)",         [] { return std::make_shared<openshot::LightAdjustment>(
                                            0, 0, 0, 0, 0, Keyframe(-0.45)); }},
+        {"light(contrast -1)",    [] { return std::make_shared<openshot::LightAdjustment>(
+                                           0, Keyframe(-1.0), 0, 0, 0, 0); }},
+        {"light(highlights-)",    [] { return std::make_shared<openshot::LightAdjustment>(
+                                           0, 0, Keyframe(-0.7), 0, 0, 0); }},
+        {"light(dev export)",     [] { return std::make_shared<openshot::LightAdjustment>(
+                                           Keyframe(0.32), Keyframe(-1.0), 0, Keyframe(0.09),
+                                           Keyframe(1.0), Keyframe(-0.07)); }},
         {"light(all)",            [] { return std::make_shared<openshot::LightAdjustment>(
                                            Keyframe(0.2), Keyframe(0.5), Keyframe(-0.3),
                                            Keyframe(0.4), Keyframe(0.25), Keyframe(0.35)); }},

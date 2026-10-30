@@ -157,6 +157,7 @@ void registerSubtitleScenarios();
 void registerTimeScenarios();
 void registerExportScenarios();
 void registerUnitScenarios();
+void registerEditorFilterScenarios();
 void registerResidentScenarios();
 
 struct Options {

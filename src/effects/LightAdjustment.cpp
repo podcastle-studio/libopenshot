@@ -133,13 +133,14 @@ void applyHighlights(double& r, double& g, double& b, const double highlights_va
     if (lum > 0.6) {
         double mask = (lum - 0.6) / 0.4;
 
+        // 0.2 and 0.45 are the editor's (light.frag); see toneCurve() for why they must agree.
         if (amount < 0) {
-            double reduction = std::abs(amount) * mask * 0.5;
+            double reduction = std::abs(amount) * mask * 0.2;
             r *= (1 - reduction);
             g *= (1 - reduction);
             b *= (1 - reduction);
         } else {
-            double boost = amount * mask * 0.3;
+            double boost = amount * mask * 0.45;
             r += (255 - r) * boost;
             g += (255 - g) * boost;
             b += (255 - b) * boost;
@@ -198,9 +199,12 @@ double LightAdjustment::toneCurve(double value, double contrast) const
             output = 1 - (1 - midpoint) * std::pow((1 - normalized) / (1 - midpoint), 1 + amount);
         }
     } else if (contrast < 0) {
-        // Inverse S-curve for negative contrast
+        // Inverse S-curve for negative contrast, at half strength. The web editor previews this
+        // filter with its own GLSL (podcastle-frontend light.frag), so the export is right only
+        // when it draws the same curve: without the 0.5, contrast -1 flattens the whole middle of
+        // the range to grey and turns skin pink. tests/ColorFilters.cpp holds both to the editor.
         const double amount = -contrast;
-        output = normalized + (0.5 - normalized) * amount * std::sin(M_PI * normalized);
+        output = normalized + (0.5 - normalized) * amount * std::sin(M_PI * normalized) * 0.5;
     } else {
         output = normalized;
     }

@@ -9,9 +9,9 @@
 // port of this one. It also means this fragment never divides by alpha, which is
 // the one operation that costs bit-exactness (GPU-DECISIONS.md, W19).
 //
-// The three stages run in the C++'s order and each is skipped on the same
-// condition, because vibrance's boost depends on the saturation of what saturation
-// left behind -- reordering them changes the result.
+// The three stages run in the C++'s order -- which is the editor's, color.frag:
+// temperature/tint, vibrance, saturation -- and each is skipped on the same condition,
+// because each reads what the previous one left behind; reordering them changes the result.
 uniform float temperature;
 uniform float tint;
 uniform float saturation;
@@ -29,22 +29,24 @@ float4 main(float2 p) {
 		c.g = c.g * (1.0 - tint * 0.1);
 		c.r = c.r * (1.0 + tint * 0.05);
 		c.b = c.b * (1.0 + tint * 0.05);
-	}
-
-	if (saturation != 0.0) {
-		float grey = c.r * 0.299 + c.g * 0.587 + c.b * 0.114;
-		c = grey + (c - grey) * (1.0 + saturation);
+		// Clamped here as well, as the editor does, so vibrance measures in-range colour.
+		c = clamp(c, 0.0, 255.0);
 	}
 
 	if (vibrance != 0.0) {
-		float grey = (c.r + c.g + c.b) / 3.0;
 		float hi = max(c.r, max(c.g, c.b));
 		float lo = min(c.r, min(c.g, c.b));
 		// Guarded exactly as the C++ guards it: a black pixel has no saturation to
 		// measure, and dividing by hi would be a division by zero.
 		float sat = hi == 0.0 ? 0.0 : (hi - lo) / hi;
-		float boost = vibrance * (1.0 - sat * sat);
-		c = grey + (c - grey) * (1.0 + boost);
+		float grey = c.r * 0.2126 + c.g * 0.7152 + c.b * 0.0722;
+		float scale = 1.0 + (vibrance * 2.0) * (1.0 - sat);
+		c = clamp(grey + (c - grey) * scale, 0.0, 255.0);
+	}
+
+	if (saturation != 0.0) {
+		float grey = c.r * 0.299 + c.g * 0.587 + c.b * 0.114;
+		c = grey + (c - grey) * (1.0 + saturation);
 	}
 
 	// clamp(double) in the header takes an int parameter, so the double is

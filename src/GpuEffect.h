@@ -47,12 +47,13 @@ namespace openshot
 	 *
 	 * ### The fragment is shared with the front end, so it is not free-form
 	 *
-	 * These fragments are the same source the web editor runs through
-	 * `CanvasKit.RuntimeEffect` (decided 2026-09-18; see GPU-DECISIONS.md), which is
-	 * what makes editor and export identical by construction rather than by a test
-	 * that keeps catching drift. A fragment therefore declares its uniforms and
-	 * reads its pixels only through the prelude below, and puts nothing
-	 * host-specific in the body.
+	 * The transition fragments (image-processing-lib/shaders/) are the same source
+	 * the web editor runs through `CanvasKit.RuntimeEffect` (decided 2026-09-18; see
+	 * GPU-DECISIONS.md), which makes editor and export identical by construction. The
+	 * per-clip filters in src/shaders/ are not shared: the editor previews them with
+	 * its own GLSL, and only a test (`unit.editor_filters`) keeps the two in step. A
+	 * fragment either way declares its uniforms and reads its pixels only through the
+	 * prelude below, and puts nothing host-specific in the body.
 	 *
 	 * ### Frames stay on the GPU between effects
 	 *

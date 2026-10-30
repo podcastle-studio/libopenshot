@@ -37,7 +37,7 @@ namespace openshot
         void init_effect_details();
 
     protected:
-        /// The SkSL twin of the temperature/tint, saturation and vibrance chain.
+        /// The SkSL twin of the temperature/tint, vibrance and saturation chain.
         const char* GpuShaderSource() const override;
 
         /// The four keyframe values, or false when all of them are at their defaults.

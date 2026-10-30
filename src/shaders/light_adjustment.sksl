@@ -71,16 +71,16 @@ float4 main(float2 p) {
 		}
 	}
 
-	// 6. Highlights, masked to the bright end above 0.6. Note the asymmetry, which is the C++'s:
-	//    a reduction scales, a boost moves toward white.
+	// 6. Highlights, masked to the bright end above 0.6. Note the asymmetry, which is the C++'s
+	//    and the editor's: a reduction scales, a boost moves toward white.
 	if (highlights != 0.0) {
 		float lum = osLum3(c).r / 255.0;
 		if (lum > 0.6) {
 			float mask = (lum - 0.6) / 0.4;
 			if (highlights < 0.0)
-				c = c * (1.0 - abs(highlights) * mask * 0.5);
+				c = c * (1.0 - abs(highlights) * mask * 0.2);
 			else
-				c = c + (255.0 - c) * (highlights * mask * 0.3);
+				c = c + (255.0 - c) * (highlights * mask * 0.45);
 		}
 	}
 

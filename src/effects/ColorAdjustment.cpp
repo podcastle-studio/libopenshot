@@ -41,25 +41,31 @@ void applyTemperatureTint(double& r, double& g, double& b, const double temperat
     g *= (1.0 - tint * 0.1);
     r *= (1.0 + tint * 0.05);
     b *= (1.0 + tint * 0.05);
+
+    // Clamped here rather than only at the end, as the editor's color.frag does: vibrance
+    // measures the saturation of what this left, and an over-range channel would skew it.
+    r = std::clamp(r, 0.0, 255.0);
+    g = std::clamp(g, 0.0, 255.0);
+    b = std::clamp(b, 0.0, 255.0);
 }
 
 // Apply vibrance adjustment to RGB values: vibrance_value: -1.0 to 1.0
+// The editor's applyVibrance (color.frag): push away from Rec. 709 grey, twice as hard on dull
+// colours as on saturated ones, then clamp before saturation reads the result.
 void applyVibrance(double& r, double& g, double& b, const double vibrance_value) {
     if (vibrance_value == 0) return;
-
-    const double amount = vibrance_value;
-    const double gray = (r + g + b) / 3.0;
 
     // Avoid initializer_list overhead
     double maxRGB = r > g ? (r > b ? r : b) : (g > b ? g : b);
     double minRGB = r < g ? (r < b ? r : b) : (g < b ? g : b);
 
     const double saturation = maxRGB == 0 ? 0 : (maxRGB - minRGB) / maxRGB;
-    const double boostFactor = amount * (1.0 - saturation * saturation);
+    const double gray = r * 0.2126 + g * 0.7152 + b * 0.0722;
+    const double scale = 1.0 + (vibrance_value * 2.0) * (1.0 - saturation);
 
-    r = gray + (r - gray) * (1.0 + boostFactor);
-    g = gray + (g - gray) * (1.0 + boostFactor);
-    b = gray + (b - gray) * (1.0 + boostFactor);
+    r = std::clamp(gray + (r - gray) * scale, 0.0, 255.0);
+    g = std::clamp(gray + (g - gray) * scale, 0.0, 255.0);
+    b = std::clamp(gray + (b - gray) * scale, 0.0, 255.0);
 }
 
 // Apply saturation adjustment to RGB values: saturation_value: -1.0 to 1.0
@@ -167,13 +173,13 @@ std::shared_ptr<openshot::Frame> ColorAdjustment::GetFrame(std::shared_ptr<opens
             if (doTT)
                 applyTemperatureTint(r, g, b, temperature_value, tint_value);
 
-            // 2. Saturation
-            if (doSat)
-                applySaturation(r, g, b, saturation_value);
-
-            // 3. Vibrance
+            // 2. Vibrance, before saturation: the editor's order (color.frag)
             if (doVib)
                 applyVibrance(r, g, b, vibrance_value);
+
+            // 3. Saturation
+            if (doSat)
+                applySaturation(r, g, b, saturation_value);
 
             // Final clamping and assignment
             px[0] = clamp(r);

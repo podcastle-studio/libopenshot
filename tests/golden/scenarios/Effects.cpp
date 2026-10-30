@@ -100,16 +100,19 @@ void golden::registerEffectScenarios() {
         s.timeline->Open();
     });
 
+    // The service passes the payload's -1..1 filter values straight through (FilterData), so these
+    // scenarios do too. They used to pass UI-scale values (vibrance 70, contrast 25), which clip
+    // every channel to 0 or 255 and so tested no formula at all.
     add("effects.color_adjustment", {"effects", "filters", "exact", "gpu-composite"}, F, [](Scene& s) {
         auto* c = baseScene(s);
-        c->AddEffect(new openshot::ColorAdjustment(ramp(-60, 60), openshot::Keyframe(20), ramp(0, 70), openshot::Keyframe(40)));
+        c->AddEffect(new openshot::ColorAdjustment(ramp(-0.6, 0.6), openshot::Keyframe(0.2), ramp(0, 0.7), openshot::Keyframe(0.4)));
         s.timeline->Open();
     });
 
-    add("effects.light_adjustment", {"effects", "filters", "exact"}, F, [](Scene& s) {
+    add("effects.light_adjustment", {"effects", "filters", "exact", "gpu-composite"}, F, [](Scene& s) {
         auto* c = baseScene(s);
-        c->AddEffect(new openshot::LightAdjustment(ramp(-30, 30), openshot::Keyframe(25), openshot::Keyframe(-30),
-                                                   openshot::Keyframe(30), ramp(0, 40), openshot::Keyframe(-20)));
+        c->AddEffect(new openshot::LightAdjustment(ramp(-0.3, 0.3), openshot::Keyframe(-0.6), openshot::Keyframe(-0.3),
+                                                   openshot::Keyframe(0.3), ramp(0, 0.4), openshot::Keyframe(-0.2)));
         s.timeline->Open();
     });
 
