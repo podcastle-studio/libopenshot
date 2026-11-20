@@ -384,8 +384,10 @@ CUDA side of the NV12 handshake stops, every NVDEC reader waits in `waitForNV12C
 (`OPENSHOT_GPU_WAIT_TIMEOUT_SEC`, 30 s) and a timeout or sticky CUDA error sets `CudaInterop::Lost()`;
 the reader throws `ErrorDecodingVideo` (new) then, and on `AVERROR_EXTERNAL` from NVDEC after the
 stream has decoded; the writer throws `ErrorEncodingVideo` when NVENC refuses a frame or its upload
-fails (it used to flush the encoder and drop every later frame). Skia's own waits
-(`SyncToCpu::kYes`, its fences) are still unbounded: the service's watchdog covers those. Four-way
+fails (it used to flush the encoder and drop every later frame). Once lost, NVDEC
+and NVENC contexts are leaked rather than closed (closing them waits on the dead context, under the
+codec lock), and `FFmpegReader::Close()` never throws. Skia's own waits (`SyncToCpu::kYes`, its
+fences) are still unbounded: the service's watchdog covers those. Four-way
 sweep green; the Vulkan+NVDEC arm keeps its 6 pre-existing pixel failures (same before the change).
 
 **Also done 2026-09-25: four encoder leaks fixed** (LeakSanitizer): every video and audio
