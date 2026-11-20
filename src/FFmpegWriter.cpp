@@ -1263,6 +1263,15 @@ void FFmpegWriter::flush_encoders() {
 void FFmpegWriter::close_video(AVFormatContext *oc, AVStream *st)
 {
 	const std::lock_guard<std::mutex> codec_lock(HardwareCodecMutex());   // see open_video
+#if USE_HW_ACCEL
+	// On a lost GPU, closing NVENC (or its CUDA device) waits on the dead context for ever --
+	// under the codec lock, so every other export's close waited behind it (2026-11-20). Leak
+	// them: the process is about to be restarted.
+	if (openshot::CudaInterop::Lost() && hw_en_on) {
+		video_codec_ctx = nullptr;
+		hw_device_ctx = NULL;
+	}
+#endif
 	// Free any previous memory allocations
 	if (video_codec_ctx != nullptr) {
 		AV_FREE_CONTEXT(video_codec_ctx);

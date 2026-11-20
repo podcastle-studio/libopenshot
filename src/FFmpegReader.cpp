@@ -1064,18 +1064,26 @@ void FFmpegReader::Close() {
 		packet = NULL;
 		int attempts = 0;
 		int max_attempts = 128;
-		while (packet_status.packets_decoded() < packet_status.packets_read() && attempts < max_attempts) {
-			ZmqLogger::Instance()->AppendDebugMethod("FFmpegReader::Close (Drain decoder loop)",
-													 "packets_read", packet_status.packets_read(),
-													 "packets_decoded", packet_status.packets_decoded(),
-													 "attempts", attempts);
-			if (packet_status.video_decoded < packet_status.video_read) {
-				ProcessVideoPacket(info.video_length);
+		// Close() runs from destructors (Clip::Close, the service's cleanup): nothing may escape
+		// it. A decoder on a lost GPU throws (ErrorDecodingVideo) and has nothing left to drain;
+		// it used to abort the process here, before the service could settle its exports.
+		try {
+			while (!openshot::CudaInterop::Lost() &&
+				   packet_status.packets_decoded() < packet_status.packets_read() && attempts < max_attempts) {
+				ZmqLogger::Instance()->AppendDebugMethod("FFmpegReader::Close (Drain decoder loop)",
+														 "packets_read", packet_status.packets_read(),
+														 "packets_decoded", packet_status.packets_decoded(),
+														 "attempts", attempts);
+				if (packet_status.video_decoded < packet_status.video_read) {
+					ProcessVideoPacket(info.video_length);
+				}
+				if (packet_status.audio_decoded < packet_status.audio_read) {
+					ProcessAudioPacket(info.video_length);
+				}
+				attempts++;
 			}
-			if (packet_status.audio_decoded < packet_status.audio_read) {
-				ProcessAudioPacket(info.video_length);
-			}
-			attempts++;
+		} catch (const std::exception& e) {
+			ZmqLogger::Instance()->AppendDebugMethod("FFmpegReader::Close (drain stopped by an error)");
 		}
 
 		// Remove packet
@@ -1108,7 +1116,18 @@ void FFmpegReader::Close() {
 			if(avcodec_is_open(pCodecCtx)) {
 				avcodec_flush_buffers(pCodecCtx);
 			}
-			AV_FREE_CONTEXT(pCodecCtx);
+#if USE_HW_ACCEL
+			// On a lost GPU, closing an NVDEC decoder or its CUDA device waits on the dead
+			// context for ever (cuStreamSynchronize inside the driver): leak them instead, the
+			// process is about to be restarted (2026-11-20).
+			const bool leak_device = hw_de_on && openshot::CudaInterop::Lost();
+			if (leak_device) {
+				pCodecCtx = nullptr;
+				hw_device_ctx = NULL;
+			}
+#endif
+			if (pCodecCtx)
+				AV_FREE_CONTEXT(pCodecCtx);
 #if USE_HW_ACCEL
 			if (hw_de_on) {
 				if (hw_device_ctx) {
