@@ -63,6 +63,10 @@ struct PacketFree { void operator()(AVPacket* p) const { av_packet_free(&p); } }
 using OwnedPacket = std::unique_ptr<AVPacket, PacketFree>;
 #endif
 
+/// Why write_video_packet failed, for the exception write_frame throws. Per thread: four exports
+/// encode at once in one process, each on its own thread.
+thread_local std::string video_encode_error;
+
 /// Bounded blocking queue for pipeline: producer pushes frames, consumer pops in order.
 class BoundedFrameQueue {
 public:
@@ -915,8 +919,11 @@ void FFmpegWriter::write_frame(std::shared_ptr<Frame> frame) {
 	is_writing = false;
 
 	// Raise exception from main thread
-	if (has_error_encoding_video)
-		throw ErrorEncodingVideo("Error while writing raw video frame", -1);
+	if (has_error_encoding_video) {
+		const std::string why = video_encode_error.empty() ? "writing the packet failed" : video_encode_error;
+		video_encode_error.clear();
+		throw ErrorEncodingVideo("Error while writing raw video frame: " + why, frame ? frame->number : -1);
+	}
 }
 
 void FFmpegWriter::SetSilentAudioMode(bool enable) {
@@ -2918,18 +2925,28 @@ bool FFmpegWriter::write_video_packet(std::shared_ptr<Frame> frame, AVFrame *fra
 			// Already a CUDA frame from the encoder's own pool: send it as it is.
 			hw_frame = av_frame_clone(frame_final);
 		} else if (hw_en_on && hw_en_supported) {
+			// Each of these failing used to be printed and ignored, and the frame then went to the
+			// encoder without its picture (or as a null frame, which flushes it for good). On a
+			// faulted GPU (XID 43, 2026-11-20) that is every frame: fail the export instead.
+			int err = 0;
+			const char* step = nullptr;
 			if (!(hw_frame = av_frame_alloc())) {
-				std::clog << "Error code: av_hwframe_alloc\n";
+				err = AVERROR(ENOMEM);
+				step = "av_frame_alloc";
+			} else if ((err = av_hwframe_get_buffer(video_codec_ctx->hw_frames_ctx, hw_frame, 0)) < 0) {
+				step = "av_hwframe_get_buffer";
+			} else if (!hw_frame->hw_frames_ctx) {
+				err = AVERROR(EINVAL);
+				step = "hw_frames_ctx";
+			} else {
+				hw_frame->format = AV_PIX_FMT_NV12;
+				if ((err = av_hwframe_transfer_data(hw_frame, frame_final, 0)) < 0)
+					step = "av_hwframe_transfer_data";
 			}
-			if (av_hwframe_get_buffer(video_codec_ctx->hw_frames_ctx, hw_frame, 0) < 0) {
-				std::clog << "Error code: av_hwframe_get_buffer\n";
-			}
-			if (!hw_frame->hw_frames_ctx) {
-				std::clog << "Error hw_frames_ctx.\n";
-			}
-			hw_frame->format = AV_PIX_FMT_NV12;
-			if ( av_hwframe_transfer_data(hw_frame, frame_final, 0) < 0) {
-				std::clog << "Error while transferring frame data to surface.\n";
+			if (step) {
+				av_frame_free(&hw_frame);
+				video_encode_error = std::string("uploading the frame to the encoder (") + step + "): " + av_err2string(err);
+				return false;
 			}
 			av_frame_copy_props(hw_frame, frame_final);
 		}
@@ -2950,15 +2967,22 @@ bool FFmpegWriter::write_video_packet(std::shared_ptr<Frame> frame, AVFrame *fra
 			ret = avcodec_send_frame(video_codec_ctx, frame_final);
 		}
 		error_code = ret;
-		if (ret < 0 ) {
+		if (ret < 0 && ret != AVERROR(EAGAIN)) {
+			// The encoder refused the frame: a failed EncodePicture (NVENC on a faulted GPU), or
+			// AVERROR_EOF from an encoder that an earlier failure flushed. Printing it and going on
+			// wrote an export with every remaining frame missing ("Frame AVERROR_EOF" once per
+			// frame, 2026-11-20); write_frame turns this into ErrorEncodingVideo.
+#if USE_HW_ACCEL
+			if (hw_frame)
+				av_frame_free(&hw_frame);
+#endif
+			video_encode_error = "the encoder refused the frame (avcodec_send_frame: " + av_err2string(ret) + ")";
+			return false;
+		}
+		if (ret < 0) {
 			ZmqLogger::Instance()->AppendDebugMethod(
 				"FFmpegWriter::write_video_packet (Frame not sent)");
-			if (ret == AVERROR(EAGAIN) ) {
-				std::clog << "Frame EAGAIN\n";
-			}
-			if (ret == AVERROR_EOF ) {
-				std::clog << "Frame AVERROR_EOF\n";
-			}
+			std::clog << "Frame EAGAIN\n";
 			avcodec_send_frame(video_codec_ctx, NULL);
 		}
 		else {

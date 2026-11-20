@@ -1998,6 +1998,21 @@ int FFmpegReader::GetNextPacket() {
 // Get an AVFrame (if any)
 bool FFmpegReader::GetAVFrame() {
 	int frameFinished = 0;
+	// NVDEC failing on a stream it has already decoded (cuvidMapVideoFrame, the download's
+	// cuMemcpy2DAsync: AVERROR_EXTERNAL) is a faulted GPU, not a bad packet. Skipping the frame,
+	// as for a decode error, rendered black frames on 2026-11-20; it fails the export instead,
+	// once this function has freed what it allocated.
+	std::string hw_device_failure;
+	auto note_hw_device_failure = [&](int err, const char* stage) {
+#if USE_HW_ACCEL
+		if (err == AVERROR_EXTERNAL && hw_de_on && hw_de_supported && !force_sw_decode && hw_decode_succeeded &&
+			hw_device_failure.empty())
+			hw_device_failure = std::string("hardware decode failed during ") + stage + ": " + av_err2string(err);
+#else
+		(void) err;
+		(void) stage;
+#endif
+	};
 	auto note_hw_decode_failure = [&](int err, const char* stage) {
 #if USE_HW_ACCEL
 		if (!hw_de_on || !hw_de_supported || force_sw_decode) {
@@ -2080,6 +2095,7 @@ bool FFmpegReader::GetAVFrame() {
 			if (receive_frame_err != 0) {
 				ZmqLogger::Instance()->AppendDebugMethod("FFmpegReader::GetAVFrame (receive frame: frame not ready yet from decoder [\" + av_err2string(receive_frame_err) + \"])", "receive_frame_err", receive_frame_err, "send_packet_pts", send_packet_pts);
 				note_hw_decode_failure(receive_frame_err, "receive_frame");
+				note_hw_device_failure(receive_frame_err, "receive_frame");
 
 				if (receive_frame_err == AVERROR_EOF) {
 					ZmqLogger::Instance()->AppendDebugMethod(
@@ -2126,6 +2142,7 @@ bool FFmpegReader::GetAVFrame() {
 				} else if (next_frame2->hw_frames_ctx) {
 					// A hardware frame (its format is the device's, hw_de_av_pix_fmt): bring it down.
 					if ((err = av_hwframe_transfer_data(next_frame, next_frame2, 0)) < 0) {
+						note_hw_device_failure(err, "hwframe_transfer");
 						ZmqLogger::Instance()->AppendDebugMethod(
 							"FFmpegReader::GetAVFrame (Failed to transfer data to output frame)",
 							"hw_de_on", hw_de_on,
@@ -2250,6 +2267,9 @@ bool FFmpegReader::GetAVFrame() {
 	// deallocate the frame
 	AV_FREE_FRAME(&next_frame);
 
+	if (!hw_device_failure.empty())
+		throw ErrorDecodingVideo(hw_device_failure + ": " + path, packet_status.video_decoded);
+
 	// Did we get a video frame?
 	return frameFinished;
 }
@@ -2346,6 +2366,19 @@ bool FFmpegReader::CheckSeek(bool is_video) {
 // copyNV12 puts the two planes into this reader's interop images, GpuYuv samples them, and the
 // submit waits on the copy. Null means "download it instead": no interop, the device went away,
 // or anything failed.
+namespace {
+
+// The CUDA<->Vulkan handshake gave up (CudaInterop::Lost: a sticky CUDA error, or a wait that ran
+// out): the frame cannot be produced, on the GPU or by downloading it, so the export fails instead
+// of waiting for ever (prod, 2026-11-20).
+void throwIfGpuLost(const std::string& path)
+{
+	if (openshot::CudaInterop::Lost())
+		throw openshot::ErrorDecodingVideo("the GPU stopped answering (" + openshot::CudaInterop::LostReason() + "): " + path);
+}
+
+}   // namespace
+
 std::shared_ptr<openshot::GpuFrame> FFmpegReader::ConvertOnDevice(int out_width, int out_height) {
 #if OPENSHOT_NVDEC_ON_DEVICE
 	openshot::CudaInterop &interop = openshot::CudaInterop::Instance();
@@ -2380,6 +2413,7 @@ std::shared_ptr<openshot::GpuFrame> FFmpegReader::ConvertOnDevice(int out_width,
 			interop.synchronizeStream(decode_stream ? decode_stream : interop.cudaStream());
 			device_luma.reset();
 			device_chroma.reset();
+			throwIfGpuLost(path);
 			return nullptr;
 		}
 
@@ -2409,6 +2443,7 @@ std::shared_ptr<openshot::GpuFrame> FFmpegReader::ConvertOnDevice(int out_width,
 	// stream, which is this reader's own (review C6, 2026-10-01: the result used to be ignored).
 	if (!interop.waitForNV12Copy(*device_luma))
 		interop.synchronizeStream(decode_stream ? decode_stream : interop.cudaStream());
+	throwIfGpuLost(path);
 	if (!submitted) {
 		// Inserted but not submitted: the recording that waits on the copy's semaphore is queued
 		// and the next submit (anyone's) sends it, which consumes the signal -- the images stay.

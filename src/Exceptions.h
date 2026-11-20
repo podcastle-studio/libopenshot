@@ -129,6 +129,22 @@ namespace openshot {
 		virtual ~ErrorDecodingAudio() noexcept {}
 	};
 
+	/// Exception when decoding a video frame fails for good: the GPU decoder (NVDEC) or the
+	/// CUDA<->Vulkan handshake stopped working after the stream had decoded (a faulted GPU).
+	class ErrorDecodingVideo : public FrameExceptionBase
+	{
+	public:
+		/**
+		 * @brief Constructor
+		 *
+		 * @param message A message to accompany the exception
+		 * @param frame_number The frame number being processed
+		 */
+		ErrorDecodingVideo(std::string message, int64_t frame_number=-1)
+			: FrameExceptionBase(message, frame_number) { }
+		virtual ~ErrorDecodingVideo() noexcept {}
+	};
+
 	/// Exception when encoding audio packet
 	class ErrorEncodingAudio : public FrameExceptionBase
 	{

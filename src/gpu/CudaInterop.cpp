@@ -5,10 +5,74 @@
 
 #include "GpuDevice.h"
 
+#include <atomic>
+#include <chrono>
+#include <cstdlib>
 #include <cstring>
+#include <iostream>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
+
+// ---- Lost (both builds)
+
+namespace {
+
+std::atomic<bool> gInteropLost{false};
+std::mutex gInteropLostMu;
+std::string gInteropLostReason;
+
+}   // namespace
+
+namespace openshot
+{
+namespace cuda_detail
+{
+
+bool gInteropLostFlag()
+{
+	return gInteropLost.load();
+}
+
+void markLost(const std::string& reason)
+{
+	{
+		std::lock_guard<std::mutex> lock(gInteropLostMu);
+		if (gInteropLost.load())
+			return;
+		gInteropLostReason = reason;
+		gInteropLost.store(true);
+	}
+	std::clog << "CudaInterop: the CUDA context is lost: " << reason << std::endl;
+}
+
+/// How long a host wait on the CUDA<->Vulkan handshake may take before the GPU is taken for
+/// lost. Generous: four exports share one GPU, and a frame there takes milliseconds.
+std::chrono::milliseconds waitTimeout()
+{
+	static const std::chrono::milliseconds timeout = [] {
+		const char* v = std::getenv("OPENSHOT_GPU_WAIT_TIMEOUT_SEC");
+		const long sec = v && *v ? std::strtol(v, nullptr, 10) : 30;
+		return std::chrono::milliseconds(1000 * (sec > 0 ? sec : 30));
+	}();
+	return timeout;
+}
+
+}   // namespace cuda_detail
+
+bool CudaInterop::Lost()
+{
+	return gInteropLost.load();
+}
+
+std::string CudaInterop::LostReason()
+{
+	std::lock_guard<std::mutex> lock(gInteropLostMu);
+	return gInteropLostReason;
+}
+
+}   // namespace openshot
 
 #if defined(OPENSHOT_HAVE_SKIA_GPU) && defined(OPENSHOT_HAVE_CUDA)
 #define OPENSHOT_CUDA_INTEROP 1
@@ -81,6 +145,8 @@ struct CudaApi
 	decltype(&cuEventRecord) EventRecord = nullptr;
 	decltype(&cuEventDestroy) EventDestroy = nullptr;
 	decltype(&cuEventSynchronize) EventSynchronize = nullptr;
+	decltype(&cuEventQuery) EventQuery = nullptr;
+	decltype(&cuStreamQuery) StreamQuery = nullptr;
 	decltype(&cuStreamWaitEvent) StreamWaitEvent = nullptr;
 	decltype(&cuImportExternalMemory) ImportExternalMemory = nullptr;
 	decltype(&cuDestroyExternalMemory) DestroyExternalMemory = nullptr;
@@ -102,6 +168,75 @@ struct CudaApi
 		return std::string(what) + " failed: " + (name ? name : "unknown CUDA error");
 	}
 };
+
+/// Errors after which a CUDA context runs nothing more (what an XID leaves behind).
+bool isSticky(CUresult r)
+{
+	switch (r) {
+		case CUDA_ERROR_ILLEGAL_ADDRESS:
+		case CUDA_ERROR_LAUNCH_TIMEOUT:
+		case CUDA_ERROR_LAUNCH_FAILED:
+		case CUDA_ERROR_HARDWARE_STACK_ERROR:
+		case CUDA_ERROR_ILLEGAL_INSTRUCTION:
+		case CUDA_ERROR_MISALIGNED_ADDRESS:
+		case CUDA_ERROR_INVALID_ADDRESS_SPACE:
+		case CUDA_ERROR_INVALID_PC:
+		case CUDA_ERROR_ECC_UNCORRECTABLE:
+		case CUDA_ERROR_CONTEXT_IS_DESTROYED:
+		case CUDA_ERROR_DEVICE_UNAVAILABLE:
+			return true;
+		default:
+			return false;
+	}
+}
+
+/// Note a failed call; a sticky error marks the interop lost.
+CUresult noteResult(const CudaApi& cu, const char* what, CUresult r)
+{
+	if (r != CUDA_SUCCESS && isSticky(r))
+		markLost(cu.message(what, r));
+	return r;
+}
+
+/// Wait for `query` (cuEventQuery / cuStreamQuery) to report the work done, for at most
+/// waitTimeout(). cuEventSynchronize and cuStreamSynchronize wait for ever, and when the
+/// Vulkan side of the handshake never signals (a faulted GPU) that is exactly how long they
+/// waited (2026-11-20). Spins briefly first: most waits are a fraction of a millisecond.
+template <class Query>
+CUresult waitBounded(const CudaApi& cu, const char* what, Query query)
+{
+	if (gInteropLost.load())
+		return CUDA_ERROR_LAUNCH_TIMEOUT;   // a context already given up on: do not wait again
+	const auto deadline = std::chrono::steady_clock::now() + waitTimeout();
+	for (int i = 0;; ++i) {
+		const CUresult r = query();
+		if (r != CUDA_ERROR_NOT_READY)
+			return noteResult(cu, what, r);
+		if (std::chrono::steady_clock::now() >= deadline) {
+			markLost(std::string(what) + " did not complete in " +
+					 std::to_string(waitTimeout().count() / 1000) + " s");
+			return CUDA_ERROR_LAUNCH_TIMEOUT;
+		}
+		if (i < 2000)
+			std::this_thread::yield();
+		else
+			std::this_thread::sleep_for(std::chrono::microseconds(100));
+	}
+}
+
+CUresult syncStream(const CudaApi& cu, CUstream stream, const char* what)
+{
+	if (!cu.StreamQuery)
+		return CUDA_ERROR_NOT_INITIALIZED;
+	return waitBounded(cu, what, [&] { return cu.StreamQuery(stream); });
+}
+
+CUresult syncEvent(const CudaApi& cu, CUevent event, const char* what)
+{
+	if (!cu.EventQuery)
+		return CUDA_ERROR_NOT_INITIALIZED;
+	return waitBounded(cu, what, [&] { return cu.EventQuery(event); });
+}
 
 bool loadCuda(CudaApi& api, std::string& error)
 {
@@ -146,6 +281,8 @@ bool loadCuda(CudaApi& api, std::string& error)
 	OPENSHOT_CU_LOAD(EventRecord, cuEventRecord);
 	OPENSHOT_CU_LOAD(EventDestroy, cuEventDestroy);
 	OPENSHOT_CU_LOAD(EventSynchronize, cuEventSynchronize);
+	OPENSHOT_CU_LOAD(EventQuery, cuEventQuery);
+	OPENSHOT_CU_LOAD(StreamQuery, cuStreamQuery);
 	OPENSHOT_CU_LOAD(StreamWaitEvent, cuStreamWaitEvent);
 	OPENSHOT_CU_LOAD(ImportExternalMemory, cuImportExternalMemory);
 	OPENSHOT_CU_LOAD(DestroyExternalMemory, cuDestroyExternalMemory);
@@ -687,19 +824,32 @@ void InteropState::releaseImage(ImageState& state)
 				GpuDevice::QueueGuard guard;
 				submitted = vkQueueSubmit(queue, 0, nullptr, fence);
 			}
-			drained = submitted == VK_SUCCESS &&
-					  vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX) == VK_SUCCESS;
-			vkDestroyFence(device, fence, nullptr);
+			// Bounded, like the CUDA waits: a queue stuck behind a semaphore a faulted CUDA
+			// context never signals never drains.
+			const VkResult waited = submitted == VK_SUCCESS
+				? vkWaitForFences(device, 1, &fence, VK_TRUE,
+								  static_cast<uint64_t>(waitTimeout().count()) * 1000000ull)
+				: VK_ERROR_UNKNOWN;
+			if (waited == VK_TIMEOUT || waited == VK_ERROR_DEVICE_LOST)
+				markLost(waited == VK_TIMEOUT ? "the Vulkan queue did not drain (releasing an interop image)"
+											  : "VK_ERROR_DEVICE_LOST (releasing an interop image)");
+			drained = waited == VK_SUCCESS;
+			if (waited != VK_TIMEOUT)
+				vkDestroyFence(device, fence, nullptr);   // a pending fence must not be destroyed
 		}
-		if (!drained) {
+		if (!drained && !gInteropLost.load()) {
 			GpuDevice::QueueGuard guard;
 			vkQueueWaitIdle(queue);
 		}
 	}
-	if (state.external && stream && cu.StreamSynchronize)
-		cu.StreamSynchronize(stream);
-	if (state.external && encode_stream && cu.StreamSynchronize)
-		cu.StreamSynchronize(encode_stream);
+	// A lost context may still have work queued on these objects: leak them rather than free
+	// memory the GPU could touch. The process is about to be restarted anyway.
+	if (gInteropLost.load())
+		return;
+	if (state.external && stream)
+		syncStream(cu, stream, "cuStreamSynchronize (releasing an interop image)");
+	if (state.external && encode_stream)
+		syncStream(cu, encode_stream, "cuStreamSynchronize (releasing an interop image)");
 	if (state.ready_cu && cu.DestroyExternalSemaphore)
 		cu.DestroyExternalSemaphore(state.ready_cu);
 	if (state.done_cu && cu.DestroyExternalSemaphore)
@@ -824,7 +974,7 @@ bool InteropState::submitBarriers(ImageState& y, ImageState& uv)
 		CUDA_EXTERNAL_SEMAPHORE_WAIT_PARAMS wait{};
 		CUresult result = cu.WaitExternalSemaphores(&y.ready_cu, &wait, 1, stream);
 		if (result == CUDA_SUCCESS)
-			result = cu.StreamSynchronize(stream);
+			result = syncStream(cu, stream, "cuStreamSynchronize (standing barrier signal)");
 		y.ready_signalled = false;
 		if (result != CUDA_SUCCESS) {
 			error = cu.message("consuming a standing barrier signal", result);
@@ -907,7 +1057,7 @@ bool InteropState::copyNV12(const AVFrame* frame, ImageState& y, ImageState& uv,
 		copy.Height = static_cast<size_t>(planes[i]->height);
 		result = cu.Memcpy2DAsync(&copy, on_stream);
 		if (result != CUDA_SUCCESS) {
-			error = cu.message("cuMemcpy2DAsync", result);
+			error = cu.message("cuMemcpy2DAsync", noteResult(cu, "cuMemcpy2DAsync", result));
 			return false;
 		}
 	}
@@ -981,7 +1131,7 @@ bool InteropState::copyToNV12(ImageState& packed, AVFrame* frame, CUstream on_st
 		copy.Height = static_cast<size_t>(planes[i].rows);
 		result = cu.Memcpy2DAsync(&copy, on_stream);
 		if (result != CUDA_SUCCESS) {
-			error = cu.message("cuMemcpy2DAsync", result);
+			error = cu.message("cuMemcpy2DAsync", noteResult(cu, "cuMemcpy2DAsync", result));
 			return false;
 		}
 	}
@@ -1185,7 +1335,7 @@ bool CudaInterop::synchronizeStream(void* stream)
 	cuda_detail::ContextGuard guard(state.cu, state.context);
 	if (!guard.ok())
 		return false;
-	return state.cu.StreamSynchronize(static_cast<CUstream>(stream)) == CUDA_SUCCESS;
+	return cuda_detail::syncStream(state.cu, static_cast<CUstream>(stream), "cuStreamSynchronize") == CUDA_SUCCESS;
 }
 
 bool CudaInterop::synchronizeContext()
@@ -1216,8 +1366,9 @@ void CudaInterop::destroyStream(void* stream)
 	if (!guard.ok())
 		return;
 	CUstream s = static_cast<CUstream>(stream);
-	if (state.cu.StreamSynchronize)
-		state.cu.StreamSynchronize(s);
+	cuda_detail::syncStream(state.cu, s, "cuStreamSynchronize (destroying a stream)");
+	if (cuda_detail::gInteropLostFlag())
+		return;   // work may still be queued on it: leak it
 	if (state.cu.StreamDestroy)
 		state.cu.StreamDestroy(s);
 }
@@ -1273,7 +1424,7 @@ bool CudaInterop::waitForNV12Copy(const GpuImage& y)
 	cuda_detail::ContextGuard guard(impl->state.cu, impl->state.context);
 	if (!guard.ok() || !impl->state.cu.EventSynchronize)
 		return false;
-	return impl->state.cu.EventSynchronize(event) == CUDA_SUCCESS;
+	return cuda_detail::syncEvent(impl->state.cu, event, "waiting for the NV12 copy (cuEventSynchronize)") == CUDA_SUCCESS;
 }
 
 unsigned long long CudaInterop::drawnSemaphore(const GpuImage& packed) const

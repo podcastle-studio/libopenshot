@@ -131,6 +131,16 @@ namespace openshot
 		/// calls it before registering its exit-time teardown, so they outlive that teardown.
 		static void ConstructStatics();
 
+		/// True once a CUDA call of the interop failed with an error that leaves its context
+		/// unusable (an XID: CUDA_ERROR_ILLEGAL_ADDRESS, _LAUNCH_FAILED ...), or a host wait on
+		/// the CUDA<->Vulkan handshake ran past OPENSHOT_GPU_WAIT_TIMEOUT_SEC (default 30). Sticky
+		/// for the life of the process: the readers and writers then throw instead of waiting
+		/// for ever, and the process should be restarted (prod, 2026-11-20: four exports blocked
+		/// in waitForNV12Copy after an XID 43).
+		static bool Lost();
+		/// Why Lost() is true; empty while it is not.
+		static std::string LostReason();
+
 		/// Is there a CUDA context sharing memory with the Vulkan device? Sets it
 		/// up on the first call. False is a normal answer; see lastError().
 		bool available();
