@@ -48,6 +48,17 @@ a='255*clip((40-hypot(X-80-30*sin(T*2),Y-60))/8,0,1)',format=yuva444p12le" -t 1 
 # same bytes as software decode. 4:2:0 8-bit, what NVDEC keeps on the device as NV12.
 ffmpeg -y -hide_banner -v error -f lavfi -i "testsrc2=size=640x360:rate=30" -t 1 -c:v libvpx-vp9 -b:v 800k -pix_fmt yuv420p -an clip_vp9_640x360_30.webm
 ffmpeg -y -hide_banner -v error -f lavfi -i "testsrc2=size=640x360:rate=30" -t 1 -c:v libvpx -b:v 800k -pix_fmt yuv420p -an clip_vp8_640x360_30.webm
+# WebM with alpha, for unit.webm_alpha: transparent left half, opaque right half. The alpha plane
+# rides in Matroska's BlockAdditional (track tag alpha_mode=1) and only libvpx decodes it. The
+# remuxed copy is what -c copy makes of it: the same stream, the tag written as ALPHA_MODE.
+for vpx in "libvpx vp8" "libvpx-vp9 vp9"; do
+  set -- $vpx
+  ffmpeg -y -hide_banner -v error -f lavfi -i "testsrc2=size=320x180:rate=30" -t 0.5 \
+    -vf "format=yuva420p,geq=lum='lum(X,Y)':cb='cb(X,Y)':cr='cr(X,Y)':a='if(lt(X,W/2),0,255)'" \
+    -c:v "$1" -b:v 400k -pix_fmt yuva420p -auto-alt-ref 0 -an "clip_${2}_alpha_320x180_30.webm"
+done
+ffmpeg -y -hide_banner -v error -i clip_vp8_alpha_320x180_30.webm -c copy remux_tmp.webm
+mv remux_tmp.webm clip_vp8_alpha_remuxed_320x180_30.webm
 ffmpeg -y -hide_banner -v error -f lavfi -i "testsrc2=size=640x360:rate=30" -t 1 -c:v libx265 -x265-params log-level=error -crf 24 -pix_fmt yuv420p -tag:v hvc1 -an clip_hevc_640x360_30.mp4
 ffmpeg -y -hide_banner -v error -f lavfi -i "testsrc2=size=640x360:rate=30" -t 1 -c:v libsvtav1 -crf 40 -pix_fmt yuv420p -an clip_av1_640x360_30.mp4
 # opaque JPEG

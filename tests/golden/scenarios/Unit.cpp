@@ -1419,6 +1419,85 @@ void golden::registerUnitScenarios() {
             checks.push_back({"telemetry_report", ok, r.Summary()});
         });
 
+    // A WebM with alpha keeps its alpha (2026-11-20). The alpha plane rides in Matroska's
+    // BlockAdditional and only libvpx decodes it; FFmpeg's native vp8/vp9 decoders and NVDEC
+    // return the colour alone, and a VP8 clip with alpha rendered opaque because only VP9 was
+    // routed to libvpx. The clips are transparent on the left half and opaque on the right
+    // (media/generate.sh); the remuxed one carries the tag as ALPHA_MODE, which is how a file
+    // that went through ffmpeg -c copy arrives. Each is read with hardware decode off and on:
+    // NVDEC has no alpha plane, so with it on an alpha stream must still go to libvpx. The
+    // opaque VP8 clip must still be decoded by NVDEC wherever H.264 is (the override must not
+    // catch it); on a machine with no NVDEC both decline and that is the supported answer.
+    addCustom("unit.webm_alpha", {"unit"}, unitScene,
+        [](Scene& s, std::vector<Captured>&, std::vector<Check>& checks) {
+            openshot::Settings* settings = openshot::Settings::Instance();
+            struct Restore {
+                openshot::Settings* settings;
+                int previous;
+                ~Restore() { settings->HARDWARE_DECODER = previous; }
+            } restore{settings, settings->HARDWARE_DECODER};
+
+            // Reads `wanted` frames; returns whether NVDEC decoded them, and the widest alpha on
+            // the left half and the narrowest on the right, 8 px clear of the cut each side.
+            struct Result { bool hardware = false; int left_max = -1, right_min = 256; std::string error; };
+            const auto read = [&](const std::string& file, int hardware) {
+                settings->HARDWARE_DECODER = hardware;
+                Result r;
+                try {
+                    openshot::FFmpegReader reader(s.media(file));
+                    reader.DecodeAudio(false);
+                    reader.Open();
+                    for (int i = 1; i <= 8; ++i) {
+                        const auto image = reader.GetFrame(i)->GetImage();
+                        const int w = image->width(), h = image->height();
+                        for (int y = 0; y < h; ++y) {
+                            const uchar* row = image->constScanLine(y);
+                            for (int x = 0; x < w; ++x) {
+                                const int a = row[4 * x + 3];
+                                if (x < w / 2 - 8) r.left_max = std::max(r.left_max, a);
+                                else if (x >= w / 2 + 8) r.right_min = std::min(r.right_min, a);
+                            }
+                        }
+                    }
+                    r.hardware = reader.HardwareDecodeSuccessful();
+                    reader.Close();
+                } catch (const std::exception& e) {
+                    r.error = std::string("threw: ") + e.what();
+                }
+                return r;
+            };
+
+            const char* alpha_clips[] = {"clip_vp8_alpha_320x180_30.webm",
+                                         "clip_vp9_alpha_320x180_30.webm",
+                                         "clip_vp8_alpha_remuxed_320x180_30.webm"};
+            for (const char* file : alpha_clips) {
+                for (int hardware : {0, 2}) {
+                    const Result r = read(file, hardware);
+                    const bool ok = r.error.empty() && r.left_max <= 8 && r.right_min >= 247 &&
+                                    !r.hardware;
+                    char detail[256];
+                    std::snprintf(detail, sizeof(detail),
+                                  "%s HARDWARE_DECODER=%d: left alpha max %d, right alpha min %d, "
+                                  "NVDEC %s%s%s", file, hardware, r.left_max, r.right_min,
+                                  r.hardware ? "used (alpha lost)" : "not used",
+                                  r.error.empty() ? "" : "; ", r.error.c_str());
+                    checks.push_back({std::string("webm_alpha(") + file + ", hw=" +
+                                          std::to_string(hardware) + ")", ok, detail});
+                }
+            }
+
+            // The opaque VP8 clip still goes to NVDEC wherever NVDEC decodes at all.
+            const Result h264 = read("clip_a_640x360_30.mp4", 2);
+            const Result vp8 = read("clip_vp8_640x360_30.webm", 2);
+            const bool ok = h264.error.empty() && vp8.error.empty() && vp8.hardware == h264.hardware;
+            char detail[192];
+            std::snprintf(detail, sizeof(detail),
+                          "opaque VP8 NVDEC %s, H.264 NVDEC %s%s%s", vp8.hardware ? "yes" : "no",
+                          h264.hardware ? "yes" : "no", vp8.error.empty() ? "" : "; ",
+                          vp8.error.c_str());
+            checks.push_back({"webm_opaque_vp8_hardware_decode", ok, detail});
+        });
+
     // Hardware decode must not take the process with it.
     //
     // With HARDWARE_DECODER set, FFmpegReader used to throw on the first frame

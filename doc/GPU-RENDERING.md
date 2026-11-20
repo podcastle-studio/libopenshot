@@ -29,7 +29,7 @@ default (2026-09-24). Every GPU path falls back to the CPU by itself when its re
 
 | stage | on the GPU | CPU fallback / notes |
 |---|---|---|
-| decode | NVDEC for H.264, HEVC, VP8, VP9, AV1 (and MPEG-2/VC-1); 8-bit 4:2:0 frames stay on the device through `CudaInterop` into `GpuYuv` (YUV→RGBA on the GPU), bit-exact against software decode (`unit.nvdec_on_device`, all five codecs) | software decode + swscale: ProRes (the watermark), alpha VP9 (libvpx), and a stream NVDEC refuses (> 4096 wide, 4:4:4) reopens in software. 10-bit (P010) is decoded by NVDEC but downloaded and converted by swscale |
+| decode | NVDEC for H.264, HEVC, VP8, VP9, AV1 (and MPEG-2/VC-1); 8-bit 4:2:0 frames stay on the device through `CudaInterop` into `GpuYuv` (YUV→RGBA on the GPU), bit-exact against software decode (`unit.nvdec_on_device`, all five codecs) | software decode + swscale: ProRes (the watermark), alpha VP8 and VP9 (libvpx), and a stream NVDEC refuses (> 4096 wide, 4:4:4) reopens in software. 10-bit (P010) is decoded by NVDEC but downloaded and converted by swscale |
 | decoder threads | one FFmpeg thread per hardware decoder (NVDEC does the work); software decoders keep up to 16 frame threads | n/a |
 | read-ahead | one decode worker per `FFmpegReader` (`READ_AHEAD_FRAMES`, default 2) | host-memory frames only: with `GPU_DECODE` on, only for a stream that can never reach the GPU (no NVDEC, a layout `GpuYuv` does not convert — the ProRes 4444 watermark), since 2026-09-24 |
 | compositing | `Timeline::GetFrame` on a pooled Graphite surface; `Clip::draw_to_canvas` in one transformed draw; all 16 blend modes; clip shadow, blur, flip on the paint; the opacity curve as an exact pre-pass; overlay-clip transitions (the overlay composited onto the source frame, the overlay clip transformed on the GPU); a host-memory source (still image, held last frame) uploaded once (`Clip::HostTextureCache`) | a clip that cannot draw on the GPU — a frame-number overlay, a waveform, an effect after keyframes, none of which the service uses — puts the whole frame on QPainter only if its blend mode is not `NORMAL` (`Timeline.cpp:1099`); a `NORMAL` one reads the canvas back mid-frame in `apply_background` |
@@ -49,7 +49,7 @@ untouched.
 **Not on the GPU, deliberately:** `Crop` without `GPU_CROP` (the switch exists because the GPU's rounded
 corners antialias differently; the service turns it on); decoding what NVDEC cannot — ProRes (the
 watermark: 144 small frames per export, read ahead on their own thread and uploaded, the held last
-frame once), still images and SVG shapes (decoded once, uploaded once), alpha VP9 (libvpx); 10-bit
+frame once), still images and SVG shapes (decoded once, uploaded once), alpha VP8 and VP9 (libvpx); 10-bit
 video's conversion (P010, see "What is left", 6); ChromaKey's non-YCbCr methods (babl colour science; the service only uses YCbCr); ColorMap's
 colour-match mode (re-bakes the cube from the frame, i.e. a readback). Enhancement's grain *is* on
 the GPU (since 2026-09-24), but not as a parity fragment — see "Parity". Also CPU by nature and
@@ -809,7 +809,7 @@ the background and the LUT/tone tables. The gate for all of it in the suite is `
   `GpuYuv` do not take (R8/RG8 only), so it is downloaded and converted by swscale. The service's
   inputs are 8-bit (H.264, browser webm); porting means R16/RG16 interop images and a 10-bit
   `GpuYuv` conversion, and changes pixels like `GPU_DECODE` does.
-- **Alpha VP9** (libvpx, no hwaccel; NVDEC has no alpha plane) and **4:4:4 / 4:2:2** streams:
+- **Alpha VP8 and VP9** (libvpx, no hwaccel; NVDEC has no alpha plane) and **4:4:4 / 4:2:2** streams:
   software decode, then `GpuYuv` for 4:2:0 or swscale otherwise.
 - **Still images and SVG shapes**: decoded / rasterised once on the CPU, uploaded once.
 - **Audio** (see "What runs where"), and the service's ffmpeg audio mux.

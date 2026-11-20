@@ -362,7 +362,7 @@ GPU to take over. Earlier, lower figures in the docs were measured on an Intel i
   and made GPU decode look worthless. It shares the surface now, as `Frame`'s copy constructor
   does. Anything new that copies frames must do the same.
 - **NVDEC takes H.264, HEVC, VP8, VP9 and AV1** (2026-09-24; `IsHardwareDecodeSupported`), kept on
-  the device for 8-bit 4:2:0. Alpha VP9 stays on libvpx; AV1 needs FFmpeg's native `av1` decoder
+  the device for 8-bit 4:2:0. Alpha VP8 and VP9 stay on libvpx; AV1 needs FFmpeg's native `av1` decoder
   (libdav1d has no hwaccel), chosen only while hardware decode is on. 10-bit (P010) is decoded by
   NVDEC but still downloaded — `CudaInterop`/`GpuYuv` are R8/RG8 only.
 - **`unit.gpu_resident` is the "frame never leaves the GPU" gate**: every feature the service

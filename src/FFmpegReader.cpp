@@ -561,12 +561,18 @@ void FFmpegReader::OpenStreams() {
 					pCodec = native;
 			}
 #endif
-			if (codecId == AV_CODEC_ID_VP9) {
-				// Does the stream metadata say alpha_mode=1?
+			// A WebM with alpha (VP8 or VP9) carries the alpha plane as a second stream in
+			// Matroska's BlockAdditional, flagged by the track tag alpha_mode=1. Only libvpx
+			// decodes it: FFmpeg's native vp8/vp9 decoders and NVDEC drop it and the clip renders
+			// opaque (info.has_alpha still says true). av_dict_get matches the key case-
+			// insensitively, so a remuxed file's ALPHA_MODE is found too. The choice does not
+			// depend on hardware decode, so a reopen with force_sw_decode keeps libvpx.
+			if (codecId == AV_CODEC_ID_VP8 || codecId == AV_CODEC_ID_VP9) {
 				AVDictionaryEntry *alpha =
 					av_dict_get(pFormatCtx->streams[videoStream]->metadata, "alpha_mode", NULL, 0);
 				if (alpha && strcmp(alpha->value, "1") == 0) {
-					const AVCodec *pref = avcodec_find_decoder_by_name("libvpx-vp9");
+					const AVCodec *pref = avcodec_find_decoder_by_name(
+						codecId == AV_CODEC_ID_VP8 ? "libvpx" : "libvpx-vp9");
 					if (pref) pCodec = pref;               // override native decoder
 				}
 			}
@@ -584,8 +590,9 @@ void FFmpegReader::OpenStreams() {
 				if (hw_de_on && (retry_decode_open==2)) {
 					// Up to here no decision is made if hardware or software decode
 					hw_de_supported = IsHardwareDecodeSupported(pCodecCtx->codec_id);
-					// A VP9 with alpha is decoded by libvpx (above): NVDEC has no alpha plane and
-					// libvpx no hwaccel, so that stream stays in software.
+					// A VP8 or VP9 with alpha is decoded by libvpx (above; "libvpx" and
+					// "libvpx-vp9" both match): NVDEC has no alpha plane and libvpx no hwaccel,
+					// so that stream stays in software.
 					if (hw_de_supported && pCodec && std::strncmp(pCodec->name, "libvpx", 6) == 0)
 						hw_de_supported = 0;
 				}
