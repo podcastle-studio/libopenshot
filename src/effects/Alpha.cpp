@@ -1,5 +1,10 @@
 #include "Alpha.h"
 #include "Exceptions.h"
+
+#include "EffectShaders.h"
+#include "image-processing-lib/src/Planner/EffectPlan.h"
+
+#include "skia/include/effects/SkRuntimeEffect.h"
 #include "./image-processing-lib/src/Effects/effects.h"
 
 using namespace openshot;
@@ -83,13 +88,40 @@ void Alpha::init_effect_details() {
 	info.has_video = true;
 }
 
-// This method is required for all derived classes of EffectBase, and returns a
-// modified openshot::Frame object
+// The shared SkSL source lives in image-processing-lib/shaders/ so the editor loads the
+// same bytes through CanvasKit; it is embedded here at build time. Read it there --
+// including why it is written the way it is.
+const char* Alpha::GpuShaderSource() const
+{
+	return openshot::shaders::kAlpha;
+}
+
+bool Alpha::SetGpuUniforms(SkRuntimeEffectBuilder& builder, int64_t frame_number,
+				int width, int height) const
+{
+	// Resolved by the shared planner (image-processing-lib/src/Planner), the same code the editor
+	// runs, so the two cannot disagree about what these values mean. It declines -- and the C++
+	// twin runs -- for every case the fragment does not cover.
+	Podcastle::Effects::EffectPlan plan;
+	PlanForFrame(frame_number, width, height, plan);
+	return BindPlan(builder, plan);
+}
+
+bool Alpha::PlanForFrame(int64_t frame_number, int width, int height,
+						 Podcastle::Effects::EffectPlan& plan) const
+{
+	plan = Podcastle::Effects::planEffect("ALPHA", {{"alpha", alpha.GetValue(frame_number)}}, width, height);
+	return true;
+}
+
 std::shared_ptr<openshot::Frame> Alpha::GetFrame(std::shared_ptr<openshot::Frame> frame, int64_t frame_number) {
 	const double alphaValue = alpha.GetValue(frame_number);
 	if (alphaValue >= 1.0) {
 		return frame;
 	}
+
+	if (ApplyOnGpu(frame, frame_number))
+		return frame;
 
 	std::shared_ptr<QImage> img = frame->GetImage();
 	applyAlphaPremultiplied(*img, alphaValue);

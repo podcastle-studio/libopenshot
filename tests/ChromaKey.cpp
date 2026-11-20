@@ -69,3 +69,66 @@ TEST_CASE( "threshold", "[libopenshot][effect][chromakey]" )
     CHECK(pix_e == expected);
 }
 
+TEST_CASE( "default method is basic soft", "[libopenshot][effect][chromakey][json]" )
+{
+    openshot::ChromaKey e;
+    Json::Value json = e.JsonValue();
+    CHECK(json["keymethod"].asInt() == CHROMAKEY_BASIC_SOFT);
+}
+
+TEST_CASE( "basic vs basic soft halo behavior", "[libopenshot][effect][chromakey]" )
+{
+    // Pick a green value in the halo band for key=(0,255,0), threshold=5, halo=20.
+    // For BASIC this should remain unchanged, for BASIC_SOFT it should be partially faded.
+    auto frame_basic = std::make_shared<openshot::Frame>(1, 320, 180, "#00fa00");
+    auto frame_soft = std::make_shared<openshot::Frame>(1, 320, 180, "#00fa00");
+
+    openshot::Color key(0, 255, 0, 255);
+    openshot::Keyframe fuzz(5);
+    openshot::Keyframe halo(20);
+
+    openshot::ChromaKey basic(key, fuzz, halo, CHROMAKEY_BASIC);
+    openshot::ChromaKey soft(key, fuzz, halo, CHROMAKEY_BASIC_SOFT);
+
+    auto out_basic = basic.GetFrame(frame_basic, 1);
+    auto out_soft = soft.GetFrame(frame_soft, 1);
+
+    QColor basic_pix = out_basic->GetImage()->pixelColor(10, 10);
+    QColor soft_pix = out_soft->GetImage()->pixelColor(10, 10);
+
+    CHECK(basic_pix == QColor(0, 250, 0, 255));
+    CHECK(soft_pix.alpha() < 255);
+    CHECK(soft_pix.alpha() > 0);
+    CHECK(soft_pix != basic_pix);
+}
+
+TEST_CASE( "json roundtrip preserves method", "[libopenshot][effect][chromakey][json]" )
+{
+    openshot::Color key(0, 255, 0, 255);
+    openshot::Keyframe fuzz(5);
+    openshot::Keyframe halo(20);
+    openshot::ChromaKey basic(key, fuzz, halo, CHROMAKEY_BASIC);
+    openshot::ChromaKey soft(key, fuzz, halo, CHROMAKEY_BASIC_SOFT);
+
+    Json::Value basic_json = basic.JsonValue();
+    Json::Value soft_json = soft.JsonValue();
+
+    openshot::ChromaKey basic_loaded;
+    openshot::ChromaKey soft_loaded;
+    basic_loaded.SetJsonValue(basic_json);
+    soft_loaded.SetJsonValue(soft_json);
+
+    CHECK(basic_loaded.JsonValue()["keymethod"].asInt() == CHROMAKEY_BASIC);
+    CHECK(soft_loaded.JsonValue()["keymethod"].asInt() == CHROMAKEY_BASIC_SOFT);
+}
+
+TEST_CASE( "SetJson string preserves keymethod", "[libopenshot][effect][chromakey][json]" )
+{
+    openshot::ChromaKey source(openshot::Color(0, 255, 0, 255), openshot::Keyframe(5), openshot::Keyframe(20), CHROMAKEY_BASIC_SOFT);
+    const std::string payload = source.Json();
+
+    openshot::ChromaKey loaded;
+    loaded.SetJson(payload);
+
+    CHECK(loaded.JsonValue()["keymethod"].asInt() == CHROMAKEY_BASIC_SOFT);
+}

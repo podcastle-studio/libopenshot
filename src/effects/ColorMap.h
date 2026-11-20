@@ -13,7 +13,7 @@
 #ifndef OPENSHOT_COLORMAP_EFFECT_H
 #define OPENSHOT_COLORMAP_EFFECT_H
 
-#include "../EffectBase.h"
+#include "../GpuEffect.h"
 #include "../Json.h"
 #include "../KeyFrame.h"
 
@@ -39,13 +39,16 @@ namespace openshot
      * This wrapper adds: OpenMP parallelized trilinear apply, QImage loading,
      * EffectBase integration, keyframe animation.
      */
-    class ColorMap : public EffectBase
+    class ColorMap : public GpuEffect
     {
     private:
         struct Impl;
         std::unique_ptr<Impl> pimpl;
 
     public:
+        /// Drops the LUT atlas and the host-source upload (EffectBase::ReleaseGpuResources).
+        void ReleaseGpuResources() override;
+
         // ── LUT mode keyframes ──────────────────────────────────────────────
         Keyframe intensity;
         Keyframe intensity_r;
@@ -83,6 +86,15 @@ namespace openshot
         void SetJson(const std::string value) override;
         void SetJsonValue(const Json::Value root) override;
         std::string PropertiesJSON(int64_t requested_frame) const override;
+
+    protected:
+        /// The .cube applied as one fragment, with the cube itself uploaded as a texture.
+        const char* GpuShaderSource() const override;
+
+        /// Bind the cube's atlas and this frame's intensities. Declines -- and so falls back to
+        /// the C++ -- when the effect is in colour-match mode or the atlas cannot be built.
+        bool SetGpuUniforms(SkRuntimeEffectBuilder& builder, int64_t frame_number,
+                            int width, int height) const override;
     };
 
 } // namespace openshot

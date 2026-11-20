@@ -25,6 +25,7 @@
 #include <mutex>
 
 #include "ChannelLayouts.h"
+#include "Enums.h"
 #include "Fraction.h"
 
 #include <QColor>
@@ -85,12 +86,31 @@ namespace openshot
 	 *
 	 * @endcode
 	 */
+	class GpuFrame;
+
 	class Frame
 	{
 	private:
 		std::shared_ptr<QImage> image;
 		std::shared_ptr<QImage> wave_image;
 
+		/// GPU surface holding this frame's pixels, when it has one. While it is set the
+		/// surface is authoritative and @c image is stale or absent; the first GetImage()
+		/// brings the pixels across once and detaches it. See AttachGpuFrame().
+		///
+		/// Copying a Frame shares this pointer rather than duplicating the surface. That
+		/// is safe because every mutator (AddColor, AddImage, SetImageCV) drops its own
+		/// frame's pointer and installs a CPU image, so neither copy can write through
+		/// the other. Drawing into GpuBacking()->canvas() directly is the exception, and
+		/// only the Timeline does that, to a canvas it made itself.
+		std::shared_ptr<openshot::GpuFrame> gpu_frame;
+		std::shared_ptr<void> encoder_frame;
+
+		/// Deliberately NOT behind USE_QT_PLAYER. Only Display()/DisplayWaveform() use it, but this
+		/// is a private data member of a public class: guarding it would make sizeof(Frame) depend
+		/// on a build option, and a consumer compiling against these headers without the macro
+		/// while linking a player-enabled library would disagree about the layout of every member
+		/// after it. The methods can be guarded; the storage cannot.
 		std::shared_ptr<QApplication> previewApp;
 		std::recursive_mutex addingImageMutex;
 		std::recursive_mutex addingAudioMutex;
@@ -102,7 +122,7 @@ namespace openshot
 		int sample_rate;
 		std::string color;
 		int64_t max_audio_sample; ///< The max audio sample count added to this frame
-		bool audio_reversed; ///< Keep track of audio reversal (i.e. time keyframe)
+		bool audio_is_increasing; ///< Keep track of audio direction (i.e. related to time keyframe)
 
 #ifdef USE_OPENCV
 		cv::Mat imagecv; ///< OpenCV image. It will always be in BGRA format
@@ -114,6 +134,7 @@ namespace openshot
 	public:
 		std::shared_ptr<juce::AudioBuffer<float>> audio;
 		int64_t number;	 ///< This is the frame number (starting at 1)
+		double capture_timestamp; ///< Optional source capture timestamp in seconds for live capture frames
 		bool has_audio_data; ///< This frame has been loaded with audio data
 		bool has_image_data; ///< This frame has been loaded with pixel data
 
@@ -176,11 +197,14 @@ namespace openshot
 		/// Copy data and pointers from another Frame instance
 		void DeepCopy(const Frame& other);
 
-		/// Display the frame image to the screen (primarily used for debugging reasons)
+#ifdef USE_QT_PLAYER
+		/// Display the frame image to the screen (primarily used for debugging reasons).
+		/// Debug-only and Qt Widgets-based, so it is absent from an ENABLE_PLAYER=OFF build.
 		void Display();
 
 		/// Display the wave form
 		void DisplayWaveform();
+#endif
 
 		/// Get magnitude of range of samples (if channel is -1, return average of all channels for that sample)
 		float GetAudioSample(int channel, int sample, int magnitude_range);
@@ -203,7 +227,48 @@ namespace openshot
 		int64_t GetBytes();
 
 		/// Get pointer to Qt QImage image object
+		///
+		/// On a GPU-backed frame this performs the one readback that brings the pixels
+		/// to the CPU and detaches the GPU surface, so every unported path keeps working
+		/// unchanged. It is therefore the point where a frame stops being GPU-backed.
 		std::shared_ptr<QImage> GetImage();
+
+		/// Make @a gpu this frame's pixels.
+		///
+		/// The surface becomes authoritative: GetImage() will read it back once, and any
+		/// AddImage() drops it because the CPU image then supersedes it. Pass null to
+		/// detach without a readback.
+		///
+		/// @note A Graphite surface belongs to the thread whose recorder created it, so a
+		/// frame must not still be GPU-backed when it crosses to another thread. The
+		/// Timeline flattens its frame before returning it for exactly this reason.
+		void AttachGpuFrame(std::shared_ptr<openshot::GpuFrame> gpu);
+
+		/// The GPU surface backing this frame, or null when it is a normal CPU frame.
+		const std::shared_ptr<openshot::GpuFrame>& GpuBacking() const { return gpu_frame; }
+
+		/// True when this frame's pixels live on the GPU.
+		bool IsGpuBacked() const { return gpu_frame != nullptr; }
+
+		/// Bring a GPU-backed frame's pixels to the CPU and detach the surface.
+		///
+		/// Idempotent, and a no-op on a frame that is not GPU-backed. Called by
+		/// GetImage(); call it directly to release the surface at a chosen point — in
+		/// particular on the thread that created it.
+		void FlattenGpuFrame();
+
+		/// An encoder-ready copy of this frame's picture, made by the writer on the
+		/// thread that composited it (W25): an @c AVFrame in the encoder's own
+		/// hardware format, held opaquely so this header stays FFmpeg-free. A frame
+		/// carrying one has **no CPU image and no GPU surface** -- it exists to be
+		/// encoded -- so only the writer that asked for it may consume it.
+		void AttachEncoderFrame(std::shared_ptr<void> encoded, int width, int height);
+
+		/// The encoder-ready copy, or null.
+		const std::shared_ptr<void>& EncoderFrame() const { return encoder_frame; }
+
+		/// Drop the GPU surface without reading it back.
+		void DropGpuFrame();
 
 		/// Set Pixel Aspect Ratio
 		openshot::Fraction GetPixelRatio() { return pixel_ratio; };
@@ -244,9 +309,8 @@ namespace openshot
 		/// Set the original sample rate of this frame's audio data
 		void SampleRate(int orig_sample_rate) { sample_rate = orig_sample_rate; };
 
-		/// Reverse the audio buffer of this frame (will only reverse a single time, regardless of how many times
-		/// you invoke this method)
-		void ReverseAudio();
+		/// Set the direction of the audio buffer of this frame
+		void SetAudioDirection(bool is_increasing);
 
 		/// Save the frame image to the specified path.  The image format can be BMP, JPG, JPEG, PNG, PPM, XBM, XPM
 		void Save(std::string path, float scale, std::string format="PNG", int quality=100);
@@ -258,9 +322,12 @@ namespace openshot
 		void SetPixelRatio(int num, int den);
 
 		/// Thumbnail the frame image with tons of options to the specified path.  The image format is determined from the extension (i.e. image.PNG, image.JPEG).
-		/// This method allows for masks, overlays, background color, and much more accurate resizing (including padding and centering)
+		/// This method allows for masks, overlays, background color, and much more accurate resizing (including padding and centering).
+		/// A trailing optional scale mode can force FIT / CROP / STRETCH behavior while preserving
+		/// legacy behavior for existing callers.
 		void Thumbnail(std::string path, int new_width, int new_height, std::string mask_path, std::string overlay_path,
-				std::string background_color, bool ignore_aspect, std::string format="png", int quality=100, float rotate=0.0);
+				std::string background_color, bool ignore_aspect, std::string format="png", int quality=100,
+				float rotate=0.0, ScaleType scale_mode=SCALE_FIT);
 
 		/// Play audio samples for this frame
 		void Play();

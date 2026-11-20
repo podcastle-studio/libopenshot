@@ -11,10 +11,39 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
 #include "openshot_catch.h"
+#include <cstdlib>
 #include <sstream>
+#include <fstream>
+#include <cstdio>
 
 
+#include "Exceptions.h"
 #include "Profiles.h"
+
+static std::string get_temp_test_path(const std::string& file_name) {
+#ifdef _WIN32
+    const char* base = std::getenv("TEMP");
+    if (!base || !*base) {
+        base = std::getenv("TMP");
+    }
+    if (!base || !*base) {
+        base = ".";
+    }
+    return std::string(base) + "\\" + file_name;
+#else
+    const char* base = std::getenv("TMPDIR");
+    if (!base || !*base) {
+        base = "/tmp";
+    }
+    return std::string(base) + "/" + file_name;
+#endif
+}
+
+static std::string test_output_profile_path(const std::string& base_name) {
+    std::stringstream file_name;
+    file_name << base_name << "_" << std::rand() << ".profile";
+    return get_temp_test_path(file_name.str());
+}
 
 TEST_CASE( "empty constructor", "[libopenshot][profile]" )
 {
@@ -105,6 +134,38 @@ TEST_CASE( "constructor with example profiles", "[libopenshot][profile]" )
     CHECK(p2.info.spherical == false);
 }
 
+TEST_CASE( "invalid profile path message", "[libopenshot][profile]" )
+{
+    const std::string invalid_path = get_temp_test_path("__openshot_missing_test_profile__");
+    std::remove(invalid_path.c_str());
+    try {
+        openshot::Profile p(invalid_path);
+        FAIL("Expected InvalidFile for missing profile path");
+    } catch (const openshot::InvalidFile& e) {
+        const std::string message = e.what();
+        CHECK(message.find("Profile file could not be found or opened.") != std::string::npos);
+        CHECK(message.find(invalid_path) != std::string::npos);
+    }
+}
+
+TEST_CASE( "invalid profile parse message", "[libopenshot][profile]" )
+{
+    const std::string invalid_profile = get_temp_test_path("openshot_invalid_profile_for_test.profile");
+    {
+        std::ofstream f(invalid_profile);
+        f << "width=abc\n";
+    }
+
+    try {
+        openshot::Profile p(invalid_profile);
+        FAIL("Expected InvalidFile for malformed profile contents");
+    } catch (const openshot::InvalidFile& e) {
+        const std::string message = e.what();
+        CHECK(message.find("Profile file could not be parsed (invalid format or values).") != std::string::npos);
+        CHECK(message.find(invalid_profile) != std::string::npos);
+    }
+}
+
 TEST_CASE( "24 fps names", "[libopenshot][profile]" )
 {
     std::stringstream path;
@@ -181,12 +242,11 @@ TEST_CASE( "save profiles", "[libopenshot][profile]" )
     openshot::Profile p1(profile1.str());
 
     // Save copy
-    std::stringstream profile1_copy;
-    profile1_copy << TEST_MEDIA_PATH << "example_profile1_copy";
-    p1.Save(profile1_copy.str());
+    const std::string profile1_copy = test_output_profile_path("example_profile1_copy");
+    p1.Save(profile1_copy);
 
     // Load saved copy
-    openshot::Profile p1_load_copy(profile1_copy.str());
+    openshot::Profile p1_load_copy(profile1_copy);
 
     // Default values
     CHECK(p1_load_copy.info.description == "HD 720p 24 fps");
@@ -233,12 +293,11 @@ TEST_CASE( "spherical profiles", "[libopenshot][profile]" )
     CHECK(p_json.ShortName() == "3840x1920p30 360°");
 
     // Save and reload to test file I/O
-    std::stringstream profile_path;
-    profile_path << TEST_MEDIA_PATH << "example_profile_360";
-    p.Save(profile_path.str());
+    const std::string profile_path = test_output_profile_path("example_profile_360");
+    p.Save(profile_path);
 
     // Load the saved profile
-    openshot::Profile p_loaded(profile_path.str());
+    openshot::Profile p_loaded(profile_path);
     CHECK(p_loaded.info.spherical == true);
     CHECK(p_loaded.ShortName() == "3840x1920p30 360°");
 

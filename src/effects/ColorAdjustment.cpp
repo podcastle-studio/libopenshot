@@ -10,6 +10,10 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
 #include "ColorAdjustment.h"
+
+#include "EffectShaders.h"
+
+#include "skia/include/effects/SkRuntimeEffect.h"
 #include "Exceptions.h"
 #include <QImage>
 #include <QRgb>
@@ -37,25 +41,31 @@ void applyTemperatureTint(double& r, double& g, double& b, const double temperat
     g *= (1.0 - tint * 0.1);
     r *= (1.0 + tint * 0.05);
     b *= (1.0 + tint * 0.05);
+
+    // Clamped here rather than only at the end, as the editor's color.frag does: vibrance
+    // measures the saturation of what this left, and an over-range channel would skew it.
+    r = std::clamp(r, 0.0, 255.0);
+    g = std::clamp(g, 0.0, 255.0);
+    b = std::clamp(b, 0.0, 255.0);
 }
 
 // Apply vibrance adjustment to RGB values: vibrance_value: -1.0 to 1.0
+// The editor's applyVibrance (color.frag): push away from Rec. 709 grey, twice as hard on dull
+// colours as on saturated ones, then clamp before saturation reads the result.
 void applyVibrance(double& r, double& g, double& b, const double vibrance_value) {
     if (vibrance_value == 0) return;
-
-    const double amount = vibrance_value;
-    const double gray = (r + g + b) / 3.0;
 
     // Avoid initializer_list overhead
     double maxRGB = r > g ? (r > b ? r : b) : (g > b ? g : b);
     double minRGB = r < g ? (r < b ? r : b) : (g < b ? g : b);
 
     const double saturation = maxRGB == 0 ? 0 : (maxRGB - minRGB) / maxRGB;
-    const double boostFactor = amount * (1.0 - saturation * saturation);
+    const double gray = r * 0.2126 + g * 0.7152 + b * 0.0722;
+    const double scale = 1.0 + (vibrance_value * 2.0) * (1.0 - saturation);
 
-    r = gray + (r - gray) * (1.0 + boostFactor);
-    g = gray + (g - gray) * (1.0 + boostFactor);
-    b = gray + (b - gray) * (1.0 + boostFactor);
+    r = std::clamp(gray + (r - gray) * scale, 0.0, 255.0);
+    g = std::clamp(gray + (g - gray) * scale, 0.0, 255.0);
+    b = std::clamp(gray + (b - gray) * scale, 0.0, 255.0);
 }
 
 // Apply saturation adjustment to RGB values: saturation_value: -1.0 to 1.0
@@ -106,9 +116,6 @@ void ColorAdjustment::init_effect_details()
 // modified openshot::Frame object
 std::shared_ptr<openshot::Frame> ColorAdjustment::GetFrame(std::shared_ptr<openshot::Frame> frame, int64_t frame_number)
 {
-    // Get the frame's image
-    std::shared_ptr<QImage> frame_image = frame->GetImage();
-
     // Assume incoming frame is already RGBA (e.g. QImage::Format_RGBA8888)
     // and do not convert formats.
 
@@ -123,6 +130,16 @@ std::shared_ptr<openshot::Frame> ColorAdjustment::GetFrame(std::shared_ptr<opens
         vibrance_value == 0 && saturation_value == 0) {
         return frame;
     }
+
+    // The shader when there is a GPU to run it on, the C++ otherwise. After the
+    // all-defaults early-out above so both paths share it, and before GetImage(),
+    // which on a GPU-backed frame is the one readback -- with the fetch left above
+    // this, the shader measured 4.4 ms a pass instead of 0.1 ms.
+    if (ApplyOnGpu(frame, frame_number))
+        return frame;
+
+    // Get the frame's image
+    std::shared_ptr<QImage> frame_image = frame->GetImage();
 
     const int width = frame_image->width();
     const int height = frame_image->height();
@@ -156,13 +173,13 @@ std::shared_ptr<openshot::Frame> ColorAdjustment::GetFrame(std::shared_ptr<opens
             if (doTT)
                 applyTemperatureTint(r, g, b, temperature_value, tint_value);
 
-            // 2. Saturation
-            if (doSat)
-                applySaturation(r, g, b, saturation_value);
-
-            // 3. Vibrance
+            // 2. Vibrance, before saturation: the editor's order (color.frag)
             if (doVib)
                 applyVibrance(r, g, b, vibrance_value);
+
+            // 3. Saturation
+            if (doSat)
+                applySaturation(r, g, b, saturation_value);
 
             // Final clamping and assignment
             px[0] = clamp(r);
@@ -174,6 +191,25 @@ std::shared_ptr<openshot::Frame> ColorAdjustment::GetFrame(std::shared_ptr<opens
 
     // return the modified frame
     return frame;
+}
+
+// The SkSL source lives in src/shaders/ (per-clip effects run only by the export) and is
+// embedded here at build time. Read it there -- including why it is written the way it is.
+const char* ColorAdjustment::GpuShaderSource() const
+{
+	return openshot::shaders::kColorAdjustment;
+}
+
+bool ColorAdjustment::SetGpuUniforms(SkRuntimeEffectBuilder& builder, int64_t frame_number,
+									 int width, int height) const
+{
+	// The C++ carries these as double through the whole chain and an SkSL uniform is
+	// float, so expect the same sub-LSB drift the other scaling fragments show.
+	builder.uniform("temperature") = static_cast<float>(temperature.GetValue(frame_number));
+	builder.uniform("tint") = static_cast<float>(tint.GetValue(frame_number));
+	builder.uniform("saturation") = static_cast<float>(saturation.GetValue(frame_number));
+	builder.uniform("vibrance") = static_cast<float>(vibrance.GetValue(frame_number));
+	return true;
 }
 
 // Generate JSON string of this object

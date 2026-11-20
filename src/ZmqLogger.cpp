@@ -1,5 +1,7 @@
 // ZmqLogger.cpp
 #include "ZmqLogger.h"
+
+#include <mutex>
 #include <iostream>
 #include <iomanip>
 #include <ctime>
@@ -9,9 +11,10 @@ using namespace openshot;
 ZmqLogger* ZmqLogger::m_pInstance = nullptr;
 
 ZmqLogger* ZmqLogger::Instance() {
-    if (!m_pInstance) {
-        m_pInstance = new ZmqLogger;
-    }
+    // call_once: concurrent first callers (four exports starting together) each built a logger
+    // and one leaked (ThreadSanitizer, 2026-10-01).
+    static std::once_flag created;
+    std::call_once(created, [] { m_pInstance = new ZmqLogger; });
     return m_pInstance;
 }
 

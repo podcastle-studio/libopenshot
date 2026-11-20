@@ -1,7 +1,7 @@
 #ifndef OPENSHOT_SPLIT_SHIFT_EFFECT_H
 #define OPENSHOT_SPLIT_SHIFT_EFFECT_H
 
-#include "../EffectBase.h"
+#include "../GpuEffect.h"
 
 #include "../Frame.h"
 #include "../Json.h"
@@ -15,11 +15,24 @@ namespace openshot
 {
 
 
-class SplitShift : public EffectBase
+class SplitShift : public GpuEffect
 {
 private:
 	/// Init effect settings
 	void init_effect_details();
+
+protected:
+	/// The SkSL twin of applySplitShiftEffect.
+	const char* GpuShaderSource() const override;
+
+	/// The split point and shift in whole pixels, or false when the C++ would bail out.
+	bool SetGpuUniforms(SkRuntimeEffectBuilder& builder, int64_t frame_number,
+						int width, int height) const override;
+
+	/// The planner's answer, so a shift of 0 -- every frame of a SPLIT transition's clips
+	/// outside its window -- stays on the GPU untouched instead of being read back.
+	bool PlanForFrame(int64_t frame_number, int width, int height,
+					  Podcastle::Effects::EffectPlan& plan) const override;
 
 
 public:

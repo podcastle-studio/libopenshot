@@ -106,7 +106,9 @@
 #include "AudioBufferSource.h"
 #include "AudioLocation.h"
 #include "AudioReaderSource.h"
+#include "AudioRecorder.h"
 #include "AudioResampler.h"
+#include "CameraCaptureReader.h"
 #include "CacheDisk.h"
 #include "CacheMemory.h"
 #include "ChunkReader.h"
@@ -121,11 +123,13 @@
 #include "Enums.h"
 #include "Exceptions.h"
 #include "ReaderBase.h"
+#include "ScreenCaptureReader.h"
 #include "WriterBase.h"
 #include "FFmpegReader.h"
 #include "FFmpegWriter.h"
 #include "Fraction.h"
 #include "Frame.h"
+#include "FrameScope.h"
 #include "FrameMapper.h"
 #ifdef USE_IMAGEMAGICK
 	#include "ImageReader.h"
@@ -133,7 +137,9 @@
 	#include "TextReader.h"
 #endif
 #include "KeyFrame.h"
+#ifdef USE_QT_PLAYER
 #include "PlayerBase.h"
+#endif
 #include "Point.h"
 #include "Profiles.h"
 #include "QtHtmlReader.h"

@@ -1,7 +1,7 @@
 #ifndef OPENSHOT_CIRCLE_MASK_EFFECT_H
 #define OPENSHOT_CIRCLE_MASK_EFFECT_H
 
-#include "../EffectBase.h"
+#include "../GpuEffect.h"
 
 #include "../Json.h"
 #include "../KeyFrame.h"
@@ -14,10 +14,24 @@ namespace openshot
 	// Forward declaration
 	class ReaderBase;
 
-	class CircleMask : public EffectBase
+	class CircleMask : public GpuEffect
 	{
 		/// Init effect settings
 		void init_effect_details();
+
+	protected:
+		/// The SkSL twin of applyCircleMaskEffect, with an analytic edge where the C++ has
+		/// OpenCV's rasterised one (see circle_mask.sksl).
+		const char* GpuShaderSource() const override;
+
+		/// The circle's centre and radius, from the shared planner.
+		bool SetGpuUniforms(SkRuntimeEffectBuilder& builder, int64_t frame_number,
+							int width, int height) const override;
+
+		/// The planner's answer, so a radius of 0 is cleared on the GPU instead of being
+		/// read back for the C++'s zero fill.
+		bool PlanForFrame(int64_t frame_number, int width, int height,
+						  Podcastle::Effects::EffectPlan& plan) const override;
 
 	public:
 

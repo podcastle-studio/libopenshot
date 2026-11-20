@@ -7,6 +7,7 @@
 
 #include "KalmanTracker.h"
 #include <ctime>
+#include <algorithm>
 
 using namespace std;
 using namespace cv;
@@ -15,23 +16,26 @@ using namespace cv;
 void KalmanTracker::init_kf(
 	StateType stateMat)
 {
-	int stateNum = 7;
+	int stateNum = 8;
 	int measureNum = 4;
 	kf = KalmanFilter(stateNum, measureNum, 0);
 
 	measurement = Mat::zeros(measureNum, 1, CV_32F);
 
-	kf.transitionMatrix = (Mat_<float>(7, 7) << 1, 0, 0, 0, 1, 0, 0,
+	kf.transitionMatrix = (Mat_<float>(8, 8) << 1, 0, 0, 0, 1, 0, 0, 0,
 
-						   0, 1, 0, 0, 0, 1, 0,
-						   0, 0, 1, 0, 0, 0, 1,
-						   0, 0, 0, 1, 0, 0, 0,
-						   0, 0, 0, 0, 1, 0, 0,
-						   0, 0, 0, 0, 0, 1, 0,
-						   0, 0, 0, 0, 0, 0, 1);
+						   0, 1, 0, 0, 0, 1, 0, 0,
+						   0, 0, 1, 0, 0, 0, 1, 0,
+						   0, 0, 0, 1, 0, 0, 0, 1,
+						   0, 0, 0, 0, 1, 0, 0, 0,
+						   0, 0, 0, 0, 0, 1, 0, 0,
+						   0, 0, 0, 0, 0, 0, 1, 0,
+						   0, 0, 0, 0, 0, 0, 0, 1);
 
 	setIdentity(kf.measurementMatrix);
 	setIdentity(kf.processNoiseCov, Scalar::all(1e-1));
+	kf.processNoiseCov.at<float>(2, 2) = 1e0; // higher noise for area (s) to adapt to size changes
+	kf.processNoiseCov.at<float>(3, 3) = 1e0; // higher noise for aspect ratio (r)
 	setIdentity(kf.measurementNoiseCov, Scalar::all(1e-4));
 	setIdentity(kf.errorCovPost, Scalar::all(1e-2));
 
@@ -40,6 +44,10 @@ void KalmanTracker::init_kf(
 	kf.statePost.at<float>(1, 0) = stateMat.y + stateMat.height / 2;
 	kf.statePost.at<float>(2, 0) = stateMat.area();
 	kf.statePost.at<float>(3, 0) = stateMat.width / stateMat.height;
+	kf.statePost.at<float>(4, 0) = 0.0f;
+	kf.statePost.at<float>(5, 0) = 0.0f;
+	kf.statePost.at<float>(6, 0) = 0.0f;
+	kf.statePost.at<float>(7, 0) = 0.0f;
 }
 
 // Predict the estimated bounding box.
@@ -90,6 +98,42 @@ void KalmanTracker::update(
 	// convert now to string form
 
 	// detect_times.push_back(dt);
+}
+
+void KalmanTracker::update_class_scores(const std::vector<ClassScore>& classScores, int fallbackClassId, float fallbackConfidence)
+{
+	const double decay = 0.82;
+	const double update_weight = 1.0 - decay;
+	const bool had_history = !classScoreHistory.empty();
+
+	for (auto it = classScoreHistory.begin(); it != classScoreHistory.end();) {
+		it->second *= decay;
+		if (it->second < 0.0001)
+			it = classScoreHistory.erase(it);
+		else
+			++it;
+	}
+
+	const double candidate_weight = had_history ? update_weight : 1.0;
+	if (classScores.empty()) {
+		classScoreHistory[fallbackClassId] += fallbackConfidence * candidate_weight;
+	} else {
+		for (const auto& candidate : classScores) {
+			if (candidate.classId < 0 || candidate.score <= 0.0f)
+				continue;
+			classScoreHistory[candidate.classId] += candidate.score * candidate_weight;
+		}
+	}
+
+	if (classScoreHistory.empty()) {
+		classId = fallbackClassId;
+		return;
+	}
+
+	auto best = std::max_element(
+		classScoreHistory.begin(), classScoreHistory.end(),
+		[](const auto& a, const auto& b) { return a.second < b.second; });
+	classId = best->first;
 }
 
 // Return the current state vector

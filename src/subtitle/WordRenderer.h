@@ -1,5 +1,6 @@
 #pragma once
 
+#include "EmojiPass.h"
 #include "SubtitleTypes.h"
 #include <string>
 #include <vector>
@@ -48,7 +49,12 @@ private:
         SkFont font;
         float x;           // X position
         float advance;     // Advance width
+        bool emoji = false;   // a colour-emoji cluster, drawn shaped from the emoji face
     };
+
+    // Draw one entry of buildCharRenderInfo; `pass` says what an emoji does in this pass.
+    void drawChar(const CharRenderInfo& info, float x, float y, const SkPaint& paint,
+                  const SubtitleTextStyle& style, const EmojiPass& pass) const;
 
     // Build rendering info for all characters in the text
     std::vector<CharRenderInfo> buildCharRenderInfo(const std::string& text, const SubtitleTextStyle& style) const;

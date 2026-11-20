@@ -1,5 +1,6 @@
 #include "TextClipRenderer.h"
 
+#include "../gpu/GpuOffscreen.h"
 #include "../subtitle/SkiaRenderer.h"
 #include "TextCurvedText.h"
 #include "TextDrawShared.h"
@@ -298,9 +299,8 @@ std::vector<double> measureLetterWidths(
     std::vector<double> widths;
     if (text.empty() || !renderer) return widths;
 
-    forEachUtf8(text, [&](const std::string& letter, SkUnichar uc) {
-        const SkFont font = getFontForChar(renderer, style, uc);
-        widths.push_back(measureLetterAdvance(font, letter));
+    forEachCluster(text, [&](const std::string& letter, SkUnichar) {
+        widths.push_back(measureLetter(renderer, style, letter));
     });
 
     return widths;
@@ -333,7 +333,19 @@ VerticalBounds measureTextVerticalBounds(
     if (text.empty() || !renderer) return out;
 
     bool found = false;
-    forEachUtf8(text, [&](const std::string& letter, SkUnichar uc) {
+    forEachCluster(text, [&](const std::string& letter, SkUnichar uc) {
+        // Colour emoji: bounds come from the shaped cluster in the emoji face, so a line of
+        // emoji is centred on its real ink rather than on a .notdef box.
+        SkRect emojiBounds;
+        if (subtitle::isEmojiCluster(letter) &&
+            renderer->emojiClusterBounds(letter, static_cast<float>(style.fontSize), &emojiBounds)) {
+            const double t = static_cast<double>(emojiBounds.fTop);
+            const double b = static_cast<double>(emojiBounds.fBottom);
+            if (!found) { out.top = t; out.bottom = b; found = true; }
+            else        { out.top = std::min(out.top, t); out.bottom = std::max(out.bottom, b); }
+            return;
+        }
+
         const SkFont font = getFontForChar(renderer, style, uc);
         SkGlyphID glyphs[8];
         // M147: textToGlyphs/getBounds take SkSpan; textToGlyphs returns size_t.
@@ -455,13 +467,12 @@ void appendBrokenToken(
     std::string& currentText,
     double& currentWidth)
 {
-    // Build per-codepoint advance widths and the codepoint letters.
+    // Build per-letter advance widths and the letters themselves.
     std::vector<std::string> letters;
     std::vector<double> letterWidths;
-    forEachUtf8(token, [&](const std::string& letter, SkUnichar uc) {
-        const SkFont font = getFontForChar(renderer, style, uc);
+    forEachCluster(token, [&](const std::string& letter, SkUnichar) {
         letters.push_back(letter);
-        letterWidths.push_back(measureLetterAdvance(font, letter));
+        letterWidths.push_back(measureLetter(renderer, style, letter));
     });
 
     std::string workingText = currentText;
@@ -613,7 +624,7 @@ TextClipLayout layoutText(
     const std::string VERTICAL_METRICS_PROBE = "Hg";
     const VerticalBounds probeBounds = measureTextVerticalBounds(VERTICAL_METRICS_PROBE, style, renderer);
 
-    // Populate per-codepoint advances and per-line vertical metrics for each line. When the
+    // Populate per-letter advances and per-line vertical metrics for each line. When the
     // caller is `layoutTextAtReferenceSize`, these are reference-space values which scaleLayout
     // converts back into actual pixel space.
     for (auto& line : lines) {
@@ -701,7 +712,7 @@ TextClipLayout layoutTextAtReferenceSize(
 
 double getLineStartX(const TextClipLine& line, const TextClipLayout& layout, TextAlignment alignment,
                      double extraLetterSpacing) {
-    const size_t n = utf8Length(line.text);
+    const size_t n = clusterCount(line.text);
     const double width = line.width + (n > 0 ? static_cast<double>(n - 1) : 0.0) * extraLetterSpacing;
     switch (alignment) {
     case TextAlignment::LEFT:  return 0.0;
@@ -748,8 +759,9 @@ void drawTextLine(
             paint = &gradPaint;
         }
     }
+    const EmojiPass emojiFill{EmojiPass::Kind::Colour, fillBlur};
     forEachLetter(line, x, extraLetterSpacing, [&](const std::string& letter, double letterX) {
-        drawLetter(renderer, letter, letterX, baselineY, *paint, style);
+        drawLetter(renderer, letter, letterX, baselineY, *paint, style, emojiFill);
     });
 }
 
@@ -777,7 +789,7 @@ void drawStrokeLine(
         }
     }
     forEachLetter(line, x, extraLetterSpacing, [&](const std::string& letter, double letterX) {
-        drawLetter(renderer, letter, letterX, baselineY, *paint, style);
+        drawLetter(renderer, letter, letterX, baselineY, *paint, style, {EmojiPass::Kind::Skip});
     });
 }
 
@@ -808,9 +820,14 @@ void drawShadowLine(
         : nullptr;
     const SkPaint* fillPaint = renderer->getPaint(subtitle::PaintProps{shadow.color, shadow.opacity, std::nullopt, blur});
 
+    // The stroke-expanded pass adds nothing for an emoji (no outline to trace); the fill pass
+    // carries the whole emoji shadow, flattened to the shadow colour and blurred by the same sigma.
+    const EmojiPass emojiShadow{EmojiPass::Kind::Silhouette, shadowBlur};
     forEachLetter(line, x, extraLetterSpacing, [&](const std::string& letter, double letterX) {
-        if (strokePaint) drawLetter(renderer, letter, letterX + dx, baselineY + dy, *strokePaint, style);
-        drawLetter(renderer, letter, letterX + dx, baselineY + dy, *fillPaint, style);
+        if (strokePaint) {
+            drawLetter(renderer, letter, letterX + dx, baselineY + dy, *strokePaint, style, {EmojiPass::Kind::Skip});
+        }
+        drawLetter(renderer, letter, letterX + dx, baselineY + dy, *fillPaint, style, emojiShadow);
     });
 }
 
@@ -865,18 +882,21 @@ void renderShadowLayer(
     const int sw = std::max(2, static_cast<int>(std::ceil(blockW * s)));
     const int sh = std::max(2, static_cast<int>(std::ceil(blockH * s)));
 
-    sk_sp<SkSurface> surface = SkSurfaces::Raster(SkImageInfo::MakeN32Premul(sw, sh));
-    if (!surface) { drawLines(originX, originY, shadowBlur); return; }   // fallback: clamped, but drawn
-    SkCanvas* offscreen = surface->getCanvas();
+    // Matched to the destination so the downscaled shadow is composited without a copy across
+    // the boundary. The whole branch is only here for the CPU mask-blur clamp, which the GPU
+    // does not have — plan step 2.5 deletes it rather than keeping a GPU version of it.
+    SkCanvas* canvas = renderer->getCanvas();
+    GpuOffscreen shadowSurface = GpuOffscreen::Match(canvas, sw, sh);
+    if (!shadowSurface) { drawLines(originX, originY, shadowBlur); return; }   // fallback: clamped, but drawn
+    SkCanvas* offscreen = shadowSurface.canvas();
     offscreen->clear(SK_ColorTRANSPARENT);
     offscreen->scale(static_cast<float>(s), static_cast<float>(s));   // draw full-coord glyphs downscaled
     renderer->renderToCanvas(offscreen, [&] {
         drawLines(margin, margin, shadowBlur * s);   // offscreen sigma == MAX_CPU_MASK_BLUR_SIGMA, under cap
     });
-    sk_sp<SkImage> image = surface->makeImageSnapshot();
+    sk_sp<SkImage> image = shadowSurface.snapshot();
     if (!image) return;
 
-    SkCanvas* canvas = renderer->getCanvas();
     canvas->save();
     canvas->translate(static_cast<float>(originX - margin), static_cast<float>(originY - margin));
     canvas->scale(static_cast<float>(1.0 / s), static_cast<float>(1.0 / s));

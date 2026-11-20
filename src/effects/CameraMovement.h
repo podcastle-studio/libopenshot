@@ -26,6 +26,10 @@ namespace openshot
 		/// Init effect settings
 		void init_effect_details();
 
+		/// The transform drawn on the GPU into a pooled surface; false (nothing touched) when there
+		/// is no GPU or the frame cannot be used from this thread.
+		bool ApplyOnGpu(const std::shared_ptr<openshot::Frame>& frame, double z, double mx, double my, double a);
+
 	public:
 		Keyframe rotationAngle;
 		Keyframe zoomPercent;

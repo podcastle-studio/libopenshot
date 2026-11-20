@@ -13,13 +13,14 @@
 #ifndef OPENSHOT_MASK_EFFECT_H
 #define OPENSHOT_MASK_EFFECT_H
 
-#include "../EffectBase.h"
+#include "../GpuEffect.h"
 
 #include "../Json.h"
 #include "../KeyFrame.h"
 
 #include <string>
 #include <memory>
+#include <mutex>
 
 namespace openshot
 {
@@ -33,15 +34,58 @@ namespace openshot
 	 * These masks / wipes can also be combined, such as a transparency mask on top of a clip, which
 	 * is then wiped away with another animated version of this effect.
 	 */
-	class Mask : public EffectBase
+	class Mask : public GpuEffect
 	{
+	private:
 		ReaderBase *reader;
+		/// Guards reader and the mask built from it. Per mask: it was a process-wide OpenMP
+		/// critical section around the whole matte decode, so every video matte of every export
+		/// in the process decoded one at a time (review P4, 2026-10-01).
+		std::mutex reader_mutex;
 		std::shared_ptr<QImage> original_mask;
 		bool needs_refresh;
         int roundedRadiusX;
         int roundedRadiusY;
 		/// Init effect settings
 		void init_effect_details();
+
+	protected:
+		/// The SkSL twin of the mask's grey-to-alpha arithmetic.
+		const char* GpuShaderSource() const override;
+
+		/// The brightness/contrast/invert/replace controls, plus the prepared mask
+		/// image bound as a texture. False when no mask has been prepared.
+		bool SetGpuUniforms(SkRuntimeEffectBuilder& builder, int64_t frame_number,
+							int width, int height) const override;
+
+	private:
+		/// The prepared mask as a GPU texture, cached across frames -- a still mask is
+		/// the normal case and re-uploading it every frame would cost more than the
+		/// effect. Keyed on the QImage's cacheKey() AND GpuDevice::Generation().
+		/// Defined in the .cpp: this header is installed and compiled without Skia on
+		/// the include path, so no Skia type may appear here.
+		struct MaskTextureCache;
+		mutable std::shared_ptr<MaskTextureCache> mask_texture;
+
+		/// True when mask_texture was built on the GPU for the current frame, from a matte frame
+		/// that was already on the GPU (a GPU-decoded video matte), with no original_mask behind
+		/// it. See PrepareGpuMask.
+		bool gpu_mask_current = false;
+
+		/// Build mask_texture on the GPU from a GPU-backed matte frame, scaled to the frame's
+		/// size: the matte's own texture when the sizes match, a linear resample otherwise. False
+		/// (and nothing changed) when the matte cannot be used from this thread.
+		bool PrepareGpuMask(const std::shared_ptr<Frame>& matte, int width, int height);
+
+		/// The matte frame behind a GPU-prepared mask, kept for the CPU path if the shader
+		/// declines (it is read back only then).
+		std::shared_ptr<Frame> gpu_matte;
+
+		/// Bind mask_texture and the controls; shared by the QImage and the GPU-prepared mask.
+		bool BindMaskUniforms(SkRuntimeEffectBuilder& builder, int64_t frame_number) const;
+
+	protected:
+		bool HandlesMaskInternally() const override { return true; }
 
 	public:
         enum MaskType
@@ -54,6 +98,7 @@ namespace openshot
         MaskType maskType;
 		bool replace_image;		///< Replace the frame image with a grayscale image representing the mask. Great for debugging a mask.
 		bool invert;			///< Invert the mask (swap transparent and visible regions).
+		bool fade_audio_hint;	///< Timeline-only hint requesting equal-power audio crossfade for overlapping clips when this Mask is used as a global transition.
 		Keyframe brightness;	///< Brightness keyframe to control the wipe / mask effect. A constant value here will prevent animation.
 		Keyframe contrast;		///< Contrast keyframe to control the hardness of the wipe effect / mask.
 
@@ -109,10 +154,13 @@ namespace openshot
 		std::string PropertiesJSON(int64_t requested_frame) const override;
 
 		/// Get the reader object of the mask grayscale image
-		ReaderBase* Reader() { return reader; };
+		ReaderBase* Reader() { return MaskReader(); };
 
 		/// Set a new reader to be used by the mask effect (grayscale image)
-		void Reader(ReaderBase *new_reader) { reader = new_reader; };
+		void Reader(ReaderBase *new_reader);
+
+		/// Drops the mask texture and closes the matte reader (EffectBase::ReleaseGpuResources).
+		void ReleaseGpuResources() override;
 	};
 
 }

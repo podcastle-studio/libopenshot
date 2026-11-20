@@ -12,18 +12,36 @@
 
 #include <sstream>
 #include <memory>
+#include <fstream>
 
 #include "openshot_catch.h"
 
 #include "FFmpegWriter.h"
 #include "Exceptions.h"
+#include "DummyReader.h"
 #include "FFmpegReader.h"
 #include "Fraction.h"
 #include "Frame.h"
 #include "Timeline.h"
 
+extern "C" {
+	#include <libavformat/avformat.h>
+}
+
 using namespace std;
 using namespace openshot;
+
+namespace {
+AVStream* first_video_stream(AVFormatContext* format_context)
+{
+	for (unsigned int index = 0; index < format_context->nb_streams; ++index) {
+		AVStream* stream = format_context->streams[index];
+		if (stream && stream->codecpar && stream->codecpar->codec_type == AVMEDIA_TYPE_VIDEO)
+			return stream;
+	}
+	return nullptr;
+}
+}
 
 TEST_CASE( "Webm", "[libopenshot][ffmpegwriter]" )
 {
@@ -232,4 +250,130 @@ TEST_CASE( "Gif", "[libopenshot][ffmpegwriter]" )
 
     // Close reader
     r1.Close();
+}
+
+TEST_CASE( "MP4_30fps_duration_exact_with_b_frames", "[libopenshot][ffmpegwriter][fps]" )
+{
+	const std::string out_name = "MP4_30fps_duration_exact_with_b_frames.mp4";
+	DummyReader reader(Fraction(30, 1), 1280, 720, 48000, 2, 1.0f);
+	reader.Open();
+
+	FFmpegWriter writer(out_name);
+	writer.SetVideoOptions(true, "mpeg4", Fraction(30, 1), 1280, 720, Fraction(1, 1), false, false, 15000000);
+	writer.Open();
+	writer.WriteFrame(&reader, 1, 30);
+	writer.Close();
+	reader.Close();
+
+	AVFormatContext* format_context = nullptr;
+	REQUIRE(avformat_open_input(&format_context, out_name.c_str(), nullptr, nullptr) == 0);
+	REQUIRE(avformat_find_stream_info(format_context, nullptr) >= 0);
+	AVStream* stream = first_video_stream(format_context);
+	REQUIRE(stream != nullptr);
+
+	CHECK(stream->r_frame_rate.num == 30);
+	CHECK(stream->r_frame_rate.den == 1);
+	CHECK(stream->avg_frame_rate.num == 30);
+	CHECK(stream->avg_frame_rate.den == 1);
+	CHECK(stream->duration == av_rescale_q(30, av_make_q(1, 30), stream->time_base));
+
+	avformat_close_input(&format_context);
+}
+
+TEST_CASE( "WriteFrameAt_preserves_sparse_video_timestamps", "[libopenshot][ffmpegwriter][fps]" )
+{
+	const std::string out_name = "WriteFrameAt_sparse_timestamps.mp4";
+	DummyReader reader(Fraction(30, 1), 1280, 720, 0, 0, 1.0f);
+	reader.Open();
+
+	FFmpegWriter writer(out_name);
+	writer.SetVideoOptions(true, "libx264", Fraction(30, 1), 1280, 720, Fraction(1, 1), false, false, 15000000);
+	writer.Open();
+	writer.WriteFrameAt(reader.GetFrame(1), 1);
+	writer.WriteFrameAt(reader.GetFrame(2), 2);
+	writer.WriteFrameAt(reader.GetFrame(3), 10);
+	writer.Close();
+	reader.Close();
+
+	AVFormatContext* format_context = nullptr;
+	REQUIRE(avformat_open_input(&format_context, out_name.c_str(), nullptr, nullptr) == 0);
+	REQUIRE(avformat_find_stream_info(format_context, nullptr) >= 0);
+	AVStream* stream = first_video_stream(format_context);
+	REQUIRE(stream != nullptr);
+
+	CHECK(stream->duration == av_rescale_q(10, av_make_q(1, 30), stream->time_base));
+
+	avformat_close_input(&format_context);
+}
+
+TEST_CASE( "SizeOrdering_x264_CRF", "[libopenshot][ffmpegwriter][filesize]" )
+{
+	std::stringstream path;
+	path << TEST_MEDIA_PATH << "sintel_trailer-720p.mp4";
+	FFmpegReader reader(path.str());
+	reader.Open();
+
+	auto file_size = [](const std::string& file_path) -> std::streamoff {
+		std::ifstream in(file_path, std::ios::binary | std::ios::ate);
+		if (!in)
+			return -1;
+		return in.tellg();
+	};
+
+	auto encode = [&](const std::string& out_name, int crf, int audio_bitrate) -> std::streamoff {
+		FFmpegWriter w(out_name);
+		w.SetAudioOptions(true, "aac", 48000, 2, LAYOUT_STEREO, audio_bitrate);
+		w.SetVideoOptions(true, "libx264", Fraction(24,1), 1280, 720, Fraction(1,1), false, false, crf);
+		w.PrepareStreams();
+		w.SetOption(VIDEO_STREAM, "crf", std::to_string(crf));
+		w.Open();
+		w.WriteFrame(&reader, 1, 120);
+		w.Close();
+		return file_size(out_name);
+	};
+
+	const auto low_size = encode("SizeOrdering_x264_CRF_low.mp4", 30, 96000);
+	const auto med_size = encode("SizeOrdering_x264_CRF_med.mp4", 23, 128000);
+	const auto high_size = encode("SizeOrdering_x264_CRF_high.mp4", 20, 160000);
+
+	CHECK(low_size < med_size);
+	CHECK(med_size < high_size);
+
+	reader.Close();
+}
+
+TEST_CASE( "SizeOrdering_vp9_CRF", "[libopenshot][ffmpegwriter][filesize]" )
+{
+	std::stringstream path;
+	path << TEST_MEDIA_PATH << "sintel_trailer-720p.mp4";
+	FFmpegReader reader(path.str());
+	reader.Open();
+
+	auto file_size = [](const std::string& file_path) -> std::streamoff {
+		std::ifstream in(file_path, std::ios::binary | std::ios::ate);
+		if (!in)
+			return -1;
+		return in.tellg();
+	};
+
+	auto encode = [&](const std::string& out_name, int crf, int audio_bitrate) -> std::streamoff {
+		FFmpegWriter w(out_name);
+		w.SetAudioOptions(true, "libvorbis", 48000, 2, LAYOUT_STEREO, audio_bitrate);
+		w.SetVideoOptions(true, "libvpx-vp9", Fraction(24,1), 1280, 720, Fraction(1,1), false, false, crf);
+		w.PrepareStreams();
+		w.SetOption(VIDEO_STREAM, "crf", std::to_string(crf));
+		w.Open();
+		w.WriteFrame(&reader, 1, 120);
+		w.Close();
+		return file_size(out_name);
+	};
+
+	const auto low_size = encode("SizeOrdering_vp9_CRF_low.webm", 46, 96000);
+	const auto med_size = encode("SizeOrdering_vp9_CRF_med.webm", 34, 128000);
+	const auto high_size = encode("SizeOrdering_vp9_CRF_high.webm", 26, 160000);
+
+	CHECK(low_size < med_size);
+	CHECK(med_size < high_size);
+
+	reader.Close();
 }

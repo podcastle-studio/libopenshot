@@ -25,6 +25,10 @@
 
 namespace openshot
 {
+	enum HueMaskMode {
+		HUE_MASK_LIMIT_TO_AREA = 0,
+		HUE_MASK_VARY_STRENGTH = 1
+	};
 
 	/**
 	 * @brief This class shifts the hue of an image, and can be animated with openshot::Keyframe curves over time.
@@ -38,9 +42,14 @@ namespace openshot
 		/// Init effect settings
 		void init_effect_details();
 
+	protected:
+		bool UseCustomMaskBlend(int64_t frame_number) const override;
+		void ApplyCustomMaskBlend(std::shared_ptr<QImage> original_image, std::shared_ptr<QImage> effected_image,
+							  std::shared_ptr<QImage> mask_image, int64_t frame_number) const override;
 
 	public:
 		Keyframe hue;	///< Shift the hue coordinates (left or right)
+		int mask_mode;	///< Mask behavior mode for this effect.
 
 		/// Default constructor, useful when using Json to load the effect properties
 		Hue();

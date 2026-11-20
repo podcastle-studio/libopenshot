@@ -1,0 +1,1076 @@
+/*
+ * gpu_effect_parity — is each GpuEffect's SkSL fragment the same function as its C++ twin?
+ *
+ * W19's per-effect gate: PSNR >= 48 dB against the CPU effect on eight images including
+ * transparent and semi-transparent pixels, and <= 0.2 ms at 1080p. This measures both, and
+ * also reports whether the two agree *exactly*, which is the stronger claim the fragments are
+ * written for — see GpuEffect::GpuShaderPrelude() on why byte-for-byte parity is reachable at
+ * all. A bit-exact shader lets the effects goldens keep Tolerance::Exact() on the GPU instead
+ * of needing a tolerance band, so the distinction is worth printing separately.
+ *
+ * The images matter as much as the effects. Every CPU twin unpremultiplies, operates and
+ * re-premultiplies, so the interesting pixels are the ones where that round trip loses
+ * something: alpha 0 (undefined colour), alpha 1 (one part in 255), and alpha just under 255.
+ *
+ *   OPENSHOT_GPU=vulkan cmake-build-gpu/tests/gpu/openshot-gpu-effect-parity
+ *   OPENSHOT_GPU=lavapipe cmake-build-gpu/tests/gpu/openshot-gpu-effect-parity
+ */
+#include "Frame.h"
+#include "gpu/GpuFrame.h"
+#include "KeyFrame.h"
+#include "effects/Alpha.h"
+#include "effects/Bars.h"
+#include "effects/Blur.h"
+#include "effects/BorderReflectedMove.h"
+#include "effects/BorderReflectedRotation.h"
+#include "effects/Brightness.h"
+#include "effects/ChromaKey.h"
+#include "effects/CircleMask.h"
+#include "effects/ColorAdjustment.h"
+#include "effects/ColorMap.h"
+#include "effects/ColorShift.h"
+#include "effects/Enhancement.h"
+#include "effects/Exposure.h"
+#include "effects/LightAdjustment.h"
+#include "effects/Mask.h"
+#include "effects/SplitShift.h"
+#include "effects/Wipe.h"
+#include "effects/Zoom.h"
+#include "gpu/GpuDevice.h"
+
+#include <QImage>
+
+#include <babl/babl.h>
+
+#include <opencv2/imgproc.hpp>
+
+#include "skia/include/core/SkBlendMode.h"
+#include "skia/include/core/SkCanvas.h"
+#include "skia/include/core/SkImage.h"
+#include "skia/include/core/SkImageInfo.h"
+#include "skia/include/core/SkPaint.h"
+#include "skia/include/core/SkPixmap.h"
+#include "skia/include/core/SkRect.h"
+#include "skia/include/core/SkSamplingOptions.h"
+#include "skia/include/core/SkShader.h"
+#include "skia/include/core/SkString.h"
+#include "skia/include/core/SkTileMode.h"
+#include "skia/include/effects/SkRuntimeEffect.h"
+
+#include <algorithm>
+#include <chrono>
+#include <cmath>
+#include <cstdio>
+#include <iostream>
+#include <cstdint>
+#include <functional>
+#include <memory>
+#include <limits>
+#include <random>
+#include <string>
+#include <vector>
+
+namespace {
+
+constexpr int kW = 256, kH = 256;
+
+// A premultiplied pixel, built so the invariant the CPU twins rely on always holds: no colour
+// channel exceeds alpha. Feeding them anything else would test undefined behaviour rather than
+// parity.
+void setPremul(uchar* p, int r, int g, int b, int a) {
+    p[0] = (uchar) std::min(r, a);
+    p[1] = (uchar) std::min(g, a);
+    p[2] = (uchar) std::min(b, a);
+    p[3] = (uchar) a;
+}
+
+struct TestImage { std::string name; QImage image; };
+
+std::vector<TestImage> makeImages() {
+    std::vector<TestImage> images;
+    auto blank = [] { return QImage(kW, kH, QImage::Format_RGBA8888_Premultiplied); };
+
+    // 1. Every (r, g) pair at full alpha — the plain opaque case, and the one the goldens cover.
+    {
+        QImage img = blank();
+        for (int y = 0; y < kH; ++y)
+            for (int x = 0; x < kW; ++x)
+                setPremul(img.scanLine(y) + x * 4, x, y, (x + y) / 2, 255);
+        images.push_back({"opaque_ramp", img});
+    }
+    // 2. Colour ramp under an alpha ramp: the unpremultiply divides by every alpha there is.
+    {
+        QImage img = blank();
+        for (int y = 0; y < kH; ++y)
+            for (int x = 0; x < kW; ++x) {
+                const int a = y;
+                setPremul(img.scanLine(y) + x * 4, x * a / 255, (255 - x) * a / 255, a / 2, a);
+            }
+        images.push_back({"alpha_ramp", img});
+    }
+    // 3. Alpha 1 everywhere. One part in 255, so the unpremultiply divides by 1/255 and the
+    //    re-premultiply throws almost everything away — the worst case for rounding, and the
+    //    one where floor() vs round() shows up immediately.
+    {
+        QImage img = blank();
+        for (int y = 0; y < kH; ++y)
+            for (int x = 0; x < kW; ++x)
+                setPremul(img.scanLine(y) + x * 4, x % 2, y % 2, 1, 1);
+        images.push_back({"alpha_one", img});
+    }
+    // 4. Fully transparent. Colour is not observable, but the code still runs and must not
+    //    produce a NaN out of a division by zero.
+    {
+        QImage img = blank();
+        img.fill(QColor(0, 0, 0, 0));
+        images.push_back({"transparent", img});
+    }
+    // 5. Alpha 254: opaque to the eye, but off the fast path every twin takes at 255.
+    {
+        QImage img = blank();
+        for (int y = 0; y < kH; ++y)
+            for (int x = 0; x < kW; ++x)
+                setPremul(img.scanLine(y) + x * 4, x, y, 128, 254);
+        images.push_back({"alpha_254", img});
+    }
+    // 6. The 0/255 corners of the cube, where a clamp either holds or does not.
+    {
+        QImage img = blank();
+        const int corner[8][3] = {{0,0,0},{255,0,0},{0,255,0},{0,0,255},
+                                  {255,255,0},{255,0,255},{0,255,255},{255,255,255}};
+        for (int y = 0; y < kH; ++y)
+            for (int x = 0; x < kW; ++x) {
+                const int c = ((x / 32) + (y / 32) * 8) % 8;
+                setPremul(img.scanLine(y) + x * 4, corner[c][0], corner[c][1], corner[c][2], 255);
+            }
+        images.push_back({"corners", img});
+    }
+    // 7. Flat mid-grey — the fixed point of a contrast curve about 128.
+    {
+        QImage img = blank();
+        for (int y = 0; y < kH; ++y)
+            for (int x = 0; x < kW; ++x)
+                setPremul(img.scanLine(y) + x * 4, 128, 128, 128, 255);
+        images.push_back({"mid_grey", img});
+    }
+    // 8. Noise in colour and alpha, fixed seed. Nothing structured left to hide behind.
+    {
+        QImage img = blank();
+        std::mt19937 rng(20260922u);
+        std::uniform_int_distribution<int> byte(0, 255);
+        for (int y = 0; y < kH; ++y)
+            for (int x = 0; x < kW; ++x) {
+                const int a = byte(rng);
+                setPremul(img.scanLine(y) + x * 4, byte(rng), byte(rng), byte(rng), a);
+            }
+        images.push_back({"noise", img});
+    }
+    return images;
+}
+
+std::shared_ptr<openshot::Frame> frameFrom(const QImage& img) {
+    auto frame = std::make_shared<openshot::Frame>();
+    frame->AddImage(std::make_shared<QImage>(img.copy()));
+    return frame;
+}
+
+struct Delta { double psnr; int max_delta; long differing; long total; };
+
+// What a grain pass added, as a distribution: the mean and standard deviation of (out - in) over
+// every colour byte, and the correlation of that delta with its right-hand neighbour. The mean and
+// spread are what the grain looks like; the neighbour correlation is ~0 for a good hash and is
+// what would catch float sin() degenerating into visible stripes or blocks at large arguments.
+struct GrainStats { double mean, stddev, neighbour_corr; };
+
+GrainStats grainStats(const QImage& in, const QImage& out) {
+    const int w = in.width(), h = in.height();
+    std::vector<double> d(static_cast<std::size_t>(w) * h);
+    double sum = 0.0, sum2 = 0.0;
+    long n = 0;
+    for (int y = 0; y < h; ++y) {
+        const uchar* pi = in.scanLine(y);
+        const uchar* po = out.scanLine(y);
+        for (int x = 0; x < w; ++x) {
+            double px = 0.0;
+            for (int c = 0; c < 3; ++c) {
+                const double v = (double) po[x * 4 + c] - (double) pi[x * 4 + c];
+                sum += v; sum2 += v * v; n++; px += v;
+            }
+            d[static_cast<std::size_t>(y) * w + x] = px / 3.0;
+        }
+    }
+    const double mean = sum / n;
+    const double var = std::max(0.0, sum2 / n - mean * mean);
+    double pm = 0.0;
+    for (double v : d) pm += v;
+    pm /= (double) d.size();
+    double num = 0.0, den = 0.0;
+    for (int y = 0; y < h; ++y)
+        for (int x = 0; x + 1 < w; ++x) {
+            const double a = d[static_cast<std::size_t>(y) * w + x] - pm;
+            const double b = d[static_cast<std::size_t>(y) * w + x + 1] - pm;
+            num += a * b; den += a * a;
+        }
+    return {mean, std::sqrt(var), den > 0.0 ? num / den : 0.0};
+}
+
+Delta compare(const QImage& a, const QImage& b) {
+    Delta d{0.0, 0, 0, 0};
+    double sum_squares = 0.0;
+    for (int y = 0; y < a.height(); ++y) {
+        const uchar* pa = a.scanLine(y);
+        const uchar* pb = b.scanLine(y);
+        for (int i = 0; i < a.width() * 4; ++i) {
+            const int diff = std::abs((int) pa[i] - (int) pb[i]);
+            if (diff > d.max_delta) d.max_delta = diff;
+            if (diff) d.differing++;
+            sum_squares += (double) diff * diff;
+            d.total++;
+        }
+    }
+    const double mse = sum_squares / (double) d.total;
+    d.psnr = mse == 0.0 ? std::numeric_limits<double>::infinity()
+                        : 10.0 * std::log10(255.0 * 255.0 / mse);
+    return d;
+}
+
+using Factory = std::function<std::shared_ptr<openshot::EffectBase>()>;
+
+// Each case carries the gate its own worklist item declares, because the two items differ:
+// W19's per-effect clause is PSNR >= 48 dB, W20's is >= 45 dB. W20 is looser on purpose -- its
+// effects resample, and OpenCV's fixed-point interpolation weights are not reproducible in float
+// -- so holding a transition to W19's number would be testing against a gate nobody set.
+struct Case {
+    std::string name;
+    Factory make;
+    double psnrGate = 48.0;
+    /// Compared by the distribution of what the effect adds, not byte for byte. Only grain: its
+    /// hash is float on the GPU and double on the CPU, so the two are the same noise at a
+    /// different random phase (owner decision 2026-09-24). See grainStats().
+    bool statistical = false;
+};
+constexpr double kTransitionGate = 45.0;   // W20
+constexpr double kCircleEdgeGate = 35.0;   // the analytic circle edge, see the circlemask cases
+
+std::vector<Case> cases() {
+    using openshot::Keyframe;
+    return {
+        {"brightness(0, 3)",      [] { return std::make_shared<openshot::Brightness>(Keyframe(0.0), Keyframe(3.0)); }},
+        {"brightness(0.25, 10)",  [] { return std::make_shared<openshot::Brightness>(Keyframe(0.25), Keyframe(10.0)); }},
+        {"brightness(-0.4, 20)",  [] { return std::make_shared<openshot::Brightness>(Keyframe(-0.4), Keyframe(20.0)); }},
+        {"brightness(0.6, 100)",  [] { return std::make_shared<openshot::Brightness>(Keyframe(0.6), Keyframe(100.0)); }},
+
+        // Alpha takes the CPU shortcuts at 0 and 1, so only the interior is a shader.
+        {"alpha(0.5)",            [] { return std::make_shared<openshot::Alpha>(Keyframe(0.5)); }},
+        {"alpha(0.13)",           [] { return std::make_shared<openshot::Alpha>(Keyframe(0.13)); }},
+
+        {"exposure(1.0)",         [] { return std::make_shared<openshot::Exposure>(Keyframe(1.0)); }},
+        {"exposure(1.7)",         [] { return std::make_shared<openshot::Exposure>(Keyframe(1.7)); }},
+        {"exposure(4.2)",         [] { return std::make_shared<openshot::Exposure>(Keyframe(4.2)); }},
+
+        // Shifts chosen to be non-integer fractions of 256, so the host's round()
+        // actually rounds, and with a negative one because the sign is applied after
+        // the magnitude. The last shifts alpha too, which is the case that can emit
+        // colour above its own alpha -- invalid premultiplied data that the C++
+        // produces and the fragment must not quietly clamp.
+        {"colorshift(rgb)",       [] { return std::make_shared<openshot::ColorShift>(
+                                           Keyframe(0.031), Keyframe(0.0), Keyframe(0.0), Keyframe(-0.017),
+                                           Keyframe(0.0074), Keyframe(0.0), Keyframe(0.0), Keyframe(0.0)); }},
+        {"colorshift(rgb+alpha)", [] { return std::make_shared<openshot::ColorShift>(
+                                           Keyframe(0.05), Keyframe(0.02), Keyframe(-0.03), Keyframe(0.04),
+                                           Keyframe(0.01), Keyframe(-0.06), Keyframe(0.02), Keyframe(0.03)); }},
+
+        // Bar extents are truncated, so fractions that do and do not land on a whole
+        // pixel of a 256-wide image are both represented.
+        {"bars(edges)",           [] { return std::make_shared<openshot::Bars>(
+                                           openshot::Color("#000000"), Keyframe(0.125), Keyframe(0.07),
+                                           Keyframe(0.0), Keyframe(0.3)); }},
+        {"bars(all four)",        [] { return std::make_shared<openshot::Bars>(
+                                           openshot::Color("#000000"), Keyframe(0.2), Keyframe(0.2),
+                                           Keyframe(0.2), Keyframe(0.2)); }},
+
+        // One of each stage on its own, then all three together, because saturation
+        // reads what vibrance left behind (the editor's order).
+        {"coloradj(temp+tint)",   [] { return std::make_shared<openshot::ColorAdjustment>(
+                                           Keyframe(0.6), Keyframe(-0.4), Keyframe(0.0), Keyframe(0.0)); }},
+        {"coloradj(saturation)",  [] { return std::make_shared<openshot::ColorAdjustment>(
+                                           Keyframe(0.0), Keyframe(0.0), Keyframe(0.0), Keyframe(0.7)); }},
+        {"coloradj(vibrance)",    [] { return std::make_shared<openshot::ColorAdjustment>(
+                                           Keyframe(0.0), Keyframe(0.0), Keyframe(0.8), Keyframe(0.0)); }},
+        {"coloradj(all)",         [] { return std::make_shared<openshot::ColorAdjustment>(
+                                           Keyframe(0.3), Keyframe(0.25), Keyframe(-0.5), Keyframe(0.45)); }},
+        // The dev export that turned a face pink (6ae48eb4, 2026-10-30), at its exact values.
+        {"coloradj(dev export)",  [] { return std::make_shared<openshot::ColorAdjustment>(
+                                           Keyframe(-0.46), Keyframe(-0.08), Keyframe(0.15), Keyframe(0.0)); }},
+
+        // The service's configuration exactly: green key, fuzz 70, halo 20, YCbCr. Then a wide
+        // halo, because the halo branch is the only part with any arithmetic in it, and a zero
+        // halo, which takes the hard-cut path.
+        {"chromakey(service)",    [] { return std::make_shared<openshot::ChromaKey>(
+                                           openshot::Color(0, 255, 0, 0), 70, 20,
+                                           openshot::CHROMAKEY_YCBCR); }},
+        {"chromakey(wide halo)",  [] { return std::make_shared<openshot::ChromaKey>(
+                                           openshot::Color(0, 255, 0, 0), 40, 90,
+                                           openshot::CHROMAKEY_YCBCR); }},
+        {"chromakey(no halo)",    [] { return std::make_shared<openshot::ChromaKey>(
+                                           openshot::Color(20, 200, 60, 0), 90, 0,
+                                           openshot::CHROMAKEY_YCBCR); }},
+
+        // Each LightAdjustment stage alone, both signs where the sign picks a different
+        // branch, then everything at once. Order matters -- shadows and highlights read a
+        // luminance computed from whatever the earlier stages left.
+        {"light(brightness+)",    [] { return std::make_shared<openshot::LightAdjustment>(
+                                           Keyframe(0.4), 0, 0, 0, 0, 0); }},
+        {"light(brightness-)",    [] { return std::make_shared<openshot::LightAdjustment>(
+                                           Keyframe(-0.5), 0, 0, 0, 0, 0); }},
+        {"light(contrast+)",      [] { return std::make_shared<openshot::LightAdjustment>(
+                                           0, Keyframe(0.8), 0, 0, 0, 0); }},
+        {"light(contrast-)",      [] { return std::make_shared<openshot::LightAdjustment>(
+                                           0, Keyframe(-0.6), 0, 0, 0, 0); }},
+        {"light(highlights)",     [] { return std::make_shared<openshot::LightAdjustment>(
+                                           0, 0, Keyframe(0.7), 0, 0, 0); }},
+        {"light(shadows)",        [] { return std::make_shared<openshot::LightAdjustment>(
+                                           0, 0, 0, Keyframe(-0.65), 0, 0); }},
+        {"light(whites)",         [] { return std::make_shared<openshot::LightAdjustment>(
+                                           0, 0, 0, 0, Keyframe(0.55), 0); }},
+        {"light(blacks)",         [] { return std::make_shared<openshot::LightAdjustment>(
+                                           0, 0, 0, 0, 0, Keyframe(-0.45)); }},
+        {"light(contrast -1)",    [] { return std::make_shared<openshot::LightAdjustment>(
+                                           0, Keyframe(-1.0), 0, 0, 0, 0); }},
+        {"light(highlights-)",    [] { return std::make_shared<openshot::LightAdjustment>(
+                                           0, 0, Keyframe(-0.7), 0, 0, 0); }},
+        {"light(dev export)",     [] { return std::make_shared<openshot::LightAdjustment>(
+                                           Keyframe(0.32), Keyframe(-1.0), 0, Keyframe(0.09),
+                                           Keyframe(1.0), Keyframe(-0.07)); }},
+        {"light(all)",            [] { return std::make_shared<openshot::LightAdjustment>(
+                                           Keyframe(0.2), Keyframe(0.5), Keyframe(-0.3),
+                                           Keyframe(0.4), Keyframe(0.25), Keyframe(0.35)); }},
+
+        // Enhancement is noise, clarity, sharpness. Grain is never on the GPU, so the cases
+        // that matter are clarity alone, each sign of sharpness, and the two together -- the
+        // only effect so far that runs as two sequential passes.
+        {"enhance(clarity)",      [] { return std::make_shared<openshot::Enhancement>(
+                                           Keyframe(0.0), Keyframe(0.6), Keyframe(0.0)); }},
+        {"enhance(sharpen)",      [] { return std::make_shared<openshot::Enhancement>(
+                                           Keyframe(0.0), Keyframe(0.0), Keyframe(0.5)); }},
+        {"enhance(blur)",         [] { return std::make_shared<openshot::Enhancement>(
+                                           Keyframe(0.0), Keyframe(0.0), Keyframe(-0.7)); }},
+        {"enhance(clarity+sharp)",[] { return std::make_shared<openshot::Enhancement>(
+                                           Keyframe(0.0), Keyframe(0.4), Keyframe(0.35)); }},
+
+        // Grain, alone and after the other two -- the whole production configuration of the
+        // service's ADJUSTMENT filter runs on the GPU now. Statistical cases: see Case.
+        {"enhance(grain)",        [] { return std::make_shared<openshot::Enhancement>(
+                                           Keyframe(0.67), Keyframe(0.0), Keyframe(0.0)); },
+                                  48.0, true},
+        {"enhance(all, prod)",    [] { return std::make_shared<openshot::Enhancement>(
+                                           Keyframe(0.67), Keyframe(0.68), Keyframe(-0.58)); },
+                                  48.0, true},
+
+        // Mask through the ROUNDED_CORNERS type, which builds its own mask and so needs no
+        // reader here. The mask itself is CPU-built either way; what is under test is the
+        // grey-to-alpha arithmetic on top of it.
+        {"mask(rounded)",         [] { return std::make_shared<openshot::Mask>(
+                                           openshot::Mask::ROUNDED_CORNERS, Keyframe(0.0),
+                                           Keyframe(0.0)); }},
+        {"mask(bright+contrast)", [] { return std::make_shared<openshot::Mask>(
+                                           openshot::Mask::ROUNDED_CORNERS, Keyframe(0.25),
+                                           Keyframe(8.0)); }},
+        {"mask(inverted)",        [] {
+                                       auto m = std::make_shared<openshot::Mask>(
+                                           openshot::Mask::ROUNDED_CORNERS, Keyframe(-0.15),
+                                           Keyframe(-5.0));
+                                       m->invert = true;
+                                       return m;
+                                   }},
+        // CircleMask at three radii. The edge ring is the whole effect, so a radius that puts the
+        // circle well inside the frame matters more than one that clips.
+        //
+        // Gated at kCircleEdgeGate, not 48: the GPU edge is an analytic ramp and the C++'s is
+        // OpenCV's rasterised polygon (owner, 2026-09-24; circle_mask.sksl). The interior and
+        // exterior are exact, the one-pixel ring is not -- measured 37.4-49.6 dB here, the whole
+        // difference on the ring. The gate catches a circle in the wrong place or of the wrong
+        // size, which would cost far more than a ring.
+        {"circlemask(0.8)",       [] { return std::make_shared<openshot::CircleMask>(Keyframe(0.8)); },
+                                  kCircleEdgeGate},
+        {"circlemask(0.45)",      [] { return std::make_shared<openshot::CircleMask>(Keyframe(0.45)); },
+                                  kCircleEdgeGate},
+        {"circlemask(0.12)",      [] { return std::make_shared<openshot::CircleMask>(Keyframe(0.12)); },
+                                  kCircleEdgeGate},
+
+        // Zoom-in at two magnifications and an off-centre anchor. Zoom-out declines, so there is
+        // nothing to compare for it.
+        {"zoom(220, centre)",     [] { return std::make_shared<openshot::Zoom>(
+                                           Keyframe(220.0), Keyframe(0.5), Keyframe(0.5)); }, kTransitionGate},
+        {"zoom(135, off-centre)", [] { return std::make_shared<openshot::Zoom>(
+                                           Keyframe(135.0), Keyframe(0.3), Keyframe(0.7)); }, kTransitionGate},
+
+        // Border-reflected move and rotation. Both warp with BORDER_REFLECT, which is not Skia's
+        // kMirror: OpenCV repeats the edge pixel and Skia does not. Fractional shifts on purpose,
+        // since a whole-pixel one would hide the interpolation entirely.
+        {"reflmove(0.3, 0)",      [] { return std::make_shared<openshot::BorderReflectedMove>(
+                                           Keyframe(0.3), Keyframe(0.0)); }, kTransitionGate},
+        {"reflmove(-0.13, 0.07)", [] { return std::make_shared<openshot::BorderReflectedMove>(
+                                           Keyframe(-0.13), Keyframe(0.07)); }, kTransitionGate},
+        {"reflrot(45)",           [] { return std::make_shared<openshot::BorderReflectedRotation>(
+                                           Keyframe(45.0)); }},
+        {"reflrot(-12.5)",        [] { return std::make_shared<openshot::BorderReflectedRotation>(
+                                           Keyframe(-12.5)); }},
+
+        // W20 begins here: the two transition effects whose C++ is exactly reproducible.
+        // Wipe's thresholds are chosen so all three branches of its mask are exercised -- below
+        // low, between the two, and above high.
+        {"wipe(30-70)",           [] { return std::make_shared<openshot::Wipe>(
+                                           Keyframe(30.0), Keyframe(70.0)); }},
+        {"wipe(0-100)",           [] { return std::make_shared<openshot::Wipe>(
+                                           Keyframe(0.0), Keyframe(100.0)); }},
+        {"wipe(swapped)",         [] { return std::make_shared<openshot::Wipe>(
+                                           Keyframe(80.0), Keyframe(20.0)); }},
+
+        // SplitShift both ways round, and a negative shift, because the sign picks a different
+        // pair of rectangles in the C++.
+        {"splitshift(vert)",      [] { return std::make_shared<openshot::SplitShift>(
+                                           Keyframe(0.35), false, Keyframe(0.5)); }},
+        {"splitshift(vert -)",    [] { return std::make_shared<openshot::SplitShift>(
+                                           Keyframe(-0.2), false, Keyframe(0.3)); }},
+        {"splitshift(horiz)",     [] { return std::make_shared<openshot::SplitShift>(
+                                           Keyframe(0.15), true, Keyframe(0.62)); }},
+
+        // The four blurs are pass chains the planner builds and both paths run (EffectPlan.h,
+        // boxBlurChain and friends; 2026-09-25): the C++ twin runs the same passes, so every case
+        // here is expected EXACT but the zoom blur, whose ray direction takes a sqrt.
+        //
+        // The Gaussian. Radii are large because these images are 256 wide and the parameter is in
+        // reference pixels. Up to a sigma of 6 px it is one pass per axis at full size; the last
+        // two cases are wide enough (sigma 11.5 / 6.9 px here) to take the block downsample and
+        // the upsample, and 200 x 0 downsamples one axis only.
+        {"blur(40, 40)",          [] { return std::make_shared<openshot::Blur>(
+                                           Keyframe(40.0), Keyframe(40.0)); }, kTransitionGate},
+        {"blur(100, 0)",          [] { return std::make_shared<openshot::Blur>(
+                                           Keyframe(100.0), Keyframe(0.0)); }, kTransitionGate},
+        {"blur(0, 60)",           [] { return std::make_shared<openshot::Blur>(
+                                           Keyframe(0.0), Keyframe(60.0)); }, kTransitionGate},
+        {"blur(200, 120)",        [] { return std::make_shared<openshot::Blur>(
+                                           Keyframe(200.0), Keyframe(120.0)); }, kTransitionGate},
+        {"blur(200, 0)",          [] { return std::make_shared<openshot::Blur>(
+                                           Keyframe(200.0), Keyframe(0.0)); }, kTransitionGate},
+
+        // The diagonal blur: each diagonal reflects at its own length, so the short corner
+        // diagonals are the interesting part of a 256x256 image. 15 is the smallest kernel the
+        // effect builds; 100 is wide enough here to decimate along the diagonals.
+        {"diagonal_blur(15)",     [] { return std::make_shared<openshot::Blur>(
+                                           Keyframe(0.0), Keyframe(0.0), Keyframe(15.0)); }, kTransitionGate},
+        {"diagonal_blur(40)",     [] { return std::make_shared<openshot::Blur>(
+                                           Keyframe(0.0), Keyframe(0.0), Keyframe(40.0)); }, kTransitionGate},
+        {"diagonal_blur(100)",    [] { return std::make_shared<openshot::Blur>(
+                                           Keyframe(0.0), Keyframe(0.0), Keyframe(100.0)); }, kTransitionGate},
+
+        // The rotational blur, from one pass to several: the tap count and pass count follow the
+        // arc at the corners, and taps that leave the frame reflect.
+        {"rotational_blur(5)",    [] { return std::make_shared<openshot::Blur>(
+                                           Keyframe(0.0), Keyframe(0.0), Keyframe(0.0), Keyframe(5.0)); }, kTransitionGate},
+        {"rotational_blur(12)",   [] { return std::make_shared<openshot::Blur>(
+                                           Keyframe(0.0), Keyframe(0.0), Keyframe(0.0), Keyframe(12.0)); }, kTransitionGate},
+        {"rotational_blur(25)",   [] { return std::make_shared<openshot::Blur>(
+                                           Keyframe(0.0), Keyframe(0.0), Keyframe(0.0), Keyframe(25.0)); }, kTransitionGate},
+        {"rotational_blur(45)",   [] { return std::make_shared<openshot::Blur>(
+                                           Keyframe(0.0), Keyframe(0.0), Keyframe(0.0), Keyframe(45.0)); }, kTransitionGate},
+
+        // The zoom blur. Its centre matters more than its strength: rays through a centred blur
+        // run along the axes and across the centre, and a corner centre sends every ray one way.
+        {"zoom_blur(40, centre)", [] { return std::make_shared<openshot::Blur>(
+                                           Keyframe(0.0), Keyframe(0.0), Keyframe(0.0), Keyframe(0.0),
+                                           Keyframe(40.0), Keyframe(0.5), Keyframe(0.5)); }, kTransitionGate},
+        {"zoom_blur(100, off)",   [] { return std::make_shared<openshot::Blur>(
+                                           Keyframe(0.0), Keyframe(0.0), Keyframe(0.0), Keyframe(0.0),
+                                           Keyframe(100.0), Keyframe(0.31), Keyframe(0.62)); }, kTransitionGate},
+        {"zoom_blur(20, corner)", [] { return std::make_shared<openshot::Blur>(
+                                           Keyframe(0.0), Keyframe(0.0), Keyframe(0.0), Keyframe(0.0),
+                                           Keyframe(20.0), Keyframe(0.0), Keyframe(0.0)); }, kTransitionGate},
+
+        // The 3-D LUT. The cube is the golden suite's 33 cubed example, which is the size the
+        // export used to resample down to 17 -- so this also measures the atlas, not only the
+        // interpolation. Partial intensity takes the other of the C++'s two branches.
+        {"colormap(lut)",         [] { return std::make_shared<openshot::ColorMap>(
+                                           std::string(PARITY_MEDIA_DIR) + "lut_example.cube"); }},
+        {"colormap(lut, 0.4)",    [] { return std::make_shared<openshot::ColorMap>(
+                                           std::string(PARITY_MEDIA_DIR) + "lut_example.cube",
+                                           Keyframe(0.4)); }},
+        {"colormap(lut, rgb)",    [] { return std::make_shared<openshot::ColorMap>(
+                                           std::string(PARITY_MEDIA_DIR) + "lut_example.cube",
+                                           Keyframe(1.0), Keyframe(0.8), Keyframe(0.5),
+                                           Keyframe(1.0)); }},
+
+        {"mask(replace_image)",   [] {
+                                       auto m = std::make_shared<openshot::Mask>(
+                                           openshot::Mask::ROUNDED_CORNERS, Keyframe(0.1),
+                                           Keyframe(3.0));
+                                       m->replace_image = true;
+                                       return m;
+                                   }},
+    };
+}
+
+// The shader pass on its own. A single timed loop cannot give this: the run has to end in a
+// readback or the recorded work never reaches the GPU, and at 1080p that readback is as large as
+// the gate itself. So time two loop lengths that differ only in the number of shader passes and
+// take the slope — the upload at the front and the readback at the end cancel exactly.
+//
+// Chained is the only way an effect is ever used: ApplyOnGpu leaves its result on the GPU, so the
+// next effect reads a texture rather than uploading. The single-effect cost, upload and readback
+// included, is reported beside it because that is what a lone GPU effect on a CPU frame pays, and
+// it is the crossing W22-W25 exists to remove.
+QImage timingImage(int width, int height) {
+    QImage img(width, height, QImage::Format_RGBA8888_Premultiplied);
+    for (int y = 0; y < height; ++y)
+        for (int x = 0; x < width; ++x)
+            setPremul(img.scanLine(y) + x * 4, x & 255, y & 255, (x ^ y) & 255, 255);
+    return img;
+}
+
+double msChainedPass(const Factory& make, int width, int height) {
+    const QImage img = timingImage(width, height);
+    auto effect = make();
+
+    auto timeRun = [&](int passes) {
+        auto frame = frameFrom(img);
+        const auto start = std::chrono::steady_clock::now();
+        for (int i = 0; i < passes; ++i)
+            effect->GetFrame(frame, 1);
+        frame->GetImage();   // the one readback that makes all of it happen
+        return std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - start).count();
+    };
+
+    // A pass costs about as much as the gate allows, so a single slope over a short chain lands
+    // on either side of it run to run — the first version of this measurement reported 0.143 and
+    // 0.218 ms for the same case. Longer chains and the median of three make the number mean
+    // something; the gate is not worth deciding by noise.
+    constexpr int kShort = 30, kLong = 150;
+    timeRun(kShort);   // warm up: shader compile, pool fill, first upload
+    double slopes[3];
+    for (double& slope : slopes)
+        slope = (timeRun(kLong) - timeRun(kShort)) / (kLong - kShort);
+    std::sort(std::begin(slopes), std::end(slopes));
+    return slopes[1];
+}
+
+double msSingleWithTransfers(const Factory& make, int width, int height) {
+    const QImage img = timingImage(width, height);
+    auto effect = make();
+    constexpr int kWarmup = 3, kRuns = 20;
+    auto run = [&] {
+        auto frame = frameFrom(img);
+        effect->GetFrame(frame, 1);
+        frame->GetImage();
+    };
+    for (int i = 0; i < kWarmup; ++i) run();
+    const auto start = std::chrono::steady_clock::now();
+    for (int i = 0; i < kRuns; ++i) run();
+    return std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - start).count() / kRuns;
+}
+
+// Where a pass's time actually goes. ApplyOnGpu does three things per effect — snapshot the
+// source surface, borrow a destination, run the fragment — and a pass measured well over its gate
+// needs the breakdown before anything is redesigned around a guess.
+//
+// Every probe has to be a genuine dependency chain. The first attempt at this measured ~0 ms for
+// all three because a run of full-coverage kSrc draws whose results nobody reads is work Graphite
+// is entitled to throw away, and it does: each draw replaces the last, so only the final one
+// survives. So each pass below reads what the previous pass wrote, which nothing can elide, and
+// the variants differ by one ingredient at a time.
+void probe(int width, int height) {
+    using namespace openshot;
+    const QImage img = timingImage(width, height);
+    const SkPixmap pixels(
+        SkImageInfo::Make(width, height, kRGBA_8888_SkColorType, kPremul_SkAlphaType),
+        img.constBits(), img.bytesPerLine());
+
+    // A trivial fragment, to separate "a shader pass costs this" from "this shader costs this".
+    auto [passthrough, error] = SkRuntimeEffect::MakeForShader(SkString(
+        "uniform shader osSrc;\nfloat4 main(float2 p) { return osSrc.eval(p); }\n"));
+    if (!passthrough) { std::printf("  probe: %s\n", error.c_str()); return; }
+
+    auto slope = [&](const std::function<void(int)>& body) {
+        constexpr int kShort = 10, kLong = 30;
+        auto run = [&](int n) {
+            const auto start = std::chrono::steady_clock::now();
+            body(n);
+            GpuDevice::Instance().submit(true);
+            return std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - start).count();
+        };
+        run(kShort);
+        return (run(kLong) - run(kShort)) / (kLong - kShort);
+    };
+
+    auto drawChain = [&](sk_sp<SkRuntimeEffect> effect, bool snapshot_each, bool acquire_each) {
+        auto a = GpuFrame::Create(width, height, kRGBA_8888_SkColorType);
+        auto b = GpuFrame::Create(width, height, kRGBA_8888_SkColorType);
+        if (!a || !b || !a->upload(pixels)) return -1.0;
+        sk_sp<SkImage> fixed = a->snapshot();
+        return slope([&](int n) {
+            auto src = a, dst = b;
+            for (int i = 0; i < n; ++i) {
+                sk_sp<SkImage> child = snapshot_each ? src->snapshot() : fixed;
+                if (acquire_each) {
+                    auto fresh = GpuFrame::Create(width, height, kRGBA_8888_SkColorType);
+                    if (fresh) dst = fresh;
+                }
+                SkRuntimeEffectBuilder builder(effect);
+                builder.child("osSrc") = child->makeShader(SkTileMode::kClamp, SkTileMode::kClamp,
+                                                            SkSamplingOptions());
+                if (effect->findUniform("factor")) {
+                    builder.uniform("factor") = 1.0f;
+                    builder.uniform("shift") = 8.0f;
+                }
+                SkPaint paint;
+                paint.setBlendMode(SkBlendMode::kSrc);
+                paint.setShader(builder.makeShader());
+                dst->canvas()->drawRect(SkRect::MakeIWH(width, height), paint);
+                std::swap(src, dst);
+            }
+        });
+    };
+
+    // The brightness fragment in the same harness, so the only difference from the passthrough
+    // line above is the body. Its text is duplicated here on purpose: this is a measurement of
+    // the fragment, and reaching into GpuEffect for the real one would make the probe depend on
+    // the thing it is measuring.
+    auto [brightness, brightness_error] = SkRuntimeEffect::MakeForShader(SkString(
+        "uniform shader osSrc;\n"
+        "uniform float factor;\n"
+        "uniform float shift;\n"
+        "float4 main(float2 p) {\n"
+        "  float4 bytes = floor(float4(osSrc.eval(p)) * 255.0 + 0.5);\n"
+        "  float alpha_percent = bytes.a == 0.0 ? 1.0 : bytes.a / 255.0;\n"
+        "  float3 c = floor(bytes.rgb / alpha_percent);\n"
+        "  c = clamp(floor(factor * (c - 128.0) + 128.0), 0.0, 255.0);\n"
+        "  c = clamp(floor(c + shift), 0.0, 255.0);\n"
+        "  return float4(floor(c * alpha_percent), bytes.a) / 255.0;\n"
+        "}\n"));
+    if (!brightness) { std::printf("  probe: %s\n", brightness_error.c_str()); return; }
+
+    std::printf("  passthrough, snapshot + acquire each pass  %6.3f ms\n",
+                drawChain(passthrough, true, true));
+    std::printf("  passthrough, snapshot each pass            %6.3f ms\n",
+                drawChain(passthrough, true, false));
+    std::printf("  brightness, snapshot + acquire each pass   %6.3f ms\n",
+                drawChain(brightness, true, true));
+}
+
+// Exactly where the unpremultiply disagrees, over every (premultiplied byte, alpha) pair there
+// is. This is the one step every CPU twin shares, so if it is not reproducible then no fragment
+// can be bit-exact on a semi-transparent pixel and that is a property of the port, not of any one
+// effect. Isolating it here says so once instead of once per effect.
+int checkUnpremul() {
+    using namespace openshot;
+    auto [effect, error] = SkRuntimeEffect::MakeForShader(SkString(
+        "uniform shader osSrc;\n"
+        "float4 main(float2 p) {\n"
+        "  float4 b = floor(float4(osSrc.eval(p)) * 255.0 + 0.5);\n"
+        "  float ap = b.a == 0.0 ? 1.0 : b.a / 255.0;\n"
+        "  float q = floor(b.r / ap);\n"
+        // The quotient is 0..255 and has to survive an 8-bit surface, so it goes out as the
+        // channel value itself rather than being scaled.
+        "  return float4(q / 255.0, 0.0, 0.0, 1.0);\n"
+        "}\n"));
+    if (!effect) { std::printf("  unpremul probe: %s\n", error.c_str()); return 1; }
+
+    // x is the premultiplied byte, y the alpha, and the image is premultiplied-valid, so only
+    // x <= y is a legal pixel. The rest are skipped rather than compared.
+    QImage img(256, 256, QImage::Format_RGBA8888_Premultiplied);
+    for (int a = 0; a < 256; ++a)
+        for (int r = 0; r < 256; ++r)
+            setPremul(img.scanLine(a) + r * 4, r, 0, 0, a);
+
+    auto source = GpuFrame::Create(256, 256, kRGBA_8888_SkColorType);
+    auto target = GpuFrame::Create(256, 256, kRGBA_8888_SkColorType);
+    const SkPixmap pixels(
+        SkImageInfo::Make(256, 256, kRGBA_8888_SkColorType, kPremul_SkAlphaType),
+        img.constBits(), img.bytesPerLine());
+    if (!source || !target || !source->upload(pixels)) { std::printf("  unpremul: setup failed\n"); return 1; }
+
+    SkRuntimeEffectBuilder builder(effect);
+    builder.child("osSrc") = source->snapshot()->makeShader(
+        SkTileMode::kClamp, SkTileMode::kClamp, SkSamplingOptions());
+    SkPaint paint;
+    paint.setBlendMode(SkBlendMode::kSrc);
+    paint.setShader(builder.makeShader());
+    target->canvas()->drawRect(SkRect::MakeIWH(256, 256), paint);
+
+    QImage out(256, 256, QImage::Format_RGBA8888_Premultiplied);
+    const SkPixmap dst(SkImageInfo::Make(256, 256, kRGBA_8888_SkColorType, kPremul_SkAlphaType),
+                       out.bits(), out.bytesPerLine());
+    if (!target->readback(dst)) { std::printf("  unpremul: readback failed\n"); return 1; }
+
+    long compared = 0, differing = 0;
+    int worst = 0, worst_r = 0, worst_a = 0;
+    for (int a = 0; a < 256; ++a)
+        for (int r = 0; r <= a && r < 256; ++r) {
+            // The CPU twin, spelled exactly as image-processing-lib spells it.
+            const float alpha_percent = a == 0 ? 1.0f : a / 255.0f;
+            const int cpu = (int) (unsigned char) (r / alpha_percent);
+            const int gpu = out.scanLine(a)[r * 4];
+            compared++;
+            if (cpu != gpu) {
+                differing++;
+                if (std::abs(cpu - gpu) > worst) { worst = std::abs(cpu - gpu); worst_r = r; worst_a = a; }
+            }
+        }
+    std::printf("  unpremultiply: %ld of %ld (premul, alpha) pairs differ, worst %d LSB "
+                "(byte %d over alpha %d)\n", differing, compared, worst, worst_r, worst_a);
+    return 0;
+}
+
+// The whole exposure(1.0) chain -- floor(floor(v/a) * a), an identity in exact arithmetic -- over
+// every legal (premultiplied byte, alpha) pair.
+//
+// This exists because the parity numbers did not add up. The unpremultiply above disagrees on
+// 1.8 % of pairs, but exposure at 1.0 disagrees on 19 % of a noise image, and the composition
+// cannot amplify a disagreement tenfold. Either the multiply back is also disagreeing, or the
+// bytes the fragment reads are not the bytes the C++ reads -- and the second would matter to every
+// fragment, not just this one. So the chain is measured whole, over the same exhaustive input.
+int checkExposureChain() {
+    using namespace openshot;
+    auto [effect, error] = SkRuntimeEffect::MakeForShader(SkString(
+        "uniform shader osSrc;\n"
+        "float4 main(float2 p) {\n"
+        "  float4 b = floor(float4(osSrc.eval(p)) * 255.0 + 0.5);\n"
+        "  float ap = b.a == 0.0 ? 1.0 : b.a / 255.0;\n"
+        "  float u = floor(b.r / ap);\n"
+        "  float v = floor(u * ap);\n"
+        // Two channels out: the chain's result, and the raw byte the fragment read, so a
+        // disagreement in reading the texture is distinguishable from one in the arithmetic.
+        "  return float4(v / 255.0, b.r / 255.0, 0.0, 1.0);\n"
+        "}\n"));
+    if (!effect) { std::printf("  exposure chain probe: %s\n", error.c_str()); return 1; }
+
+    QImage img(256, 256, QImage::Format_RGBA8888_Premultiplied);
+    for (int a = 0; a < 256; ++a)
+        for (int r = 0; r < 256; ++r)
+            setPremul(img.scanLine(a) + r * 4, r, 0, 0, a);
+
+    auto source = GpuFrame::Create(256, 256, kRGBA_8888_SkColorType);
+    auto target = GpuFrame::Create(256, 256, kRGBA_8888_SkColorType);
+    const SkPixmap pixels(
+        SkImageInfo::Make(256, 256, kRGBA_8888_SkColorType, kPremul_SkAlphaType),
+        img.constBits(), img.bytesPerLine());
+    if (!source || !target || !source->upload(pixels)) { std::printf("  chain: setup failed\n"); return 1; }
+
+    SkRuntimeEffectBuilder builder(effect);
+    builder.child("osSrc") = source->snapshot()->makeShader(
+        SkTileMode::kClamp, SkTileMode::kClamp, SkSamplingOptions());
+    SkPaint paint;
+    paint.setBlendMode(SkBlendMode::kSrc);
+    paint.setShader(builder.makeShader());
+    target->canvas()->drawRect(SkRect::MakeIWH(256, 256), paint);
+
+    QImage out(256, 256, QImage::Format_RGBA8888_Premultiplied);
+    const SkPixmap dst(SkImageInfo::Make(256, 256, kRGBA_8888_SkColorType, kPremul_SkAlphaType),
+                       out.bits(), out.bytesPerLine());
+    if (!target->readback(dst)) { std::printf("  chain: readback failed\n"); return 1; }
+
+    long compared = 0, chain_differ = 0, byte_differ = 0;
+    int worst = 0, worst_r = 0, worst_a = 0;
+    for (int a = 0; a < 256; ++a)
+        for (int r = 0; r <= a && r < 256; ++r) {
+            const float alpha_percent = a == 0 ? 1.0f : a / 255.0f;
+            const int u = (int) (unsigned char) (r / alpha_percent);
+            const int cpu = (int) (unsigned char) (u * alpha_percent);
+            const int gpu = out.scanLine(a)[r * 4];
+            const int gpu_byte = out.scanLine(a)[r * 4 + 1];
+            compared++;
+            if (gpu_byte != r) byte_differ++;
+            if (cpu != gpu) {
+                chain_differ++;
+                if (std::abs(cpu - gpu) > worst) { worst = std::abs(cpu - gpu); worst_r = r; worst_a = a; }
+            }
+        }
+    std::printf("  exposure(1.0) chain: %ld of %ld pairs differ, worst %d LSB (byte %d over alpha %d)\n",
+                chain_differ, compared, worst, worst_r, worst_a);
+    std::printf("  the byte the fragment reads: %ld of %ld wrong\n", byte_differ, compared);
+    return 0;
+}
+
+// What exactly does babl's "R'G'B'A u8" -> "Y'CbCr u8" conversion compute?
+//
+// ChromaKey's YCbCr method -- the only method ../video-rendering-service ever asks for -- keys on
+// Cb and Cr produced by babl. A fragment cannot call babl, so it has to reproduce the mapping, and
+// "it is probably BT.601" is not something to find out from a failing parity run. This asks babl
+// over the whole 6-bit-per-channel grid and reports how far the textbook formula is from it.
+int checkYCbCr() {
+    // ChromaKey::GetFrame calls babl_init() behind a static flag the first time it needs it; this
+    // probe may run first, and babl aborts the process rather than returning an error if it has
+    // not been initialised. It is idempotent, so calling it here is safe either way.
+    babl_init();
+    Babl const* rgb = babl_format("R'G'B'A u8");
+    Babl const* ycbcr = babl_format("Y'CbCr u8");
+    Babl const* fish = (rgb && ycbcr) ? babl_fish(rgb, ycbcr) : nullptr;
+    if (!fish) { std::printf("  ycbcr: babl_fish failed\n"); return 1; }
+
+    constexpr int kStep = 4;                 // 64^3 = 262,144 samples
+    std::vector<unsigned char> in, out;
+    for (int r = 0; r < 256; r += kStep)
+        for (int g = 0; g < 256; g += kStep)
+            for (int b = 0; b < 256; b += kStep) {
+                in.push_back((unsigned char) r); in.push_back((unsigned char) g);
+                in.push_back((unsigned char) b); in.push_back(255);
+            }
+    const long samples = (long) in.size() / 4;
+    out.resize(samples * 3);
+    babl_process(const_cast<Babl*>(fish), in.data(), out.data(), samples);
+
+    // Which arithmetic reproduces babl exactly? The coefficients are settled by the probes below
+    // (BT.601 studio range); what is not settled is the precision and the rounding babl uses to
+    // get back to u8, and that is worth pinning down because the fragment has to match it or
+    // ChromaKey keys slightly different pixels on the GPU.
+    struct Variant { const char* name; bool use_float; bool trunc_half; bool short_coeffs; };
+    const Variant variants[] = {
+        {"double, exact coeffs, round-half-away", false, false, false},
+        {"double, exact coeffs, trunc(x+0.5)",    false, true,  false},
+        {"float,  exact coeffs, round-half-away", true,  false, false},
+        {"float,  exact coeffs, trunc(x+0.5)",    true,  true,  false},
+        {"double, 3-dp coeffs,  round-half-away", false, false, true },
+        {"float,  3-dp coeffs,  trunc(x+0.5)",    true,  true,  true },
+    };
+
+    for (const Variant& v : variants) {
+        int worst_cb = 0, worst_cr = 0;
+        long differ = 0;
+        for (long i = 0; i < samples; ++i) {
+            const double r = in[i * 4 + 0], g = in[i * 4 + 1], b = in[i * 4 + 2];
+            double cbf, crf;
+            if (v.short_coeffs) {
+                cbf = 128.0 + (-0.148 * r - 0.291 * g + 0.439 * b);
+                crf = 128.0 + (0.439 * r - 0.368 * g - 0.071 * b);
+            } else {
+                cbf = 128.0 + (-37.797 * r - 74.203 * g + 112.0 * b) / 255.0;
+                crf = 128.0 + (112.0 * r - 93.786 * g - 18.214 * b) / 255.0;
+            }
+            if (v.use_float) { cbf = (float) cbf; crf = (float) crf; }
+            const int cb = v.trunc_half ? (int) (cbf + 0.5) : (int) std::lround(cbf);
+            const int cr = v.trunc_half ? (int) (crf + 0.5) : (int) std::lround(crf);
+            const int dcb = std::abs(std::min(255, std::max(0, cb)) - (int) out[i * 3 + 1]);
+            const int dcr = std::abs(std::min(255, std::max(0, cr)) - (int) out[i * 3 + 2]);
+            if (dcb > worst_cb) worst_cb = dcb;
+            if (dcr > worst_cr) worst_cr = dcr;
+            if (dcb || dcr) differ++;
+        }
+        std::printf("  %-40s %6ld of %ld differ, worst Cb %d Cr %d\n",
+                    v.name, differ, samples, worst_cb, worst_cr);
+    }
+
+    // Read the mapping off babl directly instead of guessing at it: the response to black, to
+    // each primary at full intensity, and to white gives the offset and the three coefficients
+    // of each of Cb and Cr.
+    const unsigned char probes[5][4] = {
+        {0, 0, 0, 255}, {255, 0, 0, 255}, {0, 255, 0, 255}, {0, 0, 255, 255}, {255, 255, 255, 255},
+    };
+    unsigned char probe_out[5 * 3];
+    babl_process(const_cast<Babl*>(fish), (void*) probes, probe_out, 5);
+    const char* names[5] = {"black", "red", "green", "blue", "white"};
+    for (int i = 0; i < 5; ++i)
+        std::printf("    %-6s -> Y=%3d Cb=%3d Cr=%3d\n", names[i],
+                    probe_out[i * 3], probe_out[i * 3 + 1], probe_out[i * 3 + 2]);
+    return 0;
+}
+
+// What does cv::cvtColor(COLOR_BGRA2GRAY) actually compute?
+//
+// The wipe and the displacement map both key on it, and the candidate fixed-point formula
+// (B*1868 + G*9617 + R*4899 + 8192) >> 14 leaves the wipe differing by a whole threshold step on
+// 144 pixels. Asking OpenCV over the whole 6-bit-per-channel grid is the same move that settled
+// babl's Y'CbCr, and for the same reason: a coefficient guess that is nearly right is worse than
+// no guess, because it looks like it works.
+int checkBgraGray() {
+    constexpr int kStep = 4;                 // 64^3 = 262,144 samples
+    cv::Mat bgra(1, 64 * 64 * 64, CV_8UC4);
+    int i = 0;
+    for (int b = 0; b < 256; b += kStep)
+        for (int g = 0; g < 256; g += kStep)
+            for (int r = 0; r < 256; r += kStep)
+                bgra.at<cv::Vec4b>(0, i++) = cv::Vec4b((uchar) b, (uchar) g, (uchar) r, 255);
+
+    cv::Mat grey;
+    cv::cvtColor(bgra, grey, cv::COLOR_BGRA2GRAY);
+
+    struct Variant { const char* name; int cb, cg, cr; int round; };
+    const Variant variants[] = {
+        {"(B*1868 + G*9617 + R*4899 + 8192) >> 14", 1868, 9617, 4899, 8192},
+        {"(B*1868 + G*9617 + R*4899) >> 14, trunc",  1868, 9617, 4899, 0},
+        {"(B*1squared...) placeholder",              1868, 9617, 4899, 8192},
+    };
+    for (int v = 0; v < 2; ++v) {
+        long differ = 0; int worst = 0; int wb = 0, wg = 0, wr = 0;
+        for (int j = 0; j < i; ++j) {
+            const cv::Vec4b& px = bgra.at<cv::Vec4b>(0, j);
+            const int mine = (px[0] * variants[v].cb + px[1] * variants[v].cg +
+                              px[2] * variants[v].cr + variants[v].round) >> 14;
+            const int cv_value = grey.at<uchar>(0, j);
+            if (mine != cv_value) {
+                differ++;
+                if (std::abs(mine - cv_value) > worst) {
+                    worst = std::abs(mine - cv_value); wb = px[0]; wg = px[1]; wr = px[2];
+                }
+            }
+        }
+        std::printf("  %-42s %6ld of %d differ, worst %d (B=%d G=%d R=%d)\n",
+                    variants[v].name, differ, i, worst, wb, wg, wr);
+    }
+    // And the float formula, for comparison.
+    {
+        long differ = 0; int worst = 0;
+        for (int j = 0; j < i; ++j) {
+            const cv::Vec4b& px = bgra.at<cv::Vec4b>(0, j);
+            const int mine = (int) std::lround(px[0] * 0.114 + px[1] * 0.587 + px[2] * 0.299);
+            const int cv_value = grey.at<uchar>(0, j);
+            if (mine != cv_value) { differ++; worst = std::max(worst, std::abs(mine - cv_value)); }
+        }
+        std::printf("  %-42s %6ld of %d differ, worst %d\n",
+                    "round(0.114B + 0.587G + 0.299R)", differ, i, worst);
+    }
+    return 0;
+}
+
+} // namespace
+
+int main(int argc, char** argv) {
+    // --sksl compiles whatever is on stdin and prints the compiler's answer. SkSL is not GLSL and
+    // its intrinsic set is narrower than the documentation makes obvious, so a fragment that
+    // "should" work is worth asking about directly rather than finding out through a silent
+    // fallback to the CPU path.
+    if (argc > 1 && std::string(argv[1]) == "--sksl") {
+        std::string source, line;
+        while (std::getline(std::cin, line)) source += line + "\n";
+        auto [effect, error] = SkRuntimeEffect::MakeForShader(SkString(source.c_str()));
+        std::printf("%s\n", effect ? "ok" : error.c_str());
+        return effect ? 0 : 1;
+    }
+
+    if (!openshot::GpuDevice::Instance().available()) {
+        std::printf("GPU not available (OPENSHOT_GPU unset or off) — nothing to compare.\n");
+        return 0;
+    }
+    std::printf("device: %s\n\n", openshot::GpuDevice::Instance().deviceName().c_str());
+
+    const std::vector<TestImage> images = makeImages();
+    const std::vector<Case> all = cases();
+
+    // Both arms of every case, GPU first, then the whole device torn down once for the CPU arm.
+    // SetBackend is the single control and moves Generation(), so switching per case would drop
+    // every pooled surface each time for no benefit.
+    // ApplyOnGpu leaves its result as the frame's GPU backing and the CPU twin does not, so
+    // IsGpuBacked() afterwards is the proof that the shader actually ran. Without this check a
+    // fragment that fails to compile falls back to the CPU on both arms and every comparison
+    // below reports a perfect match — which is exactly what the first run of this test did.
+    std::vector<std::vector<QImage>> gpu_results(all.size());
+    int not_on_gpu = 0;
+    for (std::size_t c = 0; c < all.size(); ++c)
+        for (const TestImage& t : images) {
+            auto frame = frameFrom(t.image);
+            all[c].make()->GetFrame(frame, 1);
+            if (!frame->IsGpuBacked()) {
+                std::printf("FAIL  %-22s %-12s did not run on the GPU (shader declined or "
+                            "failed to compile)\n", all[c].name.c_str(), t.name.c_str());
+                not_on_gpu++;
+            }
+            gpu_results[c].push_back(frame->GetImage()->copy());
+        }
+    if (not_on_gpu) {
+        std::printf("\n%d case(s) never reached the GPU — comparing them would prove nothing.\n",
+                    not_on_gpu);
+        return 1;
+    }
+
+    const openshot::GpuDevice::Backend backend = openshot::GpuDevice::RequestedBackend();
+    openshot::GpuDevice::SetBackend(openshot::GpuDevice::Backend::Off);
+
+    int failures = 0;
+    for (std::size_t c = 0; c < all.size(); ++c) {
+        std::printf("%s\n", all[c].name.c_str());
+        for (std::size_t i = 0; i < images.size(); ++i) {
+            auto frame = frameFrom(images[i].image);
+            all[c].make()->GetFrame(frame, 1);
+            const QImage cpu = frame->GetImage()->copy();
+            const Delta d = compare(cpu, gpu_results[c][i]);
+
+            if (all[c].statistical) {
+                // The same grain, measured: the GPU's spread within 5 % of the CPU's, the means
+                // within half an LSB, alpha untouched, and no spatial structure. An image the
+                // grain cannot move (clamped white or black) has nothing to compare.
+                const GrainStats sc = grainStats(images[i].image, cpu);
+                const GrainStats sg = grainStats(images[i].image, gpu_results[c][i]);
+                bool alpha_kept = true;
+                for (int y = 0; y < cpu.height() && alpha_kept; ++y) {
+                    const uchar* pg = gpu_results[c][i].scanLine(y);
+                    const uchar* pc = cpu.scanLine(y);
+                    for (int x = 0; x < cpu.width(); ++x)
+                        if (pg[x * 4 + 3] != pc[x * 4 + 3]) { alpha_kept = false; break; }
+                }
+                const bool flat = sc.stddev < 0.5;
+                const bool pass = alpha_kept &&
+                    (flat ? sg.stddev < 0.5
+                          : std::abs(sg.stddev / sc.stddev - 1.0) <= 0.05 &&
+                            std::abs(sg.mean - sc.mean) <= 0.5 &&
+                            std::abs(sg.neighbour_corr) <= 0.1 + std::abs(sc.neighbour_corr));
+                if (!pass) failures++;
+                std::printf("  %-6s %-12s grain sd cpu=%6.2f gpu=%6.2f  mean cpu=%+6.2f gpu=%+6.2f  "
+                            "corr cpu=%+5.2f gpu=%+5.2f  alpha %s  (statistical)\n",
+                            pass ? "PASS" : "FAIL", images[i].name.c_str(), sc.stddev, sg.stddev,
+                            sc.mean, sg.mean, sc.neighbour_corr, sg.neighbour_corr,
+                            alpha_kept ? "kept" : "CHANGED");
+                continue;
+            }
+
+            const bool exact = d.max_delta == 0;
+            const bool pass = exact || d.psnr >= all[c].psnrGate;
+            if (!pass) failures++;
+            std::printf("  %-6s %-12s psnr=%8.3f max=%3d differing=%6ld/%ld%s\n",
+                        exact ? "EXACT" : (pass ? "PASS" : "FAIL"),
+                        images[i].name.c_str(), d.psnr, d.max_delta, d.differing, d.total,
+                        all[c].psnrGate == kTransitionGate ? "  (45 dB gate, W20)"
+                        : all[c].psnrGate == kCircleEdgeGate ? "  (35 dB gate, analytic edge)" : "");
+        }
+    }
+
+    // The CPU twin's own cost at 1080p, measured with the device still off. Printed beside the
+    // shader figures so the two are comparable, and because it is the number that says whether a
+    // change to the CPU path was worth making.
+    std::printf("\n1080p cost per frame, CPU twin (device off)\n");
+    for (const Case& c : all)
+        std::printf("       %-22s %6.3f ms\n", c.name.c_str(),
+                    msSingleWithTransfers(c.make, 1920, 1080));
+
+    // Timing needs the GPU back.
+    openshot::GpuDevice::SetBackend(backend);
+    if (openshot::GpuDevice::Instance().available()) {
+        std::printf("\nthe shared unpremultiply step, over every legal pair\n");
+        checkUnpremul();
+        checkExposureChain();
+        checkYCbCr();
+        checkBgraGray();
+        std::printf("\n1080p breakdown of one pass\n");
+        probe(1920, 1080);
+        // The 0.2 ms gate is about a GPU. Lavapipe is Mesa's software rasteriser and exists here
+        // to check that a result is not vendor-specific -- it measures roughly 25x slower, so
+        // holding it to a hardware timing gate would only ever produce a failure that means
+        // nothing. Parity still counts on lavapipe, and above it did.
+        const bool software = backend == openshot::GpuDevice::Backend::Lavapipe;
+        std::printf("\n1080p cost per frame, gate <= 0.200 ms for the shader pass%s\n",
+                    software ? " (reported only: lavapipe is a software rasteriser)" : "");
+        for (const Case& c : all) {
+            const double chained = msChainedPass(c.make, 1920, 1080);
+            const double alone = msSingleWithTransfers(c.make, 1920, 1080);
+            const bool pass = chained <= 0.200;
+            if (!pass && !software) failures++;
+            std::printf("  %-4s %-22s shader=%6.3f ms   with upload+readback=%6.3f ms\n",
+                        software ? "----" : (pass ? "PASS" : "FAIL"),
+                        c.name.c_str(), chained, alone);
+        }
+    }
+
+    std::printf("\n%d failure(s)\n", failures);
+    return failures ? 1 : 0;
+}

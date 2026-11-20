@@ -1,0 +1,83 @@
+{
+ "date": "2026-09-24",
+ "machine": "RTX A2000 8GB Laptop GPU, mains power",
+ "skia": "GPU, OPENSHOT_GPU=vulkan",
+ "method": "same scratch A/B as 20260924-cpu-work-audit-ab.json (Timeline::GetFrame, 120 frames, 3 interleaved rounds, median)",
+ "ab": [
+  {
+   "res": "1920x1080",
+   "arm": "zoom66",
+   "before_delta_ms": 11.04,
+   "after_delta_ms": 0.2
+  },
+  {
+   "res": "1920x1080",
+   "arm": "zoom34",
+   "before_delta_ms": 11.01,
+   "after_delta_ms": 0.07
+  },
+  {
+   "res": "1920x1080",
+   "arm": "vblur360",
+   "before_delta_ms": 26.21,
+   "after_delta_ms": 16.67
+  },
+  {
+   "res": "1920x1080",
+   "arm": "hblur230",
+   "before_delta_ms": 27.64,
+   "after_delta_ms": 10.4
+  },
+  {
+   "res": "1920x1080",
+   "arm": "boxblur",
+   "after_delta_ms": 2.65
+  },
+  {
+   "res": "1280x720",
+   "arm": "zoom66",
+   "before_delta_ms": 4.29,
+   "after_delta_ms": 0.04
+  },
+  {
+   "res": "1280x720",
+   "arm": "zoom34",
+   "before_delta_ms": 4.26,
+   "after_delta_ms": 0.01
+  },
+  {
+   "res": "1280x720",
+   "arm": "vblur360",
+   "before_delta_ms": 13.31,
+   "after_delta_ms": 4.98
+  },
+  {
+   "res": "1280x720",
+   "arm": "hblur230",
+   "before_delta_ms": 8.65,
+   "after_delta_ms": 2.92
+  },
+  {
+   "res": "1280x720",
+   "arm": "boxblur",
+   "after_delta_ms": 0.88
+  }
+ ],
+ "service_trace": [
+  "barndoors frames=750 readbacks=0 uploads=149 sws_scale=144 qpainter=0 cpu_fallbacks=0",
+  "blurvertical frames=750 readbacks=1 uploads=150 sws_scale=144 qpainter=0 cpu_fallbacks=0",
+  "circle frames=750 readbacks=0 uploads=149 sws_scale=144 qpainter=0 cpu_fallbacks=0",
+  "contrast frames=750 readbacks=0 uploads=149 sws_scale=144 qpainter=0 cpu_fallbacks=0",
+  "dissolveblur frames=750 readbacks=1 uploads=150 sws_scale=144 qpainter=0 cpu_fallbacks=0",
+  "fade frames=750 readbacks=0 uploads=149 sws_scale=144 qpainter=0 cpu_fallbacks=0",
+  "glitch frames=750 readbacks=0 uploads=149 sws_scale=144 qpainter=0 cpu_fallbacks=0",
+  "lightfootage frames=750 readbacks=0 uploads=149 sws_scale=144 qpainter=0 cpu_fallbacks=0",
+  "lightleak frames=750 readbacks=0 uploads=149 sws_scale=144 qpainter=0 cpu_fallbacks=0",
+  "pandiag frames=750 readbacks=0 uploads=149 sws_scale=144 qpainter=0 cpu_fallbacks=0",
+  "rotate frames=750 readbacks=0 uploads=149 sws_scale=144 qpainter=0 cpu_fallbacks=0",
+  "split frames=750 readbacks=0 uploads=149 sws_scale=144 qpainter=0 cpu_fallbacks=0",
+  "whoosh frames=750 readbacks=1 uploads=150 sws_scale=144 qpainter=0 cpu_fallbacks=0",
+  "zoomin frames=750 readbacks=0 uploads=149 sws_scale=144 qpainter=0 cpu_fallbacks=0",
+  "zoomout frames=750 readbacks=0 uploads=149 sws_scale=144 qpainter=0 cpu_fallbacks=0"
+ ]
+}

@@ -12,6 +12,27 @@
 
 #include "Mask.h"
 
+#include <mutex>
+
+#include "../gpu/GpuDevice.h"
+#include "../gpu/GpuFrame.h"
+
+#include "skia/include/core/SkBlendMode.h"
+#include "skia/include/core/SkCanvas.h"
+#include "skia/include/core/SkImage.h"
+#include "skia/include/core/SkImageInfo.h"
+#include "skia/include/core/SkPaint.h"
+#include "skia/include/core/SkRect.h"
+#include "skia/include/core/SkPixmap.h"
+#include "skia/include/core/SkSamplingOptions.h"
+#include "skia/include/core/SkShader.h"
+#include "skia/include/core/SkTileMode.h"
+#include "EffectShaders.h"
+
+#include "skia/include/effects/SkRuntimeEffect.h"
+
+#include <cmath>
+
 #include "Exceptions.h"
 
 #include "ReaderBase.h"
@@ -28,7 +49,7 @@
 using namespace openshot;
 
 /// Blank constructor, useful when using Json to load the effect properties
-Mask::Mask() : maskType(MaskType::INVALID), reader(NULL), replace_image(false), invert(false), needs_refresh(true) {
+Mask::Mask() : maskType(MaskType::INVALID), reader(NULL), replace_image(false), invert(false), fade_audio_hint(false), needs_refresh(true) {
 	// Init effect properties
 	init_effect_details();
 }
@@ -36,7 +57,7 @@ Mask::Mask() : maskType(MaskType::INVALID), reader(NULL), replace_image(false), 
 // Default constructor
 Mask::Mask(ReaderBase *mask_reader, const Keyframe& mask_brightness, const Keyframe& mask_contrast,
 			const Keyframe& start_frame, const Keyframe& end_frame)
-		: reader(mask_reader), needs_refresh(true), maskType(MaskType::CUSTOM), replace_image(false), invert(false)
+		: reader(mask_reader), needs_refresh(true), maskType(MaskType::CUSTOM), replace_image(false), invert(false), fade_audio_hint(false)
 		, brightness(mask_brightness), contrast(mask_contrast), startFrame(start_frame), endFrame(end_frame)
 {
 	// Init effect properties
@@ -45,7 +66,7 @@ Mask::Mask(ReaderBase *mask_reader, const Keyframe& mask_brightness, const Keyfr
 
 Mask::Mask(MaskType _maskType, const Keyframe& mask_brightness, const Keyframe& mask_contrast,
 			const Keyframe& start_frame, const Keyframe& end_frame) :
-		maskType(_maskType), reader(NULL), brightness(mask_brightness), contrast(mask_contrast), replace_image(false), invert(false), needs_refresh(true),
+		maskType(_maskType), reader(NULL), brightness(mask_brightness), contrast(mask_contrast), replace_image(false), invert(false), fade_audio_hint(false), needs_refresh(true),
         roundedRadiusX(0), roundedRadiusY(0), startFrame(start_frame), endFrame(end_frame)
 {
 	// Init effect properties
@@ -73,17 +94,19 @@ void Mask::init_effect_details()
 // This method is required for all derived classes of EffectBase, and returns a
 // modified openshot::Frame object
 std::shared_ptr<openshot::Frame> Mask::GetFrame(std::shared_ptr<openshot::Frame> frame, int64_t frame_number) {
-	// Get the mask image (from the mask reader)
-	std::shared_ptr<QImage> frame_image = frame->GetImage();
-
 	if (frame_number < startFrame.GetValue(frame_number) || frame_number > endFrame.GetValue(frame_number)) {
 		return frame;
 	}
 
+	// The frame's size, taken from the frame rather than from its QImage, so that preparing the
+	// mask below does not force a GPU-backed frame to read itself back before ApplyOnGpu can run.
+	const int frame_width = frame->GetWidth();
+	const int frame_height = frame->GetHeight();
+
 	if (maskType == CUSTOM) {
 		// Check if mask reader is open
-		#pragma omp critical (open_mask_reader)
 		{
+			const std::lock_guard<std::mutex> reader_lock(reader_mutex);
 			if (reader && !reader->IsOpen()) reader->Open();
 		}
 
@@ -91,27 +114,39 @@ std::shared_ptr<openshot::Frame> Mask::GetFrame(std::shared_ptr<openshot::Frame>
 		if (!reader) return frame;
 
 		// Get mask image (if missing or different size than frame image)
-		#pragma omp critical (open_mask_reader)
+		gpu_mask_current = false;
 		{
+			const std::lock_guard<std::mutex> reader_lock(reader_mutex);
 			if (!original_mask || !reader->info.has_single_image || needs_refresh ||
-				(original_mask && original_mask->size() != frame_image->size())) {
+				(original_mask && original_mask->size() != QSize(frame_width, frame_height))) {
 
 				// Only get mask if needed
-				const auto mask_without_sizing = std::make_shared<QImage>(*reader->GetFrame(frame_number)->GetImage());
+				const std::shared_ptr<Frame> matte = reader->GetFrame(frame_number);
 
-				// Resize mask image to match frame size
-				original_mask = std::make_shared<QImage>(mask_without_sizing->scaled(
-								frame_image->width(), frame_image->height(),
-								Qt::IgnoreAspectRatio, Qt::SmoothTransformation));
+				// A video matte decoded on the GPU is used where it is: reading it back, scaling
+				// it with Qt and uploading it again was 6.3 ms a frame at 1080p. The CPU path
+				// below still gets its QImage if the shader declines (see after ApplyOnGpu).
+				if (matte && matte->IsGpuBacked() && PrepareGpuMask(matte, frame_width, frame_height)) {
+					original_mask.reset();
+					gpu_matte = matte;
+				} else {
+					gpu_matte.reset();
+					const auto mask_without_sizing = std::make_shared<QImage>(*matte->GetImage());
+
+					// Resize mask image to match frame size
+					original_mask = std::make_shared<QImage>(mask_without_sizing->scaled(
+									frame_width, frame_height,
+									Qt::IgnoreAspectRatio, Qt::SmoothTransformation));
+				}
 			}
 		}
 	} else if (maskType == ROUNDED_CORNERS) {
-		QImage mask(frame_image->width(),frame_image->height(),QImage::Format_RGBA8888_Premultiplied);
+		QImage mask(frame_width, frame_height, QImage::Format_RGBA8888_Premultiplied);
 		mask.fill(Qt::white);
 		QPainter p(&mask);
 		p.setRenderHint(QPainter::Antialiasing);
 		QPainterPath path;
-		path.addRoundedRect(QRectF(0, 0, frame_image->width(), frame_image->height()), roundedRadiusX, roundedRadiusY);
+		path.addRoundedRect(QRectF(0, 0, frame_width, frame_height), roundedRadiusX, roundedRadiusY);
 		QPen pen(Qt::black, 0);
 		p.setPen(pen);
 		p.fillPath(path, Qt::black);
@@ -123,7 +158,26 @@ std::shared_ptr<openshot::Frame> Mask::GetFrame(std::shared_ptr<openshot::Frame>
     // Refresh no longer needed
 	needs_refresh = false;
 
+	// The shader when there is a GPU to run it on, the C++ otherwise. It comes after the mask has
+	// been prepared -- that work is CPU-side either way, and the fragment takes the result as a
+	// texture -- but before GetImage(), which on a GPU-backed frame is the one readback.
+	if (ApplyOnGpu(frame, frame_number))
+		return frame;
+
+	// The shader declined after the mask was prepared on the GPU: bring the matte across the way
+	// the CPU path always has.
+	if (!original_mask && gpu_matte) {
+		const auto mask_without_sizing = std::make_shared<QImage>(*gpu_matte->GetImage());
+		original_mask = std::make_shared<QImage>(mask_without_sizing->scaled(
+						frame_width, frame_height, Qt::IgnoreAspectRatio, Qt::SmoothTransformation));
+		gpu_matte.reset();
+		gpu_mask_current = false;
+	}
+	if (!original_mask)
+		return frame;
+
 	// Get pixel arrays
+	std::shared_ptr<QImage> frame_image = frame->GetImage();
 	unsigned char *pixels = frame_image->bits();
 	const unsigned char *mask_pixels = original_mask->bits();
 
@@ -176,6 +230,122 @@ std::shared_ptr<openshot::Frame> Mask::GetFrame(std::shared_ptr<openshot::Frame>
 	return frame;
 }
 
+// The prepared mask as a GPU texture. See Mask.h for why this is declared there and defined here.
+struct Mask::MaskTextureCache
+{
+	sk_sp<SkImage> texture;
+	qint64 cache_key = 0;              // QImage::cacheKey(), which changes whenever the mask does
+	unsigned long long generation = 0; // GpuDevice::Generation()
+	std::shared_ptr<GpuFrame> owner;   // keeps the pooled surface alive alongside its snapshot
+};
+
+// The SkSL source lives in src/shaders/ (per-clip effects run only by the export) and is
+// embedded here at build time. Read it there -- including why it is written the way it is.
+const char* Mask::GpuShaderSource() const
+{
+	return openshot::shaders::kMask;
+}
+
+bool Mask::SetGpuUniforms(SkRuntimeEffectBuilder& builder, int64_t frame_number,
+						  int width, int height) const
+{
+	// A mask prepared on the GPU for this frame (PrepareGpuMask) has no QImage behind it.
+	if (gpu_mask_current && mask_texture && mask_texture->texture &&
+		mask_texture->texture->width() == width && mask_texture->texture->height() == height &&
+		mask_texture->generation == GpuDevice::Generation())
+		return BindMaskUniforms(builder, frame_number);
+
+	// GetFrame prepares original_mask before calling ApplyOnGpu; without one there is nothing to
+	// apply and the CPU path bails out the same way.
+	if (!original_mask || original_mask->isNull())
+		return false;
+	if (original_mask->width() != width || original_mask->height() != height)
+		return false;
+
+	const unsigned long long generation = GpuDevice::Generation();
+	if (!mask_texture || mask_texture->cache_key != original_mask->cacheKey() ||
+		mask_texture->generation != generation || !mask_texture->texture) {
+		auto cache = std::make_shared<MaskTextureCache>();
+		cache->cache_key = original_mask->cacheKey();
+		cache->generation = generation;
+
+		// The C++ reads the mask's raw bytes, so the upload must not convert them. Both routes
+		// that build original_mask produce Format_RGBA8888_Premultiplied, which is byte-for-byte
+		// kRGBA_8888 premultiplied.
+		if (original_mask->format() != QImage::Format_RGBA8888_Premultiplied)
+			return false;
+		const SkPixmap pixels(
+			SkImageInfo::Make(original_mask->width(), original_mask->height(),
+							  kRGBA_8888_SkColorType, kPremul_SkAlphaType),
+			original_mask->constBits(), original_mask->bytesPerLine());
+
+		cache->owner = GpuFrame::Create(original_mask->width(), original_mask->height(),
+										kRGBA_8888_SkColorType);
+		if (!cache->owner || !cache->owner->upload(pixels))
+			return false;
+		cache->texture = cache->owner->snapshot();
+		if (!cache->texture)
+			return false;
+		mask_texture = std::move(cache);
+	}
+
+	return BindMaskUniforms(builder, frame_number);
+}
+
+bool Mask::BindMaskUniforms(SkRuntimeEffectBuilder& builder, int64_t frame_number) const
+{
+	// Nearest and no local matrix: the mask is the frame's size, so eval(p) is the same texel the
+	// C++ indexes by the same loop counter.
+	builder.child("maskImage") = mask_texture->texture->makeShader(
+		SkTileMode::kClamp, SkTileMode::kClamp, SkSamplingOptions());
+
+	const double contrast_value = contrast.GetValue(frame_number);
+	builder.uniform("brightnessShift") =
+		static_cast<float>(255 * brightness.GetValue(frame_number));
+	builder.uniform("contrastFactor") =
+		static_cast<float>(20 / std::fmax(0.00001, 20.0 - contrast_value));
+	builder.uniform("invertMask") = invert ? 1.0f : 0.0f;
+	builder.uniform("replaceImage") = replace_image ? 1.0f : 0.0f;
+	return true;
+}
+
+bool Mask::PrepareGpuMask(const std::shared_ptr<Frame>& matte, int width, int height)
+{
+	if (!GpuDevice::Instance().available())
+		return false;
+	const std::shared_ptr<GpuFrame>& source = matte->GpuBacking();
+	if (!source || !source->ownedByThisThread())
+		return false;
+	sk_sp<SkImage> snapshot = source->snapshot();
+	if (!snapshot)
+		return false;
+
+	auto cache = std::make_shared<MaskTextureCache>();
+	cache->generation = GpuDevice::Generation();
+	if (source->width() == width && source->height() == height) {
+		// Same size: QImage::scaled() would return the image as it is, so this is bit-exact.
+		cache->texture = std::move(snapshot);
+	} else {
+		// A resample on the GPU instead of Qt's SmoothTransformation: bilinear, which is what Qt
+		// does upscaling; downscaling Qt box-averages, so a shrunk matte differs by a few LSB
+		// at its edges (owner's decision, 2026-09-24).
+		cache->owner = GpuFrame::Create(width, height, kRGBA_8888_SkColorType);
+		SkCanvas* canvas = cache->owner ? cache->owner->canvas() : nullptr;
+		if (!canvas)
+			return false;
+		SkPaint paint;
+		paint.setBlendMode(SkBlendMode::kSrc);
+		canvas->drawImageRect(snapshot, SkRect::MakeWH(float(width), float(height)),
+							  SkSamplingOptions(SkFilterMode::kLinear), &paint);
+		cache->texture = cache->owner->snapshot();
+		if (!cache->texture)
+			return false;
+	}
+	mask_texture = std::move(cache);
+	gpu_mask_current = true;
+	return true;
+}
+
 // Generate JSON string of this object
 std::string Mask::Json() const {
 
@@ -196,6 +366,7 @@ Json::Value Mask::JsonValue() const {
 	else
 		root["reader"] = Json::objectValue;
 	root["replace_image"] = replace_image;
+	root["fade_audio_hint"] = fade_audio_hint;
 	root["invert"] = invert;
 	root["start_frame"] = startFrame.JsonValue();
 	root["end_frame"]   = endFrame.JsonValue();
@@ -229,6 +400,9 @@ void Mask::SetJsonValue(const Json::Value root) {
 	// Set data from Json (if key is found)
 	if (!root["replace_image"].isNull())
 		replace_image = root["replace_image"].asBool();
+
+	if (!root["fade_audio_hint"].isNull())
+		fade_audio_hint = root["fade_audio_hint"].asBool();
 	if (!root["invert"].isNull())
 		invert = root["invert"].asBool();
 	if (!root["brightness"].isNull())
@@ -239,8 +413,8 @@ void Mask::SetJsonValue(const Json::Value root) {
 	if (!root["end_frame"].isNull())   endFrame   = root["end_frame"].asInt();
 	if (!root["reader"].isNull()) // does Json contain a reader?
 	{
-		#pragma omp critical (open_mask_reader)
 		{
+			const std::lock_guard<std::mutex> reader_lock(reader_mutex);
 			// This reader has changed, so refresh cached assets
 			needs_refresh = true;
 
@@ -309,6 +483,11 @@ std::string Mask::PropertiesJSON(int64_t requested_frame) const {
 	root["replace_image"]["choices"].append(add_property_choice_json("Yes", true, replace_image));
 	root["replace_image"]["choices"].append(add_property_choice_json("No", false, replace_image));
 
+	// Timeline-only hint: equal-power audio crossfade when this Mask is a global transition
+	root["fade_audio_hint"] = add_property_json("Fade Audio", fade_audio_hint, "int", "", NULL, 0, 1, false, requested_frame);
+	root["fade_audio_hint"]["choices"].append(add_property_choice_json("Yes", true, fade_audio_hint));
+	root["fade_audio_hint"]["choices"].append(add_property_choice_json("No", false, fade_audio_hint));
+
 	// Add invert choices (dropdown style)
 	root["invert"] = add_property_json("Invert Mask", invert, "int", "", NULL, 0, 1, false, requested_frame);
 	root["invert"]["choices"].append(add_property_choice_json("Yes", true, invert));
@@ -325,4 +504,21 @@ std::string Mask::PropertiesJSON(int64_t requested_frame) const {
 
 	// Return formatted string
 	return root.toStyledString();
+}
+
+// The matte reader was opened in GetFrame and never closed with its clip: its decoder, NVDEC
+// session and GPU frames stayed alive until the export ended, one set per video matte (review
+// M2, 2026-10-01). Clip::Close() calls this; GetFrame reopens it if the clip comes back.
+void Mask::ReleaseGpuResources()
+{
+	const std::lock_guard<std::mutex> reader_lock(reader_mutex);
+	mask_texture.reset();
+	gpu_matte.reset();
+	gpu_mask_current = false;
+	if (reader && reader->IsOpen()) {
+		reader->Close();
+		original_mask.reset();
+		needs_refresh = true;
+	}
+	GpuEffect::ReleaseGpuResources();
 }

@@ -11,6 +11,14 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
 #include "ColorShift.h"
+
+#include "skia/include/core/SkM44.h"
+#include "EffectShaders.h"
+#include "image-processing-lib/src/Planner/EffectPlan.h"
+
+#include "skia/include/effects/SkRuntimeEffect.h"
+
+#include <cmath>
 #include "Exceptions.h"
 #include "./image-processing-lib/src/Effects/effects.h"
 
@@ -48,14 +56,6 @@ void ColorShift::init_effect_details()
 // modified openshot::Frame object
 std::shared_ptr<openshot::Frame> ColorShift::GetFrame(std::shared_ptr<openshot::Frame> frame, int64_t frame_number)
 {
-	// Get the frame's image
-	std::shared_ptr<QImage> frame_image = frame->GetImage();
-	unsigned char *pixels = frame_image->bits();
-
-	// Get image size
-	int frame_image_width = frame_image->width();
-	int frame_image_height = frame_image->height();
-
 	// Get the current shift amount, and clamp to range (-1 to 1 range)
 	// Red Keyframes
 	float red_x_shift = red_x.GetValue(frame_number);
@@ -75,6 +75,26 @@ std::shared_ptr<openshot::Frame> ColorShift::GetFrame(std::shared_ptr<openshot::
 		return frame;
 	}
 
+	// The shader when there is a GPU to run it on, the C++ otherwise. It has to come
+	// BEFORE GetImage() below: on a GPU-backed frame GetImage() is the one readback,
+	// so asking for the pixels first flattens the frame and the shader then pays an
+	// upload and a readback every frame. Measured at 3.4 ms a pass against 0.15 ms
+	// with the order this way round -- the readback is the whole cost of the effect.
+	// The all-zero early-out above still comes first, so both paths share it,
+	// including its quirk: the condition tests green_x twice and never green_y, so a
+	// shift that is purely green-Y is dropped. Fixing that changes output for
+	// existing payloads, so it belongs to its own change.
+	if (ApplyOnGpu(frame, frame_number))
+		return frame;
+
+	// Get the frame's image
+	std::shared_ptr<QImage> frame_image = frame->GetImage();
+	unsigned char *pixels = frame_image->bits();
+
+	// Get image size
+	int frame_image_width = frame_image->width();
+	int frame_image_height = frame_image->height();
+
 	// Apply color shift (example values)
 	Podcastle::Effects::applyColorShiftEffect(pixels, frame_image_width, frame_image_height,
 						  red_x_shift, red_y_shift, // Red shift X/Y
@@ -83,6 +103,35 @@ std::shared_ptr<openshot::Frame> ColorShift::GetFrame(std::shared_ptr<openshot::
 						  alpha_x_shift, alpha_y_shift); // Alpha shift X/Y
 	// returns the modified frame
 	return frame;
+}
+
+// The shared SkSL source lives in image-processing-lib/shaders/ so the editor loads the
+// same bytes through CanvasKit; it is embedded here at build time. Read it there --
+// including why it is written the way it is.
+const char* ColorShift::GpuShaderSource() const
+{
+	return openshot::shaders::kColorShift;
+}
+
+bool ColorShift::SetGpuUniforms(SkRuntimeEffectBuilder& builder, int64_t frame_number,
+					int width, int height) const
+{
+	// Resolved by the shared planner (image-processing-lib/src/Planner), the same code the editor
+	// runs, so the two cannot disagree about what these values mean. It declines -- and the C++
+	// twin runs -- for every case the fragment does not cover.
+	Podcastle::Effects::EffectPlan plan;
+	PlanForFrame(frame_number, width, height, plan);
+	return BindPlan(builder, plan);
+}
+
+bool ColorShift::PlanForFrame(int64_t frame_number, int width, int height,
+                             Podcastle::Effects::EffectPlan& plan) const
+{
+	// The planner's answer for ApplyOnGpu too, so an identity, a clear or a multi-pass plan runs
+	// on the GPU rather than declining to the C++.
+	plan = Podcastle::Effects::planEffect(
+		"COLOR_SHIFT", {{"redX", red_x.GetValue(frame_number)}, {"redY", red_y.GetValue(frame_number)}, {"greenX", green_x.GetValue(frame_number)}, {"greenY", green_y.GetValue(frame_number)}, {"blueX", blue_x.GetValue(frame_number)}, {"blueY", blue_y.GetValue(frame_number)}, {"alphaX", alpha_x.GetValue(frame_number)}, {"alphaY", alpha_y.GetValue(frame_number)}}, width, height);
+	return true;
 }
 
 // Generate JSON string of this object

@@ -12,6 +12,8 @@
 
 #include "Clip.h"
 
+#include "gpu/GpuOverlay.h"
+
 #include "AudioResampler.h"
 #include "Exceptions.h"
 #include "FFmpegReader.h"
@@ -22,6 +24,43 @@
 #include "Timeline.h"
 #include "ZmqLogger.h"
 #include "effects/image-processing-lib/src/Effects/effects.h"
+#include "effects/AudioVisualization.h"
+#include "effects/Crop.h"
+
+#include <algorithm>
+#include <cmath>
+#include <sstream>
+#include <cstdio>
+#include <cstdlib>
+
+#include <QPainter>
+#include <QPainterPath>
+
+#include "gpu/GpuDevice.h"
+#include "gpu/GpuFrame.h"
+#include "gpu/GpuTelemetry.h"
+
+#include <thread>
+
+#include "skia/include/core/SkCanvas.h"
+#include "skia/include/core/SkImage.h"
+#include "skia/include/core/SkMatrix.h"
+#include "skia/include/core/SkPaint.h"
+#include "skia/include/core/SkSamplingOptions.h"
+#include "skia/include/core/SkImageInfo.h"
+#include "skia/include/core/SkPixmap.h"
+#include "skia/include/core/SkAlphaType.h"
+#include "skia/include/core/SkColorType.h"
+#include "skia/include/core/SkBlendMode.h"
+#include "skia/include/core/SkColor.h"
+#include "skia/include/core/SkImageFilter.h"
+#include "skia/include/core/SkRect.h"
+#include "skia/include/core/SkTileMode.h"
+#include "skia/include/effects/SkImageFilters.h"
+#include "skia/include/effects/SkRuntimeEffect.h"
+#include "skia/include/core/SkString.h"
+
+#include <mutex>
 
 #ifdef USE_IMAGEMAGICK
 	#include "MagickUtilities.h"
@@ -37,30 +76,57 @@
 using namespace openshot;
 
 namespace {
-	// High-quality Gaussian blur over a cv::Mat, in place. The amount uses the same units
-	// as the image-processing-lib box blur (applyBlurEffect): a box-equivalent kernel size
-	// in pixels. A box of width w has variance (w^2 - 1)/12, so we build a Gaussian of the
-	// matching variance — same blur spread as that box size, but smooth instead of boxy.
-	void gaussian_blur(cv::Mat& image, int horizontal, int vertical) {
-		auto sigma_for_box = [](int box_size) -> double {
-			const double w = std::max(1, box_size);
-			return std::sqrt(std::max(0.0, (w * w - 1.0) / 12.0));
-		};
+	// Blur amount -> Gaussian sigma. `blur_amount` and `shadow_blur` are box-equivalent
+	// kernel sizes in pixels, the same unit the image-processing-lib box blur
+	// (applyBlurEffect) uses. A box of width w has variance (w^2 - 1)/12, so a Gaussian of
+	// the matching variance has the same spread, smooth instead of boxy. The CPU
+	// (cv::GaussianBlur) and GPU (SkImageFilters) paths share this one mapping so the two
+	// blur the same amount.
+	double sigma_for_box(double box_size) {
+		const double w = std::max(1.0, box_size);
+		return std::sqrt(std::max(0.0, (w * w - 1.0) / 12.0));
+	}
+
+	// High-quality Gaussian blur over a cv::Mat, in place.
+	void gaussian_blur(cv::Mat& image, double sigma_x, double sigma_y, int border = cv::BORDER_DEFAULT) {
 		// Smallest odd kernel covering ~+/-3 sigma (1 = no blur along that axis).
 		auto kernel_for_sigma = [](double sigma) -> int {
 			if (sigma <= 0.0) return 1;
 			return std::max(1, static_cast<int>(std::ceil(sigma * 6.0)) | 1);
 		};
 
-		const double sigma_x = sigma_for_box(horizontal);
-		const double sigma_y = sigma_for_box(vertical);
 		if (sigma_x <= 0.0 && sigma_y <= 0.0)
 			return;
 
 		cv::GaussianBlur(image, image,
 		                 cv::Size(kernel_for_sigma(sigma_x), kernel_for_sigma(sigma_y)),
-		                 sigma_x, sigma_y);
+		                 sigma_x, sigma_y, border);
 	}
+	struct CompositeChoice { const char* name; CompositeType value; };
+	const CompositeChoice composite_choices[] = {
+		{"Normal",      COMPOSITE_SOURCE_OVER},
+
+		// Darken group
+		{"Darken",      COMPOSITE_DARKEN},
+		{"Multiply",    COMPOSITE_MULTIPLY},
+		{"Color Burn",  COMPOSITE_COLOR_BURN},
+
+		// Lighten group
+		{"Lighten",     COMPOSITE_LIGHTEN},
+		{"Screen",      COMPOSITE_SCREEN},
+		{"Color Dodge", COMPOSITE_COLOR_DODGE},
+		{"Add",         COMPOSITE_PLUS},
+
+		// Contrast group
+		{"Overlay",     COMPOSITE_OVERLAY},
+		{"Soft Light",  COMPOSITE_SOFT_LIGHT},
+		{"Hard Light",  COMPOSITE_HARD_LIGHT},
+
+		// Compare
+		{"Difference",  COMPOSITE_DIFFERENCE},
+		{"Exclusion",   COMPOSITE_EXCLUSION},
+	};
+	const int composite_choices_count = sizeof(composite_choices)/sizeof(CompositeChoice);
 }
 
 // Init default settings for a clip
@@ -76,10 +142,13 @@ void Clip::init_settings()
 	anchor = ANCHOR_CANVAS;
 	display = FRAME_DISPLAY_NONE;
 	mixing = VOLUME_MIX_NONE;
+	composite = COMPOSITE_SOURCE_OVER;
 	waveform = false;
 	shadow = false;
 	flip_horizontal = false;
 	flip_vertical = false;
+	waveform_mode = AUDIO_VISUALIZATION_FILLED_WAVEFORM;
+	reader_orientation_mode = ReaderOrientationMode::Reader;
 	previous_properties = "";
 	parentObjectId = "";
 
@@ -93,6 +162,8 @@ void Clip::init_settings()
 
 	// Init alpha
 	alpha = Keyframe(1.0);
+	margin = Keyframe(0.0);
+	corner_radius = Keyframe(0.0);
 
 	// Init time & volume
 	time = Keyframe(1.0);
@@ -110,6 +181,7 @@ void Clip::init_settings()
 	// Init clip blur curve
 	blur = false;
 	blur_amount = Keyframe(10.0);
+	effect_size_space = EFFECT_SIZE_SOURCE;
 
 	// Init shear and perspective curves
 	shear_x = Keyframe(0.0);
@@ -158,36 +230,56 @@ void Clip::init_reader_settings() {
 }
 
 void Clip::init_reader_rotation() {
-	// Don't init rotation if clip already has keyframes.
-	if (rotation.GetCount() > 0)
+	// Only apply metadata rotation if clip rotation has not been explicitly set.
+	if (rotation.GetCount() > 0 || !reader)
 		return;
 
-	// Get rotation from metadata (if any)
-	float rotate_angle = 0.0f;
-	if (reader && reader->info.metadata.count("rotate") > 0) {
-		try {
-			rotate_angle = strtof(reader->info.metadata["rotate"].c_str(), nullptr);
-		} catch (const std::exception& e) {
-			// Leave rotate_angle at default 0.0f
-		}
+	if (reader->ApplyOrientationMetadata()) {
+		rotation = Keyframe(0.0f);
+		return;
 	}
+
+	const auto rotate_meta = reader->info.metadata.find("rotate");
+	if (rotate_meta == reader->info.metadata.end()) {
+		// Ensure rotation keyframes always start with a default 0° point.
+		rotation = Keyframe(0.0f);
+		return;
+	}
+
+	float rotate_angle = 0.0f;
+	try {
+		rotate_angle = strtof(rotate_meta->second.c_str(), nullptr);
+	} catch (const std::exception& e) {
+		return; // ignore invalid metadata
+	}
+
 	rotation = Keyframe(rotate_angle);
 
-	// Compute uniform scale factors for rotated video.
-	// Assume reader->info.width and reader->info.height are the clip's natural dimensions.
+	// Do not overwrite user-authored scale curves.
+	auto has_default_scale = [](const Keyframe& kf) {
+		return kf.GetCount() == 1 && fabs(kf.GetPoint(0).co.Y - 1.0) < 0.00001;
+	};
+	if (!has_default_scale(scale_x) || !has_default_scale(scale_y))
+		return;
+
+	// No need to adjust scaling when the metadata rotation is effectively zero.
+	if (fabs(rotate_angle) < 0.0001f)
+		return;
+
 	float w = static_cast<float>(reader->info.width);
 	float h = static_cast<float>(reader->info.height);
-	float rad = rotate_angle * M_PI / 180.0f;
+	if (w <= 0.0f || h <= 0.0f)
+		return;
 
-	// Calculate the dimensions of the bounding box for the rotated clip.
+	float rad = rotate_angle * static_cast<float>(M_PI) / 180.0f;
+
 	float new_width  = fabs(w * cos(rad)) + fabs(h * sin(rad));
 	float new_height = fabs(w * sin(rad)) + fabs(h * cos(rad));
+	if (new_width <= 0.0f || new_height <= 0.0f)
+		return;
 
-	// To have the rotated clip appear the same size as the unrotated clip,
-	// compute a uniform scale factor S that brings the bounding box back to (w, h).
 	float uniform_scale = std::min(w / new_width, h / new_height);
 
-	// Set scale keyframes uniformly.
 	scale_x = Keyframe(uniform_scale);
 	scale_y = Keyframe(uniform_scale);
 }
@@ -225,50 +317,7 @@ Clip::Clip(std::string path) : resampler(NULL), reader(NULL), allocated_reader(N
 {
 	// Init all default settings
 	init_settings();
-
-	// Get file extension (and convert to lower case)
-	std::string ext = get_file_extension(path);
-	std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-
-	// Determine if common video formats (or image sequences)
-	if (ext=="avi" || ext=="mov" || ext=="mkv" ||  ext=="mpg" || ext=="mpeg" || ext=="mp3" || ext=="mp4" || ext=="mts" ||
-		ext=="ogg" || ext=="wav" || ext=="wmv" || ext=="webm" || ext=="vob" || ext=="gif" || path.find("%") != std::string::npos)
-	{
-		try
-		{
-			// Open common video format
-			reader = new openshot::FFmpegReader(path);
-
-		} catch(...) { }
-	}
-	if (ext=="osp")
-	{
-		try
-		{
-			// Open common video format
-			reader = new openshot::Timeline(path, true);
-
-		} catch(...) { }
-	}
-
-
-	// If no video found, try each reader
-	if (!reader)
-	{
-		try
-		{
-			// Try an image reader
-			reader = new openshot::QtImageReader(path);
-
-		} catch(...) {
-			try
-			{
-				// Try a video reader
-				reader = new openshot::FFmpegReader(path);
-
-			} catch(...) { }
-		}
-	}
+	reader = CreateReader(path);
 
 	// Update duration and set parent
 	if (reader) {
@@ -278,6 +327,43 @@ Clip::Clip(std::string path) : resampler(NULL), reader(NULL), allocated_reader(N
 		// Init reader info struct
 		init_reader_settings();
 	}
+}
+
+ReaderBase* Clip::CreateReader(std::string path, bool inspect_reader)
+{
+	// Get file extension (and convert to lower case)
+	std::string ext = get_file_extension(path);
+	std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+
+	// Determine if common video formats (or image sequences)
+	if (ext=="avi" || ext=="flac" || ext=="mov" || ext=="mkv" ||  ext=="mpg" || ext=="mpeg" || ext=="mp3" || ext=="mp4" || ext=="mts" ||
+		ext=="ogg" || ext=="wav" || ext=="wmv" || ext=="webm" || ext=="vob" || ext=="gif" || path.find("%") != std::string::npos)
+	{
+		try
+		{
+			return new openshot::FFmpegReader(path, inspect_reader);
+		} catch(...) { }
+	}
+	if (ext=="osp")
+	{
+		try
+		{
+			return new openshot::Timeline(path, true);
+		} catch(...) { }
+	}
+
+	// If no video found, try each reader
+	try
+	{
+		return new openshot::QtImageReader(path, inspect_reader);
+	} catch(...) {
+		try
+		{
+			return new openshot::FFmpegReader(path, inspect_reader);
+		} catch(...) { }
+	}
+
+	return NULL;
 }
 
 // Destructor
@@ -299,6 +385,7 @@ Clip::~Clip()
 	for (const auto effect : effects) {
 		delete effect;
 	}
+	effects.clear();   // Close() below releases each effect's GPU caches; these are gone
 
 	// Close clip
 	Close();
@@ -366,6 +453,7 @@ void Clip::Reader(ReaderBase* new_reader)
 
 	// set parent
 	if (reader) {
+		reader->ApplyOrientationMetadata(reader_orientation_mode == ReaderOrientationMode::Reader);
 		reader->ParentClip(this);
 
 		// Init reader info struct
@@ -416,6 +504,14 @@ void Clip::Close()
 
 	// Clear cache
 	final_cache.Clear();
+	// GPU caches held for this clip -- the still's texture, each effect's uploads, masks and
+	// LUTs -- are exact-size and marked in use, so the pool's idle eviction never reached them
+	// and they lived until the export ended (review M1, 2026-10-01). Rebuilt if the clip is
+	// opened again.
+	host_texture.reset();
+	for (EffectBase* effect : effects)
+		if (effect)
+			effect->ReleaseGpuResources();
 	is_open = false;
 }
 
@@ -505,7 +601,15 @@ std::shared_ptr<Frame> Clip::GetFrame(std::shared_ptr<openshot::Frame> backgroun
 		// Get frame object
 		std::shared_ptr<Frame> frame = NULL;
 
-		if (requested_clip_frame_number > mFreezeFramesCountAtBeginning) {
+		// Decide before consulting the cache, because the two paths cache different things.
+		// final_cache holds the timeline-sized, already transformed image; the GPU path
+		// never builds that image, so it neither reads nor writes the cache. Mixing them
+		// would composite an untransformed frame as though it had been transformed.
+		const bool gpu_path = !isOverlay && background_frame && background_frame->IsGpuBacked() &&
+							  can_draw_to_canvas();
+		bool drawn_on_canvas = false;
+
+		if (!gpu_path && requested_clip_frame_number > mFreezeFramesCountAtBeginning) {
 			// Check cache
 			frame = final_cache.GetFrame(requested_clip_frame_number);
 		}
@@ -540,11 +644,11 @@ std::shared_ptr<Frame> Clip::GetFrame(std::shared_ptr<openshot::Frame> backgroun
             // Get time mapped frame object (used to increase speed, change direction, etc...)
             apply_timemapping(frame, options);
 
-            // Apply waveform image (if any)
-            apply_waveform(frame, timeline_size);
+		// Apply waveform image (if any)
+		apply_waveform(frame, timeline_size);
 
-            // Apply effects BEFORE applying keyframes (if any local or global effects are used)
-            apply_effects(frame, timeline_frame_number, options, true);
+		// Apply effects BEFORE applying keyframes (if any local or global effects are used)
+		apply_effects(frame, timeline_frame_number, options, true);
 
 			if (!overlayClips.empty()) {
 				for (const auto& overlayClipData : overlayClips) {
@@ -571,6 +675,28 @@ std::shared_ptr<Frame> Clip::GetFrame(std::shared_ptr<openshot::Frame> backgroun
 					if (requested_clip_frame_number > transitionClipStartFrame && requested_clip_frame_number < transitionClipEndFrame) {
 						const int64_t overlayClipFrameNum = (overlayedClip->start + (requested_clip_frame_number - transitionClipStartFrame) / currentClipFps) * overlayedClipFps;
 						const auto overlayedFrame = overlayedClip->GetFrame(overlayClipFrameNum);
+
+						// The shader when there is a GPU to run it on, OpenCV otherwise. This has
+						// to come before GetImageCV() below: that call flattens a GPU-backed frame
+						// AND converts it to a BGRA cv::Mat, so asking for it first costs a
+						// readback and two full-frame conversions before the composite even starts.
+						// GpuOverlay declines whenever it cannot match the C++ exactly -- see
+						// GpuOverlay.h -- and then the path below runs unchanged.
+						bool overlay_on_gpu = false;
+						switch (overlayType) {
+						case OverlayType::ADDITIVE_BLEND:
+							overlay_on_gpu = GpuOverlay::AdditiveBlend(*frame, *overlayedFrame);
+							break;
+						case OverlayType::DISPLACEMENT_MAP:
+							overlay_on_gpu = GpuOverlay::DisplacementMap(*frame, *overlayedFrame,
+								overlayedClip->horizontal_displacement.GetValue(overlayClipFrameNum),
+								overlayedClip->vertical_displacement.GetValue(overlayClipFrameNum));
+							break;
+						default: break;
+						}
+						if (overlay_on_gpu)
+							continue;
+
 						auto mainImageCv = frame->GetImageCV();
 
 						switch (overlayType) {
@@ -594,14 +720,53 @@ std::shared_ptr<Frame> Clip::GetFrame(std::shared_ptr<openshot::Frame> backgroun
 				}
 			}
 
-            // Apply keyframe / transforms to current clip image
-            apply_keyframes(frame, timeline_size);
+            // One transformed draw straight onto the timeline's GPU canvas, replacing both
+            // the timeline-sized intermediate that apply_keyframes builds and the
+            // full-frame composite that apply_background does. If the draw cannot be made
+            // it leaves the canvas untouched and says so, and the CPU path runs as usual.
+            if (gpu_path && frame->has_image_data)
+                drawn_on_canvas = draw_to_canvas(frame, background_frame);
 
-            // Apply effects AFTER applying keyframes (if any local or global effects are used)
-            apply_effects(frame, timeline_frame_number, options, false);
+            // An overlay clip (a transition's light leak or displacement map) has no timeline
+            // canvas: its frame is composited onto another clip's source. apply_keyframes would
+            // draw it with QPainter onto a transparent image of its own size -- a readback of the
+            // GPU-decoded frame every transition frame. The same draw onto a transparent GPU
+            // surface of that size is draw_to_canvas, and the result stays on the GPU.
+            bool overlay_on_gpu = false;
+            if (isOverlay && !background_frame && frame->has_image_data && frame->IsGpuBacked() &&
+                can_draw_to_canvas()) {
+                if (auto surface = GpuFrame::Create(timeline_size.width(), timeline_size.height(),
+                                                    kRGBA_8888_SkColorType)) {
+                    if (SkCanvas* canvas = surface->canvas()) {
+                        canvas->clear(SK_ColorTRANSPARENT);
+                        auto transformed = std::make_shared<Frame>(
+                            frame->number, timeline_size.width(), timeline_size.height(), "#00000000",
+                            frame->GetAudioSamplesCount(), frame->GetAudioChannelsCount());
+                        transformed->AttachGpuFrame(std::move(surface));
+                        if (draw_to_canvas(frame, transformed)) {
+                            // The frame keeps its number and audio; its pixels become the draw.
+                            frame->AttachGpuFrame(transformed->GpuBacking());
+                            overlay_on_gpu = true;
+                        }
+                    }
+                }
+            }
 
-            // Add final frame to cache (before flattening into background_frame)
-            final_cache.Add(frame);
+            // The GPU overlay is not cached either, for the GPU path's reason: final_cache holds
+            // host images a later hit composites as they are, and this one is bound to its thread.
+            if (!drawn_on_canvas && !overlay_on_gpu) {
+                // Apply keyframe / transforms to current clip image
+                apply_keyframes(frame, timeline_size);
+
+                // Apply effects AFTER applying keyframes (if any local or global effects are used)
+                apply_effects(frame, timeline_frame_number, options, false);
+
+                // Add final frame to cache (before flattening into background_frame). The GPU
+                // path deliberately does not reach here: what it would cache is the
+                // untransformed source, which a later cache hit would composite on the CPU
+                // path as though it had already been transformed.
+                final_cache.Add(frame);
+            }
         }
 
 
@@ -611,8 +776,9 @@ std::shared_ptr<Frame> Clip::GetFrame(std::shared_ptr<openshot::Frame> backgroun
                                                        "#00000000",  frame->GetAudioSamplesCount(), frame->GetAudioChannelsCount());
         }
 
-		// Apply background canvas (i.e. flatten this image onto previous layer image)
-		if (!isOverlay) {
+		// Apply background canvas (i.e. flatten this image onto previous layer image).
+		// Already done, as one draw, when the clip went onto the GPU canvas.
+		if (!isOverlay && !drawn_on_canvas) {
 			apply_background(frame, background_frame);
 		}
 
@@ -669,8 +835,13 @@ std::shared_ptr<openshot::TrackedObjectBase> Clip::GetParentTrackedObject() {
 // Get file extension
 std::string Clip::get_file_extension(std::string path)
 {
-	// return last part of path
-	return path.substr(path.find_last_of(".") + 1);
+	// Return last part of path safely (handle filenames without a dot)
+	const auto dot_pos = path.find_last_of('.');
+	if (dot_pos == std::string::npos || dot_pos + 1 >= path.size()) {
+		return std::string();
+	}
+
+	return path.substr(dot_pos + 1);
 }
 
 // Adjust the audio and image of a time mapped frame
@@ -694,7 +865,8 @@ void Clip::apply_timemapping(std::shared_ptr<Frame> frame, openshot::TimelineInf
 
 		// Get delta (difference from this frame to the next time mapped frame: Y value)
 		double delta = time.GetDelta(clip_frame_number + 1);
-		bool is_increasing = time.IsIncreasing(clip_frame_number + 1);
+		const bool prev_is_increasing = time.IsIncreasing(clip_frame_number);
+		const bool is_increasing = time.IsIncreasing(clip_frame_number + 1);
 
 		// Determine length of source audio (in samples)
 		// A delta of 1.0 == normal expected samples
@@ -714,7 +886,7 @@ void Clip::apply_timemapping(std::shared_ptr<Frame> frame, openshot::TimelineInf
 
 		// Determine starting audio location
 		AudioLocation location;
-		if (previous_location.frame == 0 || abs(new_frame_number - previous_location.frame) > 2) {
+		if (previous_location.frame == 0 || abs(new_frame_number - previous_location.frame) > 2 || prev_is_increasing != is_increasing) {
 			// No previous location OR gap detected
 			location.frame = new_frame_number;
 			location.sample_start = 0;
@@ -723,6 +895,7 @@ void Clip::apply_timemapping(std::shared_ptr<Frame> frame, openshot::TimelineInf
 			// We don't want to interpolate between unrelated audio data
 			if (resampler) {
 				delete resampler;
+				resampler = nullptr;
 			}
 			// Init resampler with # channels from Reader (should match the timeline)
 			resampler = new AudioResampler(Reader()->info.channels);
@@ -755,6 +928,12 @@ void Clip::apply_timemapping(std::shared_ptr<Frame> frame, openshot::TimelineInf
 		while (remaining_samples > 0) {
 			std::shared_ptr<Frame> source_frame = GetOrCreateFrame(location.frame, false);
 			int frame_sample_count = source_frame->GetAudioSamplesCount() - location.sample_start;
+
+            // Inform FrameMapper of the direction for THIS mapper frame
+            if (auto *fm = dynamic_cast<FrameMapper*>(reader)) {
+                fm->SetDirectionHint(is_increasing);
+            }
+            source_frame->SetAudioDirection(is_increasing);
 
 			if (frame_sample_count == 0) {
 				// No samples found in source frame (fill with silence)
@@ -842,10 +1021,17 @@ std::shared_ptr<Frame> Clip::GetOrCreateFrame(int64_t number, bool enable_time)
 	try {
 		// Init to requested frame
 		int64_t clip_frame_number = adjust_frame_number_minimum(number);
+		bool is_increasing = true;
 
 		// Adjust for time-mapping (if any)
 		if (enable_time && time.GetLength() > 1) {
-			clip_frame_number = adjust_frame_number_minimum(time.GetLong(clip_frame_number));
+			is_increasing = time.IsIncreasing(clip_frame_number + 1);
+			const int64_t time_frame_number = adjust_frame_number_minimum(time.GetLong(clip_frame_number));
+			if (auto *fm = dynamic_cast<FrameMapper*>(reader)) {
+				// Inform FrameMapper which direction this mapper frame is being requested
+				fm->SetDirectionHint(is_increasing);
+			}
+			clip_frame_number = time_frame_number;
 		}
 
 		// Debug output
@@ -855,10 +1041,12 @@ std::shared_ptr<Frame> Clip::GetOrCreateFrame(int64_t number, bool enable_time)
 
 		// Attempt to get a frame (but this could fail if a reader has just been closed)
 		auto reader_frame = reader->GetFrame(clip_frame_number);
-		reader_frame->number = number; // Override frame # (due to time-mapping might change it)
-
-		// Return real frame
 		if (reader_frame) {
+			// Override frame # (due to time-mapping might change it)
+			reader_frame->number = number;
+			reader_frame->SetAudioDirection(is_increasing);
+
+			// Return real frame
 			// Create a new copy of reader frame
 			// This allows a clip to modify the pixels and audio of this frame without
 			// changing the underlying reader's frame data
@@ -921,12 +1109,14 @@ std::string Clip::PropertiesJSON(int64_t requested_frame) const {
 	root["scale"] = add_property_json("Scale", scale, "int", "", NULL, 0, 3, false, requested_frame);
 	root["display"] = add_property_json("Frame Number", display, "int", "", NULL, 0, 3, false, requested_frame);
 	root["mixing"] = add_property_json("Volume Mixing", mixing, "int", "", NULL, 0, 2, false, requested_frame);
+	root["composite"] = add_property_json("Composite", composite, "int", "", NULL, 0, composite_choices_count - 1, false, requested_frame);
 	root["waveform"] = add_property_json("Waveform", waveform, "int", "", NULL, 0, 1, false, requested_frame);
 	root["shadow"] = add_property_json("Shadow", shadow, "int", "", NULL, 0, 1, false, requested_frame);
 	root["blur_enabled"] = add_property_json("Blur", blur, "int", "", NULL, 0, 1, false, requested_frame);
 	root["flip_horizontal"] = add_property_json("Flip Horizontal", flip_horizontal, "int", "", NULL, 0, 1, false, requested_frame);
 	root["flip_vertical"] = add_property_json("Flip Vertical", flip_vertical, "int", "", NULL, 0, 1, false, requested_frame);
 	root["blend_mode"] = add_property_json("Blend Mode", blend_mode, "int", "", NULL, 0, BLEND_MODE_COUNT - 1, false, requested_frame);
+	root["waveform_mode"] = add_property_json("Waveform Mode", waveform_mode, "int", "", NULL, 0, AUDIO_VISUALIZATION_RADIAL_BARS, false, requested_frame);
 	root["parentObjectId"] = add_property_json("Parent", 0.0, "string", parentObjectId, NULL, -1, -1, false, requested_frame);
 
 	// Add gravity choices (dropdown style)
@@ -961,6 +1151,10 @@ std::string Clip::PropertiesJSON(int64_t requested_frame) const {
 	root["mixing"]["choices"].append(add_property_choice_json("Average", VOLUME_MIX_AVERAGE, mixing));
 	root["mixing"]["choices"].append(add_property_choice_json("Reduce", VOLUME_MIX_REDUCE, mixing));
 
+	// Add composite choices (dropdown style)
+	for (int i = 0; i < composite_choices_count; ++i)
+		root["composite"]["choices"].append(add_property_choice_json(composite_choices[i].name, composite_choices[i].value, composite));
+
 	// Add waveform choices (dropdown style)
 	root["waveform"]["choices"].append(add_property_choice_json("Yes", true, waveform));
 	root["waveform"]["choices"].append(add_property_choice_json("No", false, waveform));
@@ -978,6 +1172,16 @@ std::string Clip::PropertiesJSON(int64_t requested_frame) const {
 	root["flip_horizontal"]["choices"].append(add_property_choice_json("No", false, flip_horizontal));
 	root["flip_vertical"]["choices"].append(add_property_choice_json("Yes", true, flip_vertical));
 	root["flip_vertical"]["choices"].append(add_property_choice_json("No", false, flip_vertical));
+	// Add waveform mode choices (dropdown style)
+	root["waveform_mode"]["choices"].append(add_property_choice_json("Waveform", AUDIO_VISUALIZATION_WAVEFORM, waveform_mode));
+	root["waveform_mode"]["choices"].append(add_property_choice_json("Filled Waveform", AUDIO_VISUALIZATION_FILLED_WAVEFORM, waveform_mode));
+	root["waveform_mode"]["choices"].append(add_property_choice_json("Bars", AUDIO_VISUALIZATION_BARS, waveform_mode));
+	root["waveform_mode"]["choices"].append(add_property_choice_json("Radial", AUDIO_VISUALIZATION_RADIAL, waveform_mode));
+	root["waveform_mode"]["choices"].append(add_property_choice_json("Radial Bars", AUDIO_VISUALIZATION_RADIAL_BARS, waveform_mode));
+	root["waveform_mode"]["choices"].append(add_property_choice_json("Spectrum", AUDIO_VISUALIZATION_SPECTRUM, waveform_mode));
+	root["waveform_mode"]["choices"].append(add_property_choice_json("Phase Scope", AUDIO_VISUALIZATION_PHASE_SCOPE, waveform_mode));
+	root["waveform_mode"]["choices"].append(add_property_choice_json("Particles", AUDIO_VISUALIZATION_PARTICLES, waveform_mode));
+	root["waveform_mode"]["choices"].append(add_property_choice_json("VU Meter", AUDIO_VISUALIZATION_VU_METER, waveform_mode));
 
 	// Add the parentClipObject's properties
 	if (parentClipObject)
@@ -1019,6 +1223,8 @@ std::string Clip::PropertiesJSON(int64_t requested_frame) const {
 
 	// Keyframes
 	root["alpha"] = add_property_json("Alpha", alpha.GetValue(requested_frame), "float", "", &alpha, 0.0, 1.0, false, requested_frame);
+	root["corner_radius"] = add_property_json("Corner Radius", corner_radius.GetValue(requested_frame), "float", "", &corner_radius, 0.0, 0.5, false, requested_frame);
+	root["margin"] = add_property_json("Margin", margin.GetValue(requested_frame), "float", "", &margin, 0.0, 0.5, false, requested_frame);
 	root["origin_x"] = add_property_json("Origin X", origin_x.GetValue(requested_frame), "float", "", &origin_x, 0.0, 1.0, false, requested_frame);
 	root["origin_y"] = add_property_json("Origin Y", origin_y.GetValue(requested_frame), "float", "", &origin_y, 0.0, 1.0, false, requested_frame);
 	root["volume"] = add_property_json("Volume", volume.GetValue(requested_frame), "float", "", &volume, 0.0, 1.0, false, requested_frame);
@@ -1072,6 +1278,7 @@ Json::Value Clip::JsonValue() const {
 	root["anchor"] = anchor;
 	root["display"] = display;
 	root["mixing"] = mixing;
+	root["composite"] = composite;
 	root["waveform"] = waveform;
 	root["flip_horizontal"] = flip_horizontal;
 	root["flip_vertical"] = flip_vertical;
@@ -1098,12 +1305,25 @@ Json::Value Clip::JsonValue() const {
 	clip_blur["enabled"] = blur;
 	clip_blur["amount"] = blur_amount.JsonValue();
 	root["blur"] = clip_blur;
+	root["effect_size_space"] = effect_size_space == EFFECT_SIZE_CANVAS ? "canvas" : "source";
 
+	root["waveform_mode"] = waveform_mode;
+	switch (reader_orientation_mode) {
+		case ReaderOrientationMode::LegacyClipTransform:
+			root["reader_orientation_mode"] = "legacy_clip_transform";
+			break;
+		case ReaderOrientationMode::Reader:
+		default:
+			root["reader_orientation_mode"] = "reader";
+			break;
+	}
 	root["scale_x"] = scale_x.JsonValue();
 	root["scale_y"] = scale_y.JsonValue();
 	root["location_x"] = location_x.JsonValue();
 	root["location_y"] = location_y.JsonValue();
 	root["alpha"] = alpha.JsonValue();
+	root["corner_radius"] = corner_radius.JsonValue();
+	root["margin"] = margin.JsonValue();
 	root["rotation"] = rotation.JsonValue();
 	root["time"] = time.JsonValue();
 	root["volume"] = volume.JsonValue();
@@ -1162,9 +1382,27 @@ void Clip::SetJson(const std::string value) {
 
 // Load Json::Value into this object
 void Clip::SetJsonValue(const Json::Value root) {
+	auto ensure_default_keyframe = [](Keyframe& kf, double default_value) {
+		if (kf.GetCount() == 0) {
+			kf = Keyframe(default_value);
+		}
+	};
 
 	// Set parent data
 	ClipBase::SetJsonValue(root);
+
+	// Older project files predate reader-applied orientation metadata and stored
+	// phone/camera rotation as ordinary clip rotation/scale keyframes.
+	if (root["reader_orientation_mode"].isNull()) {
+		reader_orientation_mode = ReaderOrientationMode::LegacyClipTransform;
+	} else {
+		const std::string mode = root["reader_orientation_mode"].asString();
+		if (mode == "legacy_clip_transform") {
+			reader_orientation_mode = ReaderOrientationMode::LegacyClipTransform;
+		} else {
+			reader_orientation_mode = ReaderOrientationMode::Reader;
+		}
+	}
 
 	// Set data from Json (if key is found)
 	if (!root["parentObjectId"].isNull()){
@@ -1186,6 +1424,8 @@ void Clip::SetJsonValue(const Json::Value root) {
 		display = (FrameDisplayType) root["display"].asInt();
 	if (!root["mixing"].isNull())
 		mixing = (VolumeMixType) root["mixing"].asInt();
+	if (!root["composite"].isNull())
+		composite = (CompositeType) root["composite"].asInt();
 	if (!root["waveform"].isNull())
 		waveform = root["waveform"].asBool();
 	if (!root["flip_horizontal"].isNull())
@@ -1234,6 +1474,15 @@ void Clip::SetJsonValue(const Json::Value root) {
 			blur_amount.SetJsonValue(clip_blur["amount"]);
 	}
 
+	// Units of the shadow and blur sizes: "source" / "canvas", or the enum's number.
+	if (!root["effect_size_space"].isNull()) {
+		const Json::Value space = root["effect_size_space"];
+		if (space.isString())
+			effect_size_space = space.asString() == "canvas" ? EFFECT_SIZE_CANVAS : EFFECT_SIZE_SOURCE;
+		else if (space.isNumeric())
+			effect_size_space = space.asInt() == EFFECT_SIZE_CANVAS ? EFFECT_SIZE_CANVAS : EFFECT_SIZE_SOURCE;
+	}
+
 	// Flat keys (used by the OpenShot editor's property panel; see PropertiesJSON)
 	if (!root["shadow"].isNull())
 		shadow = root["shadow"].asBool();
@@ -1249,6 +1498,8 @@ void Clip::SetJsonValue(const Json::Value root) {
 		blur = root["blur_enabled"].asBool();
 	if (!root["blur_amount"].isNull())
 		blur_amount.SetJsonValue(root["blur_amount"]);
+	if (!root["waveform_mode"].isNull())
+		waveform_mode = root["waveform_mode"].asInt();
 	if (!root["scale_x"].isNull())
 		scale_x.SetJsonValue(root["scale_x"]);
 	if (!root["scale_y"].isNull())
@@ -1259,6 +1510,10 @@ void Clip::SetJsonValue(const Json::Value root) {
 		location_y.SetJsonValue(root["location_y"]);
 	if (!root["alpha"].isNull())
 		alpha.SetJsonValue(root["alpha"]);
+	if (!root["corner_radius"].isNull())
+		corner_radius.SetJsonValue(root["corner_radius"]);
+	if (!root["margin"].isNull())
+		margin.SetJsonValue(root["margin"]);
 	if (!root["rotation"].isNull())
 		rotation.SetJsonValue(root["rotation"]);
 	if (!root["time"].isNull())
@@ -1299,6 +1554,18 @@ void Clip::SetJsonValue(const Json::Value root) {
 		perspective_c4_x.SetJsonValue(root["perspective_c4_x"]);
 	if (!root["perspective_c4_y"].isNull())
 		perspective_c4_y.SetJsonValue(root["perspective_c4_y"]);
+
+	// Core clip transforms should never remain empty after load. Empty JSON
+	// point arrays can be produced by editing flows that remove every keyframe.
+	ensure_default_keyframe(scale_x, 1.0);
+	ensure_default_keyframe(scale_y, 1.0);
+	ensure_default_keyframe(location_x, 0.0);
+	ensure_default_keyframe(location_y, 0.0);
+	ensure_default_keyframe(origin_x, 0.5);
+	ensure_default_keyframe(origin_y, 0.5);
+	ensure_default_keyframe(rotation, 0.0);
+	ensure_default_keyframe(corner_radius, 0.0);
+	ensure_default_keyframe(margin, 0.0);
 	if (!root["effects"].isNull()) {
 
 		// Clear existing effects
@@ -1392,6 +1659,7 @@ void Clip::SetJsonValue(const Json::Value root) {
 
 			// mark as managed reader and set parent
 			if (reader) {
+				reader->ApplyOrientationMetadata(reader_orientation_mode == ReaderOrientationMode::Reader);
 				reader->ParentClip(this);
 				allocated_reader = reader;
 			}
@@ -1472,7 +1740,280 @@ void Clip::RemoveEffect(EffectBase* effect)
 
 
 // Apply background image to the current clip image (i.e. flatten this image onto previous layer)
-void Clip::apply_background(std::shared_ptr<openshot::Frame> frame, std::shared_ptr<openshot::Frame> background_frame) {
+namespace {
+
+/// The W3C "Compositing and Blending Level 1" mode that @a mode names, as Skia spells it.
+///
+/// BlendModes.cpp implements that spec directly (see BlendImages()) and so does Skia, so this is a
+/// naming table rather than a translation -- there is no approximation in it. Both evaluate the
+/// blend on non-premultiplied colour and composite source-over afterwards, and the pooled surfaces
+/// carry a null colour space, matching the 8-bit sRGB values BlendImages() works on, so neither
+/// side silently linearises.
+///
+/// Kept here rather than in BlendModes.h so that header stays free of Skia for the Qt-only callers.
+SkBlendMode ToSkBlendMode(openshot::BlendMode mode)
+{
+	switch (mode) {
+		case openshot::BLEND_NORMAL:      return SkBlendMode::kSrcOver;
+		case openshot::BLEND_MULTIPLY:    return SkBlendMode::kMultiply;
+		case openshot::BLEND_SCREEN:      return SkBlendMode::kScreen;
+		case openshot::BLEND_OVERLAY:     return SkBlendMode::kOverlay;
+		case openshot::BLEND_DARKEN:      return SkBlendMode::kDarken;
+		case openshot::BLEND_LIGHTEN:     return SkBlendMode::kLighten;
+		case openshot::BLEND_COLOR_DODGE: return SkBlendMode::kColorDodge;
+		case openshot::BLEND_COLOR_BURN:  return SkBlendMode::kColorBurn;
+		case openshot::BLEND_HARD_LIGHT:  return SkBlendMode::kHardLight;
+		case openshot::BLEND_SOFT_LIGHT:  return SkBlendMode::kSoftLight;
+		case openshot::BLEND_DIFFERENCE:  return SkBlendMode::kDifference;
+		case openshot::BLEND_EXCLUSION:   return SkBlendMode::kExclusion;
+		case openshot::BLEND_HUE:         return SkBlendMode::kHue;
+		case openshot::BLEND_SATURATION:  return SkBlendMode::kSaturation;
+		case openshot::BLEND_COLOR:       return SkBlendMode::kColor;
+		case openshot::BLEND_LUMINOSITY:  return SkBlendMode::kLuminosity;
+	}
+	return SkBlendMode::kSrcOver;
+}
+
+} // namespace
+
+// A texture is only reusable on the thread whose recorder made it and while the device that
+// made it is alive, and only for the very pixels it was made from. QImage::cacheKey() moves on
+// every detach, so a source rewritten in place -- get_transform()'s CPU alpha, say -- misses.
+struct Clip::HostTextureCache
+{
+	qint64 key = 0;
+	unsigned long long generation = 0;
+	std::thread::id thread;
+	sk_sp<SkImage> texture;
+};
+
+bool Clip::can_draw_to_canvas() const
+{
+	// Every blend mode qualifies since W13: BlendImages() and SkBlendMode implement the
+	// same W3C spec, so the mode is set on the paint and Skia does the backdrop read.
+
+	// Shadow and blur qualify since W14: both are SkImageFilters on the paint, so they
+	// ride the same single transformed draw. The frame-number overlay and the waveform
+	// draw extra content onto the clip's own canvas, which there no longer is.
+	if (display != FRAME_DISPLAY_NONE || waveform)
+		return false;
+
+	// Overlay clips no longer disqualify a clip: GetFrame composites them onto the clip's own
+	// source frame before this draw either way (GpuOverlay on the GPU, OpenCV otherwise), and
+	// the draw then transforms that frame exactly as apply_keyframes would.
+
+	// Anything applied *after* the keyframes expects the timeline-sized, already
+	// transformed image. Collapsing the transform into the final draw means that image
+	// never exists, so a clip with post-keyframe effects has to take the CPU path.
+	for (const auto effect : effects)
+		if (!effect->info.apply_before_clip)
+			return false;
+	if (timeline != NULL) {
+		Timeline* timeline_instance = static_cast<Timeline*>(timeline);
+		if (!timeline_instance->Effects().empty())
+			return false;
+	}
+
+	return true;
+}
+
+bool Clip::draw_to_canvas(std::shared_ptr<openshot::Frame> frame,
+						  std::shared_ptr<openshot::Frame> background_frame)
+{
+	const std::shared_ptr<openshot::GpuFrame>& gpu = background_frame->GpuBacking();
+	if (!gpu)
+		return false;
+
+	// A source that is already on the GPU -- a text clip since W17 -- is taken as a
+	// texture and never crosses to the CPU at all. The opacity curve goes on the paint below
+	// rather than into the pixels, for a host-memory source too since 2026-09-24: the CPU loop
+	// over the image cost a full pass every faded frame and, by rewriting the QImage, defeated
+	// the upload-once cache for a fading still. The paint's float alpha rounds differently from
+	// the loop's truncation by at most an LSB (owner's decision); the CPU path keeps the loop.
+	const std::shared_ptr<openshot::GpuFrame>& source_gpu = frame->GpuBacking();
+	float deferred_alpha = 1.0f;
+	const QTransform t = get_transform(frame, gpu->width(), gpu->height(), &deferred_alpha);
+
+	sk_sp<SkImage> texture;
+	int source_w = 0, source_h = 0;
+	std::shared_ptr<QImage> source_image;   // held until the synchronous upload is done
+	if (source_gpu) {
+		// snapshot() copies the contents, so it stays valid once the pooled surface
+		// behind it goes back to the pool at the end of this frame.
+		texture = source_gpu->snapshot();
+		source_w = source_gpu->width();
+		source_h = source_gpu->height();
+	} else {
+		source_image = frame->GetImage();
+		if (!source_image || source_image->isNull())
+			return false;
+		source_w = source_image->width();
+		source_h = source_image->height();
+
+		// A still image, or a reader holding its last frame, hands back the same QImage
+		// every frame; upload it once. At 1080p the upload was 1.65 ms a frame for the
+		// background PNG every export carries.
+		const qint64 key = source_image->cacheKey();
+		const unsigned long long generation = GpuDevice::Generation();
+		if (host_texture && host_texture->texture && host_texture->key == key &&
+			host_texture->generation == generation &&
+			host_texture->thread == std::this_thread::get_id()) {
+			texture = host_texture->texture;
+			openshot::GpuCounters::Add(openshot::GpuCounters::UploadCached);
+		} else {
+			// Format_RGBA8888_Premultiplied is byte-for-byte kRGBA_8888 premultiplied.
+			const SkPixmap src(SkImageInfo::Make(source_w, source_h,
+												 kRGBA_8888_SkColorType, kPremul_SkAlphaType),
+							   source_image->constBits(), source_image->bytesPerLine());
+			// Wrap the QImage's pixels rather than copying them: the upload below is
+			// synchronous and source_image outlives it, so the extra full-frame CPU copy
+			// RasterFromPixmapCopy would make is pure cost on a path whose whole expense is
+			// moving the image.
+			texture = openshot::GpuFrame::ToTexture(SkImages::RasterFromPixmap(src, nullptr, nullptr));
+			if (texture) {
+				auto cache = std::make_shared<HostTextureCache>();
+				cache->key = key;
+				cache->generation = generation;
+				cache->thread = std::this_thread::get_id();
+				cache->texture = texture;
+				host_texture = std::move(cache);
+			}
+		}
+	}
+	if (!texture)
+		return false;   // caller falls back; the canvas has not been touched
+
+	// The opacity curve, applied to the source's pixels on the GPU exactly as get_transform's CPU
+	// loop applies it -- `pixel *= alpha` on every premultiplied byte, a float multiply truncated
+	// to the byte -- and before the transform, as there. Paint alpha instead rounds, which was an
+	// LSB off on every faded pixel. One small pass per faded frame; the result is this draw's only.
+	std::shared_ptr<openshot::GpuFrame> faded;
+	if (deferred_alpha != 1.0f) {
+		static std::mutex fade_mutex;
+		static sk_sp<SkRuntimeEffect> fade_effect;
+		{
+			std::lock_guard<std::mutex> lock(fade_mutex);
+			if (!fade_effect) {
+				auto [effect, error] = SkRuntimeEffect::MakeForShader(SkString(
+					"uniform shader src;\n"
+					"uniform float alpha;\n"
+					"half4 main(float2 p) {\n"
+					"  float4 bytes = floor(float4(src.eval(p)) * 255.0 + 0.5);\n"
+					"  return half4(floor(bytes * alpha) / 255.0);\n"
+					"}\n"));
+				fade_effect = effect;
+			}
+		}
+		faded = fade_effect ? openshot::GpuFrame::Create(source_w, source_h, kRGBA_8888_SkColorType) : nullptr;
+		SkCanvas* fade_canvas = faded ? faded->canvas() : nullptr;
+		if (!fade_canvas)
+			return false;
+		SkRuntimeEffectBuilder builder(fade_effect);
+		builder.child("src") = texture->makeShader(SkTileMode::kClamp, SkTileMode::kClamp, SkSamplingOptions());
+		builder.uniform("alpha") = deferred_alpha;
+		SkPaint fade_paint;
+		fade_paint.setShader(builder.makeShader());
+		fade_paint.setBlendMode(SkBlendMode::kSrc);
+		fade_canvas->drawRect(SkRect::MakeIWH(source_w, source_h), fade_paint);
+		texture = faded->snapshot();
+		if (!texture)
+			return false;
+		deferred_alpha = 1.0f;
+	}
+
+	// Qt stores an affine transform row-vector style (x' = m11*x + m21*y + m31), Skia
+	// column-vector style, so the six coefficients transpose across directly and the
+	// mapping is exact rather than approximate.
+	SkMatrix m;
+	m.setAll((SkScalar) t.m11(), (SkScalar) t.m21(), (SkScalar) t.m31(),
+			 (SkScalar) t.m12(), (SkScalar) t.m22(), (SkScalar) t.m32(),
+			 (SkScalar) t.m13(), (SkScalar) t.m23(), (SkScalar) t.m33());
+
+	SkCanvas* canvas = gpu->canvas();
+	SkPaint paint;
+	paint.setBlendMode(ToSkBlendMode(blend_mode));
+
+	// W14: the clip blur and the drop shadow become one SkImageFilter chain on the paint,
+	// so a clip carrying either still composites in this single transformed draw. Both are
+	// built in the source image's own coordinate space and the canvas transform below
+	// carries them, exactly as the QPainter path draws the shadow under the same transform
+	// as the clip. The CPU equivalents -- apply_keyframes()' cv::GaussianBlur and
+	// get_shadow_image() -- are untouched and still run whenever this draw is not taken.
+	const SkRect source_rect = SkRect::MakeWH((SkScalar) source_w, (SkScalar) source_h);
+	const EffectSizes sizes = (blur || shadow) ? effect_sizes(t, frame->number) : EffectSizes();
+	sk_sp<SkImageFilter> filter;
+	if (blur) {
+		const SkScalar sigma = (SkScalar) sizes.blur_sigma;
+		if (sigma > 0.0f) {
+			// kClamp is the nearest Skia has to the BORDER_REFLECT_101 cv::GaussianBlur
+			// uses (kMirror is not implemented), and cropping to the visible rect keeps the
+			// blur inside the image the way an in-place blur on the source does, instead of
+			// letting it bleed 3 sigma past every edge. The input is clamped from the whole
+			// pixels inside a crop's cut edge, so its antialiased fringe does not smear in.
+			const QRectF bounds = blur_bounds(frame->number, source_w, source_h);
+			const QRect inner(QPoint((int) std::ceil(bounds.left()), (int) std::ceil(bounds.top())),
+							  QPoint((int) std::floor(bounds.right()) - 1, (int) std::floor(bounds.bottom()) - 1));
+			if (bounds == QRectF(0, 0, source_w, source_h) || inner.isEmpty()) {
+				filter = SkImageFilters::Blur(sigma, sigma, SkTileMode::kClamp, nullptr, source_rect);
+			} else {
+				const SkRect inner_rect = SkRect::MakeXYWH((SkScalar) inner.x(), (SkScalar) inner.y(),
+														   (SkScalar) inner.width(), (SkScalar) inner.height());
+				const SkRect outer_rect = SkRect::Make(SkRect::MakeLTRB((SkScalar) bounds.left(), (SkScalar) bounds.top(),
+																		(SkScalar) bounds.right(), (SkScalar) bounds.bottom()).roundOut());
+				filter = SkImageFilters::Blur(sigma, sigma, SkTileMode::kClamp,
+											  SkImageFilters::Crop(inner_rect, SkTileMode::kClamp, nullptr), outer_rect);
+			}
+		}
+	}
+	if (shadow) {
+		const SkScalar sigma = (SkScalar) sizes.shadow_sigma;
+		const auto channel = [](double v) {
+			return (U8CPU) std::min(255, std::max(0, (int) std::lround(v)));
+		};
+		// The colour's alpha is an overall shadow-opacity multiplier on the source's
+		// blurred alpha, which is what DropShadow does with the alpha it is given.
+		const SkColor color = SkColorSetARGB(channel(shadow_color.alpha.GetValue(frame->number)),
+											 channel(shadow_color.red.GetValue(frame->number)),
+											 channel(shadow_color.green.GetValue(frame->number)),
+											 channel(shadow_color.blue.GetValue(frame->number)));
+		// DropShadow (not DropShadowOnly) draws the shadow and then the clip over it, in
+		// the one filter, which is the order apply_keyframes() paints them in. Chaining it
+		// on top of the blur filter reproduces the CPU path's ordering too: the shadow's
+		// silhouette is taken from the *blurred* source.
+		filter = SkImageFilters::DropShadow((SkScalar) sizes.shadow_dx, (SkScalar) sizes.shadow_dy,
+											sigma, sigma, color, std::move(filter));
+	}
+	if (filter)
+		paint.setImageFilter(std::move(filter));
+
+	// Match what QPainter actually does, which is not "always resample". For a transform
+	// no more complex than a translation by whole pixels, Qt blits the image straight
+	// across -- no filtering, no edge antialiasing. Resampling those instead softens every
+	// edge in the image, which costs most on content that is nearly all antialiased edges:
+	// it took the text scenarios from ~46 dB to ~36 dB against the CPU goldens.
+	const bool whole_pixel_translate = t.type() <= QTransform::TxTranslate;
+
+	SkSamplingOptions sampling(SkFilterMode::kLinear, SkMipmapMode::kNone);
+	if (whole_pixel_translate) {
+		sampling = SkSamplingOptions();   // nearest, no mipmaps: a straight blit
+	} else {
+		paint.setAntiAlias(true);         // QPainter::Antialiasing, for the transformed edge
+	}
+
+	canvas->save();
+	if (whole_pixel_translate)
+		canvas->translate((SkScalar) std::round(t.dx()), (SkScalar) std::round(t.dy()));
+	else
+		canvas->concat(m);
+	// Otherwise QPainter::SmoothPixmapTransform is bilinear, and this is its counterpart.
+	canvas->drawImage(texture, 0, 0, sampling, &paint);
+	canvas->restore();
+	return true;
+}
+
+void Clip::apply_background(std::shared_ptr<openshot::Frame> frame,
+                            std::shared_ptr<openshot::Frame> background_frame,
+                            bool update_frame_image) {
 	// Retrieve the background image
     const std::shared_ptr<QImage> background_canvas = background_frame->GetImage();
 
@@ -1489,8 +2030,11 @@ void Clip::apply_background(std::shared_ptr<openshot::Frame> frame, std::shared_
         BlendImages(*background_canvas, *frame->GetImage(), blend_mode);
     }
 
-    // Add the modified image back to the frame
-    frame->AddImage(background_canvas);
+
+	// A standalone clip wants its own image updated; timeline composition paints straight
+	// onto the timeline-owned background frame and leaves the cached clip frame alone.
+	if (update_frame_image)
+		frame->AddImage(background_canvas);
 }
 
 // Apply effects to the source frame (if any)
@@ -1500,9 +2044,9 @@ void Clip::apply_effects(std::shared_ptr<Frame> frame, int64_t timeline_frame_nu
 	{
 		// Apply the effect to this frame
 		if (effect->info.apply_before_clip && before_keyframes) {
-			effect->GetFrame(frame, frame->number);
+			effect->ProcessFrame(frame, frame->number);
 		} else if (!effect->info.apply_before_clip && !before_keyframes) {
-			effect->GetFrame(frame, frame->number);
+			effect->ProcessFrame(frame, frame->number);
 		}
 	}
 
@@ -1520,14 +2064,63 @@ bool Clip::isNear(double a, double b)
 	return fabs(a - b) < 0.000001;
 }
 
-// Build a blurred, tinted drop-shadow image from the source image's alpha silhouette
-std::shared_ptr<QImage> Clip::get_shadow_image(std::shared_ptr<QImage> source_image, int64_t frame_number, int& offset_x, int& offset_y) {
-	// Shadow blur amount, passed to the shared image-processing-lib Gaussian blur using the
-	// same units as the clip blur (box-equivalent kernel size in pixels). Pad the canvas so
-	// the Gaussian has room to spread past the silhouette edge (~3 sigma ≈ 0.87·amount).
-	const int blur_amount = std::max(0, (int) std::lround(shadow_blur.GetValue(frame_number)));
-	const int pad = blur_amount > 0 ? blur_amount + 1 : 0;
+// The clip blur and drop shadow of one frame, in the source pixels both paths draw them in
+Clip::EffectSizes Clip::effect_sizes(const QTransform& t, int64_t frame_number) const {
+	EffectSizes sizes;
+	// Polar (distance, angle) -> x/y: degrees clockwise from +X with +Y pointing down.
+	const double distance = shadow_distance.GetValue(frame_number);
+	const double angle_rad = shadow_angle.GetValue(frame_number) * M_PI / 180.0;
+	const double dx = distance * std::cos(angle_rad);
+	const double dy = distance * std::sin(angle_rad);
 
+	// Canvas pixels per source pixel: the linear part of the clip transform (Qt stores it
+	// row-vector style, canvas = (x*m11 + y*m21, x*m12 + y*m22)), its area scale.
+	const double det = t.m11() * t.m22() - t.m21() * t.m12();
+	if (effect_size_space == EFFECT_SIZE_CANVAS && std::abs(det) > 1e-12) {
+		const double s = std::sqrt(std::abs(det));
+		// The blur's spread is set on the canvas and carried into source pixels; the sigma
+		// is scaled rather than the box size so it is exactly sigma_for_box(value) on the
+		// canvas, whatever the source's resolution.
+		const double blur_box = std::max(0.0, blur_amount.GetValue(frame_number));
+		const double shadow_box = std::max(0.0, shadow_blur.GetValue(frame_number));
+		sizes.blur_sigma = sigma_for_box(blur_box) / s;
+		sizes.shadow_sigma = sigma_for_box(shadow_box) / s;
+		// Room for ~3.5 sigma, as the box + 1 of the source-pixel case leaves.
+		sizes.shadow_pad = sizes.shadow_sigma > 0.0
+			? (int) std::ceil(std::sqrt(12.0 * sizes.shadow_sigma * sizes.shadow_sigma + 1.0)) + 1 : 0;
+		// The offset is a canvas vector: back through the inverse of the linear part, which
+		// also undoes rotation and flip, so the shadow keeps its direction on the canvas.
+		sizes.shadow_dx = ( t.m22() * dx - t.m21() * dy) / det;
+		sizes.shadow_dy = (-t.m12() * dx + t.m11() * dy) / det;
+		return sizes;
+	}
+
+	// Source pixels: the values are box sizes in whole pixels.
+	const int blur_box = std::max(0, (int) std::lround(blur_amount.GetValue(frame_number)));
+	const int shadow_box = std::max(0, (int) std::lround(shadow_blur.GetValue(frame_number)));
+	sizes.blur_sigma = blur_box > 0 ? sigma_for_box(blur_box) : 0.0;
+	sizes.shadow_sigma = shadow_box > 0 ? sigma_for_box(shadow_box) : 0.0;
+	// Pad the shadow so the Gaussian has room to spread past the silhouette edge
+	// (~3 sigma ≈ 0.87·box).
+	sizes.shadow_pad = shadow_box > 0 ? shadow_box + 1 : 0;
+	sizes.shadow_dx = dx;
+	sizes.shadow_dy = dy;
+	return sizes;
+}
+
+// Where the clip blur clamps: the whole image, or what the crop effects leave visible
+QRectF Clip::blur_bounds(int64_t frame_number, int width, int height) const {
+	QRectF bounds(0, 0, width, height);
+	for (EffectBase* effect : effects) {
+		const Crop* crop = dynamic_cast<const Crop*>(effect);
+		if (crop && crop->info.apply_before_clip && !crop->resize)
+			bounds = bounds.intersected(crop->VisibleRect(frame_number, width, height));
+	}
+	return bounds;
+}
+
+// Build a blurred, tinted drop-shadow image from the source image's alpha silhouette
+std::shared_ptr<QImage> Clip::get_shadow_image(std::shared_ptr<QImage> source_image, int64_t frame_number, double sigma, int pad, int& offset_x, int& offset_y) {
 	const int src_w = source_image->width();
 	const int src_h = source_image->height();
 	const int w = src_w + pad * 2;
@@ -1545,8 +2138,8 @@ std::shared_ptr<QImage> Clip::get_shadow_image(std::shared_ptr<QImage> source_im
 	}
 
 	// Blur the alpha silhouette with a high-quality Gaussian (local helper)
-	if (blur_amount > 0)
-		gaussian_blur(alpha_mat, blur_amount, blur_amount);
+	if (sigma > 0.0)
+		gaussian_blur(alpha_mat, sigma, sigma);
 
 	// Tint the blurred silhouette with the shadow color. The color's alpha acts as an
 	// overall shadow-opacity multiplier on top of the source's (blurred) alpha.
@@ -1589,13 +2182,25 @@ void Clip::apply_keyframes(std::shared_ptr<Frame> frame, QSize timeline_size) {
 	// Get transform from clip's keyframes
 	QTransform transform = get_transform(frame, background_canvas->width(), background_canvas->height());
 
+	const EffectSizes sizes = (blur || shadow) ? effect_sizes(transform, frame->number) : EffectSizes();
+
 	// Blur the clip's image (if enabled). Done before the shadow is generated and before
 	// compositing, so both the shadow silhouette and the drawn clip reflect the blur.
 	if (blur) {
-		const int blur_radius = std::max(0, (int) std::lround(blur_amount.GetValue(frame->number)));
-		if (blur_radius > 0) {
+		if (sizes.blur_sigma > 0.0) {
 			auto imageCv = frame->GetImageCV();
-			gaussian_blur(imageCv, blur_radius, blur_radius);
+			// Inside a crop, blur only the whole pixels it leaves visible, as if they were the
+			// image: BORDER_ISOLATED keeps the transparent margin out of the kernel.
+			const QRectF bounds = blur_bounds(frame->number, imageCv.cols, imageCv.rows);
+			const QRect inner(QPoint((int) std::ceil(bounds.left()), (int) std::ceil(bounds.top())),
+							  QPoint((int) std::floor(bounds.right()) - 1, (int) std::floor(bounds.bottom()) - 1));
+			if (bounds == QRectF(0, 0, imageCv.cols, imageCv.rows) || inner.isEmpty()) {
+				gaussian_blur(imageCv, sizes.blur_sigma, sizes.blur_sigma);
+			} else {
+				cv::Mat visible = imageCv(cv::Rect(inner.x(), inner.y(), inner.width(), inner.height()));
+				gaussian_blur(visible, sizes.blur_sigma, sizes.blur_sigma,
+							  cv::BORDER_REFLECT_101 | cv::BORDER_ISOLATED);
+			}
 			frame->SetImageCV(imageCv);
 			// Re-fetch the (now blurred) image, since SetImageCV replaces it
 			source_image = frame->GetImage();
@@ -1615,13 +2220,10 @@ void Clip::apply_keyframes(std::shared_ptr<Frame> frame, QSize timeline_size) {
 	if (shadow) {
 		int shadow_offset_x = 0;
 		int shadow_offset_y = 0;
-		std::shared_ptr<QImage> shadow_image = get_shadow_image(source_image, frame->number, shadow_offset_x, shadow_offset_y);
-		// Convert polar (distance, angle) offset into source-image x/y offset.
-		// Angle is in degrees, clockwise from +X, with +Y pointing down.
-		const double distance = shadow_distance.GetValue(frame->number);
-		const double angle_rad = shadow_angle.GetValue(frame->number) * M_PI / 180.0;
-		const float dx = (float) (distance * std::cos(angle_rad));
-		const float dy = (float) (distance * std::sin(angle_rad));
+		std::shared_ptr<QImage> shadow_image = get_shadow_image(source_image, frame->number, sizes.shadow_sigma,
+																sizes.shadow_pad, shadow_offset_x, shadow_offset_y);
+		const float dx = (float) sizes.shadow_dx;
+		const float dy = (float) sizes.shadow_dy;
 		painter.setCompositionMode(QPainter::CompositionMode_SourceOver);
 		painter.drawImage(QPointF(dx + shadow_offset_x, dy + shadow_offset_y), *shadow_image);
 	}
@@ -1707,9 +2309,6 @@ void Clip::apply_waveform(std::shared_ptr<Frame> frame, QSize timeline_size) {
 		return;
 	}
 
-	// Get image from clip
-	std::shared_ptr<QImage> source_image = frame->GetImage();
-
 	// Debug output
 	ZmqLogger::Instance()->AppendDebugMethod("Clip::apply_waveform (Generate Waveform Image)",
 			"frame->number", frame->number,
@@ -1723,9 +2322,34 @@ void Clip::apply_waveform(std::shared_ptr<Frame> frame, QSize timeline_size) {
 	int blue = wave_color.blue.GetInt(frame->number);
 	int alpha = wave_color.alpha.GetInt(frame->number);
 
-	// Generate Waveform Dynamically (the size of the timeline)
-	source_image = frame->GetWaveform(timeline_size.width(), timeline_size.height(), red, green, blue, alpha);
-	frame->AddImage(source_image);
+	// Render the waveform through the audio visualization effect so clip shortcuts
+	// and explicit effects share the same rendering path.
+	auto visual_frame = std::make_shared<Frame>(*frame.get());
+	visual_frame->AddImage(std::make_shared<QImage>(
+		timeline_size.width(), timeline_size.height(), QImage::Format_RGBA8888_Premultiplied));
+	visual_frame->GetImage()->fill(Qt::transparent);
+
+	AudioVisualization visualization;
+	visualization.visualization_type = waveform_mode;
+	visualization.style = AUDIO_VISUALIZATION_STYLE_MINIMAL;
+	visualization.color = Color(
+		static_cast<unsigned char>(red),
+		static_cast<unsigned char>(green),
+		static_cast<unsigned char>(blue),
+		static_cast<unsigned char>(alpha));
+	visualization.intensity = Keyframe(1.0);
+	visualization.smoothing = Keyframe(0.25);
+	visualization.detail = Keyframe(0.75);
+	visualization.glow = Keyframe(0.0);
+	visualization.color_spread = Keyframe(0.0);
+	visualization.color_mode = AUDIO_VISUALIZATION_COLOR_SEED;
+	visualization.channel_layout = AUDIO_VISUALIZATION_CHANNEL_AUTO;
+	visualization.frequency_low = Keyframe(0.0);
+	visualization.frequency_high = Keyframe(1.0);
+	visualization.background = AUDIO_VISUALIZATION_BACKGROUND_TRANSPARENT;
+	visualization.GetFrame(visual_frame, frame->number);
+
+	frame->AddImage(visual_frame->GetImage());
 }
 
 // Scale a source size to a target size (given a specific scale-type)
@@ -1750,38 +2374,62 @@ QSize Clip::scale_size(QSize source_size, ScaleType source_scale, int target_wid
 }
 
 // Get QTransform from keyframes
-QTransform Clip::get_transform(std::shared_ptr<Frame> frame, int width, int height)
+QTransform Clip::get_transform(std::shared_ptr<Frame> frame, int width, int height,
+							   float* deferred_alpha)
 {
-	// Get image from clip
-	std::shared_ptr<QImage> source_image = frame->GetImage();
+	// A GPU-backed source has no QImage to touch, and asking for one would read the
+	// texture back -- exactly what the caller passing deferred_alpha is avoiding. Take
+	// the size from the frame, which AttachGpuFrame keeps in step with the surface.
+	const bool defer = deferred_alpha != nullptr;
+	if (defer)
+		*deferred_alpha = 1.0f;
+	std::shared_ptr<QImage> source_image;
+	QSize image_size;
+	if (defer) {
+		image_size = QSize(frame->GetWidth(), frame->GetHeight());
+	} else {
+		// Get image from clip
+		source_image = frame->GetImage();
+		image_size = source_image->size();
+	}
 
 	/* ALPHA & OPACITY */
 	if (alpha.GetValue(frame->number) != 1.0)
 	{
 		float alpha_value = alpha.GetValue(frame->number);
 
-		// Get source image's pixels
-		unsigned char *pixels = source_image->bits();
+		if (!source_image) {
+			// Hand the curve to the caller to set on its paint, and leave the texture be.
+			*deferred_alpha = alpha_value;
 
-		// Loop through pixels
-		for (int pixel = 0, byte_index=0; pixel < source_image->width() * source_image->height(); pixel++, byte_index+=4)
-		{
-			// Apply alpha to pixel values (since we use a premultiplied value, we must
-			// multiply the alpha with all colors).
-			pixels[byte_index + 0] *= alpha_value;
-			pixels[byte_index + 1] *= alpha_value;
-			pixels[byte_index + 2] *= alpha_value;
-			pixels[byte_index + 3] *= alpha_value;
+			// Debug output
+			ZmqLogger::Instance()->AppendDebugMethod("Clip::get_transform (Defer Alpha & Opacity)",
+				"alpha_value", alpha_value,
+				"frame->number", frame->number);
+		} else {
+			// Get source image's pixels
+			unsigned char *pixels = source_image->bits();
+
+			// Loop through pixels
+			for (int pixel = 0, byte_index=0; pixel < source_image->width() * source_image->height(); pixel++, byte_index+=4)
+			{
+				// Apply alpha to pixel values (since we use a premultiplied value, we must
+				// multiply the alpha with all colors).
+				pixels[byte_index + 0] *= alpha_value;
+				pixels[byte_index + 1] *= alpha_value;
+				pixels[byte_index + 2] *= alpha_value;
+				pixels[byte_index + 3] *= alpha_value;
+			}
+
+			// Debug output
+			ZmqLogger::Instance()->AppendDebugMethod("Clip::get_transform (Set Alpha & Opacity)",
+				"alpha_value", alpha_value,
+				"frame->number", frame->number);
 		}
-
-		// Debug output
-		ZmqLogger::Instance()->AppendDebugMethod("Clip::get_transform (Set Alpha & Opacity)",
-			"alpha_value", alpha_value,
-			"frame->number", frame->number);
 	}
 
 	/* RESIZE SOURCE IMAGE - based on scale type */
-	QSize source_size = scale_size(source_image->size(), scale, width, height);
+	QSize source_size = scale_size(image_size, scale, width, height);
 
 	// Initialize parent object's properties (Clip or Tracked Object)
 	float parentObject_location_x = 0.0;
@@ -1948,8 +2596,8 @@ QTransform Clip::get_transform(std::shared_ptr<Frame> frame, int width, int heig
 	}
 
 	// SCALE CLIP (if needed)
-	float source_width_scale = (float(source_size.width()) / float(source_image->width())) * sx;
-	float source_height_scale = (float(source_size.height()) / float(source_image->height())) * sy;
+	float source_width_scale = (float(source_size.width()) / float(image_size.width())) * sx;
+	float source_height_scale = (float(source_size.height()) / float(image_size.height())) * sy;
 	if (!isNear(source_width_scale, 1.0) || !isNear(source_height_scale, 1.0)) {
 		transform.scale(source_width_scale, source_height_scale);
 	}

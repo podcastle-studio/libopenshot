@@ -13,6 +13,7 @@
 #ifndef OPENSHOT_SETTINGS_H
 #define OPENSHOT_SETTINGS_H
 
+#include <atomic>
 #include <string>
 
 namespace openshot {
@@ -46,6 +47,15 @@ namespace openshot {
 		/// Private variable to keep track of singleton instance
 		static Settings * m_pInstance;
 
+		/// Last OMP thread count applied to the OpenMP runtime
+		std::atomic<int> applied_omp_threads{0};
+
+		/// Machine default OpenMP thread count detected at startup
+		int default_omp_threads = 2;
+
+		/// Machine default FFmpeg thread count detected at startup
+		int default_ff_threads = 2;
+
 	public:
 		/**
 		 * @brief Use video codec for faster video decoding (if supported)
@@ -64,17 +74,81 @@ namespace openshot {
 		/// Scale mode used in FFmpeg decoding and encoding (used as an optimization for faster previews)
 		bool HIGH_QUALITY_SCALING = true;
 
-		/// Number of threads of OpenMP
-		int OMP_THREADS = 16;
+		/**
+		 * @brief Let the reader convert YUV to RGBA on the GPU, so decoded frames stay there.
+		 *
+		 * Needs a GPU as well (@c GpuDevice::available()); with one, the reader runs the
+		 * conversion and the pre-scale as an SkSL pass and hands the compositor a GPU-backed
+		 * frame, so nothing crosses the bus but the YUV. It replaces @c sws_scale, which is
+		 * 95 % of the reader's wall clock.
+		 *
+		 * **Off by default because it changes pixels, not because it is unfinished.** Two
+		 * differences, both measured (see GPU-WORKLIST W23):
+		 *
+		 * - the conversion itself is faithful — 46.2 dB, 3 LSB at worst — but it is not
+		 *   bit-identical, and effects that threshold or divide (chroma key, colour-burn)
+		 *   turn 3 LSB into a visible difference;
+		 * - **it honours the stream's declared colour space and swscale, as this reader
+		 *   configures it, never did.** A file tagged @c bt709 decoded as BT.709 rather than
+		 *   BT.601 is the correct answer and a different picture.
+		 *
+		 * Turning it on is the project owner's call, and it re-baselines every golden that
+		 * decodes video.
+		 */
+		bool GPU_DECODE = false;
 
-		/// Number of threads that ffmpeg uses
-		int FF_THREADS = 16;
+		/**
+		 * @brief How many frames each FFmpegReader decodes ahead, on a thread of its own.
+		 *
+		 * An export reads every clip front to back, so while the timeline composites frame N
+		 * the reader can already be decoding N+1..N+this. 0 turns it off. A seek retargets it.
+		 * Only frames that live in host memory are decoded ahead: a GPU-decoded frame belongs
+		 * to the thread whose recorder made it, so with GPU_DECODE on and a GPU present the
+		 * reader decodes on the caller's thread as before (W24).
+		 *
+		 * 2, not the 4 first planned: measured on the CPU path, 2 is as fast as 4 within noise
+		 * (source_4k x264 +20-25 %, grid_3x3 +12 %) and each extra frame is a full frame of
+		 * host memory per open reader -- 4 cost grid_3x3's nine readers 270 MB.
+		 */
+		int READ_AHEAD_FRAMES = 2;
 
-		/// Maximum rows that hardware decode can handle
-		int DE_LIMIT_HEIGHT_MAX = 1100;
+		/**
+		 * @brief Hand NVENC the compositor's frame on the GPU instead of reading it back (W25).
+		 *
+		 * With h264_nvenc/hevc_nvenc, a GPU compositor and CudaInterop available, each frame is
+		 * converted to NV12 by an SkSL pass and copied device to device into the encoder's
+		 * input; the readback, the writer's swscale and the upload all go. Anything short of
+		 * that falls back to the readback path.
+		 *
+		 * **Off by default because it changes pixels:** the chroma is a 2x2 box average where
+		 * the readback path's swscale (HIGH_QUALITY_SCALING) uses a bicubic, and the luma
+		 * rounds exactly where swscale's does not quite. Same matrix (BT.601) either way.
+		 * Turning it on is the project owner's call, like GPU_DECODE.
+		 */
+		bool GPU_ENCODE = false;
 
-		/// Maximum columns that hardware decode can handle
-		int DE_LIMIT_WIDTH_MAX = 1950;
+		/**
+		 * @brief Crop a GPU-backed frame on the GPU instead of reading it back (W29).
+		 *
+		 * The Crop effect is QPainter with antialiasing: a rounded-rect clip and a draw between
+		 * fractional rects. On a frame that is already on the GPU (GPU decode, text) that meant
+		 * one readback per clip per frame, which measured as half of `everything`'s frame time
+		 * and left the GPU ~35 % busy. With this on, the same geometry is drawn with Skia.
+		 *
+		 * **Off by default because it changes pixels:** Skia's antialiasing of the rounded
+		 * corners and fractional edges is not QPainter's (W19: a redefine-class change). The
+		 * interior is the same bilinear draw. CPU frames always take the QPainter path.
+		 */
+		bool GPU_CROP = false;
+
+		/// Number of OpenMP threads
+		int OMP_THREADS = 2;
+
+			/// Number of threads that ffmpeg uses
+			int FF_THREADS = 16;
+
+			/// Minimum number of frames for frame-count-based caches
+			int CACHE_MIN_FRAMES = 24;
 
 		/// Which GPU to use to decode (0 is the first)
 		int HW_DE_DEVICE_SET = 0;
@@ -86,10 +160,10 @@ namespace openshot {
 		float VIDEO_CACHE_PERCENT_AHEAD = 0.7;
 
 		/// Minimum number of frames to cache before playback begins
-		int VIDEO_CACHE_MIN_PREROLL_FRAMES = 24;
+		int VIDEO_CACHE_MIN_PREROLL_FRAMES = 30;
 
 		/// Max number of frames (ahead of playhead) to cache during playback
-		int VIDEO_CACHE_MAX_PREROLL_FRAMES = 48;
+		int VIDEO_CACHE_MAX_PREROLL_FRAMES = 60;
 
 		/// Max number of frames (when paused) to cache for playback
 		int VIDEO_CACHE_MAX_FRAMES = 30 * 10;
@@ -118,6 +192,21 @@ namespace openshot {
 
  		/// Whether to dump ZeroMQ debug messages to stderr
 		bool DEBUG_TO_STDERR = false;
+
+		/// Return the effective OpenMP worker budget used by libopenshot heuristics
+		int EffectiveOMPThreads() const;
+
+		/// Return the maximum allowed thread override based on this machine
+		int MaxAllowedThreads() const;
+
+		/// Return the machine default OpenMP thread count detected at startup
+		int DefaultOMPThreads() const { return default_omp_threads; }
+
+		/// Return the machine default FFmpeg thread count detected at startup
+		int DefaultFFThreads() const { return default_ff_threads; }
+
+		/// Apply any explicit OpenMP thread override to the runtime
+		void ApplyOpenMPSettings();
 
 		/// Create or get an instance of this logger singleton (invoke the class with this method)
 		static Settings * Instance();

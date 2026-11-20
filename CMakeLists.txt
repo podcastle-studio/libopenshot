@@ -24,8 +24,8 @@ For more information, please visit <http://www.openshot.org/>.
 set(CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake/Modules")
 
 ################ PROJECT VERSION ####################
-set(PROJECT_VERSION_FULL "0.4.0")
-set(PROJECT_SO_VERSION 27)
+set(PROJECT_VERSION_FULL "1.0.0")
+set(PROJECT_SO_VERSION 31)
 
 # Remove the dash and anything following, to get the #.#.# version for project()
 STRING(REGEX REPLACE "\-.*$" "" VERSION_NUM "${PROJECT_VERSION_FULL}")
@@ -72,8 +72,14 @@ option(APPIMAGE_BUILD "Build to install in an AppImage (Linux only)" OFF)
 option(USE_SYSTEM_JSONCPP "Use system installed JsonCpp, if found" ON)
 option(DISABLE_BUNDLED_JSONCPP "Don't fall back to bundled JsonCpp" OFF)
 option(ENABLE_MAGICK "Use ImageMagick, if available" ON)
+# Headless renderer: the Qt video player is a desktop feature and is the only thing that
+# needs Qt Widgets. Turning it off drops that component and the Qt/ playback threads.
+option(ENABLE_PLAYER "Build the Qt video player (QtPlayer, Qt/*) and Frame::Display" ON)
 option(ENABLE_OPENCV_EFFECTS "Build with advanced OpenCV effects: Tracker, Stabilizer, ObjectDetection, Outline (requires Protobuf 3)" OFF)
+# Headless renderer: screen capture is a desktop feature and pulls in PipeWire / xdg-desktop-portal.
+option(ENABLE_WAYLAND_CAPTURE "Build Wayland screen capture support with xdg-desktop-portal and PipeWire (Linux only)" OFF)
 option(USE_HW_ACCEL "Enable hardware-accelerated encoding-decoding with FFmpeg 3.4+" ON)
+option(ENABLE_VULKAN_BENCHMARK "Build the experimental Vulkan benchmark example" OFF)
 
 # Legacy commandline override
 if (DISABLE_TESTS)
@@ -134,6 +140,22 @@ endif()
 ###
 add_subdirectory(src)
 add_subdirectory(examples)
+
+################ GOLDEN-FRAME REGRESSION HARNESS ################
+option(ENABLE_GOLDEN_TESTS "Build the golden-frame visual regression harness (openshot-golden)" ON)
+if(ENABLE_GOLDEN_TESTS)
+  add_subdirectory(tests/golden)
+  add_subdirectory(tests/bench)
+endif()
+add_feature_info("Golden tests" ENABLE_GOLDEN_TESTS "openshot-golden visual regression harness")
+
+# Graphite/Vulkan smoke test (plan step 2.1). Off by default: it needs a Skia
+# built by skia_build_script_gpu.sh, selected with -DSkia_ROOT=/usr/local/skia-gpu.
+option(ENABLE_GPU_SMOKE "Build the Skia Graphite/Vulkan smoke test (openshot-gpu-smoke); requires a GPU Skia prefix" OFF)
+if(ENABLE_GPU_SMOKE)
+  add_subdirectory(tests/gpu)
+endif()
+add_feature_info("GPU smoke test" ENABLE_GPU_SMOKE "openshot-gpu-smoke Graphite/Vulkan check")
 add_subdirectory(bindings)
 
 ###

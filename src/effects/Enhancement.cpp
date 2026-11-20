@@ -10,6 +10,11 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
 #include "Enhancement.h"
+
+#include "skia/include/core/SkM44.h"
+#include "EffectShaders.h"
+
+#include "skia/include/effects/SkRuntimeEffect.h"
 #include "Exceptions.h"
 
 #include <QImage>
@@ -299,8 +304,6 @@ Enhancement::Enhancement(Keyframe n, Keyframe c, Keyframe s)
 std::shared_ptr<openshot::Frame>
 Enhancement::GetFrame(std::shared_ptr<openshot::Frame> frame, int64_t frame_number)
 {
-    std::shared_ptr<QImage> img = frame->GetImage();
-
     // Assume frames are already RGBA; do not convert format.
 
     const double noise_v     = std::clamp(noise    .GetValue(frame_number), 0.0, 1.0);
@@ -310,12 +313,93 @@ Enhancement::GetFrame(std::shared_ptr<openshot::Frame> frame, int64_t frame_numb
     if (noise_v == 0.0 && clarity_v == 0.0 && std::abs(sharpness_v) < 1e-6)
         return frame;                                // nothing to do
 
-    /* order: clarity ? sharpen/blur ? grain */
-    if (clarity_v   > 0.0) applyClarityPass (*img, clarity_v);
-    if (sharpness_v != 0.0) applySharpnessPass(*img, sharpness_v);
-    if (noise_v     > 0.0) applyNoisePass    (*img, noise_v);
+    // The shader when there is a GPU to run it on: clarity, then sharpen or blur, then grain,
+    // each a pass that reads the previous one's output as a texture, so only the last is ever
+    // read back. Clarity and sharpness read the NEIGHBOURS of what the previous pass wrote, so
+    // they cannot be folded into one fragment; grain is per pixel but keeps the same order.
+    //
+    // Grain on the GPU is not the CPU's bytes -- the hash is evaluated in float, not double --
+    // but the same grain at a different random phase (owner decision 2026-09-24; see
+    // enhancement.sksl). The CPU branch below is unchanged and is what a no-GPU export runs.
+    //
+    // Which passes have run on the GPU, in order. A pass that declines stops the chain, and the
+    // CPU carries on from there on the frame's pixels -- which already hold the passes before it
+    // (each ApplyOnGpu leaves its result as the frame's GPU backing, and GetImage() reads that
+    // back). The CPU must therefore skip what already ran: re-running clarity on an image that
+    // already has it applies it twice.
+    bool clarity_done = clarity_v <= 0.0;
+    bool sharpness_done = sharpness_v == 0.0;
+    bool noise_done = noise_v <= 0.0;
+    [&] {
+        if (!clarity_done) {
+            gpu_pass = GpuPass::Clarity;
+            gpu_pass_strength = clarity_v;
+            if (!ApplyOnGpu(frame, frame_number))
+                return;
+            clarity_done = true;
+        }
+        if (!sharpness_done) {
+            gpu_pass = sharpness_v > 0.0 ? GpuPass::Sharpen : GpuPass::BlurMix;
+            gpu_pass_strength = sharpness_v;
+            if (!ApplyOnGpu(frame, frame_number))
+                return;
+            sharpness_done = true;
+        }
+        if (!noise_done) {
+            gpu_pass = GpuPass::Grain;
+            gpu_pass_strength = noise_v;
+            if (!ApplyOnGpu(frame, frame_number))
+                return;
+            noise_done = true;
+        }
+    }();
+    if (clarity_done && sharpness_done && noise_done)
+        return frame;
+
+    // The CPU path: every pass on a no-GPU export, and whatever the GPU did not finish otherwise.
+    // Reading back after a GPU pass costs a crossing, which is why a pass declines up front.
+    std::shared_ptr<QImage> img = frame->GetImage();
+
+    /* order: clarity -> sharpen/blur -> grain */
+    if (!clarity_done)   applyClarityPass  (*img, clarity_v);
+    if (!sharpness_done) applySharpnessPass(*img, sharpness_v);
+    if (!noise_done)     applyNoisePass    (*img, noise_v);
 
     return frame;
+}
+
+/* ---------- GPU ---------- */
+
+// The SkSL source lives in src/shaders/ (per-clip effects run only by the export) and is
+// embedded here at build time. Read it there -- including why it is written the way it is.
+const char* Enhancement::GpuShaderSource() const
+{
+	return openshot::shaders::kEnhancement;
+}
+
+bool Enhancement::SetGpuUniforms(SkRuntimeEffectBuilder& builder, int64_t frame_number,
+								 int width, int height) const
+{
+	builder.uniform("size") = SkV2{static_cast<float>(width), static_cast<float>(height)};
+	switch (gpu_pass) {
+	case GpuPass::Clarity:
+		builder.uniform("mode") = 0.0f;
+		builder.uniform("k") = static_cast<float>(gpu_pass_strength * 3.0);
+		break;
+	case GpuPass::Sharpen:
+		builder.uniform("mode") = 1.0f;
+		builder.uniform("k") = static_cast<float>(gpu_pass_strength * 3.0);
+		break;
+	case GpuPass::BlurMix:
+		builder.uniform("mode") = 2.0f;
+		builder.uniform("k") = static_cast<float>(-gpu_pass_strength);
+		break;
+	case GpuPass::Grain:
+		builder.uniform("mode") = 3.0f;
+		builder.uniform("k") = static_cast<float>(gpu_pass_strength);
+		break;
+	}
+	return true;
 }
 
 /* ---------- serialisation ---------- */

@@ -1,0 +1,69 @@
+{
+  "cases" : 
+  [
+    {
+      "agg_fps" : 20.143015409406789,
+      "avg_ms" : 49.643999999999998,
+      "build_ms" : 126.7,
+      "cpu_cores" : 3.6386663011627589,
+      "cpu_seconds" : 11.680203000000001,
+      "description" : "podcast layout: main video with colour filters + LUT, PiP with crop radius + shadow, logo, lower third",
+      "error" : "",
+      "fps" : 20.143000000000001,
+      "frames" : 60,
+      "height" : 1080,
+      "max_ms" : 182.309,
+      "max_rss_kb" : 715428,
+      "mode" : "render",
+      "ok" : true,
+      "p50_ms" : 46.107999999999997,
+      "p95_ms" : 59.454000000000001,
+      "parallel" : 1,
+      "res" : "1080p",
+      "scenario" : "podcast_pip",
+      "wall_s" : 2.9786999999999999,
+      "width" : 1920
+    },
+    {
+      "agg_fps" : 18.196154546005943,
+      "avg_ms" : 54.957000000000001,
+      "build_ms" : 129.80000000000001,
+      "cpu_cores" : 3.9549349848421405,
+      "cpu_seconds" : 14.047759000000001,
+      "description" : "podcast layout: main video with colour filters + LUT, PiP with crop radius + shadow, logo, lower third",
+      "error" : "",
+      "fps" : 18.196000000000002,
+      "frames" : 60,
+      "height" : 1080,
+      "max_ms" : 0.0,
+      "max_rss_kb" : 1360832,
+      "mode" : "x264",
+      "ok" : true,
+      "p50_ms" : 0.0,
+      "p95_ms" : 0.0,
+      "parallel" : 1,
+      "res" : "1080p",
+      "scenario" : "podcast_pip",
+      "wall_s" : 3.2974000000000001,
+      "width" : 1920
+    }
+  ],
+  "date" : "2026-09-10T14:58:16",
+  "frames" : 60,
+  "label" : "parallel-1-heavy",
+  "machine" : 
+  {
+    "build_type" : "Release",
+    "cpu" : "12th Gen Intel(R) Core(TM) i7-12700H",
+    "ffmpeg" : "6.1",
+    "git" : "493f88bf",
+    "git_branch" : "feature/gpu-rendering",
+    "gpu" : "NVIDIA RTX A2000 8GB Laptop GPU, 580.126.20, 8192 MiB",
+    "hardware_threads" : 20,
+    "kernel" : "7.0.0-31-generic",
+    "mem_total" : "32521720 kB",
+    "threads_setting" : "library defaults (FF_THREADS=16, OMP_THREADS=16)"
+  },
+  "parallel" : 1,
+  "total_seconds" : 6.7623328010000003
+}

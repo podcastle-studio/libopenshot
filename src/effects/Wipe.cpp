@@ -1,5 +1,12 @@
 #include "Wipe.h"
 
+#include "EffectShaders.h"
+#include "image-processing-lib/src/Planner/EffectPlan.h"
+
+#include "skia/include/effects/SkRuntimeEffect.h"
+
+#include <algorithm>
+
 #include "Exceptions.h"
 #include "FFmpegReader.h"
 #include "./image-processing-lib/src/Effects/effects.h"
@@ -43,6 +50,11 @@ std::shared_ptr<openshot::Frame> Wipe::GetFrame(std::shared_ptr<openshot::Frame>
 	const auto lowPercentage = mLevelsLowPercentage.GetValue(frame_number);
     const auto highPercentage = mLevelsHighPercentage.GetValue(frame_number);
 
+    // The shader when there is a GPU to run it on, OpenCV otherwise. Before GetImageCV(), which
+    // on a GPU-backed frame is a readback AND two full-frame cv::Mat conversions.
+    if (ApplyOnGpu(frame, frame_number))
+        return frame;
+
     auto imageCv = frame->GetImageCV();
     // openshot::Frame images are premultiplied (see Frame::Mat2Qimage), so the wipe has to scale
     // every channel by its coverage -- scaling alpha alone leaves a bright fringe on the edge.
@@ -52,6 +64,35 @@ std::shared_ptr<openshot::Frame> Wipe::GetFrame(std::shared_ptr<openshot::Frame>
     // return the modified frame
     frame->SetImageCV(imageCv);
 	return frame;
+}
+
+// The shared SkSL source lives in image-processing-lib/shaders/ so the editor loads the
+// same bytes through CanvasKit; it is embedded here at build time. Read it there --
+// including why it is written the way it is.
+const char* Wipe::GpuShaderSource() const
+{
+	return openshot::shaders::kThresholdWipeMask;
+}
+
+bool Wipe::SetGpuUniforms(SkRuntimeEffectBuilder& builder, int64_t frame_number,
+				int width, int height) const
+{
+	// Resolved by the shared planner (image-processing-lib/src/Planner), the same code the editor
+	// runs, so the two cannot disagree about what these values mean. It declines -- and the C++
+	// twin runs -- for every case the fragment does not cover.
+	Podcastle::Effects::EffectPlan plan;
+	PlanForFrame(frame_number, width, height, plan);
+	return BindPlan(builder, plan);
+}
+
+bool Wipe::PlanForFrame(int64_t frame_number, int width, int height,
+                       Podcastle::Effects::EffectPlan& plan) const
+{
+	// The planner's answer for ApplyOnGpu too, so an identity, a clear or a multi-pass plan runs
+	// on the GPU rather than declining to the C++.
+	plan = Podcastle::Effects::planEffect(
+		"THRESHOLD_WIPE_MASK", {{"lowPercent", mLevelsLowPercentage.GetValue(frame_number)}, {"highPercent", mLevelsHighPercentage.GetValue(frame_number)}}, width, height);
+	return true;
 }
 
 // Generate JSON string of this object

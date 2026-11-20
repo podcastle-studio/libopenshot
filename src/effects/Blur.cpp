@@ -13,7 +13,16 @@
 #include "Blur.h"
 #include "Exceptions.h"
 #include "MagickUtilities.h"
+#include "skia/include/core/SkM44.h"
+#include "EffectShaders.h"
+#include "image-processing-lib/src/Planner/EffectPlan.h"
+#include "../gpu/GpuDevice.h"
+
+#include <algorithm>
+#include <cstddef>
 #include "./image-processing-lib/src/Effects/effects.h"
+
+#include "skia/include/effects/SkRuntimeEffect.h"
 
 using namespace openshot;
 
@@ -130,34 +139,115 @@ std::shared_ptr<openshot::Frame> Blur::GetFrame(std::shared_ptr<openshot::Frame>
 
     // diagonal blur (if any)
     if (diagonal_radius_value > 0) {
-        auto imageCv = frame->GetImageCV();
-        Podcastle::Effects::applyDiagonalBlurEffect(imageCv, diagonal_radius_value);
-        frame->SetImageCV(imageCv);
+        if (!ApplyDiagonalBlurOnGpu(frame, frame_number, diagonal_radius_value)) {
+            auto imageCv = frame->GetImageCV();
+            Podcastle::Effects::applyDiagonalBlurEffect(imageCv, diagonal_radius_value);
+            frame->SetImageCV(imageCv);
+        }
     }
 
     // radial blur (if any)
     if (radial_blur_angle_value > 0) {
-        auto imageCv = frame->GetImageCV();
-        Podcastle::Effects::applyRotationalBlur(imageCv, radial_blur_angle_value);
-        frame->SetImageCV(imageCv);
+        if (!ApplyRotationalBlurOnGpu(frame, frame_number, radial_blur_angle_value)) {
+            auto imageCv = frame->GetImageCV();
+            Podcastle::Effects::applyRotationalBlur(imageCv, radial_blur_angle_value);
+            frame->SetImageCV(imageCv);
+        }
     }
 
     // zoom blur (if any)
     if (zoom_blur_radius_value > 0) {
         const auto centerPoint = std::make_pair(zoomBlurCenterX.GetValue(frame_number), zoomBlurCenterY.GetValue(frame_number));
-        auto imageCv = frame->GetImageCV();
-        Podcastle::Effects::applyZoomBlurEffect(imageCv, zoom_blur_radius_value, centerPoint);
-        frame->SetImageCV(imageCv);
+        if (!ApplyZoomBlurOnGpu(frame, frame_number, zoom_blur_radius_value,
+                                centerPoint.first, centerPoint.second)) {
+            auto imageCv = frame->GetImageCV();
+            Podcastle::Effects::applyZoomBlurEffect(imageCv, zoom_blur_radius_value, centerPoint);
+            frame->SetImageCV(imageCv);
+        }
     }
 
     if (horizontal_radius_value > 0 || vertical_radius_value > 0) {
-        auto imageCv = frame->GetImageCV();
-        Podcastle::Effects::applyBlurEffect(imageCv, horizontal_radius_value, vertical_radius_value);
-        frame->SetImageCV(imageCv);
+        // The shader when there is a GPU to run it on, OpenCV otherwise. Before GetImageCV(),
+        // which on a GPU-backed frame is a readback and two full-frame cv::Mat conversions --
+        // and this effect sits in the middle of the {Zoom, Blur, Alpha} transition, so getting
+        // that round the wrong way is what used to split the chain in two.
+        if (!ApplyBoxBlurOnGpu(frame, frame_number, horizontal_radius_value, vertical_radius_value)) {
+            auto imageCv = frame->GetImageCV();
+            Podcastle::Effects::applyBlurEffect(imageCv, horizontal_radius_value, vertical_radius_value);
+            frame->SetImageCV(imageCv);
+        }
     }
 
 	// return the modified frame
 	return frame;
+}
+
+/* ---------- GPU ---------- */
+
+// Every mode is a pass chain built by the shared planner (image-processing-lib/src/Planner,
+// boxBlurChain and friends): the GPU draws it here, and the C++ twins above run the very same
+// chain when there is no GPU, so the two paths give the same bytes. A chain no fragment can run
+// comes back as a CPU step. The editor resolves the same presets through the same code.
+bool Blur::ApplyPlannedBlurOnGpu(std::shared_ptr<openshot::Frame> frame, int64_t frame_number,
+                                 const std::map<std::string, double>& params)
+{
+    if (!frame || !GpuDevice::Instance().available())
+        return false;
+    const int width = frame->GetWidth();
+    const int height = frame->GetHeight();
+    if (width <= 0 || height <= 0)
+        return false;
+
+    const Podcastle::Effects::EffectPlan plan =
+        Podcastle::Effects::planEffect("BLUR", params, width, height);
+    if (plan.steps.size() != 1)
+        return false;
+    const Podcastle::Effects::PlanStep& step = plan.steps.front();
+    if (step.kind == Podcastle::Effects::PlanStep::Kind::Identity)
+        return true;   // the C++ would return the image untouched
+    if (step.kind != Podcastle::Effects::PlanStep::Kind::Gpu)
+        return false;
+    return RunPlannedStep(frame, frame_number, step);
+}
+
+bool Blur::ApplyBoxBlurOnGpu(std::shared_ptr<openshot::Frame> frame, int64_t frame_number,
+                             int horizontal, int vertical)
+{
+    return ApplyPlannedBlurOnGpu(frame, frame_number,
+                                 {{"horizontalRadius", horizontal}, {"verticalRadius", vertical}});
+}
+
+bool Blur::ApplyDiagonalBlurOnGpu(std::shared_ptr<openshot::Frame> frame, int64_t frame_number,
+                                  int authored_radius)
+{
+    return ApplyPlannedBlurOnGpu(frame, frame_number, {{"diagonalRadius", authored_radius}});
+}
+
+bool Blur::ApplyRotationalBlurOnGpu(std::shared_ptr<openshot::Frame> frame, int64_t frame_number,
+                                    double angle_degrees)
+{
+    return ApplyPlannedBlurOnGpu(frame, frame_number, {{"rotationalRadius", angle_degrees}});
+}
+
+bool Blur::ApplyZoomBlurOnGpu(std::shared_ptr<openshot::Frame> frame, int64_t frame_number,
+                              int authored_strength, double center_x, double center_y)
+{
+    return ApplyPlannedBlurOnGpu(frame, frame_number,
+                                 {{"zoomBlurRadius", authored_strength},
+                                  {"anchorX", center_x},
+                                  {"anchorY", center_y}});
+}
+
+// The fragment and uniforms of whichever planned pass is being drawn.
+const char* Blur::GpuShaderSource() const
+{
+	return PlannedShaderSource(openshot::shaders::kGaussian);
+}
+
+bool Blur::SetGpuUniforms(SkRuntimeEffectBuilder& builder, int64_t frame_number,
+						  int width, int height) const
+{
+	return BindPlannedPass(builder);
 }
 
 // Generate JSON string of this object

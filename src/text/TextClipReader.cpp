@@ -3,6 +3,8 @@
 #include "../Exceptions.h"
 #include "../Frame.h"
 #include "../Json.h"
+#include "../gpu/GpuDevice.h"
+#include "../gpu/GpuFrame.h"
 #include "../subtitle/SkiaRenderer.h"
 #include "TextAnimationRenderer.h"
 #include "TextClipRenderer.h"
@@ -11,7 +13,9 @@
 
 #include <skia/include/core/SkBitmap.h>
 #include <skia/include/core/SkCanvas.h>
+#include <skia/include/core/SkColor.h>
 #include <skia/include/core/SkImageInfo.h>
+#include <skia/include/core/SkPixmap.h>
 
 #include <QColor>
 #include <QImage>
@@ -39,26 +43,47 @@ std::string collapseNewlines(const std::string& value) {
     return std::regex_replace(value, re, " ");
 }
 
-// Outward margin (px) the text effects (shadow, stroke, gaussian blur, glow beams) extend
-// beyond the bounding box, so the frame buffer reserves room for them and nothing is clipped.
-double effectsMargin(const openshot::text::TextClipPaintStyle& paint,
-                     double contentWidth, double contentHeight) {
+// Outward margin (px) the text effects (shadow, stroke, gaussian blur, glow beams) extend beyond
+// the bounding box, so the frame buffer reserves room for them and nothing is clipped.
+//
+// Per axis: the glow's god-rays are a homothety about the light source, so their reach on one axis
+// depends only on that axis (see TextGlowRenderer::glowMarginFor). Sizing both axes from the longer
+// one padded a 920 x 101 block by 623 px vertically where ~199 px is the bound — 11 MB of frame
+// buffer for 0.4 MB of content, allocated, cleared and (with the GPU on) read back every frame.
+std::pair<double, double> effectsMargin(const openshot::text::TextClipPaintStyle& paint,
+                                        double contentWidth, double contentHeight) {
     const double strokeMargin = paint.stroke.has_value() ? paint.stroke->width : 0.0;
     double shadowMargin = 0.0;
     if (paint.dropShadow.has_value()) {
         shadowMargin = paint.dropShadow->distance + SHADOW_BLUR_SIGMA_MULTIPLIER * paint.dropShadow->blur;
     }
-    double glowMargin = 0.0;
+    double glowMarginX = 0.0, glowMarginY = 0.0;
     if (paint.glow.has_value()) {
         const double offX = paint.glow->sourceOffX * paint.fontSize;
         const double offY = paint.glow->sourceOffY * paint.fontSize;
         const double offMax = std::max(std::abs(offX), std::abs(offY));
-        const double halfExtent = std::max(contentWidth, contentHeight) / 2.0;
-        glowMargin = paint.glow->rayLen * (halfExtent + offMax) + offMax
-                     + openshot::text::GLOW_BEAM_BLUR_RATIO * paint.fontSize * 3.0;
+        const double beamBlur = openshot::text::GLOW_BEAM_BLUR_RATIO * paint.fontSize;
+        const double bloomPad = openshot::text::GLOW_BLOOM_BLUR_RATIO * paint.fontSize * 3.0;
+
+        // What both axes got before. The per-axis value is clamped to it so the axis that bound
+        // the old margin keeps it to the bit, and a glow that fitted before still fits.
+        const double legacy = paint.glow->rayLen * (std::max(contentWidth, contentHeight) / 2.0 + offMax)
+                              + offMax + beamBlur * 3.0;
+
+        // Mirrors glowMarginFor: the composited glow spans the content box expanded by the
+        // silhouette's own margin plus the beam reach measured from the light to the image corner.
+        const double imageMargin = std::ceil(strokeMargin + beamBlur * 3.0 + 4.0);
+        auto axis = [&](double extent, double off) {
+            const double reach = paint.glow->rayLen * (imageMargin + extent / 2.0 + std::abs(off))
+                                 + beamBlur * 3.0;
+            return std::min(legacy, imageMargin + std::ceil(std::max(reach, bloomPad)));
+        };
+        glowMarginX = axis(contentWidth, offX);
+        glowMarginY = axis(contentHeight, offY);
     }
     const double blurMargin = SHADOW_BLUR_SIGMA_MULTIPLIER * paint.blur;
-    return std::max({strokeMargin, shadowMargin, glowMargin}) + blurMargin;
+    return {std::max({strokeMargin, shadowMargin, glowMarginX}) + blurMargin,
+            std::max({strokeMargin, shadowMargin, glowMarginY}) + blurMargin};
 }
 
 text::TextAlignment parseAlignment(const std::string& s) {
@@ -205,6 +230,7 @@ TextClipReader::~TextClipReader() = default;
 void TextClipReader::Open() {
     if (is_open) return;
     buildPlan();       // computes frame_width / frame_height + cached render plan
+    glow_cache.reset();   // the plan the cached glow was built from is gone
     initInfo();
     dirty = false;
     is_open = true;
@@ -214,6 +240,13 @@ void TextClipReader::Close() {
     if (!is_open) return;
     is_open = false;
     rendered_image.reset();
+    // The resting surface goes back to the pool with the clip. The Timeline closes a clip the
+    // moment it stops intersecting the frame, so this is what keeps a finished clip's frame --
+    // 46 MB for a 4K glow -- from staying in VRAM until the export ends: 45 text clips held 45
+    // surfaces that way (2026-09-30). Close() runs on the thread that rendered it; if it did
+    // not, the release would miss its pool and be counted, not crash (GpuFrame::~GpuFrame).
+    rendered_gpu.reset();
+    glow_cache.reset();
     info.vcodec = "";
     info.acodec = "";
 }
@@ -401,9 +434,9 @@ void TextClipReader::buildPlan() {
             halfW = std::max({std::abs(static_cast<double>(mapped.fLeft)), std::abs(static_cast<double>(mapped.fRight)), halfW});
             halfH = std::max({std::abs(static_cast<double>(mapped.fTop)),  std::abs(static_cast<double>(mapped.fBottom)), halfH});
         }
-        const double pad = effectsMargin(p, cw, ch);
-        const double preW = 2.0 * halfW + 2.0 * pad;
-        const double preH = 2.0 * halfH + 2.0 * pad;
+        const auto [fxPadX, fxPadY] = effectsMargin(p, cw, ch);
+        const double preW = 2.0 * halfW + 2.0 * fxPadX;
+        const double preH = 2.0 * halfH + 2.0 * fxPadY;
         return {preW * rotC + preH * rotS, preW * rotS + preH * rotC};
     };
 
@@ -454,6 +487,18 @@ void TextClipReader::buildPlan() {
             aabbH = std::max(aabbH, e.second);
         }
     }
+
+    // 6. Never larger than can be seen. The Clip draws this buffer centred on the text's project
+    // position, at a scale of at most 1 (the service renders at the largest keyframed size and
+    // only scales down), so no pixel farther than the project diagonal from the centre can land on
+    // the canvas -- whatever the position or rotation. A box zoom can reach far past that: Hyper
+    // Zoom (sx 10 + blur) on one word at 4K asked for 46,321 x 11,701, more than any GPU texture,
+    // so every frame fell back to a 2 GB raster QImage and OOM-killed the worker. Cropping
+    // symmetrically keeps the centre, so placement does not move.
+    const double visibleSpan = 2.0 * std::hypot(static_cast<double>(project_width),
+                                                static_cast<double>(project_height));
+    aabbW = std::min(aabbW, visibleSpan);
+    aabbH = std::min(aabbH, visibleSpan);
 
     frame_width  = std::max(1, static_cast<int>(std::ceil(aabbW)));
     frame_height = std::max(1, static_cast<int>(std::ceil(aabbH)));
@@ -527,6 +572,49 @@ TextClipReader::ResolvedPlan TextClipReader::resolvePlanAtFrame(int64_t frame) c
     return p;
 }
 
+void TextClipReader::drawFrame(SkCanvas* canvas, subtitle::ColorConvention convention,
+                               const ResolvedPlan& plan,
+                               const std::optional<text::TextClipAnimationFrame>& animation) {
+    subtitle::SkiaRenderer renderer(canvas, convention);
+
+    // Centre the content box at the frame's centre; rotate around that centre.
+    canvas->save();
+    canvas->translate(static_cast<float>(frame_width)  / 2.0f,
+                      static_cast<float>(frame_height) / 2.0f);
+    if (data.transformation.rotation != 0.0) {
+        canvas->rotate(static_cast<float>(data.transformation.rotation));
+    }
+    // A style keyframe can move the glow's colour, intensity or geometry between frames, so
+    // only a clip without one gets the cache; everything else it depends on is fixed by the
+    // plan. renderTextFrame narrows this further — only the BLOCK-mode paths take it.
+    text::renderTextFrame(plan_layout, plan.paint, plan.background,
+                          plan.origin_x, plan.origin_y, 1.0, animation, &renderer,
+                          has_style_keyframes ? nullptr : &glow_cache);
+    canvas->restore();
+}
+
+std::shared_ptr<openshot::GpuFrame> TextClipReader::renderToGpuFrame(
+    const ResolvedPlan& plan,
+    const std::optional<text::TextClipAnimationFrame>& animation) {
+    // An empty plan keeps the 1x1 transparent QImage: not worth a surface, and the caller
+    // has a cheaper answer for it.
+    if (plan_empty || !GpuDevice::Instance().available())
+        return nullptr;
+
+    std::shared_ptr<GpuFrame> gpu =
+        GpuFrame::Create(frame_width, frame_height, kRGBA_8888_SkColorType);
+    if (!gpu)
+        return nullptr;   // pool exhausted; the caller falls back and merely looks slower
+    SkCanvas* canvas = gpu->canvas();
+    if (!canvas)
+        return nullptr;
+
+    // Pooled surfaces are recycled, so this is load-bearing, not tidiness.
+    canvas->clear(SK_ColorTRANSPARENT);
+    drawFrame(canvas, subtitle::ColorConvention::Logical, plan, animation);
+    return gpu;
+}
+
 std::shared_ptr<QImage> TextClipReader::renderToQImage(
     const ResolvedPlan& plan,
     const std::optional<text::TextClipAnimationFrame>& animation) {
@@ -539,29 +627,48 @@ std::shared_ptr<QImage> TextClipReader::renderToQImage(
     auto img = std::make_shared<QImage>(frame_width, frame_height, QImage::Format_RGBA8888_Premultiplied);
     img->fill(QColor(0, 0, 0, 0));
 
-    SkBitmap bitmap;
+    // N32 premultiplied over the QImage's own buffer. A GPU frame is kRGBA_8888 and this is
+    // BGRA on x86, but that is exactly why the readback below lands the same bytes as drawing
+    // straight into it: SkiaRenderer::parseColorString swaps R and B as a LOGICAL colour
+    // convention, and converting kRGBA_8888 -> N32 on the way out undoes it once, just as
+    // storing a swapped colour into a BGRA surface does. See plan step 2.3.
     const SkImageInfo skiaInfo = SkImageInfo::MakeN32Premul(frame_width, frame_height);
+
+    // One GPU surface for the frame, read back once at the end — instead of a raster canvas
+    // that has to upload every offscreen the text engine builds. Falls back silently: with the
+    // GPU off, or if anything in the round trip fails, the raster path below runs unchanged.
+    if (GpuDevice::Instance().available()) {
+        if (std::shared_ptr<GpuFrame> gpu = GpuFrame::Create(frame_width, frame_height, kN32_SkColorType)) {
+            SkCanvas* canvas = gpu->canvas();
+            if (canvas) {
+                // Pooled surfaces are recycled, so this is load-bearing, not tidiness.
+                canvas->clear(SK_ColorTRANSPARENT);
+                drawFrame(canvas, subtitle::ColorConvention::QImageBytes, plan, animation);
+                SkPixmap pixels(skiaInfo, img->bits(), img->bytesPerLine());
+                if (gpu->readback(pixels))
+                    return img;
+                // Readback failed after drawing, so the QImage may hold a partial frame.
+                // Start again on the raster path rather than return it.
+                img->fill(QColor(0, 0, 0, 0));
+            }
+        }
+    }
+
+    SkBitmap bitmap;
     if (!bitmap.installPixels(skiaInfo, img->bits(), img->bytesPerLine())) {
         return img;
     }
     SkCanvas canvas(bitmap);
-    subtitle::SkiaRenderer renderer(&canvas);
-
-    // Centre the content box at the frame's centre; rotate around that centre.
-    canvas.save();
-    canvas.translate(static_cast<float>(frame_width)  / 2.0f,
-                     static_cast<float>(frame_height) / 2.0f);
-    if (data.transformation.rotation != 0.0) {
-        canvas.rotate(static_cast<float>(data.transformation.rotation));
-    }
-    text::renderTextFrame(plan_layout, plan.paint, plan.background,
-                          plan.origin_x, plan.origin_y, 1.0, animation, &renderer);
-    canvas.restore();
+    drawFrame(&canvas, subtitle::ColorConvention::QImageBytes, plan, animation);
 
     return img;
 }
 
 void TextClipReader::renderToImage() {
+    rendered_image = renderToQImage(cachedPlan(), restingFrame());
+}
+
+std::optional<text::TextClipAnimationFrame> TextClipReader::restingFrame() const {
     // A resting frame carrying only the static 3D tilt (if any) — constant across frames, so the
     // single-image cache still holds. Without tilt this is a plain static render (std::nullopt).
     std::optional<text::TextClipAnimationFrame> frame;
@@ -576,7 +683,7 @@ void TextClipReader::renderToImage() {
         if (!frame) frame = text::buildStatic3DFrame(0.0, 0.0);
         frame->forceBlockTexture = true;
     }
-    rendered_image = renderToQImage(cachedPlan(), frame);
+    return frame;
 }
 
 // ---------------------------------------------------------------------------
@@ -591,6 +698,8 @@ std::shared_ptr<Frame> TextClipReader::GetFrame(int64_t requested_frame) {
         buildPlan();
         initInfo();
         rendered_image.reset();
+        rendered_gpu.reset();
+        glow_cache.reset();
         dirty = false;
     }
 
@@ -610,12 +719,34 @@ std::shared_ptr<Frame> TextClipReader::GetFrame(int64_t requested_frame) {
     }
 
     std::shared_ptr<QImage> image;
+    // Whether `image` is the shared resting-frame cache (which must not be handed to a Frame
+    // that may draw over it) or a render made for this frame alone (which can be).
+    bool image_is_cached = false;
     if (!has_style_keyframes && !animFrame.has_value()) {
         // Static / resting phase: the frame is pixel-identical every frame (incl. any static 3D
         // tilt). Render ONCE and reuse the cache — this skips recomputing the (expensive) glow for
         // every resting frame. For a 5s clip with a 1.5s IN that's ~70% of frames served from cache.
+        //
+        // With a GPU the cache is a surface, drawn by the compositor as a texture: no readback,
+        // no per-frame copy of the image and no upload of it. Rendered as the per-frame branch
+        // below renders on the GPU, so a clip's resting and animated frames come from one path.
+        if (!plan_empty && GpuDevice::Instance().available()) {
+            const unsigned long long generation = GpuDevice::Generation();
+            if (!rendered_gpu || rendered_gpu_generation != generation || !rendered_gpu->ownedByThisThread()) {
+                rendered_gpu = renderToGpuFrame(cachedPlan(), restingFrame());
+                rendered_gpu_generation = generation;
+            }
+            if (rendered_gpu) {
+                auto gpu_frame = std::make_shared<Frame>(
+                    requested_frame, rendered_gpu->width(), rendered_gpu->height(),
+                    "#00000000", sample_count, info.channels);
+                gpu_frame->AttachGpuFrame(rendered_gpu);
+                return gpu_frame;
+            }
+        }
         if (!rendered_image) renderToImage();
         image = rendered_image;
+        image_is_cached = true;
     } else {
         // Per-frame render. Resolve the style keyframe overlay (if any), else reuse the cached plan.
         // No single-image cache here — the content varies frame to frame.
@@ -647,6 +778,19 @@ std::shared_ptr<Frame> TextClipReader::GetFrame(int64_t requested_frame) {
             frame = text::buildStatic3DFrame(rp.tiltX, rp.tiltY);
             if (forceTexture) frame->forceBlockTexture = true;
         }
+        // Leave the frame on the GPU when there is one: the compositor draws it as a
+        // texture, so nothing here reads back, nothing copies the QImage and nothing
+        // uploads it again (W17). Only this per-frame branch can do it -- the resting
+        // image below is cached across frames and a pooled surface must not outlive the
+        // frame that borrowed it.
+        if (std::shared_ptr<GpuFrame> gpu = renderToGpuFrame(rp, frame)) {
+            auto gpu_frame = std::make_shared<Frame>(
+                requested_frame, gpu->width(), gpu->height(),
+                "#00000000", sample_count, info.channels);
+            gpu_frame->AttachGpuFrame(std::move(gpu));
+            return gpu_frame;
+        }
+
         image = renderToQImage(rp, frame);
     }
 
@@ -659,7 +803,10 @@ std::shared_ptr<Frame> TextClipReader::GetFrame(int64_t requested_frame) {
     auto frame = std::make_shared<Frame>(
         requested_frame, image->width(), image->height(),
         "#00000000", sample_count, info.channels);
-    frame->AddImage(std::make_shared<QImage>(image->copy()));
+    // The cached resting image is shared with every later frame, so the Frame gets a copy of
+    // it. A per-frame render has no other owner — copying it would duplicate a full-resolution
+    // buffer (~8 MB at 1080p) for nothing, which is most of what an animated text clip costs.
+    frame->AddImage(image_is_cached ? std::make_shared<QImage>(image->copy()) : image);
     return frame;
 }
 

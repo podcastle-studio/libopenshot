@@ -1,5 +1,6 @@
 #include "TextAnimationRenderer.h"
 
+#include "../gpu/GpuOffscreen.h"
 #include "../subtitle/SkiaRenderer.h"
 #include "TextClipRenderer.h"
 #include "TextDrawShared.h"
@@ -83,7 +84,7 @@ double blockMargin(const TextClipPaintStyle& style, double blurSigma, double ext
         glowMargin = style.glow->rayLen * (halfExtent + offMax) + offMax + GLOW_BEAM_BLUR_RATIO * style.fontSize * 3.0;
     }
     double maxLineLen = 0.0;
-    for (const auto& line : layout.lines) maxLineLen = std::max(maxLineLen, static_cast<double>(utf8Length(line.text)));
+    for (const auto& line : layout.lines) maxLineLen = std::max(maxLineLen, static_cast<double>(clusterCount(line.text)));
     const double spreadMargin = std::abs(extraLetterSpacing) * maxLineLen;
     return std::ceil(std::max({shadowMargin, strokeMargin, glowMargin}) + (blurSigma + style.blur) * 3.0 + spreadMargin + 4.0);
 }
@@ -185,11 +186,12 @@ void applyUnitTransform(subtitle::SkiaRenderer* renderer, SkCanvas* canvas,
 }
 
 void drawAnimatedUnit(subtitle::SkiaRenderer* renderer, const AnimatedUnitItem& item,
-                      double dx, double dy, const SkPaint& paint, const TextClipPaintStyle& style) {
+                      double dx, double dy, const SkPaint& paint, const TextClipPaintStyle& style,
+                      const EmojiPass& emoji) {
     SkCanvas* canvas = renderer->getCanvas();
     for (const AnimatedUnitGlyph& glyph : item.glyphs) {
         if (!glyph.local.has_value()) {
-            drawLetter(renderer, glyph.letter, glyph.offsetX + dx, glyph.offsetY + dy, paint, style);
+            drawLetter(renderer, glyph.letter, glyph.offsetX + dx, glyph.offsetY + dy, paint, style, emoji);
             continue;
         }
         // (4) multi-glyph curved unit: step this glyph back out to its own arc position inside the
@@ -200,7 +202,7 @@ void drawAnimatedUnit(subtitle::SkiaRenderer* renderer, const AnimatedUnitItem& 
                           static_cast<float>(glyph.local->dy + pivotOffsetY));
         canvas->rotate(static_cast<float>(glyph.local->rotationDeg));
         canvas->translate(0.0f, static_cast<float>(-pivotOffsetY));
-        drawLetter(renderer, glyph.letter, glyph.offsetX + dx, glyph.offsetY + dy, paint, style);
+        drawLetter(renderer, glyph.letter, glyph.offsetX + dx, glyph.offsetY + dy, paint, style, emoji);
         canvas->restore();
     }
 }
@@ -213,7 +215,7 @@ UnitCounts countAnimationUnits(const TextClipLayout& layout) {
         if (line.text.empty()) continue;
         bool lineHasInk = false;
         bool inWord = false;
-        forEachUtf8(line.text, [&](const std::string& letter, SkUnichar) {
+        forEachCluster(line.text, [&](const std::string& letter, SkUnichar) {
             ++counts.chars;
             if (isSpaceGlyph(letter)) { inWord = false; return; }
             ++counts.charsDrawn;
@@ -307,7 +309,7 @@ void BlockAnimationRenderer::renderBlockAnimated(
         SkPaint layerPaint;
         layerPaint.setAlphaf(static_cast<float>(opacity));
         if (blurSigma > 0.0) {
-            layerPaint.setImageFilter(SkImageFilters::Blur(blurSigma, blurSigma, SkTileMode::kClamp, nullptr));
+            layerPaint.setImageFilter(SkImageFilters::Blur(blurSigma, blurSigma, SkTileMode::kDecal, nullptr));
         }
         const double margin = content.margin(blurSigma);
         const SkRect bounds = SkRect::MakeLTRB(
@@ -402,9 +404,12 @@ void BlockAnimationRenderer::drawBlockTexture(
     // The shadow stays baked so the warp tilts it with the glyphs (matching the front end, which
     // transforms one composited flat layer).
     auto bakeLayer = [&](BlockDrawLayer layer) -> sk_sp<SkImage> {
-        sk_sp<SkSurface> surface = SkSurfaces::Raster(SkImageInfo::MakeN32Premul(texWidth, texHeight));
-        if (!surface) return nullptr;
-        SkCanvas* offscreen = surface->getCanvas();
+        // Matched to the destination canvas: this texture is drawn straight back onto it
+        // below, so a mismatch would cost an upload (or a readback) of the whole block once
+        // per z-layer per frame — and the block carries the glow, which is already there.
+        GpuOffscreen bake = GpuOffscreen::Match(canvas, texWidth, texHeight);
+        if (!bake) return nullptr;
+        SkCanvas* offscreen = bake.canvas();
         offscreen->clear(SK_ColorTRANSPARENT);
         offscreen->save();
         offscreen->scale(static_cast<float>(renderScale), static_cast<float>(renderScale));
@@ -412,7 +417,7 @@ void BlockAnimationRenderer::drawBlockTexture(
             content.draw(margin + paddingX + bakeOffsetX, margin + paddingY + bakeOffsetY, layer, false);
         });
         offscreen->restore();
-        return surface->makeImageSnapshot();
+        return bake.snapshot();
     };
     auto drawLayerImage = [&](const sk_sp<SkImage>& image) {
         if (!image) return;
@@ -420,7 +425,7 @@ void BlockAnimationRenderer::drawBlockTexture(
         paint.setAntiAlias(true);
         paint.setAlphaf(static_cast<float>(opacity));
         if (motionBlurSigma > 0.0) {
-            paint.setImageFilter(SkImageFilters::Blur(motionBlurSigma, motionBlurSigma, SkTileMode::kClamp, nullptr));
+            paint.setImageFilter(SkImageFilters::Blur(motionBlurSigma, motionBlurSigma, SkTileMode::kDecal, nullptr));
         }
         if (exactBlit) {
             // Integer device translate + nearest sampling = a straight copy of the baked pixels.
@@ -522,7 +527,7 @@ std::vector<AnimatedUnitItem> collectAnimatedUnits(
         };
 
         size_t i = 0;
-        forEachUtf8(line.text, [&](const std::string& letter, SkUnichar) {
+        forEachCluster(line.text, [&](const std::string& letter, SkUnichar) {
             const double advance = i < line.letterAdvances.size() ? line.letterAdvances[i] : 0.0;
             const int slotIndex = slot++;
             if (isSpaceGlyph(letter)) {
@@ -665,10 +670,15 @@ void UnitAnimationRenderer::drawAnimatedUnitItems(
             applyUnitTransform(renderer, canvas, item, fontSize, flags);
             if (style.stroke.has_value()) {
                 withAnimatedPaint(renderer, {shadow.color, shadow.opacity, style.stroke->width}, item.opacity, combinedBlur,
-                    [&](const SkPaint& paint) { drawAnimatedUnit(renderer, item, dx, dy, paint, style); });
+                    [&](const SkPaint& paint) {
+                        drawAnimatedUnit(renderer, item, dx, dy, paint, style, {EmojiPass::Kind::Skip});
+                    });
             }
             withAnimatedPaint(renderer, {shadow.color, shadow.opacity, std::nullopt}, item.opacity, combinedBlur,
-                [&](const SkPaint& paint) { drawAnimatedUnit(renderer, item, dx, dy, paint, style); });
+                [&](const SkPaint& paint) {
+                    drawAnimatedUnit(renderer, item, dx, dy, paint, style,
+                                     {EmojiPass::Kind::Silhouette, combinedBlur});
+                });
             canvas->restore();
         }
     }
@@ -685,7 +695,9 @@ void UnitAnimationRenderer::drawAnimatedUnitItems(
                 canvas->save();
                 applyUnitTransform(renderer, canvas, item, fontSize, flags);
                 withAnimatedPaint(renderer, {stroke.color, 1.0, stroke.width}, item.opacity, combineBlur(animBlur, calibratedTextBlur(style.blur)),
-                    [&](const SkPaint& paint) { drawAnimatedUnit(renderer, item, 0.0, 0.0, paint, style); });
+                    [&](const SkPaint& paint) {
+                        drawAnimatedUnit(renderer, item, 0.0, 0.0, paint, style, {EmojiPass::Kind::Skip});
+                    });
                 canvas->restore();
             }
         };
@@ -705,9 +717,12 @@ void UnitAnimationRenderer::drawAnimatedUnitItems(
             const double animBlur = item.props.blur() > 0.0 ? item.props.blur() * fontSize : 0.0;
             canvas->save();
             applyUnitTransform(renderer, canvas, item, fontSize, flags);
-            withAnimatedPaint(renderer, {style.color, coreOpacity, std::nullopt}, item.opacity,
-                combineBlur(combineBlur(animBlur, calibratedTextBlur(style.blur)), coreSoftBlur),
-                [&](const SkPaint& paint) { drawAnimatedUnit(renderer, item, 0.0, 0.0, paint, style); });
+            const double fillBlur = combineBlur(combineBlur(animBlur, calibratedTextBlur(style.blur)), coreSoftBlur);
+            withAnimatedPaint(renderer, {style.color, coreOpacity, std::nullopt}, item.opacity, fillBlur,
+                [&](const SkPaint& paint) {
+                    drawAnimatedUnit(renderer, item, 0.0, 0.0, paint, style,
+                                     {EmojiPass::Kind::Colour, fillBlur});
+                });
             canvas->restore();
         }
     };
@@ -771,9 +786,9 @@ namespace {
 void renderBlockAnimatedFlat(
     subtitle::SkiaRenderer* renderer, const TextClipLayout& layout, const TextClipPaintStyle& style,
     const std::optional<TextClipBackgroundStyle>& background, double originX, double originY, double scale,
-    const TextClipAnimationFrame& animation) {
+    const TextClipAnimationFrame& animation, GlowFrameCache* glowCache) {
     const double extraLetterSpacing = animation.props.letterSpacing() * style.fontSize;
-    TextGlowRenderer glow(renderer);
+    TextGlowRenderer glow(renderer, glowCache);
     BlockAnimationContent content;
     content.contentWidth = layout.layoutWidth;
     content.contentHeight = layout.textHeight;
@@ -798,8 +813,9 @@ void renderBlockAnimatedFlat(
 void renderBlockAnimatedCurved(
     subtitle::SkiaRenderer* renderer, const CurvedTextGeometry& geometry, const TextClipLayout& layout,
     const TextClipPaintStyle& style, const std::optional<TextClipBackgroundStyle>& background,
-    double originX, double originY, double scale, const TextClipAnimationFrame& animation) {
-    TextGlowRenderer glow(renderer);
+    double originX, double originY, double scale, const TextClipAnimationFrame& animation,
+    GlowFrameCache* glowCache) {
+    TextGlowRenderer glow(renderer, glowCache);
     CurvedTextPainter painter(renderer, &glow);
     BlockAnimationContent content;
     content.contentWidth = geometry.width;
@@ -903,7 +919,8 @@ void renderTextFrame(
     const std::optional<TextClipBackgroundStyle>& background,
     double originX, double originY, double scale,
     const std::optional<TextClipAnimationFrame>& animation,
-    subtitle::SkiaRenderer* renderer) {
+    subtitle::SkiaRenderer* renderer,
+    GlowFrameCache* glowCache) {
     SkCanvas* canvas = renderer->getCanvas();
     if (!canvas) return;
 
@@ -928,7 +945,7 @@ void renderTextFrame(
                     geometry, *line, paint, background, originX, originY, *animation);
             }
         } else if (hasBlockAnim) {
-            renderBlockAnimatedCurved(renderer, geometry, layout, paint, background, originX, originY, scale, *animation);
+            renderBlockAnimatedCurved(renderer, geometry, layout, paint, background, originX, originY, scale, *animation, glowCache);
         } else {
             CurvedTextPainter(renderer, &glow).drawCurvedStatic(geometry, layout, paint, background, originX, originY);
         }
@@ -943,7 +960,7 @@ void renderTextFrame(
             UnitAnimationRenderer(renderer, &glow).renderUnitAnimated(layout, paint, background, originX, originY, *animation);
         }
     } else if (hasBlockAnim) {
-        renderBlockAnimatedFlat(renderer, layout, paint, background, originX, originY, scale, *animation);
+        renderBlockAnimatedFlat(renderer, layout, paint, background, originX, originY, scale, *animation, glowCache);
     } else {
         renderLayout(layout, paint, background, originX, originY, renderer);
     }
@@ -971,7 +988,7 @@ AnimatedExtent computeAnimatedExtent(
         if (line.text.empty()) continue;
         double lineRun = 0.0, wordRun = 0.0;
         size_t i = 0;
-        forEachUtf8(line.text, [&](const std::string& letter, SkUnichar) {
+        forEachCluster(line.text, [&](const std::string& letter, SkUnichar) {
             const double advance = i < line.letterAdvances.size() ? line.letterAdvances[i] : 0.0;
             lineRun += advance;
             if (isSpaceGlyph(letter)) { widestWord = std::max(widestWord, wordRun); wordRun = 0.0; }

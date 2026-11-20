@@ -1,4 +1,12 @@
 #include "Zoom.h"
+
+#include "skia/include/core/SkM44.h"
+#include "EffectShaders.h"
+#include "image-processing-lib/src/Planner/EffectPlan.h"
+
+#include "skia/include/effects/SkRuntimeEffect.h"
+
+#include <algorithm>
 #include "Exceptions.h"
 #include "./image-processing-lib/src/Effects/effects.h"
 
@@ -43,11 +51,44 @@ std::shared_ptr<openshot::Frame> Zoom::GetFrame(std::shared_ptr<openshot::Frame>
     if (zoomPercentVal == 100) {
         return frame;
     }
+    // The shader when there is a GPU to run it on, OpenCV otherwise. Before GetImageCV(), which
+    // on a GPU-backed frame is a readback and two full-frame cv::Mat conversions.
+    if (ApplyOnGpu(frame, frame_number))
+        return frame;
+
     auto imageCv = frame->GetImageCV();
     Podcastle::Effects::applyZoomEffect(imageCv, zoomPercentVal, anchorValX, anchorValY);
     frame->SetImageCV(imageCv);
 	// return the modified frame
 	return frame;
+}
+
+// The shared SkSL source lives in image-processing-lib/shaders/ so the editor loads the
+// same bytes through CanvasKit; it is embedded here at build time. Read it there --
+// including why it is written the way it is.
+const char* Zoom::GpuShaderSource() const
+{
+	return openshot::shaders::kZoom;
+}
+
+bool Zoom::SetGpuUniforms(SkRuntimeEffectBuilder& builder, int64_t frame_number,
+				int width, int height) const
+{
+	// Resolved by the shared planner (image-processing-lib/src/Planner), the same code the editor
+	// runs, so the two cannot disagree about what these values mean. It declines -- and the C++
+	// twin runs -- for every case the fragment does not cover.
+	Podcastle::Effects::EffectPlan plan;
+	PlanForFrame(frame_number, width, height, plan);
+	return BindPlan(builder, plan);
+}
+
+bool Zoom::PlanForFrame(int64_t frame_number, int width, int height,
+						Podcastle::Effects::EffectPlan& plan) const
+{
+	// Zoom-out is two passes and can change the frame's size; ApplyOnGpu runs such a plan.
+	plan = Podcastle::Effects::planEffect(
+		"ZOOM", {{"zoomPercent", zoomPercent.GetValue(frame_number)}, {"anchorX", anchorX.GetValue(frame_number)}, {"anchorY", anchorY.GetValue(frame_number)}}, width, height);
+	return true;
 }
 
 // Generate JSON string of this object

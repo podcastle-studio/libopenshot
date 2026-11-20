@@ -12,6 +12,7 @@
 
 #include "EffectInfo.h"
 #include "Effects.h"
+#include "effects/AnalogTape.h"
 
 using namespace openshot;
 
@@ -28,8 +29,17 @@ EffectBase* EffectInfo::CreateEffect(std::string effect_type) {
 	if (effect_type == "Alpha")
 		return new Alpha();
 
+	else if (effect_type == "AnalogTape")
+		return new AnalogTape();
+
+	else if (effect_type == "AudioVisualization")
+		return new AudioVisualization();
+
 	else if (effect_type == "Bars")
 		return new Bars();
+
+	else if (effect_type == "BeatSync")
+		return new BeatSync();
 
 	else if (effect_type == "Blur")
 		return new Blur();
@@ -58,6 +68,9 @@ EffectBase* EffectInfo::CreateEffect(std::string effect_type) {
 	else if (effect_type == "ColorAdjustment")
 		return new ColorAdjustment();
 
+	else if (effect_type == "ColorGrade")
+		return new ColorGrade();
+
 	else if (effect_type == "ColorMap")
 		return new ColorMap();
 
@@ -70,11 +83,20 @@ EffectBase* EffectInfo::CreateEffect(std::string effect_type) {
 	else if (effect_type == "Deinterlace")
 		return new Deinterlace();
 
+	else if (effect_type == "Displace")
+		return new Displace();
+
 	else if (effect_type == "Enhancement")
 		return new Enhancement();
 
 	else if (effect_type == "Exposure")
 		return new Exposure();
+
+	else if (effect_type == "FilmGrain")
+		return new FilmGrain();
+
+	else if (effect_type == "Glow")
+		return new Glow();
 
 	else if (effect_type == "Hue")
 		return new Hue();
@@ -100,6 +122,9 @@ EffectBase* EffectInfo::CreateEffect(std::string effect_type) {
 	else if (effect_type == "Sharpen")
 		return new Sharpen();
 
+	else if (effect_type == "Shadow")
+		return new Shadow();
+
 	else if (effect_type == "Shift")
 		return new Shift();
 
@@ -108,6 +133,12 @@ EffectBase* EffectInfo::CreateEffect(std::string effect_type) {
 
 	else if (effect_type == "SplitShift")
 		return new SplitShift();
+
+	else if (effect_type == "Timer")
+		return new Timer();
+
+	else if (effect_type == "DenoiseImage")
+		return new DenoiseImage();
 
 	else if (effect_type == "Wave")
 		return new Wave();
@@ -158,6 +189,9 @@ EffectBase* EffectInfo::CreateEffect(std::string effect_type) {
 
 	else if(effect_type == "ObjectDetection")
 		return new ObjectDetection();
+
+	else if(effect_type == "ObjectMask")
+		return new ObjectMask();
 	#endif
 
 	return NULL;
@@ -171,7 +205,10 @@ Json::Value EffectInfo::JsonValue() {
 
 	// Append info JSON from each supported effect
 	root.append(Alpha().JsonInfo());
+	root.append(AnalogTape().JsonInfo());
+	root.append(AudioVisualization().JsonInfo());
 	root.append(Bars().JsonInfo());
+	root.append(BeatSync().JsonInfo());
 	root.append(Blur().JsonInfo());
 	root.append(BorderReflectedMove().JsonInfo());
 	root.append(BorderReflectedRotation().JsonInfo());
@@ -181,12 +218,16 @@ Json::Value EffectInfo::JsonValue() {
 	root.append(ChromaKey().JsonInfo());
 	root.append(CircleMask().JsonInfo());
 	root.append(ColorAdjustment().JsonInfo());
+	root.append(ColorGrade().JsonInfo());
 	root.append(ColorMap().JsonInfo());
 	root.append(ColorShift().JsonInfo());
 	root.append(Crop().JsonInfo());
 	root.append(Deinterlace().JsonInfo());
+	root.append(Displace().JsonInfo());
 	root.append(Enhancement().JsonInfo());
 	root.append(Exposure().JsonInfo());
+	root.append(FilmGrain().JsonInfo());
+	root.append(Glow().JsonInfo());
 	root.append(Hue().JsonInfo());
 	root.append(LensFlare().JsonInfo());
 	root.append(LightAdjustment().JsonInfo());
@@ -195,9 +236,12 @@ Json::Value EffectInfo::JsonValue() {
 	root.append(Pixelate().JsonInfo());
 	root.append(Saturation().JsonInfo());
 	root.append(Sharpen().JsonInfo());
+	root.append(Shadow().JsonInfo());
 	root.append(Shift().JsonInfo());
 	root.append(SphericalProjection().JsonInfo());
 	root.append(SplitShift().JsonInfo());
+	root.append(Timer().JsonInfo());
+	root.append(DenoiseImage().JsonInfo());
 	root.append(Wave().JsonInfo());
 	root.append(Wipe().JsonInfo());
 	root.append(Zoom().JsonInfo());
@@ -218,6 +262,7 @@ Json::Value EffectInfo::JsonValue() {
 	root.append(Stabilizer().JsonInfo());	
 	root.append(Tracker().JsonInfo());
 	root.append(ObjectDetection().JsonInfo());
+	root.append(ObjectMask().JsonInfo());
 	#endif
 
 	// return JsonValue

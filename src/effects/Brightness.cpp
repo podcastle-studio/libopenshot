@@ -12,6 +12,11 @@
 
 #include "Brightness.h"
 #include "Exceptions.h"
+
+#include "EffectShaders.h"
+#include "image-processing-lib/src/Planner/EffectPlan.h"
+
+#include "skia/include/effects/SkRuntimeEffect.h"
 #include "./image-processing-lib/src/Effects/effects.h"
 
 using namespace openshot;
@@ -43,10 +48,65 @@ void Brightness::init_effect_details()
 	info.has_video = true;
 }
 
+// The contrast factor and brightness shift, computed once for a frame. Kept in
+// one place so the shader and the C++ cannot drift: the shader is only
+// bit-identical while it is handed exactly these two floats, rounded from double
+// at exactly this point.
+namespace {
+	struct BrightnessUniforms { float factor; float shift; };
+
+	// float, not double, on purpose: GetFrame() below narrows the keyframe values to
+	// float before handing them to applyBrightnessEffect(), which then widens them
+	// again for this arithmetic. Taking doubles here would skip that round trip and
+	// the shader would stop being bit-identical for no visible reason.
+	BrightnessUniforms brightnessUniforms(float brightness_value, float contrast_value)
+	{
+		return {
+			static_cast<float>((259.0 * (contrast_value + 255.0)) /
+							   (255.0 * (259.0 - contrast_value))),
+			static_cast<float>(255.0 * brightness_value),
+		};
+	}
+}
+
+// The shared SkSL source lives in image-processing-lib/shaders/ so the editor loads the
+// same bytes through CanvasKit; it is embedded here at build time. Read it there --
+// including why it is written the way it is.
+const char* Brightness::GpuShaderSource() const
+{
+	return openshot::shaders::kBrightness;
+}
+
+bool Brightness::SetGpuUniforms(SkRuntimeEffectBuilder& builder, int64_t frame_number,
+					int width, int height) const
+{
+	// Resolved by the shared planner (image-processing-lib/src/Planner), the same code the editor
+	// runs, so the two cannot disagree about what these values mean. It declines -- and the C++
+	// twin runs -- for every case the fragment does not cover.
+	Podcastle::Effects::EffectPlan plan;
+	PlanForFrame(frame_number, width, height, plan);
+	return BindPlan(builder, plan);
+}
+
+bool Brightness::PlanForFrame(int64_t frame_number, int width, int height,
+                             Podcastle::Effects::EffectPlan& plan) const
+{
+	// The planner's answer for ApplyOnGpu too, so an identity, a clear or a multi-pass plan runs
+	// on the GPU rather than declining to the C++.
+	plan = Podcastle::Effects::planEffect(
+		"BRIGHTNESS", {{"brightness", brightness.GetValue(frame_number)}, {"contrast", contrast.GetValue(frame_number)}}, width, height);
+	return true;
+}
+
 // This method is required for all derived classes of EffectBase, and returns a
 // modified openshot::Frame object
 std::shared_ptr<openshot::Frame> Brightness::GetFrame(std::shared_ptr<openshot::Frame> frame, int64_t frame_number)
 {
+	// The shader when there is a GPU to run it on, the C++ otherwise. ApplyOnGpu
+	// declining is the normal no-GPU answer, and the CPU path below is untouched.
+	if (ApplyOnGpu(frame, frame_number))
+		return frame;
+
 	// Get the frame's image
 	std::shared_ptr<QImage> frame_image = frame->GetImage();
 

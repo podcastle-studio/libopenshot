@@ -1,11 +1,16 @@
 #include "TextGlowRenderer.h"
 
+#include "../gpu/GpuDevice.h"
+#include "../gpu/GpuFrame.h"
+#include "../gpu/GpuOffscreen.h"
+#include "../gpu/GpuTelemetry.h"
 #include "../subtitle/SkiaRenderer.h"
 #include "TextAnimationRenderer.h"
 #include "TextClipRenderer.h"
 #include "TextDrawShared.h"
 #include "TextGlowShader.h"
 
+#include <skia/include/core/SkBitmap.h>
 #include <skia/include/core/SkCanvas.h>
 #include <skia/include/core/SkData.h>
 #include <skia/include/core/SkImageInfo.h>
@@ -26,26 +31,40 @@ namespace text {
 namespace {
 // Glow quality, read once from the environment for easy A/B tuning (no rebuild). Applied
 // UNIFORMLY to resting and in-motion frames so the glow never changes quality mid-clip (no
-// pop). Defaults are the chosen 0.40 / 24 balance; lowering trades softness for speed.
-//   OPENSHOT_GLOW_SCALE  silhouette/ray-march render scale (0.05..1.0, default GLOW_RENDER_SCALE)
-//   OPENSHOT_GLOW_STEPS  ray-march step cap (4..32, default 24)
-double glowScaleSetting() {
+// pop). Defaults are full resolution and uncapped steps on the GPU (see GLOW_RENDER_SCALE) and
+// the cost cap on the CPU (GLOW_CPU_RENDER_SCALE); lowering trades smoothness for speed.
+//   OPENSHOT_GLOW_SCALE  silhouette/ray-march render scale (0.05..1.0), both paths
+//   OPENSHOT_GLOW_STEPS  ray-march step cap (4..GLOW_MAX_STEPS), both paths
+double glowScaleEnv() {
     static const double v = [] {
         if (const char* e = std::getenv("OPENSHOT_GLOW_SCALE")) {
             try { double d = std::stod(e); if (d >= 0.05 && d <= 1.0) return d; } catch (...) {}
         }
-        return GLOW_RENDER_SCALE;
+        return 0.0;
     }();
     return v;
 }
-double glowStepCapSetting() {
+double glowStepCapEnv() {
     static const double v = [] {
         if (const char* e = std::getenv("OPENSHOT_GLOW_STEPS")) {
-            try { double d = std::stod(e); if (d >= 4.0 && d <= 32.0) return d; } catch (...) {}
+            try { double d = std::stod(e); if (d >= 4.0 && d <= GLOW_MAX_STEPS) return d; } catch (...) {}
         }
-        return 24.0;
+        return 0.0;
     }();
     return v;
+}
+// The CPU path is the one with no GPU device: with one, the ray-march runs on a GPU surface even
+// when the destination canvas is raster (paintGlowFromSilhouette).
+bool glowOnCpu() {
+    return !GpuDevice::Instance().available();
+}
+double glowScaleSetting() {
+    if (const double env = glowScaleEnv(); env > 0.0) return env;
+    return glowOnCpu() ? GLOW_CPU_RENDER_SCALE : GLOW_RENDER_SCALE;
+}
+double glowStepCapSetting() {
+    if (const double env = glowStepCapEnv(); env > 0.0) return env;
+    return static_cast<double>(glowOnCpu() ? GLOW_CPU_MAX_STEPS : GLOW_MAX_STEPS);
 }
 } // namespace
 
@@ -73,22 +92,61 @@ void TextGlowRenderer::drawGlowLayer(
     // reserve that spread so the silhouette captures them at the drawn positions.
     double maxLineLen = 0.0;
     if (!curved) {
-        for (const auto& line : layout.lines) maxLineLen = std::max(maxLineLen, static_cast<double>(utf8Length(line.text)));
+        for (const auto& line : layout.lines) maxLineLen = std::max(maxLineLen, static_cast<double>(clusterCount(line.text)));
     }
     const double spreadMargin = std::abs(extraLetterSpacing) * std::max(0.0, maxLineLen - 1.0);
 
     const GlowMargin geom = glowMarginFor(contentWidth, contentHeight, style, glow, spreadMargin);
     if (!geom.valid) return;
 
+    // A block-mode animation concats its transform onto the canvas before the block is drawn, so
+    // everything below — silhouette, ray-march, bloom — happens in block-local space and the result
+    // is composited with one drawImage under whatever transform the canvas carries. When the
+    // owner says the glow is frame-invariant and the per-frame inputs match, redrawing the stored
+    // image is the same draw call with the same image: bit-identical, and it skips the march that
+    // is ~91 % of the frame on the raster path.
+    if (cache && cache->matches(opacityMul, extraLetterSpacing, renderer->colorConvention())) {
+        compositeGlow(cache->image, geom.imageMargin, geom.rectPadX, geom.rectPadY,
+                      geom.renderScale, originX, originY);
+        return;
+    }
+
     const sk_sp<SkImage> image = renderGlowSilhouette(
         layout, style, glow.color, geom.imageMargin, geom.width, geom.height, geom.renderScale,
         curved, extraLetterSpacing);
     if (!image) return;
 
-    paintGlowFromSilhouette(
+    sk_sp<SkImage> combined = paintGlowFromSilhouette(
         image, glow, style, contentWidth, contentHeight,
-        geom.imageMargin, geom.rectPad, geom.width, geom.height, geom.renderScale,
+        geom.imageMargin, geom.rectPadX, geom.rectPadY, geom.width, geom.height, geom.renderScale,
         originX, originY, opacityMul);
+
+    // Null means the glow was composited straight out of a pooled GPU surface, which must not
+    // outlive this frame — drop whatever was held rather than serve it next frame.
+    if (cache) {
+        if (combined) cache->store(std::move(combined), opacityMul, extraLetterSpacing,
+                                   renderer->colorConvention());
+        else cache->reset();
+    }
+}
+
+void TextGlowRenderer::compositeGlow(const sk_sp<SkImage>& combined,
+                                     double imageMargin, double rectPadX, double rectPadY,
+                                     double renderScale, double originX, double originY) const {
+    SkCanvas* canvas = renderer->getCanvas();
+    if (!canvas || !combined) return;
+
+    // Upscale the combined glow onto the canvas (screen-blended, beneath the text). Working-surface
+    // (0,0) is (rectPadX, rectPadY) + imageMargin left/up of the content-box top-left, which maps
+    // to origin.
+    SkPaint up;
+    up.setBlendMode(SkBlendMode::kScreen);
+    canvas->save();
+    canvas->translate(static_cast<float>(originX - rectPadX - imageMargin),
+                      static_cast<float>(originY - rectPadY - imageMargin));
+    canvas->scale(static_cast<float>(1.0 / renderScale), static_cast<float>(1.0 / renderScale));
+    canvas->drawImage(combined.get(), 0, 0, SkSamplingOptions(SkFilterMode::kLinear), &up);
+    canvas->restore();
 }
 
 TextGlowRenderer::GlowMargin TextGlowRenderer::glowMarginFor(
@@ -100,13 +158,6 @@ TextGlowRenderer::GlowMargin TextGlowRenderer::glowMarginFor(
     const double offX = glow.sourceOffX * style.fontSize;
     const double offY = glow.sourceOffY * style.fontSize;
     const double offMax = std::max(std::abs(offX), std::abs(offY));
-    const double halfExtent = std::max(contentWidth, contentHeight) / 2.0;
-
-    // Beam reach — how far the god-rays extend past the glyphs. This ONLY widens the ray-march
-    // draw surface (the shader samples the silhouette via Decal outside its bounds); it must NOT
-    // size the silhouette image, or an animating rayLen / light-offset would re-rasterize the
-    // silhouette at a slightly different size each frame and make the text visibly jump ~1px.
-    const double rectPad = std::ceil(glow.rayLen * (halfExtent + offMax) + offMax);
 
     // Stable silhouette padding: stroke overhang + fixed beam-blur softening + block-mode spread +
     // per-unit overshoot (extraPad). Independent of rayLen / light offset, so the image is stable.
@@ -117,19 +168,46 @@ TextGlowRenderer::GlowMargin TextGlowRenderer::glowMarginFor(
     const double width  = std::ceil(contentWidth  + 2.0 * imageMargin);
     const double height = std::ceil(contentHeight + 2.0 * imageMargin);
 
+    // Beam reach — how far the god-rays extend past the glyphs. This ONLY widens the ray-march
+    // draw surface (the shader samples the silhouette via Decal outside its bounds); it must NOT
+    // size the silhouette image, or an animating rayLen / light-offset would re-rasterize the
+    // silhouette at a slightly different size each frame and make the text visibly jump ~1px.
+    //
+    // The march is a homothety about the light source: a silhouette pixel d away from the light
+    // on one axis lands (1 + rayLen) * d away on that SAME axis, so the reach is per-axis. Padding
+    // both axes with the longer one wastes the short one badly — a 920 x 101 block was padded by
+    // 608 px vertically where 158 px is the bound. The farthest silhouette pixel is the image
+    // corner: imageMargin + half the content + the light offset from centre. The beam blur is
+    // applied after the march, and the local bloom spreads from the image itself, so each needs
+    // its own 3 sigma of room.
+    //
+    // Clamped to what padded both axes before, so whichever axis bound the old value keeps it
+    // unchanged and no glow that fitted before can be truncated now.
+    const double legacyPad =
+        std::ceil(glow.rayLen * (std::max(contentWidth, contentHeight) / 2.0 + offMax) + offMax);
+    const double bloomPad = GLOW_BLOOM_BLUR_RATIO * style.fontSize * 3.0;
+    auto beamReach = [&](double contentExtent, double off) {
+        const double reach =
+            glow.rayLen * (imageMargin + contentExtent / 2.0 + std::abs(off)) + beamBlurSigma * 3.0;
+        return std::min(legacyPad, std::ceil(std::max(reach, bloomPad)));
+    };
+    const double rectPadX = beamReach(contentWidth, offX);
+    const double rectPadY = beamReach(contentHeight, offY);
+
     // Downscale (never skip) when the ray-march surface would exceed the texture cap, preserving
     // the full beam extent instead of truncating it. The front end's GLOW_MAX_TEXTURE_DIM cap is
     // in reference space (it renders at reference size and GPU-scales the sprite by sizeScale);
     // the backend renders at actual size, so scale the cap by sizeScale, bounded by a ceiling.
-    const double texCap = std::clamp(GLOW_MAX_TEXTURE_DIM * style.sizeScale,
-                                     static_cast<double>(GLOW_MAX_TEXTURE_DIM), 4096.0);
-    const double fullMaxDim = std::max(width, height) + 2.0 * rectPad;
+    // The floor is 4096 since the glow went to full resolution (2026-09-25): at 1080p the
+    // reference cap is ~1536 px, which would quietly put a wide glow back at a fraction of it.
+    const double texCap = std::clamp(GLOW_MAX_TEXTURE_DIM * style.sizeScale, 4096.0, 8192.0);
+    const double fullMaxDim = std::max(width + 2.0 * rectPadX, height + 2.0 * rectPadY);
     const double pixelMaxDim = fullMaxDim * glowScale_;
     const double downscale = pixelMaxDim > texCap ? texCap / pixelMaxDim : 1.0;
     const double renderScale = glowScale_ * downscale;
 
     return {
-        imageMargin, rectPad,
+        imageMargin, rectPadX, rectPadY,
         static_cast<int>(width), static_cast<int>(height),
         renderScale, true,
     };
@@ -147,9 +225,11 @@ sk_sp<SkImage> TextGlowRenderer::renderGlowSilhouette(
     const double s = renderScale;
     const int sw = std::max(1, static_cast<int>(std::ceil(width * s)));
     const int sh = std::max(1, static_cast<int>(std::ceil(height * s)));
-    sk_sp<SkSurface> surface = SkSurfaces::Raster(SkImageInfo::MakeN32Premul(sw, sh));
-    if (!surface) return nullptr;
-    SkCanvas* offscreen = surface->getCanvas();
+    // Match the destination canvas: on the GPU this both rasterises the glyphs there and saves
+    // paintGlowFromSilhouette the per-frame upload of the silhouette it uses as a shader child.
+    GpuOffscreen offscreenSurface = GpuOffscreen::Match(renderer->getCanvas(), sw, sh);
+    if (!offscreenSurface) return nullptr;
+    SkCanvas* offscreen = offscreenSurface.canvas();
     offscreen->clear(SK_ColorTRANSPARENT);
     offscreen->scale(static_cast<float>(s), static_cast<float>(s));  // draw full-coord glyphs downscaled
 
@@ -159,8 +239,13 @@ sk_sp<SkImage> TextGlowRenderer::renderGlowSilhouette(
             ? renderer->getPaint(subtitle::PaintProps{glowColor, 1.0, style.stroke->width, std::nullopt})
             : nullptr;
 
+        // The silhouette is what the glow shader smears, so an emoji has to contribute its shape
+        // in the GLOW colour — drawn in its own colours it would leak the emoji artwork into the
+        // bloom instead of lighting it.
+        const EmojiPass emojiSilhouette{EmojiPass::Kind::Silhouette};
         if (curved) {
-            forEachCurvedGlyph(renderer, *curved, imageMargin, imageMargin, style, strokePaint, *fillPaint);
+            forEachCurvedGlyph(renderer, *curved, imageMargin, imageMargin, style, strokePaint, *fillPaint,
+                               emojiSilhouette);
         } else {
             const double firstBaselineY = imageMargin + layout.firstLineAscent;
             for (size_t li = 0; li < layout.lines.size(); ++li) {
@@ -169,14 +254,16 @@ sk_sp<SkImage> TextGlowRenderer::renderGlowSilhouette(
                 const double baselineY = firstBaselineY + static_cast<double>(li) * layout.lineHeight;
                 const double x = imageMargin + getLineStartX(line, layout, style.alignment, extraLetterSpacing);
                 forEachLetter(line, x, extraLetterSpacing, [&](const std::string& letter, double letterX) {
-                    if (strokePaint) drawLetter(renderer, letter, letterX, baselineY, *strokePaint, style);
-                    drawLetter(renderer, letter, letterX, baselineY, *fillPaint, style);
+                    if (strokePaint) {
+                        drawLetter(renderer, letter, letterX, baselineY, *strokePaint, style, {EmojiPass::Kind::Skip});
+                    }
+                    drawLetter(renderer, letter, letterX, baselineY, *fillPaint, style, emojiSilhouette);
                 });
             }
         }
     });
 
-    return surface->makeImageSnapshot(SkIRect::MakeWH(sw, sh));
+    return offscreenSurface.snapshot(SkIRect::MakeWH(sw, sh));
 }
 
 void TextGlowRenderer::drawAnimatedGlowLayer(
@@ -204,9 +291,10 @@ void TextGlowRenderer::drawAnimatedGlowLayer(
     const double s = geom.renderScale;
     const int sw = std::max(1, static_cast<int>(std::ceil(geom.width * s)));
     const int sh = std::max(1, static_cast<int>(std::ceil(geom.height * s)));
-    sk_sp<SkSurface> surface = SkSurfaces::Raster(SkImageInfo::MakeN32Premul(sw, sh));
-    if (!surface) return;
-    SkCanvas* offscreen = surface->getCanvas();
+    // As in renderGlowSilhouette: the silhouette lives wherever the glow will be composited.
+    GpuOffscreen offscreenSurface = GpuOffscreen::Match(renderer->getCanvas(), sw, sh);
+    if (!offscreenSurface) return;
+    SkCanvas* offscreen = offscreenSurface.canvas();
     offscreen->clear(SK_ColorTRANSPARENT);
     offscreen->scale(static_cast<float>(s), static_cast<float>(s));  // draw full-coord glyphs downscaled
 
@@ -222,58 +310,71 @@ void TextGlowRenderer::drawAnimatedGlowLayer(
             applyUnitTransform(renderer, target, item, style.fontSize, animation);
             if (style.stroke.has_value()) {
                 withAnimatedPaint(renderer, {glow.color, 1.0, style.stroke->width}, item.opacity, 0.0,
-                    [&](const SkPaint& paint) { drawAnimatedUnit(renderer, item, 0.0, 0.0, paint, style); });
+                    [&](const SkPaint& paint) {
+                        drawAnimatedUnit(renderer, item, 0.0, 0.0, paint, style, {EmojiPass::Kind::Skip});
+                    });
             }
+            // As in the static silhouette: an emoji contributes its shape in the glow colour.
             withAnimatedPaint(renderer, {glow.color, 1.0, std::nullopt}, item.opacity, 0.0,
-                [&](const SkPaint& paint) { drawAnimatedUnit(renderer, item, 0.0, 0.0, paint, style); });
+                [&](const SkPaint& paint) {
+                    drawAnimatedUnit(renderer, item, 0.0, 0.0, paint, style, {EmojiPass::Kind::Silhouette});
+                });
             target->restore();
         }
         target->restore();
     });
 
-    sk_sp<SkImage> image = surface->makeImageSnapshot(SkIRect::MakeWH(sw, sh));
+    sk_sp<SkImage> image = offscreenSurface.snapshot(SkIRect::MakeWH(sw, sh));
     if (!image) return;
 
     paintGlowFromSilhouette(image, glow, style, contentWidth, contentHeight,
-                            geom.imageMargin, geom.rectPad, geom.width, geom.height, geom.renderScale,
+                            geom.imageMargin, geom.rectPadX, geom.rectPadY, geom.width, geom.height, geom.renderScale,
                             originX, originY, 1.0);
 }
 
-void TextGlowRenderer::paintGlowFromSilhouette(
+sk_sp<SkImage> TextGlowRenderer::paintGlowFromSilhouette(
     const sk_sp<SkImage>& image,
     const TextClipGlowStyle& glow,
     const TextClipPaintStyle& style,
     double contentWidth, double contentHeight,
-    double imageMargin, double rectPad, int width, int height, double renderScale,
+    double imageMargin, double rectPadX, double rectPadY, int width, int height, double renderScale,
     double originX, double originY,
     double opacityMul)
 {
     SkCanvas* canvas = renderer->getCanvas();
     SkRuntimeEffect* effect = getGlowEffect();
-    if (!canvas || !effect) return;
+    if (!canvas || !effect) return nullptr;
 
     // Work in the reduced glow resolution; the ray-march and blurs run on the small surface, and
     // light position / blur sigmas scale with it. The working surface is the silhouette image
-    // padded by the beam reach (rectPad) on every side so the god-rays have room to extend past
-    // the glyphs — the silhouette itself sits at (rectPad, rectPad) and is sampled via Decal, so
-    // everything outside it reads transparent.
+    // padded by the beam reach on every side so the god-rays have room to extend past the glyphs —
+    // the silhouette itself sits at (rectPadX, rectPadY) and is sampled via Decal, so everything
+    // outside it reads transparent. The reach is per-axis (see glowMarginFor).
     const double s = renderScale;
-    const double offset = rectPad;                    // full-coord offset of the silhouette
-    const double fullW = static_cast<double>(width)  + 2.0 * rectPad;
-    const double fullH = static_cast<double>(height) + 2.0 * rectPad;
+    const double fullW = static_cast<double>(width)  + 2.0 * rectPadX;
+    const double fullH = static_cast<double>(height) + 2.0 * rectPadY;
     const int gsw = std::max(1, static_cast<int>(std::ceil(fullW * s)));
     const int gsh = std::max(1, static_cast<int>(std::ceil(fullH * s)));
-    const float offsetPx = static_cast<float>(offset * s);
+    const float offsetPxX = static_cast<float>(rectPadX * s);
+    const float offsetPxY = static_cast<float>(rectPadY * s);
 
     const double beamBlurSigma = GLOW_BEAM_BLUR_RATIO * style.fontSize * s;
     const double bloomSigma    = GLOW_BLOOM_BLUR_RATIO * style.fontSize * s;
     const double offX = glow.sourceOffX * style.fontSize;
     const double offY = glow.sourceOffY * style.fontSize;
     // Light source in working-surface pixel space: the content-box top-left sits at
-    // (rectPad + imageMargin), so its centre is that plus half the content, plus the light offset.
-    const float lightX = static_cast<float>((offset + imageMargin + contentWidth / 2.0 + offX) * s);
-    const float lightY = static_cast<float>((offset + imageMargin + contentHeight / 2.0 + offY) * s);
-    const float steps = static_cast<float>(std::min(glowStepCap_, glowSteps(glow.rayLen)));
+    // (rectPadX + imageMargin, rectPadY + imageMargin), so its centre is that plus half the
+    // content, plus the light offset.
+    const float lightX = static_cast<float>((rectPadX + imageMargin + contentWidth / 2.0 + offX) * s);
+    const float lightY = static_cast<float>((rectPadY + imageMargin + contentHeight / 2.0 + offY) * s);
+    // The silhouette pixel farthest from the light: one of the image's corners, in working pixels.
+    const double imageLeft = offsetPxX, imageTop = offsetPxY;
+    const double imageRight = imageLeft + width * s, imageBottom = imageTop + height * s;
+    const double reachX = std::max(std::abs(lightX - imageLeft), std::abs(imageRight - lightX));
+    const double reachY = std::max(std::abs(lightY - imageTop), std::abs(imageBottom - lightY));
+    const double reach = std::sqrt(reachX * reachX + reachY * reachY);
+    const float steps = static_cast<float>(std::min(
+        glowStepCap_, glowSteps(glow.rayLen, reach, std::max(1.0, beamBlurSigma))));
 
     // Uniforms in SkSL declaration order: float2 lightPos, rayLen, steps, gain, falloff.
     const float uniforms[6] = {
@@ -282,24 +383,103 @@ void TextGlowRenderer::paintGlowFromSilhouette(
         static_cast<float>(GLOW_GAIN), static_cast<float>(GLOW_FALLOFF),
     };
 
+    // Choose the working surface BEFORE building the shader: on the GPU the shader's
+    // child has to be a texture-backed image, so this decides which image it is built
+    // from. The ray-march below is ~72 % of the worst benchmark scenario, and on the
+    // GPU it is the same SkSL over the same silhouette. With OPENSHOT_GPU off,
+    // GpuFrame::Create returns null and everything below runs exactly as it did
+    // before — the golden suite depends on that staying true.
+    //
+    // The ray-march earns a GPU surface even when the destination is raster, because it
+    // is worth a readback on its own. When the destination is GPU-backed too (step 2.4)
+    // that readback goes away and the glow is composited straight from VRAM.
+    const bool gpuDestination = GpuOffscreen::IsGpuBacked(canvas);
+    std::shared_ptr<GpuFrame> gpuFrame;
+    sk_sp<SkImage> source = image;
+    // The working surface's size follows the beam reach, and a keyframed rayLen or light offset
+    // moves that by a few pixels every frame. Pooled surfaces are keyed by exact size, so at 4K
+    // every frame of such a clip took a new ~40 MB surface and left the last one idle: 2.7 GB
+    // in 90 surfaces for one 45-clip export (2026-09-30). When the glow stays on the GPU, ask
+    // for the size rounded up to a coarse step and draw into the top-left gsw x gsh of it,
+    // clipped, so a clip's frames share a handful of surfaces. The pixels are the same: the
+    // clip bounds the blur layers exactly as the surface edge did, and only that rectangle is
+    // snapshotted. The readback path below keeps the exact size (it reads the whole surface).
+    int poolW = gsw, poolH = gsh;
+    if (gpuDestination && GpuDevice::Instance().available()) {
+        constexpr int kSurfaceStep = 256;
+        poolW = (gsw + kSurfaceStep - 1) / kSurfaceStep * kSurfaceStep;
+        poolH = (gsh + kSurfaceStep - 1) / kSurfaceStep * kSurfaceStep;
+    }
+    if (GpuDevice::Instance().available()) {
+        gpuFrame = GpuFrame::Create(poolW, poolH);
+        // The padded size can be what does not fit; the exact one may.
+        if (!gpuFrame && gpuDestination && (poolW != gsw || poolH != gsh)) {
+            gpuFrame = GpuFrame::Create(gsw, gsh);
+            if (gpuFrame) {
+                poolW = gsw;
+                poolH = gsh;
+            }
+        }
+    }
+    if (gpuFrame) {
+        // Graphite will not upload the raster silhouette on our behalf: a raster image
+        // used as a shader is dropped with "Couldn't convert SkImage to a
+        // Graphite-backed representation" and the draw vanishes. If the upload fails,
+        // give up the GPU surface rather than the glow. With a GPU destination the
+        // silhouette was drawn on the GPU already, and this is a no-op.
+        source = GpuFrame::ToTexture(image);
+        if (!source) {
+            gpuFrame.reset();
+            source = image;
+        }
+    }
+
     const SkSamplingOptions linear(SkFilterMode::kLinear);
-    // Shift the silhouette shader so the image lands at (rectPad, rectPad) in the working surface.
-    const SkMatrix childMat = SkMatrix::Translate(offsetPx, offsetPx);
-    sk_sp<SkShader> child = image->makeShader(SkTileMode::kDecal, SkTileMode::kDecal, linear, &childMat);
+    // Shift the silhouette shader so the image lands at (rectPadX, rectPadY) in the working surface.
+    const SkMatrix childMat = SkMatrix::Translate(offsetPxX, offsetPxY);
+    sk_sp<SkShader> child = source->makeShader(SkTileMode::kDecal, SkTileMode::kDecal, linear, &childMat);
     SkRuntimeEffect::ChildPtr children[1] = { SkRuntimeEffect::ChildPtr(child) };
     sk_sp<SkShader> shader = effect->makeShader(
         SkData::MakeWithCopy(uniforms, sizeof(uniforms)),
         SkSpan<const SkRuntimeEffect::ChildPtr>(children, 1));
-    if (!shader) return;
+    if (!shader) return nullptr;
 
     // Compose ray-march + local bloom into a small offscreen with their alphas baked.
     // Screen blending is associative, so screening this combined layer onto the canvas
     // matches drawing the ray then the bloom directly — but it lets us upscale only once.
     // (RGBA: this holds the COLOURED glow output, unlike the alpha-only silhouette.)
-    sk_sp<SkSurface> glowSurface = SkSurfaces::Raster(SkImageInfo::MakeN32Premul(gsw, gsh));
-    if (!glowSurface) return;
-    SkCanvas* gc = glowSurface->getCanvas();
+    sk_sp<SkSurface> glowSurface;
+    SkCanvas* gc = nullptr;
+    if (gpuFrame) {
+        gc = gpuFrame->canvas();
+    } else if (gpuDestination) {
+        // No pooled surface, and the silhouette is a GPU texture: a raster surface here drew
+        // nothing at all (a Graphite image cannot be a raster shader's child), so the glow
+        // vanished, uncounted, for any frame the pool was refused (review F2, 2026-10-01; the
+        // flicker that review chased was the shader's NaN, TextGlowShader.cpp). Ask the destination's own
+        // recorder for a surface; if even that is refused, say so instead of drawing the text
+        // without its glow.
+        glowSurface = canvas->makeSurface(canvas->imageInfo().makeWH(gsw, gsh));
+        if (!glowSurface) {
+            GpuCounters::Add(GpuCounters::AllocationFailure);
+            return nullptr;
+        }
+        gc = glowSurface->getCanvas();
+    } else {
+        glowSurface = SkSurfaces::Raster(SkImageInfo::MakeN32Premul(gsw, gsh));
+        if (!glowSurface) return nullptr;
+        gc = glowSurface->getCanvas();
+    }
+    if (!gc) return nullptr;
+    // Pooled GPU surfaces are recycled, so this clear is load-bearing there, not
+    // just tidiness as it is for a fresh raster surface.
     gc->clear(SK_ColorTRANSPARENT);
+    // Inside a save(): a clip at the base level would survive the surface's return to the
+    // pool and cut its next user down to this size (see GpuOffscreen::Match).
+    if (poolW != gsw || poolH != gsh) {
+        gc->save();
+        gc->clipRect(SkRect::MakeIWH(gsw, gsh));
+    }
 
     SkPaint rayPaint;                                 // base layer (onto transparent)
     rayPaint.setShader(shader);
@@ -316,22 +496,39 @@ void TextGlowRenderer::paintGlowFromSilhouette(
         bloomPaint.setAlphaf(static_cast<float>(clamp01(glow.opacity * GLOW_BLOOM_ALPHA * opacityMul)));
         bloomPaint.setImageFilter(SkImageFilters::Blur(
             bloomSigma, bloomSigma, SkTileMode::kDecal, nullptr));
-        gc->drawImage(image.get(), offsetPx, offsetPx, SkSamplingOptions(), &bloomPaint);
+        gc->drawImage(source.get(), offsetPxX, offsetPxY, SkSamplingOptions(), &bloomPaint);
     }
 
-    sk_sp<SkImage> combined = glowSurface->makeImageSnapshot();
-    if (!combined) return;
+    // Collect the finished glow. Back to the CPU only when the destination canvas is
+    // raster: reading into an N32 pixmap converts from the surface's kRGBA_8888, so the
+    // platform BGR swap that SkiaRenderer::parseColorString bakes into every colour stays
+    // consistent — it is a logical-colour convention, not a byte order, and survives the
+    // round trip.
+    sk_sp<SkImage> combined;
+    if (gpuFrame && gpuDestination) {
+        // Both sides are in VRAM: no round trip at all, just a texture draw below. The part
+        // that was drawn, not the whole (rounded-up) surface.
+        combined = (poolW != gsw || poolH != gsh)
+            ? gpuFrame->surface()->makeImageSnapshot(SkIRect::MakeWH(gsw, gsh))
+            : gpuFrame->snapshot();
+    } else if (gpuFrame) {
+        SkBitmap readback;
+        if (!readback.tryAllocN32Pixels(gsw, gsh)) return nullptr;
+        SkPixmap pixels;
+        if (!readback.peekPixels(&pixels)) return nullptr;
+        if (!gpuFrame->readback(pixels)) return nullptr;
+        readback.setImmutable();
+        combined = readback.asImage();
+    } else {
+        combined = glowSurface->makeImageSnapshot();
+    }
+    if (!combined) return nullptr;
 
-    // Upscale the combined glow onto the canvas (screen-blended, beneath the text). Working-surface
-    // (0,0) is (rectPad + imageMargin) left/up of the content-box top-left, which maps to origin.
-    SkPaint up;
-    up.setBlendMode(SkBlendMode::kScreen);
-    canvas->save();
-    canvas->translate(static_cast<float>(originX - offset - imageMargin),
-                      static_cast<float>(originY - offset - imageMargin));
-    canvas->scale(static_cast<float>(1.0 / s), static_cast<float>(1.0 / s));
-    canvas->drawImage(combined.get(), 0, 0, linear, &up);
-    canvas->restore();
+    compositeGlow(combined, imageMargin, rectPadX, rectPadY, s, originX, originY);
+
+    // Only a raster image is safe to hand back for caching: `gpuFrame`'s surface goes back to the
+    // pool when it dies here, so its snapshot must not outlive the frame.
+    return gpuFrame ? nullptr : combined;
 }
 
 } // namespace text

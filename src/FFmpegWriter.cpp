@@ -16,17 +16,27 @@
 #include <algorithm>
 #include <condition_variable>
 #include <exception>
+#include <memory>
 #include <iostream>
 #include <cmath>
 #include <ctime>
 #include <mutex>
 #include <queue>
+#include <sstream>
 #include <thread>
 #include <unistd.h>
 
 #include "FFmpegUtilities.h"
 
 #include "FFmpegWriter.h"
+#include "HardwareCodecLock.h"
+#include "gpu/CudaInterop.h"
+#include "gpu/GpuDevice.h"
+#include "gpu/GpuFrame.h"
+#include "gpu/GpuTelemetry.h"
+#include "gpu/GpuYuv.h"
+#include "Timeline.h"
+#include "skia/include/gpu/graphite/Surface.h"
 #include "Exceptions.h"
 #include "Frame.h"
 #include "OpenMPUtilities.h"
@@ -34,33 +44,68 @@
 #include "Timeline.h"
 #include "ZmqLogger.h"
 
+#if USE_HW_ACCEL && defined(OPENSHOT_HAVE_SKIA_GPU) && defined(OPENSHOT_HAVE_CUDA)
+extern "C" {
+#include <libavutil/hwcontext_cuda.h>
+}
+#endif
+
 using namespace openshot;
 
 namespace {
+
+#if IS_FFMPEG_3_2
+// Owns a packet from av_packet_alloc. AV_FREE_PACKET is av_packet_unref, which releases the
+// packet's data but not the AVPacket itself, so every packet that was only "freed" with it leaked
+// its 104-byte struct -- one per video and audio packet of every export (LeakSanitizer,
+// 2026-09-25). The early error returns leaked it too; an owner covers those.
+struct PacketFree { void operator()(AVPacket* p) const { av_packet_free(&p); } };
+using OwnedPacket = std::unique_ptr<AVPacket, PacketFree>;
+#endif
 
 /// Bounded blocking queue for pipeline: producer pushes frames, consumer pops in order.
 class BoundedFrameQueue {
 public:
 	explicit BoundedFrameQueue(size_t max_size) : max_size_(max_size) {}
 
-	void push(std::shared_ptr<Frame> frame) {
+	/// False once the queue has been aborted, so the producer knows to stop.
+	bool push(std::shared_ptr<Frame> frame) {
 		std::unique_lock<std::mutex> lock(mutex_);
-		not_full_.wait(lock, [this]() { return queue_.size() < max_size_; });
+		not_full_.wait(lock, [this]() { return aborted_ || queue_.size() < max_size_; });
+		if (aborted_)
+			return false;
 		queue_.push(std::move(frame));
 		not_empty_.notify_one();
+		return true;
 	}
 
 	std::shared_ptr<Frame> pop() {
 		std::unique_lock<std::mutex> lock(mutex_);
-		not_empty_.wait(lock, [this]() { return !queue_.empty(); });
+		not_empty_.wait(lock, [this]() { return aborted_ || !queue_.empty(); });
+		if (aborted_)
+			return nullptr;
 		auto frame = std::move(queue_.front());
 		queue_.pop();
 		not_full_.notify_one();
 		return frame;
 	}
 
+	/// Wake both ends and refuse any further work. Without this, a consumer that throws leaves the
+	/// producer blocked forever on a full queue nobody is draining -- which is reachable as soon as
+	/// anything inside the encode can fail, and now that a progress callback runs on the consumer
+	/// it is the normal way an export gets cancelled.
+	void abort() {
+		{
+			std::lock_guard<std::mutex> lock(mutex_);
+			aborted_ = true;
+		}
+		not_full_.notify_all();
+		not_empty_.notify_all();
+	}
+
 private:
 	const size_t max_size_;
+	bool aborted_ = false;
 	std::queue<std::shared_ptr<Frame>> queue_;
 	std::mutex mutex_;
 	std::condition_variable not_full_;
@@ -69,18 +114,14 @@ private:
 
 } // namespace
 
-// Multiplexer parameters temporary storage
-AVDictionary *mux_dict = NULL;
-
 #if USE_HW_ACCEL
-int hw_en_on = 1;					// Is set in UI
-int hw_en_supported = 0;	// Is set by FFmpegWriter
-AVPixelFormat hw_en_av_pix_fmt = AV_PIX_FMT_NONE;
-AVHWDeviceType hw_en_av_device_type = AV_HWDEVICE_TYPE_VAAPI;
-static AVBufferRef *hw_device_ctx = NULL;
-AVFrame *hw_frame = NULL;
+// hw_device_ctx, the frame sent to the encoder, the muxer dictionary and the hw_en_* flags used to
+// be globals here, shared by every writer in the process: two exports encoding at once overwrote
+// each other's frame and freed it twice (AddressSanitizer, 2026-09-30), and one writer's
+// WriteHeader freed the muxer dictionary while another's SetOption reallocated it -- heap
+// corruption at writer start-up (2026-10-01). All of them are members now.
 
-static int set_hwframe_ctx(AVCodecContext *ctx, AVBufferRef *hw_device_ctx, int64_t width, int64_t height)
+static int set_hwframe_ctx(AVCodecContext *ctx, AVBufferRef *hw_device_ctx, AVPixelFormat hw_en_av_pix_fmt, int64_t width, int64_t height)
 {
 	AVBufferRef *hw_frames_ref;
 	AVHWFramesContext *frames_ctx = NULL;
@@ -117,7 +158,7 @@ FFmpegWriter::FFmpegWriter(const std::string& path) :
 		initial_audio_input_frame_size(0), img_convert_ctx(NULL),
 		video_codec_ctx(NULL), audio_codec_ctx(NULL), is_writing(false), video_timestamp(0), audio_timestamp(0),
 		original_sample_rate(0), original_channels(0), avr(NULL), avr_planar(NULL), is_open(false), prepare_streams(false),
-		write_header(false), write_trailer(false), audio_encoder_buffer_size(0), audio_encoder_buffer(NULL) {
+		write_header(false), write_trailer(false), allow_b_frames(false), audio_encoder_buffer_size(0), audio_encoder_buffer(NULL) {
 
 	// Disable audio & video (so they can be independently enabled)
 	info.has_audio = false;
@@ -165,17 +206,18 @@ void FFmpegWriter::auto_detect_format() {
 	// Determine what format to use when encoding this output filename
 	oc->oformat = av_guess_format(NULL, path.c_str(), NULL);
 	if (oc->oformat == nullptr) {
-		throw InvalidFormat(
-			"Could not deduce output format from file extension.", path);
+		throw InvalidFormat("Could not deduce output format from file extension.", path);
 	}
 
-	// Update video codec name
-	if (oc->oformat->video_codec != AV_CODEC_ID_NONE && info.has_video)
-		info.vcodec = avcodec_find_encoder(oc->oformat->video_codec)->name;
-
-	// Update audio codec name
-	if (oc->oformat->audio_codec != AV_CODEC_ID_NONE && info.has_audio)
-		info.acodec = avcodec_find_encoder(oc->oformat->audio_codec)->name;
+	// Update video & audio codec name
+	if (oc->oformat->video_codec != AV_CODEC_ID_NONE && info.has_video) {
+		const AVCodec *vcodec = avcodec_find_encoder(oc->oformat->video_codec);
+		info.vcodec = vcodec ? vcodec->name : std::string();
+	}
+	if (oc->oformat->audio_codec != AV_CODEC_ID_NONE && info.has_audio) {
+		const AVCodec *acodec = avcodec_find_encoder(oc->oformat->audio_codec);
+		info.acodec = acodec ? acodec->name : std::string();
+	}
 }
 
 // initialize streams
@@ -370,6 +412,9 @@ void FFmpegWriter::SetAudioOptions(std::string codec, int sample_rate, int bit_r
 
 // Set custom options (some codecs accept additional params)
 void FFmpegWriter::SetOption(StreamType stream, std::string name, std::string value) {
+	if (stream == VIDEO_STREAM && name == "x264-params")
+		x264_params_ = value;   // read by EncodeColorSpace(); still applied below as before
+
 	// Declare codec context
 	AVCodecContext *c = NULL;
 	AVStream *st = NULL;
@@ -405,9 +450,37 @@ void FFmpegWriter::SetOption(StreamType stream, std::string name, std::string va
 	// Was option found?
 	if (option || (name == "g" || name == "qmin" || name == "qmax" || name == "max_b_frames" || name == "mb_decision" ||
 				   name == "level" || name == "profile" || name == "slices" || name == "rc_min_rate" || name == "rc_max_rate" ||
-				   name == "rc_buffer_size" || name == "crf" || name == "cqp" || name == "qp")) {
+				   name == "rc_buffer_size" || name == "crf" || name == "cqp" || name == "qp" || name == "allow_b_frames" ||
+				   name == "color_primaries" || name == "color_trc" || name == "colorspace" || name == "color_range")) {
 		// Check for specific named options
-		if (name == "g")
+
+		// Colour tagging lives on the codec context, not in priv_data, so it is the
+		// same call for every encoder. Without this the only way to tag an H.264
+		// stream was the x264-only "x264-params colorprim=...:transfer=...:colormatrix=...",
+		// which silently does nothing on h264_nvenc and every other encoder. Values are
+		// the FFmpeg names ("bt709", "smpte170m", "tv", "pc", ...); an unknown one is
+		// ignored rather than throwing, matching how a bad priv_data option behaves.
+		if (name == "color_primaries") {
+			const int v = av_color_primaries_from_name(value.c_str());
+			if (v >= 0) c->color_primaries = (AVColorPrimaries) v;
+		}
+
+		else if (name == "color_trc") {
+			const int v = av_color_transfer_from_name(value.c_str());
+			if (v >= 0) c->color_trc = (AVColorTransferCharacteristic) v;
+		}
+
+		else if (name == "colorspace") {
+			const int v = av_color_space_from_name(value.c_str());
+			if (v >= 0) c->colorspace = (AVColorSpace) v;
+		}
+
+		else if (name == "color_range") {
+			const int v = av_color_range_from_name(value.c_str());
+			if (v >= 0) c->color_range = (AVColorRange) v;
+		}
+
+		else if (name == "g")
 			// Set gop_size
 			convert >> c->gop_size;
 
@@ -422,6 +495,11 @@ void FFmpegWriter::SetOption(StreamType stream, std::string name, std::string va
 		else if (name == "max_b_frames")
 			// Maximum number of B-frames between non-B-frames
 			convert >> c->max_b_frames;
+
+		else if (name == "allow_b_frames")
+			// Preserve configured B-frames for codecs that support them.
+			// Values: 1/true/yes/on to enable, everything else disables.
+			allow_b_frames = (value == "1" || value == "true" || value == "yes" || value == "on");
 
 		else if (name == "mb_decision")
 			// Macroblock decision mode
@@ -454,7 +532,11 @@ void FFmpegWriter::SetOption(StreamType stream, std::string name, std::string va
 		else if (name == "cqp") {
 			// encode quality and special settings like lossless
 #if USE_HW_ACCEL
-			if (hw_en_on) {
+			// hw_en_on alone is not the question: it defaults to 1 and is only cleared when
+			// SetVideoOptions() was given a codec name, so a caller that never named one would
+			// take the hardware branch for a software encoder. hw_en_supported is the flag that
+			// actually says a hardware encoder was found.
+			if (hw_en_on && hw_en_supported) {
 				av_opt_set_int(c->priv_data, "qp", std::min(std::stoi(value),63), 0); // 0-63
 			} else
 #endif // USE_HW_ACCEL
@@ -502,17 +584,44 @@ void FFmpegWriter::SetOption(StreamType stream, std::string name, std::string va
 		} else if (name == "crf") {
 			// encode quality and special settings like lossless
 #if USE_HW_ACCEL
-			if (hw_en_on) {
-				double mbs = 15000000.0;
-				if (info.video_bit_rate > 0) {
-					if (info.video_bit_rate > 42) {
-						mbs = 380000.0;
+			if (hw_en_on && hw_en_supported) {
+				if (hw_en_av_device_type == AV_HWDEVICE_TYPE_CUDA) {
+					// NVENC has a constant-quality control of its own, so map onto it rather
+					// than discarding the value and inventing a bitrate from info.video_bit_rate
+					// — which is what the branch below does, and which left "crf" meaning
+					// "ignore the quality I asked for" on every hardware export.
+					//
+					// cq = crf + 10, clamped to NVENC's 0-51. Measured on podcast_pip,
+					// transitions_chain and subtitles_words at 1080p against a lossless
+					// reference (see doc/PERFORMANCE-BASELINE.md): the offset that puts NVENC
+					// on x264's rate-distortion point is +9 to +10 across crf 18, 23 and 28,
+					// and +10 is the better-centred one — file size lands within +1 % / +10 % /
+					// -14 % of libx264 at the same crf, for VMAF within 0.5 points.
+					//
+					// bit_rate must go to zero or NVENC treats cq as a cap on a bitrate target
+					// instead of the target itself. rc is only forced when the caller left it
+					// alone: "cq" is defined for VBR, but someone who explicitly asked for
+					// constqp meant it.
+					const int cq = std::max(0, std::min(std::stoi(value) + 10, 51));
+					int64_t rc = -1;
+					if (av_opt_get_int(c->priv_data, "rc", 0, &rc) < 0 || rc < 0)
+						av_opt_set(c->priv_data, "rc", "vbr", 0);
+					av_opt_set_double(c->priv_data, "cq", (double) cq, 0);
+					c->bit_rate = 0;
+				} else {
+					// Every other hardware encoder keeps the legacy bitrate estimate: none of
+					// them is testable here, and VAAPI in particular reads c->bit_rate below.
+					double mbs = 15000000.0;
+					if (info.video_bit_rate > 0) {
+						if (info.video_bit_rate > 42) {
+							mbs = 380000.0;
+						}
+						else {
+							mbs *= std::pow(0.912,info.video_bit_rate);
+						}
 					}
-					else {
-						mbs *= std::pow(0.912,info.video_bit_rate);
-					}
+					c->bit_rate = (int)(mbs);
 				}
-				c->bit_rate = (int)(mbs);
 			} else
 #endif // USE_HW_ACCEL
 			{
@@ -730,6 +839,38 @@ void FFmpegWriter::WriteFrame(std::shared_ptr<openshot::Frame> frame) {
 	last_frame = frame;
 }
 
+void FFmpegWriter::WriteFrameAt(std::shared_ptr<openshot::Frame> frame, int64_t frame_number) {
+	// Check for open reader (or throw exception)
+	if (!is_open)
+		throw WriterClosed("The FFmpegWriter is closed.  Call Open() before calling this method.", path);
+
+	if (frame_number < 1) {
+		frame_number = 1;
+	}
+
+	ZmqLogger::Instance()->AppendDebugMethod(
+		"FFmpegWriter::WriteFrameAt",
+		"frame->number", frame->number,
+		"output_frame_number", frame_number,
+		"is_writing", is_writing);
+
+	const int64_t previous_video_timestamp = video_timestamp;
+	if (info.has_video && video_st && video_codec_ctx) {
+		video_timestamp = av_rescale_q(
+			frame_number - 1,
+			av_make_q(info.fps.den, info.fps.num),
+			video_codec_ctx->time_base);
+	}
+
+	write_frame(frame);
+
+	if (!(info.has_video && video_st && video_codec_ctx)) {
+		video_timestamp = previous_video_timestamp;
+	}
+
+	last_frame = frame;
+}
+
 // Write all frames in the queue to the video file.
 void FFmpegWriter::write_frame(std::shared_ptr<Frame> frame) {
 	// Flip writing flag
@@ -757,9 +898,15 @@ void FFmpegWriter::write_frame(std::shared_ptr<Frame> frame) {
 				has_error_encoding_video = true;
 			}
 
-			// Deallocate buffer and AVFrame
-			av_freep(&(frame_final->data[0]));
-			AV_FREE_FRAME(&frame_final);
+			// Deallocate buffer and AVFrame. A device frame's data is a reference into the
+			// encoder's CUDA pool, which av_frame_free returns; av_freep would free a device
+			// pointer on the host heap.
+			if (device_frames.erase(frame_final)) {
+				av_frame_free(&frame_final);
+			} else {
+				av_freep(&(frame_final->data[0]));
+				AV_FREE_FRAME(&frame_final);
+			}
 			av_frames.erase(frame);
 		}
 	}
@@ -784,6 +931,10 @@ void FFmpegWriter::SetPipelineQueueCapacity(size_t capacity) {
 	pipeline_queue_capacity_ = (capacity == 0) ? 1 : capacity;
 }
 
+void FFmpegWriter::SetProgressCallback(std::function<void(int64_t, int64_t)> cb) {
+	progress_callback_ = std::move(cb);
+}
+
 // Write a block of frames from a reader
 void FFmpegWriter::WriteFrame(ReaderBase *reader, int64_t start, int64_t length) {
 	// When the reader is a Timeline, tell it whether clips should run audio time-mapping.
@@ -793,6 +944,18 @@ void FFmpegWriter::WriteFrame(ReaderBase *reader, int64_t start, int64_t length)
 	if (timeline)
 		timeline->SetRenderingAudio(skip_clip_audio_processing ? false : info.has_audio);
 
+	// NVENC on the interop's device: the Timeline converts each frame where it is instead of
+	// reading it back (W25). For this call only -- the hook captures this writer.
+	struct HookScope {
+		Timeline* timeline;
+		~HookScope() { if (timeline) timeline->SetGpuEncodeHook(nullptr); }
+	} hook_scope{nullptr};
+	if (timeline && encode_on_device && info.has_video && video_codec_ctx &&
+		video_codec_ctx->hw_frames_ctx) {
+		timeline->SetGpuEncodeHook([this](openshot::GpuFrame& gpu) { return EncodeOnDevice(gpu); });
+		hook_scope.timeline = timeline;
+	}
+
 	ZmqLogger::Instance()->AppendDebugMethod(
 		"FFmpegWriter::WriteFrame (from Reader)",
 		"start", start,
@@ -801,9 +964,14 @@ void FFmpegWriter::WriteFrame(ReaderBase *reader, int64_t start, int64_t length)
 
 	if (!pipeline_mode_) {
 		// Sequential: get frame then encode (original behavior)
+		const int64_t total = length - start + 1;
+		int64_t done = 0;
 		for (int64_t number = start; number <= length; number++) {
 			std::shared_ptr<Frame> f = reader->GetFrame(number);
 			WriteFrame(f);
+			++done;
+			if (progress_callback_)
+				progress_callback_(done, total);
 		}
 		return;
 	}
@@ -813,27 +981,36 @@ void FFmpegWriter::WriteFrame(ReaderBase *reader, int64_t start, int64_t length)
 	BoundedFrameQueue queue(queue_capacity);
 	std::exception_ptr consumer_exception;
 
-	std::thread consumer([this, &queue, &consumer_exception]() {
+	const int64_t total_frames = length - start + 1;
+	std::thread consumer([this, &queue, &consumer_exception, total_frames,
+						  block = openshot::GpuCounters::ThreadBlock()]() {
+		const openshot::GpuCounters::Inherit attribution(block);   // this export's counters
 		try {
+			int64_t written = 0;
 			for (;;) {
 				std::shared_ptr<Frame> f = queue.pop();
 				if (!f)
 					break;
 				WriteFrame(f);
+				++written;
+				if (progress_callback_)
+					progress_callback_(written, total_frames);
 			}
 		} catch (...) {
 			consumer_exception = std::current_exception();
+			queue.abort();   // or the producer blocks on a queue nobody is draining
 		}
 	});
 
 	try {
 		for (int64_t number = start; number <= length; number++) {
 			std::shared_ptr<Frame> f = reader->GetFrame(number);
-			queue.push(std::move(f));
+			if (!queue.push(std::move(f)))
+				break;      // consumer has gone; its exception is rethrown below
 		}
 		queue.push(nullptr);  // poison pill
 	} catch (...) {
-		queue.push(nullptr);  // unblock consumer
+		queue.abort();        // unblock the consumer
 		consumer.join();
 		throw;
 	}
@@ -851,6 +1028,13 @@ void FFmpegWriter::WriteTrailer() {
 
 	// Flush encoders (who sometimes hold on to frames)
 	flush_encoders();
+
+	if (info.has_audio && audio_st && audio_codec_ctx && audio_timestamp > 0) {
+		audio_st->duration = av_rescale_q(
+			audio_timestamp,
+			audio_codec_ctx->time_base,
+			audio_st->time_base);
+	}
 
 	/* write the trailer, if any. The trailer must be written
 	 * before you close the CodecContexts open when you wrote the
@@ -886,6 +1070,7 @@ void FFmpegWriter::flush_encoders() {
 
 #if IS_FFMPEG_3_2
 			AVPacket* pkt = av_packet_alloc();
+			const OwnedPacket owned_pkt(pkt);
 #else
 			AVPacket* pkt;
 			av_init_packet(pkt);
@@ -909,6 +1094,9 @@ void FFmpegWriter::flush_encoders() {
 					avcodec_flush_buffers(video_codec_ctx);
 					break;
 				}
+				if (pkt->duration <= 0) {
+					pkt->duration = av_rescale_q(1, av_make_q(info.fps.den, info.fps.num), video_codec_ctx->time_base);
+				}
 				av_packet_rescale_ts(pkt, video_codec_ctx->time_base, video_st->time_base);
 				pkt->stream_index = video_st->index;
 				error_code = av_interleaved_write_frame(oc, pkt);
@@ -931,6 +1119,9 @@ void FFmpegWriter::flush_encoders() {
 			}
 
 			// set the timestamp
+			if (pkt->duration <= 0) {
+				pkt->duration = av_rescale_q(1, av_make_q(info.fps.den, info.fps.num), video_codec_ctx->time_base);
+			}
 			av_packet_rescale_ts(pkt, video_codec_ctx->time_base, video_st->time_base);
 			pkt->stream_index = video_st->index;
 
@@ -962,10 +1153,61 @@ void FFmpegWriter::flush_encoders() {
 			int error_code = 0;
 			int got_packet = 0;
 #if IS_FFMPEG_3_2
+			if (!audio_codec_ctx->codec || !(audio_codec_ctx->codec->capabilities & AV_CODEC_CAP_DELAY)) {
+				av_packet_free(&pkt);
+				break;
+			}
 			error_code = avcodec_send_frame(audio_codec_ctx, NULL);
+			if (error_code < 0 && error_code != AVERROR_EOF) {
+				ZmqLogger::Instance()->AppendDebugMethod(
+					"FFmpegWriter::flush_encoders ERROR ["
+						+ av_err2string(error_code) + "]",
+					"error_code", error_code);
+			}
+			while (true) {
+				error_code = avcodec_receive_packet(audio_codec_ctx, pkt);
+				if (error_code == AVERROR(EAGAIN) || error_code == AVERROR_EOF) {
+					got_packet = 0;
+					break;
+				}
+				if (error_code < 0) {
+					ZmqLogger::Instance()->AppendDebugMethod(
+						"FFmpegWriter::flush_encoders ERROR ["
+							+ av_err2string(error_code) + "]",
+						"error_code", error_code);
+					got_packet = 0;
+					break;
+				}
+
+				got_packet = 1;
+				if (pkt->pts == AV_NOPTS_VALUE) {
+					pkt->pts = audio_timestamp;
+				}
+				if (pkt->dts == AV_NOPTS_VALUE) {
+					pkt->dts = pkt->pts;
+				}
+				if (pkt->duration <= 0) {
+					pkt->duration = audio_codec_ctx->frame_size > 0 ? audio_codec_ctx->frame_size : audio_input_frame_size;
+				}
+				const int64_t packet_duration = pkt->duration;
+				av_packet_rescale_ts(pkt, audio_codec_ctx->time_base, audio_st->time_base);
+				pkt->stream_index = audio_st->index;
+				pkt->flags |= AV_PKT_FLAG_KEY;
+
+				error_code = av_interleaved_write_frame(oc, pkt);
+				if (error_code < 0) {
+					ZmqLogger::Instance()->AppendDebugMethod(
+						"FFmpegWriter::flush_encoders ERROR ["
+							+ av_err2string(error_code) + "]",
+						"error_code", error_code);
+				}
+				audio_timestamp += packet_duration;
+				AV_FREE_PACKET(pkt);
+			}
+			av_packet_free(&pkt);
+			break;
 #else
 			error_code = avcodec_encode_audio2(audio_codec_ctx, pkt, NULL, &got_packet);
-#endif
 			if (error_code < 0) {
 				ZmqLogger::Instance()->AppendDebugMethod(
 					"FFmpegWriter::flush_encoders ERROR ["
@@ -979,6 +1221,9 @@ void FFmpegWriter::flush_encoders() {
 			// Since the PTS can change during encoding, set the value again.  This seems like a huge hack,
 			// but it fixes lots of PTS related issues when I do this.
 			pkt->pts = pkt->dts = audio_timestamp;
+			if (pkt->duration <= 0) {
+				pkt->duration = audio_codec_ctx->frame_size > 0 ? audio_codec_ctx->frame_size : audio_input_frame_size;
+			}
 
 			// Scale the PTS to the audio stream timebase (which is sometimes different than the codec's timebase)
 			av_packet_rescale_ts(pkt, audio_codec_ctx->time_base, audio_st->time_base);
@@ -1001,6 +1246,7 @@ void FFmpegWriter::flush_encoders() {
 
 			// deallocate memory for packet
 			AV_FREE_PACKET(pkt);
+#endif
 		}
 	}
 
@@ -1009,20 +1255,27 @@ void FFmpegWriter::flush_encoders() {
 // Close the video codec
 void FFmpegWriter::close_video(AVFormatContext *oc, AVStream *st)
 {
-#if USE_HW_ACCEL
-	if (hw_en_on && hw_en_supported) {
-		if (hw_device_ctx) {
-			av_buffer_unref(&hw_device_ctx);
-			hw_device_ctx = NULL;
-		}
-	}
-#endif // USE_HW_ACCEL
-
+	const std::lock_guard<std::mutex> codec_lock(HardwareCodecMutex());   // see open_video
 	// Free any previous memory allocations
 	if (video_codec_ctx != nullptr) {
 		AV_FREE_CONTEXT(video_codec_ctx);
 		av_free(video_codec_ctx);
 	}
+	video_codec_ctx = nullptr;
+#if USE_HW_ACCEL
+	// Unconditionally: the flags were process globals once, and a device kept because another
+	// writer's flags said "software" leaked it.
+	if (hw_device_ctx)
+		av_buffer_unref(&hw_device_ctx);
+	hw_device_ctx = NULL;
+#endif // USE_HW_ACCEL
+#if defined(OPENSHOT_HAVE_SKIA_GPU) && defined(OPENSHOT_HAVE_CUDA)
+	// After the encoder and its device: both may still have work queued on it.
+	if (encode_stream)
+		openshot::CudaInterop::Instance().destroyStream(encode_stream);
+	encode_stream = nullptr;
+	encode_on_device = false;
+#endif
 }
 
 // Close the audio codec
@@ -1054,6 +1307,7 @@ void FFmpegWriter::close_audio(AVFormatContext *oc, AVStream *st)
 		AV_FREE_CONTEXT(audio_codec_ctx);
 		av_free(audio_codec_ctx);
 	}
+	audio_codec_ctx = nullptr;
 }
 
 // Close the writer
@@ -1062,19 +1316,67 @@ void FFmpegWriter::Close() {
 	if (!write_trailer)
 		WriteTrailer();
 
-	// Close each codec
-	if (video_st)
-		close_video(oc, video_st);
-	if (audio_st)
-		close_audio(oc, audio_st);
+	release();
 
-	// Remove single software scaler
+	ZmqLogger::Instance()->AppendDebugMethod("FFmpegWriter::Close");
+}
+
+// A writer destroyed without Close() -- an export that threw half way -- used to keep its NVENC
+// session, CUDA device, hardware frame pool (~60 MB of VRAM at 1080p), output context and audio
+// buffers for the life of the process (review L1, 2026-10-01). Release them without a trailer:
+// the file is being abandoned.
+FFmpegWriter::~FFmpegWriter() {
+	try {
+		release();
+	} catch (...) {
+	}
+}
+
+// Free everything Open() and the constructor allocated. Safe to call on a writer that was never
+// opened, half opened, or already released.
+void FFmpegWriter::release() {
+	// Frames queued but never written (an export that threw); freed as write_frame does.
+	for (auto& entry : av_frames) {
+		AVFrame *frame_final = entry.second;
+		if (device_frames.erase(frame_final)) {
+			av_frame_free(&frame_final);
+		} else {
+			av_freep(&(frame_final->data[0]));
+			AV_FREE_FRAME(&frame_final);
+		}
+	}
+	av_frames.clear();
+	device_frames.clear();
+
+	// Close each codec
+	if (video_st || video_codec_ctx)
+		close_video(oc, video_st);
+	if (audio_st || audio_codec_ctx)
+		close_audio(oc, audio_st);
+	video_st = nullptr;
+	audio_st = nullptr;
+	encode_packed.reset();
+	last_frame.reset();
+	if (mux_dict)
+		av_dict_free(&mux_dict);
+
+	// Remove single software scaler. Nulled, or a writer opened again would reuse the freed one.
 	if (img_convert_ctx)
 		sws_freeContext(img_convert_ctx);
+	img_convert_ctx = nullptr;
 
-	if (!(oc->oformat->flags & AVFMT_NOFILE)) {
+	// The RGBA -> YUV conversion frames live for the whole export and were never freed: a frame's
+	// worth of YUV per export (3.1 MB at 1080p; LeakSanitizer, 2026-09-25). Neither frame owns its
+	// data through a buffer ref -- the source points at the Frame's pixels, the destination at
+	// persistent_dst_buffer -- so av_frame_free releases only the structs.
+	av_frame_free(&persistent_src_frame);
+	av_frame_free(&persistent_dst_frame);
+	av_freep(&persistent_dst_buffer);
+	persistent_dst_size = 0;
+
+	if (oc && !(oc->oformat->flags & AVFMT_NOFILE) && oc->pb) {
 		/* close the output file */
-		avio_close(oc->pb);
+		avio_closep(&oc->pb);
 	}
 
 	// Reset frame counters
@@ -1082,7 +1384,8 @@ void FFmpegWriter::Close() {
 	audio_timestamp = 0;
 
 	// Free the context which frees the streams too
-	avformat_free_context(oc);
+	if (oc)
+		avformat_free_context(oc);
 	oc = NULL;
 
 	// Close writer
@@ -1090,8 +1393,6 @@ void FFmpegWriter::Close() {
 	prepare_streams = false;
 	write_header = false;
 	write_trailer = false;
-
-	ZmqLogger::Instance()->AppendDebugMethod("FFmpegWriter::Close");
 }
 
 // Add an AVFrame to the cache
@@ -1153,6 +1454,9 @@ AVStream *FFmpegWriter::add_audio_stream() {
 	} else
 		// Set sample rate
 		c->sample_rate = info.sample_rate;
+
+	c->time_base = AVRational{1, c->sample_rate};
+	st->time_base = c->time_base;
 
 	uint64_t channel_layout = info.channel_layout;
 #if HAVE_CH_LAYOUT
@@ -1372,6 +1676,7 @@ AVStream *FFmpegWriter::add_video_stream() {
 	c->framerate = av_inv_q(c->time_base);
 #endif
 	st->avg_frame_rate = av_inv_q(c->time_base);
+	st->r_frame_rate = av_inv_q(c->time_base);
 	st->time_base.num = info.video_timebase.num;
 	st->time_base.den = info.video_timebase.den;
 
@@ -1385,6 +1690,18 @@ AVStream *FFmpegWriter::add_video_stream() {
 		 This does not happen with normal video, it just happens here as
 		 the motion of the chroma plane does not match the luma plane. */
 		c->mb_decision = 2;
+
+#if USE_HW_ACCEL
+	// NVENC defaults that belong with the other encoder defaults above, set here rather than in
+	// open_video() so that a SetOption() call — which happens after PrepareStreams() — still wins.
+	//
+	// Spatial AQ is off in FFmpeg by default and is close to free on NVENC. Measured on
+	// podcast_pip 1080p at cq 27: 3.09 MB at VMAF 98.17 with it, 3.49 MB at VMAF 97.69 without —
+	// smaller *and* better, so there is no trade to weigh.
+	if (hw_en_supported && hw_en_av_device_type == AV_HWDEVICE_TYPE_CUDA)
+		av_opt_set_int(c->priv_data, "spatial-aq", 1, 0);
+#endif // USE_HW_ACCEL
+
 	// some formats want stream headers to be separate
 	if (oc->oformat->flags & AVFMT_GLOBALHEADER)
 #if (LIBAVCODEC_VERSION_MAJOR >= 57)
@@ -1511,6 +1828,9 @@ void FFmpegWriter::open_audio(AVFormatContext *oc, AVStream *st) {
 
 // open video codec
 void FFmpegWriter::open_video(AVFormatContext *oc, AVStream *st) {
+	// One codec opens at a time, process-wide (HardwareCodecLock.h): four writers opening NVENC
+	// together aborted in malloc inside this function.
+	const std::lock_guard<std::mutex> codec_lock(HardwareCodecMutex());
 	const AVCodec *codec;
 	AV_GET_CODEC_FROM_STREAM(st, video_codec_ctx)
 
@@ -1553,7 +1873,38 @@ void FFmpegWriter::open_video(AVFormatContext *oc, AVStream *st) {
 			ZmqLogger::Instance()->AppendDebugMethod(
 				"Encode Device not present, using default");
 		}
-		if (av_hwdevice_ctx_create(&hw_device_ctx,
+		encode_on_device = false;
+#if defined(OPENSHOT_HAVE_SKIA_GPU) && defined(OPENSHOT_HAVE_CUDA)
+		// NVENC in the CUDA context that shares memory with the Vulkan device, so the
+		// compositor's frame can be converted and copied into its input without leaving the
+		// GPU (W25). The copies run on the interop's stream; NVENC's own stream waits on a
+		// per-frame event (waitForCopy). That stream is this writer's alone (2026-10-01): one
+		// stream for every encoder and decoder in the process let a finished export's codec
+		// teardown run with the other exports' work queued on it. Anything short of this is
+		// the ordinary device below and the readback path.
+		if (hw_en_av_device_type == AV_HWDEVICE_TYPE_CUDA &&
+			openshot::Settings::Instance()->GPU_ENCODE &&
+			openshot::GpuDevice::Instance().available() &&
+			openshot::CudaInterop::Instance().available()) {
+			AVBufferRef *device = av_hwdevice_ctx_alloc(AV_HWDEVICE_TYPE_CUDA);
+			if (device) {
+				auto *cuda = static_cast<AVCUDADeviceContext *>(
+					reinterpret_cast<AVHWDeviceContext *>(device->data)->hwctx);
+				openshot::CudaInterop &interop = openshot::CudaInterop::Instance();
+				cuda->cuda_ctx = static_cast<CUcontext>(interop.cudaContext());
+				if (!encode_stream)
+					encode_stream = interop.createStream();
+				cuda->stream = static_cast<CUstream>(encode_stream ? encode_stream : interop.cudaStream());
+				if (av_hwdevice_ctx_init(device) >= 0) {
+					hw_device_ctx = device;
+					encode_on_device = true;
+				} else {
+					av_buffer_unref(&device);
+				}
+			}
+		}
+#endif
+		if (!hw_device_ctx && av_hwdevice_ctx_create(&hw_device_ctx,
 				hw_en_av_device_type, adapter_ptr, NULL, 0) < 0)
 		{
 			ZmqLogger::Instance()->AppendDebugMethod(
@@ -1571,8 +1922,12 @@ void FFmpegWriter::open_video(AVFormatContext *oc, AVStream *st) {
 	if (!codec)
 		throw InvalidCodec("Could not find codec", path);
 
-	/* Force max_b_frames to 0 in some cases (i.e. for mjpeg image sequences */
-	if (video_codec_ctx->max_b_frames && video_codec_ctx->codec_id != AV_CODEC_ID_MPEG4 && video_codec_ctx->codec_id != AV_CODEC_ID_MPEG1VIDEO && video_codec_ctx->codec_id != AV_CODEC_ID_MPEG2VIDEO)
+	/* Legacy behavior: force max_b_frames to 0 for many codecs.
+	 * This can be disabled via SetOption(VIDEO_STREAM, "allow_b_frames", "1"). */
+	if (!allow_b_frames && video_codec_ctx->max_b_frames &&
+		video_codec_ctx->codec_id != AV_CODEC_ID_MPEG4 &&
+		video_codec_ctx->codec_id != AV_CODEC_ID_MPEG1VIDEO &&
+		video_codec_ctx->codec_id != AV_CODEC_ID_MPEG2VIDEO)
 		video_codec_ctx->max_b_frames = 0;
 
 	// Init options
@@ -1603,8 +1958,49 @@ void FFmpegWriter::open_video(AVFormatContext *oc, AVStream *st) {
 
 		switch (video_codec_ctx->codec_id) {
 			case AV_CODEC_ID_H264:
+				if (hw_en_av_device_type == AV_HWDEVICE_TYPE_CUDA) {
+					// NVENC is not VAAPI and none of the settings below suit it: it does
+					// support B-frames and High profile, its presets are p1..p7 (the
+					// legacy "slow" is far slower than anything we want by default), and
+					// "zerolatency" is not one of its tune values at all — it fails to
+					// parse and logs. Leaving those in place silently downgraded every
+					// h264_nvenc export to Main profile at preset=slow.
+					//
+					// Preset, tune and rate control are left exactly as the caller set
+					// them through SetOption (or at NVENC's own defaults when it set
+					// nothing); rate-control tuning proper is plan step 1.4. Profile is
+					// the exception: SetOption("profile") writes the integer
+					// AVCodecContext field, which NVENC ignores in favour of its private
+					// "profile" option, so there is no way to ask for High from outside.
+					av_opt_set(video_codec_ctx->priv_data, "profile", "high", 0);
+
+					// Use B-frames as references when there are B-frames to use. This has to
+					// sit here rather than with the other NVENC defaults in add_video_stream():
+					// the legacy max_b_frames reset above runs in between, and b_ref_mode is
+					// meaningless without B-frames. It is left alone if the caller set it.
+					//
+					// Note that max_b_frames is zero on this path unless the caller asked for
+					// SetOption("allow_b_frames", "1"), so today this is reached only then.
+					// Turning them on by default is a separate change and not an obvious one:
+					// measured on podcast_pip 1080p at matched cq it is a wash, -2.3 % file size
+					// for -0.08 VMAF.
+					//
+					// The clamp is not cosmetic. add_video_stream() sets max_b_frames = 10 and
+					// NVENC's H.264 limit is 4, so before this an "allow_b_frames" caller got
+					// "Max B-frames 10 exceed 4" out of avcodec_open2 and an InvalidCodec throw
+					// — the option was unusable on hardware encode rather than merely ignored.
+					if (video_codec_ctx->max_b_frames > 4)
+						video_codec_ctx->max_b_frames = 4;
+
+					if (video_codec_ctx->max_b_frames > 0) {
+						int64_t b_ref = -1;
+						if (av_opt_get_int(video_codec_ctx->priv_data, "b_ref_mode", 0, &b_ref) >= 0 && b_ref < 0)
+							av_opt_set(video_codec_ctx->priv_data, "b_ref_mode", "middle", 0);
+					}
+					break;
+				}
 				video_codec_ctx->max_b_frames = 0;  // At least this GPU doesn't support b-frames
-				video_codec_ctx->profile = FF_PROFILE_H264_BASELINE | FF_PROFILE_H264_CONSTRAINED;
+				video_codec_ctx->profile = AV_PROFILE_H264_CONSTRAINED_BASELINE;
 				av_opt_set(video_codec_ctx->priv_data, "preset", "slow", 0);
 				av_opt_set(video_codec_ctx->priv_data, "tune", "zerolatency", 0);
 				av_opt_set(video_codec_ctx->priv_data, "vprofile", "baseline", AV_OPT_SEARCH_CHILDREN);
@@ -1624,7 +2020,7 @@ void FFmpegWriter::open_video(AVFormatContext *oc, AVStream *st) {
 
 		// set hw_frames_ctx for encoder's AVCodecContext
 		int err;
-		if ((err = set_hwframe_ctx(video_codec_ctx, hw_device_ctx, info.width, info.height)) < 0)
+		if ((err = set_hwframe_ctx(video_codec_ctx, hw_device_ctx, hw_en_av_pix_fmt, info.width, info.height)) < 0)
 		{
 			ZmqLogger::Instance()->AppendDebugMethod(
 				"FFmpegWriter::open_video (set_hwframe_ctx) ERROR faled to set hwframe context",
@@ -1650,6 +2046,8 @@ void FFmpegWriter::open_video(AVFormatContext *oc, AVStream *st) {
 	if (avcodec_open2(video_codec_ctx, codec, &opts) < 0)
 		throw InvalidCodec("Could not open video codec", path);
 	AV_COPY_PARAMS_FROM_CONTEXT(st, video_codec_ctx);
+	st->avg_frame_rate = av_make_q(info.fps.num, info.fps.den);
+	st->r_frame_rate = av_make_q(info.fps.num, info.fps.den);
 
 	// Free options
 	av_dict_free(&opts);
@@ -1819,10 +2217,14 @@ void FFmpegWriter::write_audio_packets(bool is_final, std::shared_ptr<openshot::
 		if (!avr) {
 			avr = SWR_ALLOC();
 #if HAVE_CH_LAYOUT
-			AVChannelLayout in_chlayout;
-			AVChannelLayout out_chlayout;
-			av_channel_layout_from_mask(&in_chlayout, channel_layout_in_frame);
-			av_channel_layout_from_mask(&out_chlayout, info.channel_layout);
+			AVChannelLayout in_chlayout = ffmpeg_default_channel_layout(channels_in_frame);
+			AVChannelLayout out_chlayout = ffmpeg_default_channel_layout(info.channels);
+			if (channel_layout_in_frame > 0) {
+				av_channel_layout_from_mask(&in_chlayout, channel_layout_in_frame);
+			}
+			if (info.channel_layout > 0) {
+				av_channel_layout_from_mask(&out_chlayout, info.channel_layout);
+			}
 			av_opt_set_chlayout(avr, "in_chlayout", &in_chlayout, 0);
 			av_opt_set_chlayout(avr, "out_chlayout", &out_chlayout, 0);
 #else
@@ -1877,6 +2279,13 @@ void FFmpegWriter::write_audio_packets(bool is_final, std::shared_ptr<openshot::
 			"remaining_frame_samples", remaining_frame_samples);
 	}
 
+	if (is_final && remaining_frame_samples <= 0 && audio_input_position <= 0) {
+		if (all_queued_samples) {
+			av_freep(&all_queued_samples);
+		}
+		return;
+	}
+
 	// Loop until no more samples
 	while (remaining_frame_samples > 0 || is_final) {
 		// Get remaining samples needed for this packet
@@ -1916,6 +2325,7 @@ void FFmpegWriter::write_audio_packets(bool is_final, std::shared_ptr<openshot::
 		// Convert to planar (if needed by audio codec)
 		AVFrame *frame_final = AV_ALLOCATE_FRAME();
 		AV_RESET_FRAME(frame_final);
+		const int frame_nb_samples = audio_input_position / info.channels;
 		if (av_sample_fmt_is_planar(audio_codec_ctx->sample_fmt)) {
 			ZmqLogger::Instance()->AppendDebugMethod(
 				"FFmpegWriter::write_audio_packets (2nd resampling for Planar formats)",
@@ -1931,8 +2341,10 @@ void FFmpegWriter::write_audio_packets(bool is_final, std::shared_ptr<openshot::
 			if (!avr_planar) {
 				avr_planar = SWR_ALLOC();
 #if HAVE_CH_LAYOUT
-				AVChannelLayout layout;
-				av_channel_layout_from_mask(&layout, info.channel_layout);
+				AVChannelLayout layout = ffmpeg_default_channel_layout(info.channels);
+				if (info.channel_layout > 0) {
+					av_channel_layout_from_mask(&layout, info.channel_layout);
+				}
 				av_opt_set_chlayout(avr_planar, "in_chlayout", &layout, 0);
 				av_opt_set_chlayout(avr_planar, "out_chlayout", &layout, 0);
 #else
@@ -1971,7 +2383,7 @@ void FFmpegWriter::write_audio_packets(bool is_final, std::shared_ptr<openshot::
 				(uint8_t *) final_samples_planar, audio_encoder_buffer_size, 0);
 
 			// Create output frame (and allocate arrays)
-			frame_final->nb_samples = audio_input_frame_size;
+			frame_final->nb_samples = frame_nb_samples;
 #if HAVE_CH_LAYOUT
 			av_channel_layout_from_mask(&frame_final->ch_layout, info.channel_layout);
 #else
@@ -2001,10 +2413,12 @@ void FFmpegWriter::write_audio_packets(bool is_final, std::shared_ptr<openshot::
 			if (nb_samples > 0)
 				memcpy(samples, frame_final->data[0], copy_length);
 
-			// deallocate AVFrame
+			// deallocate AVFrame. Its data is final_samples_planar, not all_queued_samples: on the
+			// final call the first resampling did not run, so the queued array is still this
+			// function's to free at the end -- nulling it here leaked 384 KB per export
+			// (AVCODEC_MAX_AUDIO_FRAME_SIZE samples; LeakSanitizer, 2026-09-25).
 			av_freep(&(audio_frame->data[0]));
 			AV_FREE_FRAME(&audio_frame);
-			all_queued_samples = NULL; // this array cleared with above call
 
 			ZmqLogger::Instance()->AppendDebugMethod(
 				"FFmpegWriter::write_audio_packets (Successfully completed 2nd resampling for Planar formats)",
@@ -2024,7 +2438,14 @@ void FFmpegWriter::write_audio_packets(bool is_final, std::shared_ptr<openshot::
 				audio_input_position * av_get_bytes_per_sample(audio_codec_ctx->sample_fmt));
 
 			// Init the nb_samples property
-			frame_final->nb_samples = audio_input_frame_size;
+			frame_final->nb_samples = frame_nb_samples;
+			frame_final->format = audio_codec_ctx->sample_fmt;
+#if HAVE_CH_LAYOUT
+			av_channel_layout_copy(&frame_final->ch_layout, &audio_codec_ctx->ch_layout);
+#else
+			frame_final->channels = audio_codec_ctx->channels;
+			frame_final->channel_layout = audio_codec_ctx->channel_layout;
+#endif
 
 			// Fill the final_frame AVFrame with audio (non planar)
 #if HAVE_CH_LAYOUT
@@ -2043,12 +2464,13 @@ void FFmpegWriter::write_audio_packets(bool is_final, std::shared_ptr<openshot::
 		// Init the packet
 #if IS_FFMPEG_3_2
 		AVPacket* pkt = av_packet_alloc();
+		const OwnedPacket owned_pkt(pkt);
 #else
 		AVPacket* pkt;
 		av_init_packet(pkt);
-#endif
 		pkt->data = audio_encoder_buffer;
 		pkt->size = audio_encoder_buffer_size;
+#endif
 
 		// Set the packet's PTS prior to encoding
 		pkt->pts = pkt->dts = audio_timestamp;
@@ -2062,7 +2484,9 @@ void FFmpegWriter::write_audio_packets(bool is_final, std::shared_ptr<openshot::
 		int ret = 0;
 		int frame_finished = 0;
 		error_code = ret =  avcodec_send_frame(audio_codec_ctx, frame_final);
-		if (ret < 0 && ret !=  AVERROR(EINVAL) && ret != AVERROR_EOF) {
+		if (ret < 0 && ret !=  AVERROR(EINVAL) && ret != AVERROR_EOF
+				&& audio_codec_ctx->codec
+				&& (audio_codec_ctx->codec->capabilities & AV_CODEC_CAP_DELAY)) {
 			avcodec_send_frame(audio_codec_ctx, NULL);
 		}
 		else {
@@ -2072,7 +2496,6 @@ void FFmpegWriter::write_audio_packets(bool is_final, std::shared_ptr<openshot::
 			if (ret >= 0)
 				frame_finished = 1;
 			if(ret == AVERROR(EINVAL) || ret == AVERROR_EOF) {
-				avcodec_flush_buffers(audio_codec_ctx);
 				ret = 0;
 			}
 			if (ret >= 0) {
@@ -2094,6 +2517,9 @@ void FFmpegWriter::write_audio_packets(bool is_final, std::shared_ptr<openshot::
 			// Since the PTS can change during encoding, set the value again.  This seems like a huge hack,
 			// but it fixes lots of PTS related issues when I do this.
 			pkt->pts = pkt->dts = audio_timestamp;
+			if (pkt->duration <= 0) {
+				pkt->duration = frame_nb_samples;
+			}
 
 			// Scale the PTS to the audio stream timebase (which is sometimes different than the codec's timebase)
 			av_packet_rescale_ts(pkt, audio_codec_ctx->time_base, audio_st->time_base);
@@ -2167,8 +2593,117 @@ AVFrame *FFmpegWriter::allocate_avframe(PixelFormat pix_fmt, int width, int heig
 	return new_av_frame;
 }
 
+// What EncodeOnDevice hands the Timeline to attach: the NVENC input frame, and the event its copy
+// completes on (CudaInterop::copyToNV12), which the encoding thread waits on before sending it.
+struct FFmpegWriter::DeviceFrame {
+	AVFrame *frame = nullptr;
+	void *copied = nullptr;
+	~DeviceFrame() {
+		av_frame_free(&frame);
+#if defined(OPENSHOT_HAVE_SKIA_GPU) && defined(OPENSHOT_HAVE_CUDA)
+		openshot::CudaInterop::Instance().releaseCopy(copied);
+#endif
+	}
+};
+
+// The compositor's frame -> an NVENC input frame, on the GPU (W25). Runs on the Timeline's thread,
+// the only one the surface is usable on; what it returns is a CUDA frame, which is not bound to a
+// thread, so the pipeline's encoding thread can take it. Null means "read it back as before".
+std::shared_ptr<void> FFmpegWriter::EncodeOnDevice(openshot::GpuFrame& gpu) {
+#if defined(OPENSHOT_HAVE_SKIA_GPU) && defined(OPENSHOT_HAVE_CUDA)
+	if (!encode_on_device || !video_codec_ctx || !video_codec_ctx->hw_frames_ctx)
+		return nullptr;
+	// The readback path scales to the output size with swscale; this one does not scale.
+	if (gpu.width() != info.width || gpu.height() != info.height || (info.width & 1) ||
+		(info.height & 1))
+		return nullptr;
+	openshot::CudaInterop &interop = openshot::CudaInterop::Instance();
+	if (!interop.available())
+		return nullptr;
+
+	const int packed_height = info.height + info.height / 2;
+	if (!encode_packed || !encode_packed->valid() || encode_packed->width() != info.width ||
+		encode_packed->height() != packed_height) {
+		encode_packed = interop.createImage(info.width, packed_height, openshot::GpuImage::Format::R8);
+		if (!encode_packed)
+			return nullptr;
+	}
+
+	auto encoded = std::make_shared<DeviceFrame>();
+	encoded->frame = av_frame_alloc();
+	AVFrame *out = encoded->frame;
+	if (!out || av_hwframe_get_buffer(video_codec_ctx->hw_frames_ctx, out, 0) < 0)
+		return nullptr;
+
+	sk_sp<SkSurface> target = encode_packed->surface();
+	// AsImage, not a snapshot: the frame's surface is not drawn to again before this is
+	// submitted, so a copy of it would be a full-frame GPU copy for nothing.
+	sk_sp<SkImage> source = gpu.surface() ? SkSurfaces::AsImage(gpu.surface()) : nullptr;
+	if (!target || !source)
+		return nullptr;
+	// The same matrix the swscale path encodes with: the one the file is tagged with.
+	const int space = EncodeColorSpace();
+	const openshot::GpuYuv::Matrix matrix =
+		space == AVCOL_SPC_BT709 ? openshot::GpuYuv::Matrix::BT709
+		: (space == AVCOL_SPC_BT2020_NCL || space == AVCOL_SPC_BT2020_CL) ? openshot::GpuYuv::Matrix::BT2020
+		: openshot::GpuYuv::Matrix::BT601;
+	if (!openshot::GpuYuv::EncodeNV12(source, target->getCanvas(), info.width, info.height, matrix))
+		return nullptr;
+
+	unsigned long long wait = 0;
+	const bool must_wait = interop.takeDrawWait(*encode_packed, &wait);
+	const unsigned long long drawn = interop.drawnSemaphore(*encode_packed);
+	if (!openshot::GpuDevice::Instance().submit(false, must_wait ? &wait : nullptr,
+												must_wait ? 1 : 0, &drawn, 1, target.get()))
+		return nullptr;
+	if (!interop.copyToNV12(*encode_packed, out, &encoded->copied))
+		return nullptr;
+	openshot::GpuCounters::Add(openshot::GpuCounters::EncodedOnDevice);
+	return encoded;
+#else
+	(void) gpu;
+	return nullptr;
+#endif
+}
+
+// The AVColorSpace the output is tagged with, which is the matrix its RGB must be encoded with.
+// A file tagged BT.709 and encoded BT.601 -- what this writer did until 2026-09-23 -- plays back
+// with a systematic shift on everything born in RGB (text, graphics, images). Untagged output
+// keeps BT.601, swscale's default, so a caller that never asked for a colour space sees no change.
+int FFmpegWriter::EncodeColorSpace() const {
+	if (video_codec_ctx && video_codec_ctx->colorspace != AVCOL_SPC_UNSPECIFIED &&
+		video_codec_ctx->colorspace != AVCOL_SPC_RGB)
+		return video_codec_ctx->colorspace;
+	const std::string::size_type at = x264_params_.find("colormatrix=");
+	if (at != std::string::npos) {
+		const std::string rest = x264_params_.substr(at + 12);
+		const std::string name = rest.substr(0, rest.find(':'));
+		const int v = av_color_space_from_name(name.c_str());
+		if (v >= 0)
+			return v;
+	}
+	return AVCOL_SPC_UNSPECIFIED;
+}
+
 // process video frame
 void FFmpegWriter::process_video_packet(std::shared_ptr<Frame> frame) {
+	// Already converted and on the encoder's device (EncodeOnDevice, W25): nothing to do but
+	// queue it. The clone takes its own reference to the CUDA buffer.
+	if (frame->EncoderFrame()) {
+		auto *device = static_cast<DeviceFrame *>(frame->EncoderFrame().get());
+		// NVENC reads on this writer's stream; order it after this frame's copy, on the GPU.
+#if defined(OPENSHOT_HAVE_SKIA_GPU) && defined(OPENSHOT_HAVE_CUDA)
+		openshot::CudaInterop::Instance().waitForCopy(device->copied, encode_stream);
+		device->copied = nullptr;
+#endif
+		AVFrame *encoded = av_frame_clone(device->frame);
+		if (!encoded)
+			throw OutOfMemory("Could not reference an encoder-ready frame", path);
+		device_frames.insert(encoded);
+		add_avframe(frame, encoded);
+		return;
+	}
+
 	// Source dimensions (RGBA)
 	int src_w = frame->GetWidth();
 	int src_h = frame->GetHeight();
@@ -2251,7 +2786,21 @@ void FFmpegWriter::process_video_packet(std::shared_ptr<Frame> frame) {
 		);
 		if (!img_convert_ctx)
 			throw ErrorEncodingVideo("Could not initialize sws context", -1);
+
+		// Encode with the matrix the file is tagged with (see EncodeColorSpace). RGB in is full
+		// range; YUV out is limited, as every consumer of these files expects.
+		const int space = EncodeColorSpace();
+		const int sws_space = space == AVCOL_SPC_BT709 ? SWS_CS_ITU709
+							: (space == AVCOL_SPC_BT2020_NCL || space == AVCOL_SPC_BT2020_CL) ? SWS_CS_BT2020
+							: SWS_CS_DEFAULT;
+		if (sws_space != SWS_CS_DEFAULT) {
+			const int* coefficients = sws_getCoefficients(sws_space);
+			sws_setColorspaceDetails(img_convert_ctx, sws_getCoefficients(SWS_CS_DEFAULT), 1,
+									 coefficients, 0, 0, 1 << 16, 1 << 16);
+		}
 	}
+
+	openshot::GpuCounters::Add(openshot::GpuCounters::EncodedFromHost);
 
 	// Scale RGBA → dst_fmt into persistent_dst_buffer
 	sws_scale(
@@ -2317,6 +2866,7 @@ bool FFmpegWriter::write_video_packet(std::shared_ptr<Frame> frame, AVFrame *fra
 		// Raw video case.
 #if IS_FFMPEG_3_2
 		AVPacket* pkt = av_packet_alloc();
+		const OwnedPacket owned_pkt(pkt);
 #else
 		AVPacket* pkt;
 		av_init_packet(pkt);
@@ -2331,6 +2881,7 @@ bool FFmpegWriter::write_video_packet(std::shared_ptr<Frame> frame, AVFrame *fra
 
 		// Set PTS (in frames and scaled to the codec's timebase)
 		pkt->pts = video_timestamp;
+		pkt->duration = av_rescale_q(1, av_make_q(info.fps.den, info.fps.num), video_codec_ctx->time_base);
 
 		/* write the compressed frame in the media file */
 		int error_code = av_interleaved_write_frame(oc, pkt);
@@ -2350,6 +2901,7 @@ bool FFmpegWriter::write_video_packet(std::shared_ptr<Frame> frame, AVFrame *fra
 
 #if IS_FFMPEG_3_2
 		AVPacket* pkt = av_packet_alloc();
+		const OwnedPacket owned_pkt(pkt);
 #else
 		AVPacket* pkt;
 		av_init_packet(pkt);
@@ -2361,7 +2913,11 @@ bool FFmpegWriter::write_video_packet(std::shared_ptr<Frame> frame, AVFrame *fra
 		// Assign the initial AVFrame PTS from the frame counter
 		frame_final->pts = video_timestamp;
 #if USE_HW_ACCEL
-		if (hw_en_on && hw_en_supported) {
+		AVFrame *hw_frame = NULL;
+		if (hw_en_on && hw_en_supported && device_frames.count(frame_final)) {
+			// Already a CUDA frame from the encoder's own pool: send it as it is.
+			hw_frame = av_frame_clone(frame_final);
+		} else if (hw_en_on && hw_en_supported) {
 			if (!(hw_frame = av_frame_alloc())) {
 				std::clog << "Error code: av_hwframe_alloc\n";
 			}
@@ -2437,6 +2993,9 @@ bool FFmpegWriter::write_video_packet(std::shared_ptr<Frame> frame, AVFrame *fra
 		/* if zero size, it means the image was buffered */
 		if (error_code == 0 && got_packet_ptr) {
 			// set the timestamp
+			if (pkt->duration <= 0) {
+				pkt->duration = av_rescale_q(1, av_make_q(info.fps.den, info.fps.num), video_codec_ctx->time_base);
+			}
 			av_packet_rescale_ts(pkt, video_codec_ctx->time_base, video_st->time_base);
 			pkt->stream_index = video_st->index;
 
@@ -2508,6 +3067,7 @@ void FFmpegWriter::AddSphericalMetadata(const std::string& projection, float yaw
 	map->pitch = static_cast<int32_t>(pitch_deg * (1 << 16));
 	map->roll  = static_cast<int32_t>(roll_deg  * (1 << 16));
 
-	av_stream_add_side_data(video_st, AV_PKT_DATA_SPHERICAL, reinterpret_cast<uint8_t*>(map), sd_size);
+	ffmpeg_stream_add_side_data(video_st, AV_PKT_DATA_SPHERICAL,
+		reinterpret_cast<uint8_t*>(map), sd_size);
 #endif
 }

@@ -28,6 +28,7 @@ namespace subtitle { class SkiaRenderer; }
 namespace text {
 
 class TextGlowRenderer;
+struct GlowFrameCache;
 
 // ── Transforms ───────────────────────────────────────────────────────────────
 
@@ -94,9 +95,11 @@ void applyUnitTransform(subtitle::SkiaRenderer* renderer, SkCanvas* canvas,
                         const AnimatedUnitItem& item, double fontSize, const AnimationTransformFlags& flags);
 
 // Draw every glyph of the unit inside the already-applied unit transform. `dx`/`dy` shift the draw
-// origin (used by the drop-shadow pass).
+// origin (used by the drop-shadow pass). `emoji` says what this pass does with a colour-emoji
+// cluster (see subtitle::EmojiPass).
 void drawAnimatedUnit(subtitle::SkiaRenderer* renderer, const AnimatedUnitItem& item,
-                      double dx, double dy, const SkPaint& paint, const TextClipPaintStyle& style);
+                      double dx, double dy, const SkPaint& paint, const TextClipPaintStyle& style,
+                      const EmojiPass& emoji = {});
 
 // Tally the stagger units over the laid-out lines. Feeds the timing planner.
 UnitCounts countAnimationUnits(const TextClipLayout& layout);
@@ -214,13 +217,17 @@ void composeStatic3DIntoBlockFrame(TextClipAnimationFrame& frame, double tiltX, 
 
 // Draw one text frame: static when `animation` is nullopt, otherwise the same block content
 // under the frame's block- or unit-level transforms. Dispatches flat vs curved (paint.curveAngle).
+// `glowCache` is offered only by a caller that knows this clip's glow is frame-invariant apart
+// from the block's animated opacity and letter spacing (see GlowFrameCache); null disables it, and
+// only the BLOCK-mode paths ever use it — a unit-mode silhouette is rebuilt from moving glyphs.
 void renderTextFrame(
     const TextClipLayout& layout,
     const TextClipPaintStyle& paint,
     const std::optional<TextClipBackgroundStyle>& background,
     double originX, double originY, double scale,
     const std::optional<TextClipAnimationFrame>& animation,
-    subtitle::SkiaRenderer* renderer);
+    subtitle::SkiaRenderer* renderer,
+    GlowFrameCache* glowCache = nullptr);
 
 // Half-extents (from the content-box centre) the animation reaches across the whole timeline,
 // so the reader can size a fixed frame buffer that never clips the animated glyphs.

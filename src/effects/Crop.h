@@ -23,6 +23,8 @@
 #include <memory>
 #include <string>
 
+#include <QRectF>
+
 
 namespace openshot
 {
@@ -37,6 +39,17 @@ namespace openshot
 	class Crop : public EffectBase
 	{
 	private:
+		/// The GPU twin of GetFrame for a frame already on the GPU (Settings::GPU_CROP, W29).
+		std::shared_ptr<openshot::Frame> GetFrameOnGpu(std::shared_ptr<openshot::Frame> frame,
+		                                              const std::shared_ptr<openshot::GpuFrame>& source,
+		                                              int64_t frame_number);
+
+		/// A host-memory frame's pixels on the GPU: one upload, kept while the same QImage keeps
+		/// arriving (a still image clip, a shape). Null when it cannot be made.
+		std::shared_ptr<openshot::GpuFrame> HostSource(const std::shared_ptr<openshot::Frame>& frame);
+		struct HostSourceCache;
+		std::shared_ptr<HostSourceCache> host_source;
+
 		/// Init effect settings
 		void init_effect_details();
 
@@ -54,6 +67,9 @@ namespace openshot
 		/// Blank constructor, useful when using Json to load the effect properties
 		Crop();
 
+		/// Drops the host-source upload (EffectBase::ReleaseGpuResources).
+		void ReleaseGpuResources() override { host_source.reset(); }
+
 		/// Default constructor, which takes 4 curves. These curves animate the crop over time.
 		///
 		/// @param left The curve to adjust the left bar size (between 0 and 1)
@@ -64,6 +80,10 @@ namespace openshot
 		/// @param y y-offset of original image in output frame (-1.0 - 1.0)
 		Crop(Keyframe left, Keyframe top, Keyframe right, Keyframe bottom, Keyframe radius = 0,
 			 Keyframe x=0.0, Keyframe y=0.0);
+
+		/// The part of a @a width x @a height frame this crop leaves visible at @a frame_number:
+		/// the rect GetFrame paints into, with the same clamping. Empty when nothing is.
+		QRectF VisibleRect(int64_t frame_number, int width, int height) const;
 
 		/// @brief This method is required for all derived classes of ClipBase, and returns a
 		/// new openshot::Frame object. All Clip keyframes and effects are resolved into

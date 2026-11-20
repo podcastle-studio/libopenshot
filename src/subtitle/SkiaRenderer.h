@@ -1,5 +1,8 @@
 #pragma once
 
+#include "EmojiFont.h"
+#include "SubtitleTypes.h"
+
 #include <skia/include/core/SkCanvas.h>
 #include <skia/include/core/SkFont.h>
 #include <skia/include/core/SkPaint.h>
@@ -10,6 +13,7 @@
 #include <skia/include/core/SkTypeface.h>
 #include <skia/include/core/SkFontMgr.h>
 #include <skia/include/core/SkRRect.h>
+#include <skia/include/core/SkRect.h>
 
 #include <map>
 #include <memory>
@@ -73,7 +77,12 @@ struct PaintProps {
 
 class SkiaRenderer {
 public:
-    explicit SkiaRenderer(SkCanvas* canvas);
+    // Colour convention: see ColorConvention in SubtitleTypes.h for why the R/B swap
+    // belongs to the output boundary rather than to the canvas.
+    explicit SkiaRenderer(SkCanvas* canvas,
+                          ColorConvention convention = ColorConvention::QImageBytes);
+
+    ColorConvention colorConvention() const { return convention; }
 
     SkCanvas* getCanvas() const { return canvas; }
 
@@ -89,9 +98,28 @@ public:
 
     SkPaint* getPaint(const PaintProps& paintProps);
 
+    // ---- Colour emoji ----------------------------------------------------------------
+    // The process-wide colour-emoji face (may be unavailable; check available()).
+    static EmojiFont& emojiFont();
+
+    // Draw one emoji cluster, shaped, at the given baseline-left position. Returns false when
+    // the cluster cannot be drawn from the emoji face, so the caller falls back to the text font;
+    // returns true when the cluster was handled — including for EmojiPass::Kind::Skip, where
+    // "handled" means deliberately nothing drawn.
+    bool drawEmojiCluster(const std::string& cluster, float x, float y, const SkPaint& paint,
+                          float fontSize, const EmojiPass& pass);
+
+    // Advance width of a shaped emoji cluster, or 0 when the emoji face cannot draw it.
+    double measureEmojiCluster(const std::string& cluster, float fontSize);
+
+    // Vertical ink bounds of a shaped emoji cluster, in the same top/bottom convention as
+    // SkFont::getBounds. False when the emoji face cannot draw the cluster.
+    bool emojiClusterBounds(const std::string& cluster, float fontSize, SkRect* bounds);
+
     // Build a linear-gradient shader between two points. `stops` are (CSS colour, position 0..1)
-    // pairs, parsed with the same parseColorString used everywhere else (so the platform BGR
-    // swap stays consistent). Returns null if fewer than two stops. Clamps at both ends.
+    // pairs, parsed with the same parseColorString used everywhere else (so this renderer's
+    // colour convention stays consistent). Returns null if fewer than two stops. Clamps at
+    // both ends.
     sk_sp<SkShader> makeLinearGradientShader(
         const SkPoint pts[2],
         const std::vector<std::pair<std::string, double>>& stops);
@@ -140,10 +168,10 @@ public:
         if (count != 1) return false;
         const std::optional<SkPath> path = font.getPath(glyphs[0]);
         if (!path.has_value()) return false;
-        canvas->save();
-        canvas->translate(x, y);
-        canvas->drawPath(*path, paint);
-        canvas->restore();
+        // Offset the outline, not the canvas: a translated canvas moves the paint's shader with
+        // it, so a gradient fill (in block space) restarted at every glyph's origin and each
+        // letter showed only the colour at x=0 of the ramp (2026-09-30).
+        canvas->drawPath(path->makeOffset(x, y), paint);
         return true;
     }
 
@@ -167,6 +195,7 @@ private:
 
 private:
     SkCanvas* canvas;
+    ColorConvention convention;
     // Per-instance, cheap-to-rebuild caches. The expensive half — the fontconfig SkFontMgr
     // (~16 ms to build) and typeface resolution (opens/decompresses the font file and probes
     // glyph coverage) — lives in the process-wide SkiaFontResources cache in the .cpp, because

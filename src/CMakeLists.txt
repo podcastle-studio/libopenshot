@@ -46,6 +46,15 @@ add_feature_info("IWYU (include-what-you-use)" ENABLE_IWYU "Scan all source file
 
 # Main library sources
 set(OPENSHOT_SOURCES
+  gpu/CudaInterop.cpp
+  gpu/GpuDevice.cpp
+  gpu/GpuFrame.cpp
+  gpu/GpuOffscreen.cpp
+  gpu/GpuOverlay.cpp
+  gpu/GpuSurfacePool.cpp
+  gpu/GpuYuv.cpp
+  gpu/GpuTelemetry.cpp
+  subtitle/EmojiFont.cpp
   subtitle/Helpers.cpp
   subtitle/SkiaRenderer.cpp
   subtitle/SubtitleManager.cpp
@@ -63,10 +72,13 @@ set(OPENSHOT_SOURCES
   text/TextAnimationRenderer.cpp
   AudioBufferSource.cpp
   BlendModes.cpp
+  AudioRecorder.cpp
+  AnimatedCurve.cpp
   AudioDevices.cpp
   AudioReaderSource.cpp
   AudioResampler.cpp
   AudioWaveformer.cpp
+  CameraCaptureReader.cpp
   CacheBase.cpp
   CacheDisk.cpp
   CacheMemory.cpp
@@ -80,23 +92,28 @@ set(OPENSHOT_SOURCES
   DummyReader.cpp
   ReaderBase.cpp
   RendererBase.cpp
+  ScreenCaptureReader.cpp
   WriterBase.cpp
   EffectBase.cpp
+  GpuEffect.cpp
   EffectInfo.cpp
   FFmpegReader.cpp
   FFmpegWriter.cpp
   Fraction.cpp
   Frame.cpp
+  FrameScope.cpp
   FrameMapper.cpp
+  MemoryTrim.cpp
   Json.cpp
   KeyFrame.cpp
   OpenShotVersion.cpp
-  PlayerBase.cpp
   Point.cpp
   Profiles.cpp
+  # Filed under Qt/ but Widgets-free: a JUCE/std cache thread that AudioReaderSource
+  # calls into, so it is built even when ENABLE_PLAYER is OFF.
+  Qt/VideoCacheThread.cpp
   QtHtmlReader.cpp
   QtImageReader.cpp
-  QtPlayer.cpp
   QtTextReader.cpp
   Settings.cpp
   TimelineBase.cpp
@@ -105,16 +122,32 @@ set(OPENSHOT_SOURCES
   ZmqLogger.cpp
   )
 
+set(OPENSHOT_WAYLAND_CAPTURE FALSE)
+if(ENABLE_WAYLAND_CAPTURE AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  find_package(PkgConfig)
+  if(PkgConfig_FOUND)
+    pkg_check_modules(PC_PIPEWIRE QUIET IMPORTED_TARGET libpipewire-0.3)
+    pkg_check_modules(PC_LIBSPA QUIET IMPORTED_TARGET libspa-0.2)
+    pkg_check_modules(PC_GIO QUIET IMPORTED_TARGET gio-2.0)
+    pkg_check_modules(PC_GIO_UNIX QUIET IMPORTED_TARGET gio-unix-2.0)
+    if(PC_PIPEWIRE_FOUND AND PC_LIBSPA_FOUND AND PC_GIO_FOUND AND PC_GIO_UNIX_FOUND)
+      set(OPENSHOT_WAYLAND_CAPTURE TRUE)
+    endif()
+  endif()
+endif()
+
 # OpenCV related classes
 set(OPENSHOT_CV_SOURCES
   CVTracker.cpp
   CVStabilization.cpp
   ClipProcessingJobs.cpp
   CVObjectDetection.cpp
+  CVObjectMask.cpp
   TrackedObjectBBox.cpp
   effects/Stabilizer.cpp
   effects/Tracker.cpp
   effects/ObjectDetection.cpp
+  effects/ObjectMask.cpp
   effects/Outline.cpp
   ./sort_filter/sort.cpp
   ./sort_filter/Hungarian.cpp
@@ -123,7 +156,8 @@ set(OPENSHOT_CV_SOURCES
 # Video effects
 set(EFFECTS_SOURCES
   effects/image-processing-lib/src/Effects/effects.cpp
-  effects/image-processing-lib/src/ColorGrading/ColorGradingCore.cpp
+  effects/image-processing-lib/src/Effects/blurPasses.cpp
+  effects/image-processing-lib/src/Planner/EffectPlan.cpp
   effects/Alpha.cpp
   effects/CameraMovement.cpp
   effects/BorderReflectedRotation.cpp
@@ -136,24 +170,36 @@ set(EFFECTS_SOURCES
   effects/Wipe.cpp
   effects/Exposure.cpp
   effects/SplitShift.cpp
+  effects/AudioVisualization.cpp
   effects/Bars.cpp
+  effects/BeatSync.cpp
   effects/Blur.cpp
   effects/Brightness.cpp
   effects/Caption.cpp
   effects/ChromaKey.cpp
+  effects/ColorGrade.cpp
   effects/ColorMap.cpp
+  effects/ColorGradingCore.cpp
   effects/ColorShift.cpp
   effects/Crop.cpp
+  effects/CropHelpers.cpp
   effects/Deinterlace.cpp
+  effects/Displace.cpp
+  effects/FilmGrain.cpp
+  effects/Glow.cpp
   effects/Hue.cpp
   effects/LensFlare.cpp
+  effects/AnalogTape.cpp
   effects/Mask.cpp
   effects/Negate.cpp
   effects/Pixelate.cpp
   effects/Saturation.cpp
   effects/Sharpen.cpp
+  effects/Shadow.cpp
   effects/Shift.cpp
   effects/SphericalProjection.cpp
+  effects/Timer.cpp
+  effects/DenoiseImage.cpp
   effects/Wave.cpp
   audio_effects/STFT.cpp
   audio_effects/Noise.cpp
@@ -166,15 +212,20 @@ set(EFFECTS_SOURCES
   audio_effects/Robotization.cpp
   audio_effects/Whisperization.cpp)
 
-# Qt video player components
-set(QT_PLAYER_SOURCES
-  Qt/AudioPlaybackThread.cpp
-  Qt/PlayerDemo.cpp
-  Qt/PlayerPrivate.cpp
-  Qt/VideoCacheThread.cpp
-  Qt/VideoPlaybackThread.cpp
-  Qt/VideoRenderer.cpp
-  Qt/VideoRenderWidget.cpp)
+# Qt video player components. Desktop-only, and the sole reason this library needs Qt
+# Widgets, so a headless build (ENABLE_PLAYER=OFF) leaves all of it out.
+set(QT_PLAYER_SOURCES "")
+if (ENABLE_PLAYER)
+  set(QT_PLAYER_SOURCES
+    PlayerBase.cpp
+    QtPlayer.cpp
+    Qt/AudioPlaybackThread.cpp
+    Qt/PlayerDemo.cpp
+    Qt/PlayerPrivate.cpp
+    Qt/VideoPlaybackThread.cpp
+    Qt/VideoRenderer.cpp
+    Qt/VideoRenderWidget.cpp)
+endif()
 
 # Disable RPATH
 set(CMAKE_MACOSX_RPATH 0)
@@ -202,17 +253,43 @@ target_include_directories(openshot
   PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_BINARY_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/effects/image-processing-lib/src/ColorGrading
   PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
     $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}>
     $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/libopenshot>)
 
+if(OPENSHOT_WAYLAND_CAPTURE)
+  target_compile_definitions(openshot PRIVATE HAVE_WAYLAND_CAPTURE_PLUGIN=1)
+  target_link_libraries(openshot PRIVATE ${CMAKE_DL_LIBS})
+
+  # PipeWire is optional at runtime. Keeping it in a module prevents the
+  # dynamic loader from rejecting libopenshot on X11 or older Linux systems
+  # that do not provide the PipeWire 0.3 client ABI.
+  add_library(openshot-wayland-capture MODULE WaylandScreenCaptureReader.cpp)
+  target_include_directories(openshot-wayland-capture PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_BINARY_DIR})
+  target_link_libraries(openshot-wayland-capture PRIVATE
+    openshot
+    PkgConfig::PC_PIPEWIRE
+    PkgConfig::PC_LIBSPA
+    PkgConfig::PC_GIO
+    PkgConfig::PC_GIO_UNIX)
+  set_target_properties(openshot-wayland-capture PROPERTIES
+    BUILD_RPATH "$ORIGIN"
+    INSTALL_RPATH "$ORIGIN")
+endif()
+add_feature_info("Wayland screen capture" OPENSHOT_WAYLAND_CAPTURE "Use the optional xdg-desktop-portal and PipeWire capture module")
+
 ################# LIBOPENSHOT-AUDIO ###################
 # Find JUCE-based openshot Audio libraries
 if(NOT TARGET OpenShot::Audio)
   # Only load if necessary (not for integrated builds)
-  find_package(OpenShotAudio 0.4.0 REQUIRED)
+  # Upstream asks for 1.0.0, but their commit ffcff368 that raised it changes only version
+  # strings while tagging their own 1.0.0 release -- every upstream commit we merged was written
+  # against 0.6.0. Verified: compiles against the 0.6.0 headers and `ldd -r` on the built library
+  # reports no unresolved symbols. Keep 0.6.0 until we actually need a newer API.
+  find_package(OpenShotAudio 0.6.0 REQUIRED)
 endif()
 target_link_libraries(openshot PUBLIC OpenShot::Audio)
 
@@ -342,33 +419,87 @@ endif()
 ### Qt Toolkit
 ###
 
-set(_qt_components Core Gui Widgets)
+set(USE_QT6 "AUTO" CACHE STRING "Select Qt major version (AUTO, ON=Qt6, OFF=Qt5)")
+set_property(CACHE USE_QT6 PROPERTY STRINGS AUTO ON OFF)
+
+set(_qt_components Core Gui)
+
+# Widgets is needed only by the Qt player and by Frame::Display; a headless build has neither.
+if (ENABLE_PLAYER)
+  list(APPEND _qt_components Widgets)
+endif()
 
 # We also need QtSvg unless we have Resvg insetead.
 if(NOT HAVE_RESVG)
   list(APPEND _qt_components Svg)
 endif()
 
-find_package(Qt5 COMPONENTS ${_qt_components} REQUIRED)
+# Qt6 packages require newer CMake; gate support so older systems still build Qt5.
+set(_qt6_allowed TRUE)
+if(CMAKE_VERSION VERSION_LESS "3.16")
+  set(_qt6_allowed FALSE)
+  if(USE_QT6 STREQUAL "ON")
+    message(FATAL_ERROR "USE_QT6=ON requires CMake 3.16 or newer")
+  endif()
+endif()
+if(USE_QT6 STREQUAL "OFF")
+  set(_qt6_allowed FALSE)
+endif()
+
+set(_qt_selection "")
+if(USE_QT6 STREQUAL "ON")
+  if(NOT _qt6_allowed)
+    message(FATAL_ERROR "Qt6 support disabled by CMake version; set USE_QT6=OFF or upgrade CMake")
+  endif()
+  set(_qt_selection "Qt6")
+elseif(USE_QT6 STREQUAL "OFF")
+  set(_qt_selection "Qt5")
+else()
+  if(_qt6_allowed)
+    find_package(Qt6 COMPONENTS Core QUIET)
+    if(Qt6_FOUND)
+      set(_qt_selection "Qt6")
+    endif()
+  endif()
+  if(NOT _qt_selection)
+    set(_qt_selection "Qt5")
+  endif()
+endif()
+
+if(_qt_selection STREQUAL "Qt6")
+  set(QT_VERSION_MAJOR 6)
+else()
+  set(QT_VERSION_MAJOR 5)
+endif()
+
+find_package(Qt${QT_VERSION_MAJOR} COMPONENTS ${_qt_components} REQUIRED)
 
 foreach(_qt_comp IN LISTS _qt_components)
-  if(TARGET Qt5::${_qt_comp})
-    target_link_libraries(openshot PUBLIC Qt5::${_qt_comp})
+  if(TARGET Qt${QT_VERSION_MAJOR}::${_qt_comp})
+    target_link_libraries(openshot PUBLIC Qt${QT_VERSION_MAJOR}::${_qt_comp})
   endif()
 endforeach()
 
+if (ENABLE_PLAYER)
+  target_compile_definitions(openshot PUBLIC USE_QT_PLAYER=1)
+endif()
+
+string(REPLACE ";" ", " _qt_comp_list "${_qt_components}")
+message(STATUS "Found Qt${QT_VERSION_MAJOR} ${Qt${QT_VERSION_MAJOR}Core_VERSION_STRING} (components: ${_qt_comp_list})")
+message(STATUS "Qt video player: ${ENABLE_PLAYER}")
+
 # Keep track of Qt version, to embed in our version header
-set(QT_VERSION_STR ${Qt5Core_VERSION_STRING} CACHE STRING "Qt version linked with" FORCE)
+set(QT_VERSION_STR ${Qt${QT_VERSION_MAJOR}Core_VERSION_STRING} CACHE STRING "Qt version linked with" FORCE)
 mark_as_advanced(QT_VERSION_STR)
 
 ################### FFMPEG #####################
 # Find FFmpeg libraries (used for video encoding / decoding)
 find_package(FFmpeg REQUIRED
-  COMPONENTS avcodec avformat avutil swscale
-  OPTIONAL_COMPONENTS swresample avresample
+  COMPONENTS avcodec avdevice avformat avutil swscale
+  OPTIONAL_COMPONENTS swresample
 )
 
-set(all_comps avcodec avformat avutil swscale)
+set(all_comps avcodec avdevice avformat avutil swscale)
 set(version_comps avcodec avformat avutil)
 
 # Pick a resampler.  Prefer swresample if possible
@@ -376,6 +507,7 @@ if(TARGET FFmpeg::swresample)
   set(resample_lib swresample)
   set(USE_SW TRUE)
 else()
+  find_package(FFmpeg REQUIRED COMPONENTS avresample)
   set(resample_lib avresample)
   set(USE_SW FALSE)
 endif()
@@ -467,6 +599,37 @@ endif()
 ###
 ### Babl
 ###
+
+################## EFFECT SHADERS ###################
+# Two sources, one embedded header. image-processing-lib/shaders/ holds the prelude and the
+# transition fragments, shared verbatim with the web editor (CanvasKit) -- see that directory's
+# README. src/shaders/ holds the per-clip effects only the export runs. Embedding keeps the .sksl
+# files the single source without giving the export a runtime data-path dependency.
+set(OPENSHOT_SHADER_DIRS
+    "${CMAKE_CURRENT_SOURCE_DIR}/effects/image-processing-lib/shaders"
+    "${CMAKE_CURRENT_SOURCE_DIR}/shaders")
+set(OPENSHOT_SHADER_HEADER "${CMAKE_CURRENT_BINARY_DIR}/EffectShaders.h")
+set(OPENSHOT_SHADER_SOURCES "")
+foreach(dir ${OPENSHOT_SHADER_DIRS})
+  file(GLOB dir_sources "${dir}/*.sksl")
+  list(APPEND OPENSHOT_SHADER_SOURCES ${dir_sources})
+endforeach()
+string(REPLACE ";" "|" OPENSHOT_SHADER_DIRS_ARG "${OPENSHOT_SHADER_DIRS}")
+
+add_custom_command(
+  OUTPUT "${OPENSHOT_SHADER_HEADER}"
+  COMMAND ${CMAKE_COMMAND}
+          "-DSHADER_DIRS=${OPENSHOT_SHADER_DIRS_ARG}"
+          -DOUTPUT=${OPENSHOT_SHADER_HEADER}
+          -P ${PROJECT_SOURCE_DIR}/cmake/scripts/embed_shaders.cmake
+  DEPENDS ${OPENSHOT_SHADER_SOURCES} ${PROJECT_SOURCE_DIR}/cmake/scripts/embed_shaders.cmake
+  COMMENT "Embedding effect shaders"
+  VERBATIM)
+add_custom_target(openshot_shaders DEPENDS "${OPENSHOT_SHADER_HEADER}")
+add_dependencies(openshot openshot_shaders)
+# CMAKE_CURRENT_BINARY_DIR is already on openshot's include path (OpenShotVersion.h lives there),
+# so the generated header is reachable as "EffectShaders.h".
+target_sources(openshot PRIVATE "${OPENSHOT_SHADER_HEADER}")
 
 # Find babl library for colourspace conversion (used for advanced chroma keying
 find_package(babl)
@@ -568,6 +731,57 @@ endif()
 target_include_directories(openshot PUBLIC ${SKIA_INCLUDE_DIRS})
 target_link_libraries(openshot PUBLIC ${SKIA_LIBRARIES})
 
+# Colour-emoji cluster shaping (subtitle/EmojiFont.cpp) calls HarfBuzz. libskia.a bundles it and
+# exports the hb_* symbols, so only the declarations are needed (FindSkia.cmake locates them).
+# Without them the library still builds, but every multi-codepoint emoji (skin tone, ZWJ family,
+# flag, keycap) degrades to its base codepoint -- so that is opt-in, never silent.
+option(OPENSHOT_ALLOW_NO_HARFBUZZ "Build without HarfBuzz headers (multi-codepoint emoji degrade)" OFF)
+if(SKIA_HARFBUZZ_INCLUDE_DIR)
+  target_include_directories(openshot PRIVATE ${SKIA_HARFBUZZ_INCLUDE_DIR})
+  target_compile_definitions(openshot PRIVATE OPENSHOT_HAVE_HARFBUZZ=1)
+elseif(OPENSHOT_ALLOW_NO_HARFBUZZ)
+  message(WARNING "HarfBuzz headers not found: multi-codepoint emoji will fall back to their base codepoint")
+else()
+  message(FATAL_ERROR "HarfBuzz headers (hb.h) not found; apt install libharfbuzz-dev, "
+                      "or configure with -DOPENSHOT_ALLOW_NO_HARFBUZZ=ON to accept degraded emoji")
+endif()
+add_feature_info("Emoji shaping (HarfBuzz)" SKIA_HARFBUZZ_INCLUDE_DIR "colour-emoji sequences shaped as one glyph")
+
+# src/gpu compiles either way. With a Graphite-capable Skia (installed by
+# install_skia_gpu.sh, selected with -DSkia_ROOT=/usr/local/skia-gpu) it is the
+# real device; with the CPU Skia it is a stub whose GpuDevice::available() is
+# always false. GpuDevice is pimpl'd so its layout does not depend on this define
+# — src/*.h are installed, and a consumer compiling against them has no idea
+# which Skia the library was built with.
+if(SKIA_GPU_FOUND)
+  target_compile_definitions(openshot PRIVATE OPENSHOT_HAVE_SKIA_GPU=1)
+  # Skia's Vulkan backend resolves entry points through vkGetInstanceProcAddr, so
+  # the loader is a real link dependency of src/gpu.
+  find_package(Vulkan REQUIRED)
+  target_link_libraries(openshot PUBLIC ${Vulkan_LIBRARY})
+  message(STATUS "libopenshot: GPU support ON (Graphite/Vulkan)")
+
+  # src/gpu/CudaInterop needs the CUDA driver headers at build time and nothing
+  # at link time: the driver API is dlopen'd, so the library still loads on a
+  # machine with no NVIDIA driver. Without the headers the file compiles to the
+  # same stub it uses in a CPU-Skia build, and CudaInterop::available() is false.
+  find_path(CUDA_DRIVER_INCLUDE_DIR cuda.h
+    HINTS ENV CUDA_HOME ENV CUDA_PATH
+    PATHS /usr/local/cuda /usr/local/cuda-12 /opt/cuda /usr
+    PATH_SUFFIXES include)
+  if(CUDA_DRIVER_INCLUDE_DIR)
+    target_compile_definitions(openshot PRIVATE OPENSHOT_HAVE_CUDA=1)
+    target_include_directories(openshot SYSTEM PRIVATE ${CUDA_DRIVER_INCLUDE_DIR})
+    message(STATUS "libopenshot: CUDA interop ON (headers at ${CUDA_DRIVER_INCLUDE_DIR}, driver dlopen'd)")
+  else()
+    message(STATUS "libopenshot: CUDA interop OFF (no cuda.h); CudaInterop::available() is always false")
+  endif()
+  add_feature_info("CUDA interop" CUDA_DRIVER_INCLUDE_DIR "src/gpu/CudaInterop: NVDEC frames into Vulkan images")
+else()
+  message(STATUS "libopenshot: GPU support OFF (CPU Skia); GpuDevice::available() is always false")
+endif()
+add_feature_info("Skia GPU backend" SKIA_GPU_FOUND "src/gpu: Vulkan device + Graphite context")
+
 ###############  LINK LIBRARY  #################
 # Link remaining dependency libraries
 if(DEFINED PROFILER)
@@ -575,8 +789,8 @@ if(DEFINED PROFILER)
 endif()
 
 if(WIN32)
-  # Required for exception handling on Windows
-  target_link_libraries(openshot PUBLIC "imagehlp" "dbghelp" )
+  # Required for exception handling and DirectShow device enumeration on Windows
+  target_link_libraries(openshot PUBLIC "imagehlp" "dbghelp" "ole32" "oleaut32" "strmiids" "uuid" )
 endif()
 
 ###
@@ -590,6 +804,12 @@ install(TARGETS openshot
   LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
   RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
   INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/libopenshot)
+
+if(OPENSHOT_WAYLAND_CAPTURE)
+  install(TARGETS openshot-wayland-capture
+    COMPONENT runtime
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR})
+endif()
 
 install(DIRECTORY .
   COMPONENT devel

@@ -1,0 +1,31 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cmake --build *)",
+      "Bash(cmake -S *)",
+      "Bash(ninja *)",
+      "Bash(ctest *)",
+      "Bash(tools/golden.sh *)",
+      "Bash(tests/bench/media/generate.sh)",
+      "Bash(tests/golden/media/generate.sh)",
+      "Bash(cmake-build-release/tests/golden/openshot-golden *)",
+      "Bash(cmake-build-release/tests/bench/openshot-bench *)",
+      "Bash(git status:*)",
+      "Bash(git log:*)",
+      "Bash(git diff:*)",
+      "Bash(git show:*)",
+      "Bash(git branch:*)",
+      "Bash(git submodule status:*)",
+      "Bash(ls:*)",
+      "Bash(cat:*)",
+      "Bash(head:*)",
+      "Bash(tail:*)",
+      "Bash(wc:*)",
+      "Bash(grep:*)",
+      "Bash(rg:*)",
+      "Bash(ffprobe:*)",
+      "Bash(nvidia-smi:*)",
+      "Bash(vulkaninfo:*)"
+    ]
+  }
+}

@@ -22,6 +22,11 @@
 
 namespace openshot {
 
+enum SharpenMaskMode {
+    SHARPEN_MASK_LIMIT_TO_AREA = 0,
+    SHARPEN_MASK_VARY_STRENGTH = 1
+};
+
 /**
  * @brief This class provides a sharpen effect for video frames.
  *
@@ -32,6 +37,11 @@ class Sharpen : public EffectBase {
 private:
     /// Initialize the effect details
     void init_effect_details();
+
+protected:
+    bool UseCustomMaskBlend(int64_t frame_number) const override;
+    void ApplyCustomMaskBlend(std::shared_ptr<QImage> original_image, std::shared_ptr<QImage> effected_image,
+                              std::shared_ptr<QImage> mask_image, int64_t frame_number) const override;
 
 public:
     /// Amount of sharpening to apply (0 to 2)
@@ -48,6 +58,9 @@ public:
 
     /// Channel to apply sharpening to (0 = All, 1 = Luma, 2 = Chroma)
     int channel;
+
+    /// Mask behavior mode for this effect.
+    int mask_mode;
 
     /// Default constructor
     Sharpen();

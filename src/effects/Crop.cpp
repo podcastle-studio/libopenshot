@@ -14,6 +14,17 @@
 #include "Exceptions.h"
 #include "KeyFrame.h"
 #include "Settings.h"
+#include "gpu/GpuDevice.h"
+#include "gpu/GpuFrame.h"
+#include "skia/include/core/SkImageInfo.h"
+#include "skia/include/core/SkPixmap.h"
+#include "gpu/GpuTelemetry.h"
+#include "skia/include/core/SkCanvas.h"
+#include "skia/include/core/SkImage.h"
+#include "skia/include/core/SkPaint.h"
+#include "skia/include/core/SkRRect.h"
+#include "skia/include/core/SkRect.h"
+#include "skia/include/core/SkSamplingOptions.h"
 
 #include <QImage>
 #include <QPainter>
@@ -59,8 +70,57 @@ void Crop::init_effect_details()
 #include <QPainterPath>
 #include <algorithm> // std::clamp, std::min
 
+QRectF Crop::VisibleRect(int64_t frame_number, int width, int height) const
+{
+    const double left_value   = left.GetValue(frame_number);
+    const double top_value    = top.GetValue(frame_number);
+    const double right_value  = right.GetValue(frame_number);
+    const double bottom_value = bottom.GetValue(frame_number);
+    const double x_shift = x.GetValue(frame_number);
+    const double y_shift = y.GetValue(frame_number);
+
+    double pl = left_value * width, pt = top_value * height;
+    double pr = pl + std::max(0.0, 1.0 - left_value - right_value) * width;
+    double pb = pt + std::max(0.0, 1.0 - top_value - bottom_value) * height;
+    if (pr - pl <= 0.0 || pb - pt <= 0.0)
+        return QRectF();
+
+    // The copy rect is the paint rect shifted; where it leaves the image, the paint rect shrinks.
+    const double cl = pl + x_shift * width, ct = pt + y_shift * height;
+    const double cr = pr + x_shift * width, cb = pb + y_shift * height;
+    if (cl < 0) pl -= cl;
+    if (cr > width) pr -= cr - width;
+    if (ct < 0) pt -= ct;
+    if (cb > height) pb -= cb - height;
+    return QRectF(QPointF(pl, pt), QPointF(pr, pb));
+}
+
 std::shared_ptr<openshot::Frame> Crop::GetFrame(std::shared_ptr<openshot::Frame> frame, int64_t frame_number)
 {
+    // A frame already on the GPU is cropped there (Settings::GPU_CROP, W29), with the same
+    // geometry as below; GetImage() would read it back, and did, once per clip per frame.
+    if (!resize && Settings::Instance()->GPU_CROP && frame->IsGpuBacked() &&
+        frame->GpuBacking()->ownedByThisThread()) {
+        if (std::shared_ptr<openshot::Frame> done = GetFrameOnGpu(frame, frame->GpuBacking(), frame_number)) {
+            openshot::GpuCounters::Add(openshot::GpuCounters::CropOnGpu);
+            return done;
+        }
+    }
+    // A host-memory frame -- an image clip or a shape with a crop or rounded corners -- goes onto
+    // the GPU here rather than through QPainter (2026-09-24), so it composites without leaving it.
+    // A still hands over the same QImage every frame, and is uploaded once.
+    if (!resize && Settings::Instance()->GPU_CROP && !frame->IsGpuBacked() &&
+        openshot::GpuDevice::Instance().available()) {
+        if (std::shared_ptr<openshot::GpuFrame> uploaded = HostSource(frame)) {
+            if (std::shared_ptr<openshot::Frame> done = GetFrameOnGpu(frame, uploaded, frame_number)) {
+                openshot::GpuCounters::Add(openshot::GpuCounters::CropOnGpu);
+                return done;
+            }
+        }
+    }
+    if (frame->IsGpuBacked())
+        openshot::GpuCounters::Add(openshot::GpuCounters::CropReadback);   // GetImage() below
+
     // Get the frame's image
     std::shared_ptr<QImage> frame_image = frame->GetImage();
 
@@ -147,6 +207,98 @@ std::shared_ptr<openshot::Frame> Crop::GetFrame(std::shared_ptr<openshot::Frame>
     return frame;
 }
 
+// The QPainter path above, in Skia, on the frame's own GPU surface. Same rects, same clamping,
+// same radius; an antialiased rounded-rect clip and a bilinear draw between fractional rects,
+// which is what QPainter's Antialiasing + SmoothPixmapTransform do. Only the rasteriser differs.
+// Null means "use the QPainter path".
+struct Crop::HostSourceCache
+{
+    qint64 key = 0;
+    unsigned long long generation = 0;
+    std::shared_ptr<openshot::GpuFrame> surface;
+};
+
+std::shared_ptr<openshot::GpuFrame> Crop::HostSource(const std::shared_ptr<openshot::Frame>& frame)
+{
+    std::shared_ptr<QImage> image = frame->GetImage();
+    if (!image || image->isNull() || image->format() != QImage::Format_RGBA8888_Premultiplied)
+        return nullptr;
+    const unsigned long long generation = openshot::GpuDevice::Generation();
+    if (host_source && host_source->surface && host_source->key == image->cacheKey() &&
+        host_source->generation == generation && host_source->surface->ownedByThisThread()) {
+        openshot::GpuCounters::Add(openshot::GpuCounters::UploadCached);
+        return host_source->surface;
+    }
+    auto cache = std::make_shared<HostSourceCache>();
+    cache->key = image->cacheKey();
+    cache->generation = generation;
+    cache->surface = openshot::GpuFrame::Create(image->width(), image->height(), kRGBA_8888_SkColorType);
+    const SkPixmap pixels(SkImageInfo::Make(image->width(), image->height(), kRGBA_8888_SkColorType,
+                                            kPremul_SkAlphaType),
+                          image->constBits(), image->bytesPerLine());
+    if (!cache->surface || !cache->surface->upload(pixels))
+        return nullptr;
+    host_source = cache;
+    return cache->surface;
+}
+
+std::shared_ptr<openshot::Frame> Crop::GetFrameOnGpu(std::shared_ptr<openshot::Frame> frame,
+                                                     const std::shared_ptr<openshot::GpuFrame>& source,
+                                                     int64_t frame_number)
+{
+    const int w = source->width();
+    const int h = source->height();
+
+    const double left_value   = left.GetValue(frame_number);
+    const double top_value    = top.GetValue(frame_number);
+    const double right_value  = right.GetValue(frame_number);
+    const double bottom_value = bottom.GetValue(frame_number);
+    const double radius_value = radius.GetValue(frame_number);
+    const double x_shift = x.GetValue(frame_number);
+    const double y_shift = y.GetValue(frame_number);
+
+    double pl = left_value * w, pt = top_value * h;
+    double pr = pl + std::max(0.0, 1.0 - left_value - right_value) * w;
+    double pb = pt + std::max(0.0, 1.0 - top_value - bottom_value) * h;
+
+    std::shared_ptr<openshot::GpuFrame> out = openshot::GpuFrame::Create(w, h);
+    if (!out)
+        return nullptr;
+    SkCanvas* canvas = out->canvas();
+    canvas->clear(SK_ColorTRANSPARENT);   // a pooled surface still holds its last frame
+
+    if (pr - pl > 0.0 && pb - pt > 0.0) {
+        double cl = pl + x_shift * w, ct = pt + y_shift * h;
+        double cr = pr + x_shift * w, cb = pb + y_shift * h;
+        if (cl < 0) { pl -= cl; cl = 0; }
+        if (cr > w) { pr -= cr - w; cr = w; }
+        if (ct < 0) { pt -= ct; ct = 0; }
+        if (cb > h) { pb -= cb - h; cb = h; }
+
+        const SkRect paint_r = SkRect::MakeLTRB(float(pl), float(pt), float(pr), float(pb));
+        const SkRect copy_r = SkRect::MakeLTRB(float(cl), float(ct), float(cr), float(cb));
+        const double min_dim = std::min(pr - pl, pb - pt);
+        const double r_px = std::clamp(radius_value, 0.0, 1.0) * (min_dim * 0.5);
+
+        sk_sp<SkImage> image = source->snapshot();
+        if (!image)
+            return nullptr;
+        canvas->save();
+        if (r_px > 0.0)
+            canvas->clipRRect(SkRRect::MakeRectXY(paint_r, float(r_px), float(r_px)), true);
+        SkPaint paint;
+        paint.setAntiAlias(true);
+        canvas->drawImageRect(image, copy_r, paint_r,
+                              SkSamplingOptions(SkFilterMode::kLinear, SkMipmapMode::kNone),
+                              &paint, SkCanvas::kStrict_SrcRectConstraint);
+        canvas->restore();
+    }
+    // else fully cropped: the transparent frame, as the QPainter path emits.
+
+    frame->AttachGpuFrame(out);
+    return frame;
+}
+
 // Generate JSON string of this object
 std::string Crop::Json() const {
 
@@ -219,10 +371,10 @@ std::string Crop::PropertiesJSON(int64_t requested_frame) const {
 	Json::Value root = BasePropertiesJSON(requested_frame);
 
 	// Keyframes
-	root["left"] = add_property_json("Left Size", left.GetValue(requested_frame), "float", "", &left, 0.0, 1.0, false, requested_frame);
-	root["top"] = add_property_json("Top Size", top.GetValue(requested_frame), "float", "", &top, 0.0, 1.0, false, requested_frame);
-	root["right"] = add_property_json("Right Size", right.GetValue(requested_frame), "float", "", &right, 0.0, 1.0, false, requested_frame);
-	root["bottom"] = add_property_json("Bottom Size", bottom.GetValue(requested_frame), "float", "", &bottom, 0.0, 1.0, false, requested_frame);
+	root["left"] = add_property_json("Margin: Left", left.GetValue(requested_frame), "float", "", &left, 0.0, 1.0, false, requested_frame);
+	root["top"] = add_property_json("Margin: Top", top.GetValue(requested_frame), "float", "", &top, 0.0, 1.0, false, requested_frame);
+	root["right"] = add_property_json("Margin: Right", right.GetValue(requested_frame), "float", "", &right, 0.0, 1.0, false, requested_frame);
+	root["bottom"] = add_property_json("Margin: Bottom", bottom.GetValue(requested_frame), "float", "", &bottom, 0.0, 1.0, false, requested_frame);
 	root["x"] = add_property_json("X Offset", x.GetValue(requested_frame), "float", "", &x, -1.0, 1.0, false, requested_frame);
 	root["y"] = add_property_json("Y Offset", y.GetValue(requested_frame), "float", "", &y, -1.0, 1.0, false, requested_frame);
 

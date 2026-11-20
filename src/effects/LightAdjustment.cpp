@@ -10,6 +10,18 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
 #include "LightAdjustment.h"
+
+#include "../gpu/GpuDevice.h"
+#include "../gpu/GpuFrame.h"
+
+#include "skia/include/core/SkImageInfo.h"
+#include "skia/include/core/SkPixmap.h"
+#include "skia/include/core/SkSamplingOptions.h"
+#include "skia/include/core/SkShader.h"
+#include "skia/include/core/SkTileMode.h"
+#include "EffectShaders.h"
+
+#include "skia/include/effects/SkRuntimeEffect.h"
 #include "Exceptions.h"
 #include <QImage>
 #include <QRgb>
@@ -121,13 +133,14 @@ void applyHighlights(double& r, double& g, double& b, const double highlights_va
     if (lum > 0.6) {
         double mask = (lum - 0.6) / 0.4;
 
+        // 0.2 and 0.45 are the editor's (light.frag); see toneCurve() for why they must agree.
         if (amount < 0) {
-            double reduction = std::abs(amount) * mask * 0.5;
+            double reduction = std::abs(amount) * mask * 0.2;
             r *= (1 - reduction);
             g *= (1 - reduction);
             b *= (1 - reduction);
         } else {
-            double boost = amount * mask * 0.3;
+            double boost = amount * mask * 0.45;
             r += (255 - r) * boost;
             g += (255 - g) * boost;
             b += (255 - b) * boost;
@@ -186,9 +199,12 @@ double LightAdjustment::toneCurve(double value, double contrast) const
             output = 1 - (1 - midpoint) * std::pow((1 - normalized) / (1 - midpoint), 1 + amount);
         }
     } else if (contrast < 0) {
-        // Inverse S-curve for negative contrast
+        // Inverse S-curve for negative contrast, at half strength. The web editor previews this
+        // filter with its own GLSL (podcastle-frontend light.frag), so the export is right only
+        // when it draws the same curve: without the 0.5, contrast -1 flattens the whole middle of
+        // the range to grey and turns skin pink. tests/ColorFilters.cpp holds both to the editor.
         const double amount = -contrast;
-        output = normalized + (0.5 - normalized) * amount * std::sin(M_PI * normalized);
+        output = normalized + (0.5 - normalized) * amount * std::sin(M_PI * normalized) * 0.5;
     } else {
         output = normalized;
     }
@@ -210,9 +226,6 @@ std::array<uint8_t, 256> LightAdjustment::createContrastLUT(double contrast) con
 // modified openshot::Frame object
 std::shared_ptr<openshot::Frame> LightAdjustment::GetFrame(std::shared_ptr<openshot::Frame> frame, int64_t frame_number)
 {
-    // Get the frame's image
-    std::shared_ptr<QImage> frame_image = frame->GetImage();
-
     // Assume incoming frame is already RGBA (e.g. QImage::Format_RGBA8888)
     // and do not convert formats.
 
@@ -229,6 +242,15 @@ std::shared_ptr<openshot::Frame> LightAdjustment::GetFrame(std::shared_ptr<opens
         shadows_value == 0 && whites_value == 0 && blacks_value == 0) {
         return frame;
     }
+
+    // The shader when there is a GPU to run it on, the C++ otherwise. After the
+    // all-defaults early-out so both paths share it, and before GetImage(), which on
+    // a GPU-backed frame is the one readback.
+    if (ApplyOnGpu(frame, frame_number))
+        return frame;
+
+    // Get the frame's image
+    std::shared_ptr<QImage> frame_image = frame->GetImage();
 
     const int width = frame_image->width();
     const int height = frame_image->height();
@@ -306,6 +328,81 @@ std::shared_ptr<openshot::Frame> LightAdjustment::GetFrame(std::shared_ptr<opens
 
     // return the modified frame
     return frame;
+}
+
+// The contrast tone curve, as a 256x1 texture.
+//
+// The CPU memoises toneCurve() into a byte LUT and indexes it with clamp(int(r)). The shader could
+// evaluate toneCurve() per pixel instead, but it is built from pow() and sin(), and neither is
+// exactly specified on the GPU -- the round() back to a byte would then flip wherever the curve
+// lands near .5. Uploading the CPU's own LUT makes that stage exact by construction, and a texture
+// fetch is cheaper than a pow() as well.
+struct LightAdjustment::ContrastLutCache
+{
+	sk_sp<SkImage> texture;
+	double contrast = 0.0;
+	unsigned long long generation = 0;
+	std::shared_ptr<GpuFrame> owner;   // keeps the pooled surface alive with its snapshot
+};
+
+// The SkSL source lives in src/shaders/ (per-clip effects run only by the export) and is
+// embedded here at build time. Read it there -- including why it is written the way it is.
+const char* LightAdjustment::GpuShaderSource() const
+{
+	return openshot::shaders::kLightAdjustment;
+}
+
+bool LightAdjustment::SetGpuUniforms(SkRuntimeEffectBuilder& builder, int64_t frame_number,
+									 int width, int height) const
+{
+	const double brightness_value = brightness.GetValue(frame_number);
+	const double contrast_value = contrast.GetValue(frame_number);
+
+	// Same two-branch factor the CPU precomputes once per frame.
+	const double bright_factor =
+		brightness_value == 0.0 ? 1.0
+		: brightness_value > 0.0 ? std::pow(2.0, brightness_value)
+								 : 1.0 + brightness_value * 0.7;
+
+	// The LUT texture, rebuilt only when the contrast value changes or the device has been torn
+	// down since it was made -- a Graphite texture does not survive that, hence the generation.
+	const unsigned long long generation = GpuDevice::Generation();
+	if (!contrast_lut || contrast_lut->contrast != contrast_value ||
+		contrast_lut->generation != generation || !contrast_lut->texture) {
+		auto cache = std::make_shared<ContrastLutCache>();
+		cache->contrast = contrast_value;
+		cache->generation = generation;
+
+		const std::array<uint8_t, 256> lut =
+			contrast_value != 0.0 ? createContrastLUT(contrast_value) : std::array<uint8_t, 256>{};
+		std::array<uint8_t, 256 * 4> rgba{};
+		for (int i = 0; i < 256; ++i) {
+			rgba[i * 4 + 0] = lut[i];
+			rgba[i * 4 + 3] = 255;
+		}
+		const SkPixmap pixels(
+			SkImageInfo::Make(256, 1, kRGBA_8888_SkColorType, kPremul_SkAlphaType),
+			rgba.data(), 256 * 4);
+
+		cache->owner = GpuFrame::Create(256, 1, kRGBA_8888_SkColorType);
+		if (!cache->owner || !cache->owner->upload(pixels))
+			return false;
+		cache->texture = cache->owner->snapshot();
+		if (!cache->texture)
+			return false;
+		contrast_lut = std::move(cache);
+	}
+
+	// Nearest and no local matrix, so eval(i + 0.5) reads texel i exactly.
+	builder.child("contrastLut") = contrast_lut->texture->makeShader(
+		SkTileMode::kClamp, SkTileMode::kClamp, SkSamplingOptions());
+	builder.uniform("brightFactor") = static_cast<float>(bright_factor);
+	builder.uniform("useContrast") = contrast_value != 0.0 ? 1.0f : 0.0f;
+	builder.uniform("blacks") = static_cast<float>(blacks.GetValue(frame_number));
+	builder.uniform("whites") = static_cast<float>(whites.GetValue(frame_number));
+	builder.uniform("shadows") = static_cast<float>(shadows.GetValue(frame_number));
+	builder.uniform("highlights") = static_cast<float>(highlights.GetValue(frame_number));
+	return true;
 }
 
 // Generate JSON string of this object

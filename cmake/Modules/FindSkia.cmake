@@ -10,35 +10,60 @@ if(PKG_CONFIG_FOUND)
     pkg_check_modules(PC_SKIA QUIET skia)
 endif()
 
+# -DSkia_ROOT (or SKIA_ROOT, or either in the environment) selects which Skia
+# prefix to use; CMP0074 makes find_path/find_library search it first. pkg-config
+# knows nothing about that root, so a skia.pc left in /usr/local by the CPU build
+# would hand back the CPU headers while find_library below returns the GPU static
+# library — a silent mismatch between headers compiled without SK_GRAPHITE and a
+# library built with it. When a root is given, pkg-config does not get a say.
+if(Skia_ROOT OR SKIA_ROOT OR DEFINED ENV{Skia_ROOT} OR DEFINED ENV{SKIA_ROOT})
+    set(_skia_root_given TRUE)
+else()
+    set(_skia_root_given FALSE)
+endif()
+
 # Find include directory
 # First try to use pkg-config result if available
-if(PC_SKIA_FOUND AND PC_SKIA_INCLUDE_DIRS)
+if(PC_SKIA_FOUND AND PC_SKIA_INCLUDE_DIRS AND NOT _skia_root_given)
     set(SKIA_INCLUDE_DIR ${PC_SKIA_INCLUDE_DIRS})
     message(STATUS "Using Skia include from pkg-config: ${SKIA_INCLUDE_DIR}")
 else()
     # Fallback to manual search
     # Skia headers use paths like "include/core/SkCanvas.h"
     # So we need to find the parent directory of "include"
-    find_path(SKIA_INCLUDE_DIR
-            NAMES include/core/SkCanvas.h
-            PATHS
-            /usr/local/include/skia
-            /usr/include/skia
-            /opt/skia
-            PATH_SUFFIXES skia
-    )
+    if(_skia_root_given)
+        # Only the selected root; NO_DEFAULT_PATH would also drop the root itself,
+        # so instead we simply give no system PATHS to fall back to.
+        find_path(SKIA_INCLUDE_DIR
+                NAMES include/core/SkCanvas.h
+                PATH_SUFFIXES skia include/skia
+        )
+    else()
+        find_path(SKIA_INCLUDE_DIR
+                NAMES include/core/SkCanvas.h
+                PATHS
+                /usr/local/include/skia
+                /usr/include/skia
+                /opt/skia
+                PATH_SUFFIXES skia
+        )
+    endif()
 endif()
 
 # Find library
-find_library(SKIA_LIBRARY
-        NAMES skia
-        PATHS
-        ${PC_SKIA_LIBRARY_DIRS}
-        /usr/local/lib
-        /usr/lib
-        /usr/lib/x86_64-linux-gnu
-        /opt/skia/lib
-)
+if(_skia_root_given)
+    find_library(SKIA_LIBRARY NAMES skia)
+else()
+    find_library(SKIA_LIBRARY
+            NAMES skia
+            PATHS
+            ${PC_SKIA_LIBRARY_DIRS}
+            /usr/local/lib
+            /usr/lib
+            /usr/lib/x86_64-linux-gnu
+            /opt/skia/lib
+    )
+endif()
 
 # Find required dependencies
 find_package(Freetype REQUIRED)
@@ -56,6 +81,16 @@ if(PKG_CONFIG_FOUND)
     pkg_check_modules(ICU icu-uc)
 endif()
 
+# HarfBuzz headers for colour-emoji shaping (src/subtitle/EmojiFont.cpp). Skia builds HarfBuzz
+# into libskia.a and exports the hb_* symbols, so only the declarations are needed; the system
+# headers serve, since EmojiFont uses only HarfBuzz's long-stable core API.
+#   SKIA_HARFBUZZ_INCLUDE_DIR - the directory holding hb.h (unset when not found)
+find_path(SKIA_HARFBUZZ_INCLUDE_DIR
+        NAMES hb.h
+        HINTS ${HARFBUZZ_INCLUDE_DIRS}
+        PATHS /usr/include/harfbuzz /usr/local/include/harfbuzz
+)
+
 # Handle REQUIRED argument
 include(FindPackageHandleStandardArgs)
 find_package_handle_standard_args(Skia
@@ -65,6 +100,28 @@ find_package_handle_standard_args(Skia
 
 if(SKIA_FOUND)
     set(SKIA_INCLUDE_DIRS ${SKIA_INCLUDE_DIR})
+
+    # The fork spells Skia includes both ways: "skia/include/core/SkCanvas.h"
+    # (src/subtitle, src/text) and "include/core/SkCanvas.h" (src/gpu, tests/gpu).
+    # The first only resolves from the prefix's include/ directory, which happens
+    # to be implicit for /usr/local but is not for /usr/local/skia-gpu. Add it so
+    # both spellings work whichever prefix is selected.
+    get_filename_component(SKIA_PREFIX_INCLUDE_DIR "${SKIA_INCLUDE_DIR}" DIRECTORY)
+    list(APPEND SKIA_INCLUDE_DIRS ${SKIA_PREFIX_INCLUDE_DIR})
+
+    # A prefix installed by install_skia_gpu.sh carries the Vulkan headers Skia was
+    # built against (1.4.x) plus the Graphite/Vulkan backend. Ubuntu 24.04's system
+    # headers are 1.3.275 and will not compile Skia's VulkanPreferredFeatures.h, so
+    # this directory has to come FIRST, ahead of /usr/include. Its presence is also
+    # how we know this is the GPU build: SKIA_GPU_FOUND drives OPENSHOT_HAVE_SKIA_GPU.
+    if(EXISTS "${SKIA_PREFIX_INCLUDE_DIR}/skia-vulkan/vulkan/vulkan_core.h")
+        set(SKIA_GPU_FOUND TRUE)
+        set(SKIA_VULKAN_INCLUDE_DIR "${SKIA_PREFIX_INCLUDE_DIR}/skia-vulkan")
+        list(INSERT SKIA_INCLUDE_DIRS 0 ${SKIA_VULKAN_INCLUDE_DIR})
+        message(STATUS "Skia has a GPU backend (Graphite/Vulkan): ${SKIA_INCLUDE_DIR}")
+    else()
+        set(SKIA_GPU_FOUND FALSE)
+    endif()
 
     # Skia runtime effects (SkRuntimeEffect, used by the text glow shader) transitively
     # include "modules/skcms/skcms.h". That header lives in the Skia source tree's modules/
@@ -138,4 +195,4 @@ if(SKIA_FOUND)
     endif()
 endif()
 
-mark_as_advanced(SKIA_INCLUDE_DIR SKIA_LIBRARY)
+mark_as_advanced(SKIA_INCLUDE_DIR SKIA_LIBRARY SKIA_HARFBUZZ_INCLUDE_DIR)

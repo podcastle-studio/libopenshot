@@ -13,13 +13,13 @@
 #ifndef OPENSHOT_TIMELINE_H
 #define OPENSHOT_TIMELINE_H
 
+#include <functional>
 #include <list>
 #include <memory>
-#include <mutex>
 #include <set>
-#include <QtGui/QImage>
-#include <QtGui/QPainter>
-#include <QtCore/QRegularExpression>
+#include <atomic>
+#include <cstdint>
+#include <utility>
 
 #include "TimelineBase.h"
 #include "ReaderBase.h"
@@ -46,12 +46,21 @@ namespace openshot {
 	/// Comparison method for sorting clip pointers (by Layer and then Position). Clips are sorted
 	/// from lowest layer to top layer (since that is the sequence they need to be combined), and then
 	/// by position (left to right).
-	struct CompareClips{
-		bool operator()( openshot::Clip* lhs, openshot::Clip* rhs){
-			if( lhs->Layer() < rhs->Layer() ) return true;
-			if( lhs->Layer() == rhs->Layer() && lhs->Position() <= rhs->Position() ) return true;
+	struct CompareClips {
+		bool operator()(openshot::Clip* lhs, openshot::Clip* rhs) const {
+			// Strict-weak ordering (no <=) to keep sort well-defined
+			if (lhs == rhs) return false; // irreflexive
+			if (lhs->Layer() != rhs->Layer())
+				return lhs->Layer() < rhs->Layer();
+			if (lhs->Position() != rhs->Position())
+				return lhs->Position() < rhs->Position();
+			// Equivalent: report no ordering. std::list::sort is stable, so clips that share a
+			// layer and position keep their insertion order. Tie-breaking on pointer address
+			// (as upstream does) is deterministic within a run but varies between runs, which
+			// would make the same project render differently each time.
 			return false;
-	}};
+		}
+	};
 
 	/// Comparison method for sorting effect pointers (by Position, Layer, and Order). Effects are sorted
 	/// from lowest layer to top layer (since that is sequence clips are combined), and then by
@@ -68,13 +77,13 @@ namespace openshot {
 	/// the Clip with the highest end-frame number using std::max_element
 	struct CompareClipEndFrames {
 		bool operator()(const openshot::Clip* lhs, const openshot::Clip* rhs) {
-			return (lhs->Position() + lhs->Duration()) <= (rhs->Position() + rhs->Duration());
+			return (lhs->Position() + lhs->Duration()) < (rhs->Position() + rhs->Duration());
 	}};
 
 	/// Like CompareClipEndFrames, but for effects
 	struct CompareEffectEndFrames {
 		bool operator()(const openshot::EffectBase* lhs, const openshot::EffectBase* rhs) {
-			return (lhs->Position() + lhs->Duration()) <= (rhs->Position() + rhs->Duration());
+			return (lhs->Position() + lhs->Duration()) < (rhs->Position() + rhs->Duration());
 	}};
 
 	/**
@@ -159,9 +168,9 @@ namespace openshot {
 		std::set<openshot::FrameMapper*> allocated_frame_mappers; ///< all the frame mappers we allocated and must free
 		bool managed_cache; ///< Does this timeline instance manage the cache object
 		std::string path; ///< Optional path of loaded UTF-8 OpenShot JSON project file
-		int max_concurrent_frames; ///< Max concurrent frames to process at one time
 		double max_time; ///> The max duration (in seconds) of the timeline, based on the furthest clip (right edge)
 		double min_time; ///> The min duration (in seconds) of the timeline, based on the position of the first clip (left edge)
+		std::atomic<uint64_t> cache_epoch; ///< Cache invalidation epoch for external observers.
 
 		std::unique_ptr<subtitle::SubtitleManager> subtitleManager;
 
@@ -169,8 +178,13 @@ namespace openshot {
 
 		bool rendering_audio; ///< If false, clips skip expensive audio time-mapping (set by writer when exporting without audio)
 
+		std::function<std::shared_ptr<void>(openshot::GpuFrame&)> gpu_encode_hook;   ///< see SetGpuEncodeHook
+
 		/// Process a new layer of video or audio
 		void add_layer(std::shared_ptr<openshot::Frame> new_frame, openshot::Clip* source_clip, int64_t clip_frame_number, bool is_top_clip, float max_volume);
+
+		/// Resolve equal-power audio gains for one clip under a transition on the current timeline frame.
+		std::pair<float, float> ResolveTransitionAudioGains(openshot::Clip* source_clip, int64_t timeline_frame_number, bool is_top_clip) const;
 
 		/// Apply a FrameMapper to a clip which matches the settings of this timeline
 		void apply_mapper_to_clip(openshot::Clip* clip);
@@ -206,6 +220,12 @@ namespace openshot {
 
 		/// Update the list of 'opened' clips
 		void update_open_clips(openshot::Clip *clip, bool does_clip_intersect);
+
+		/// Increment the cache invalidation epoch.
+		void BumpCacheEpoch();
+
+		/// Remove cached timeline frames covered by a clip and notify cache clients.
+		void InvalidateCacheForClip(const openshot::Clip* clip);
 
 	public:
 		/// Sort clips by position on the timeline
@@ -316,6 +336,9 @@ namespace openshot {
 		/// of this cache object though (Timeline will not delete it for you).
 		void SetCache(openshot::CacheBase* new_cache);
 
+		/// Return the current cache invalidation epoch.
+		uint64_t CacheEpoch() const { return cache_epoch.load(std::memory_order_relaxed); };
+
 		/// Get an openshot::Frame object for a specific frame number of this timeline.
 		///
 		/// @returns The requested frame (containing the image)
@@ -372,6 +395,16 @@ namespace openshot {
 		/// writer still works: the file can have an audio stream (silent). Call before WriteFrame(reader, ...).
 		/// The writer sets this to false when SetSkipClipAudioProcessing(true) or when it has no audio stream.
 		void SetRenderingAudio(bool need_audio) { rendering_audio = need_audio; }
+
+		/// Replace the one readback per frame with the writer's own GPU conversion (W25).
+		///
+		/// When set, a frame that finished compositing on the GPU is handed to @a hook
+		/// on this thread -- the only thread its surface is usable on -- instead of
+		/// being read back. A non-null result is attached with Frame::AttachEncoderFrame
+		/// and the surface is dropped; null means "read it back as usual". The writer
+		/// sets it for the length of one WriteFrame(reader, ...) and clears it after.
+		using GpuEncodeHook = std::function<std::shared_ptr<void>(openshot::GpuFrame&)>;
+		void SetGpuEncodeHook(GpuEncodeHook hook) { gpu_encode_hook = std::move(hook); }
 	};
 
 }

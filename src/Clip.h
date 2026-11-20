@@ -117,11 +117,18 @@ namespace openshot {
 		void init_reader_rotation();
 
 	private:
+		enum class ReaderOrientationMode {
+			Reader,
+			LegacyClipTransform
+		};
+
 		bool waveform; ///< Should a waveform be used instead of the clip's image
 		bool shadow; ///< Should a drop shadow be drawn behind the clip's image
 		bool blur; ///< Should the clip's image be blurred
 		bool flip_horizontal; ///< Should the clip's image be mirrored left-to-right
 		bool flip_vertical; ///< Should the clip's image be mirrored top-to-bottom
+		int waveform_mode; ///< Audio visualization mode used when waveform is enabled
+		ReaderOrientationMode reader_orientation_mode; ///< Internal project compatibility mode
 		std::list<openshot::EffectBase*> effects; ///< List of clips on this timeline
 		bool is_open;	///< Is Reader opened
 		std::string parentObjectId; ///< Id of the bounding box that this clip is attached to
@@ -130,7 +137,7 @@ namespace openshot {
 
 		std::vector<OverlayClipData> overlayClips;
 
-		/// Final cache object used to hold final frames
+		/// Final cache object used to hold final frames (currently unused for clip frame caching)
 		CacheMemory final_cache;
 		
 		// Audio resampler (if time mapping)
@@ -147,13 +154,40 @@ namespace openshot {
 		int64_t adjust_frame_number_minimum(int64_t frame_number);
 
 		/// Apply background image to the current clip image (i.e. flatten this image onto previous layer)
-		void apply_background(std::shared_ptr<openshot::Frame> frame, std::shared_ptr<openshot::Frame> background_frame);
+		void apply_background(std::shared_ptr<openshot::Frame> frame,
+		                      std::shared_ptr<openshot::Frame> background_frame,
+		                      bool update_frame_image = true);
 
 		/// Apply effects to the source frame (if any)
 		void apply_effects(std::shared_ptr<openshot::Frame> frame, int64_t timeline_frame_number, TimelineInfoStruct* options, bool before_keyframes);
 
 		/// Apply keyframes to an openshot::Frame and use an existing background frame (if any)
 		void apply_keyframes(std::shared_ptr<Frame> frame, QSize timeline_size);
+
+	public:
+		/// True when this clip can be composited straight onto a GPU timeline canvas,
+		/// collapsing apply_keyframes() and apply_background() into one transformed draw.
+		///
+		/// Deliberately narrow. Everything it excludes -- overlays, the frame-number
+		/// overlay, waveforms, and any effect or timeline effect that runs *after* the
+		/// keyframes -- stays on the QPainter path that ships today, because each of those
+		/// reads or rewrites the composited image in a way the single draw does not
+		/// reproduce.
+		bool can_draw_to_canvas() const;
+
+	private:
+
+		/// Composite this clip onto @a background_frame's GPU canvas in one draw.
+		/// Returns false if the draw could not be made, leaving the canvas untouched so
+		/// the caller can fall back to the CPU path.
+		bool draw_to_canvas(std::shared_ptr<openshot::Frame> frame,
+							std::shared_ptr<openshot::Frame> background_frame);
+
+		/// The last host-memory source draw_to_canvas uploaded, kept while the same QImage
+		/// keeps arriving -- a still image, a held last frame -- so it is uploaded once
+		/// rather than every frame. Defined in Clip.cpp: public headers name no Skia type.
+		struct HostTextureCache;
+		std::shared_ptr<HostTextureCache> host_texture;
 
         void apply_scale_options(std::shared_ptr<Frame> frame, std::shared_ptr<openshot::Frame> background_frame);
 
@@ -164,16 +198,45 @@ namespace openshot {
 		int64_t adjust_timeline_framenumber(int64_t clip_frame_number);
 		
 		/// Get QTransform from keyframes
-		QTransform get_transform(std::shared_ptr<Frame> frame, int width, int height);
+		/// The clip's keyframed transform for this frame, onto a @a width x @a height canvas.
+		///
+		/// Also applies the alpha/opacity curve to the source pixels in place, which a
+		/// GPU-backed source cannot do -- its pixels are in a texture. Pass
+		/// @a deferred_alpha and the curve's value is written there instead, for the
+		/// caller to set on the paint; the source is then left untouched. Null keeps the
+		/// in-place behaviour, which is what every CPU caller wants.
+		QTransform get_transform(std::shared_ptr<Frame> frame, int width, int height,
+								 float* deferred_alpha = nullptr);
+
+		/// The clip blur and drop shadow of one frame, in source-image pixels: what
+		/// draw_to_canvas() and apply_keyframes() draw before the clip transform.
+		struct EffectSizes {
+			double blur_sigma = 0;     ///< Gaussian sigma of the clip blur (0 = none)
+			double shadow_sigma = 0;   ///< Gaussian sigma of the shadow blur (0 = sharp)
+			int shadow_pad = 0;        ///< Room around the shadow silhouette for its blur
+			double shadow_dx = 0;      ///< Shadow offset along the source's X axis
+			double shadow_dy = 0;      ///< Shadow offset along the source's Y axis
+		};
+
+		/// effect_size_space's sizes for this frame, carried into source pixels through @a t,
+		/// the clip transform (source -> canvas) of the same frame.
+		EffectSizes effect_sizes(const QTransform& t, int64_t frame_number) const;
+
+		/// Where the clip blur clamps on a @a width x @a height source at @a frame_number: the
+		/// whole image, or the part a Crop effect (applied before the clip, without resize)
+		/// leaves visible, so a crop's cut edge blurs like the image's own edge instead of
+		/// fading into the transparent margin the crop leaves around it.
+		QRectF blur_bounds(int64_t frame_number, int width, int height) const;
 
 		/// Build a blurred, tinted drop-shadow image from a source image (in the source
-		/// image's own coordinate space). The returned image is padded on all sides to make
-		/// room for the blur; offset_x and offset_y receive the position (in source-image
-		/// coordinates) at which the shadow image should be drawn so it lines up with the source.
-		std::shared_ptr<QImage> get_shadow_image(std::shared_ptr<QImage> source_image, int64_t frame_number, int& offset_x, int& offset_y);
+		/// image's own coordinate space). The returned image is padded on all sides by
+		/// @a pad to make room for the blur of @a sigma; offset_x and offset_y receive the
+		/// position (in source-image coordinates) at which the shadow image should be drawn
+		/// so it lines up with the source.
+		std::shared_ptr<QImage> get_shadow_image(std::shared_ptr<QImage> source_image, int64_t frame_number, double sigma, int pad, int& offset_x, int& offset_y);
 
 		/// Get file extension
-		std::string get_file_extension(std::string path);
+		static std::string get_file_extension(std::string path);
 
 		/// Get a frame object or create a blank one
 		std::shared_ptr<openshot::Frame> GetOrCreateFrame(int64_t number, bool enable_time=true);
@@ -198,6 +261,7 @@ namespace openshot {
 		openshot::AnchorType anchor;	 ///< The anchor determines what parent a clip should snap to
 		openshot::FrameDisplayType display; ///< The format to display the frame number (if any)
 		openshot::VolumeMixType mixing;  ///< What strategy should be followed when mixing audio with other clips
+		openshot::CompositeType composite; ///< How this clip is composited onto lower layers
 
         /// Repeat the clip's first source frame for this many frames at the start of the clip
         /// (used by overlapping transitions, which pull Position back by the same amount).
@@ -220,6 +284,10 @@ namespace openshot {
 		/// @brief Constructor with filepath (reader is automatically created... by guessing file extensions)
 		/// @param path The path of a reader (video file, image file, etc...). The correct reader will be used automatically.
 		Clip(std::string path);
+
+		/// Create the most appropriate reader for a media path.
+		/// The caller owns the returned reader pointer.
+		static openshot::ReaderBase* CreateReader(std::string path, bool inspect_reader=true);
 
 		/// @brief Constructor with reader
 		/// @param new_reader The reader to be used by this clip
@@ -344,6 +412,8 @@ namespace openshot {
 		// Waveform property
 		bool Waveform() { return waveform; } ///< Get the waveform property of this clip
 		void Waveform(bool value) { waveform = value; } ///< Set the waveform property of this clip
+		int WaveformMode() { return waveform_mode; } ///< Get the waveform visualization mode
+		void WaveformMode(int value) { waveform_mode = value; } ///< Set the waveform visualization mode
 
 		// Shadow property
 		bool Shadow() { return shadow; } ///< Get the drop-shadow property of this clip
@@ -369,6 +439,8 @@ namespace openshot {
 		openshot::Keyframe location_x; ///< Curve representing the relative X position in percent based on the gravity (-1 to 1)
 		openshot::Keyframe location_y; ///< Curve representing the relative Y position in percent based on the gravity (-1 to 1)
 		openshot::Keyframe alpha; ///< Curve representing the alpha (1 to 0)
+		openshot::Keyframe margin; ///< Curve representing edge margin as a percent of the canvas' shortest side
+		openshot::Keyframe corner_radius; ///< Curve representing corner radius as a percent of the clip's shortest side
 
 		// Rotation and Shear curves (origin point (x,y) is adjustable for both rotation and shear)
 		openshot::Keyframe rotation; ///< Curve representing the rotation (0 to 360)
@@ -387,6 +459,15 @@ namespace openshot {
 
 		// Blur curve (only used when Blur() is enabled)
 		openshot::Keyframe blur_amount; ///< Curve representing the clip blur radius in pixels (0 = none)
+
+		/// Which pixels shadow_blur, shadow_distance and blur_amount are measured in.
+		/// EFFECT_SIZE_SOURCE (the default) draws them in the source image's pixels, so the
+		/// same values reach further on a small source than on a large one shown at the same
+		/// size. EFFECT_SIZE_CANVAS takes them as timeline-canvas pixels and converts them
+		/// into source pixels every frame from the clip transform, so they stay the same on
+		/// the canvas whatever the source's resolution and however the clip is scaled, and
+		/// the shadow offset keeps its canvas direction when the clip rotates or flips.
+		openshot::EffectSizeSpace effect_size_space;
 
 		/// Blend mode used when this clip's image is flattened onto the layers beneath it.
 		/// Follows the W3C "Compositing and Blending Level 1" spec (the same one behind CSS

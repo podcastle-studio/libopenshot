@@ -13,12 +13,13 @@
 #ifndef OPENSHOT_BLUR_EFFECT_H
 #define OPENSHOT_BLUR_EFFECT_H
 
-#include "../EffectBase.h"
+#include "../GpuEffect.h"
 
 #include "../Frame.h"
 #include "../Json.h"
 #include "../KeyFrame.h"
 
+#include <map>
 #include <memory>
 #include <string>
 
@@ -33,7 +34,7 @@ namespace openshot
 	 * box blur effect, use identical horizontal and vertical blur values. To achieve a Gaussian blur,
 	 * use 3 iterations, a sigma of 3.0, and a radius between 3 and X (depending on how much blur you want).
 	 */
-	class Blur : public EffectBase
+	class Blur : public GpuEffect
 	{
 	public:
 		Keyframe horizontal_radius;	///< Horizontal blur radius keyframe. The size of the horizontal blur operation in pixels.
@@ -92,9 +93,50 @@ namespace openshot
 		/// Get all properties for a specific frame (perfect for a UI to display the current state
 		/// of all properties at any time)
 		std::string PropertiesJSON(int64_t requested_frame) const override;
-    private:
-        /// Init effect settings
-        void init_effect_details();
+	protected:
+		/// The fragment for the pass GetFrame is about to run. Blur is four effects in
+		/// one class and each is its own SkSL source, so this is not a constant — see
+		/// GpuEffect::GpuShaderSource() on why the cache keys on the pointer.
+		const char* GpuShaderSource() const override;
+
+		/// Bind the pass GetFrame selected. Every value is resolved here rather than in
+		/// the fragment, and by the same functions the CPU twin uses.
+		bool SetGpuUniforms(SkRuntimeEffectBuilder& builder, int64_t frame_number,
+							int width, int height) const override;
+
+	private:
+		/// Init effect settings
+		void init_effect_details();
+
+		/// The Gaussian blur as its planned chain (boxBlurChain: an optional block
+		/// downsample, one Gaussian pass per axis, the upsample back). False means nothing
+		/// was touched and the caller must run the C++; it is decided before the first
+		/// pass, so a half-blurred frame is not a state this can leave behind.
+		bool ApplyBoxBlurOnGpu(std::shared_ptr<openshot::Frame> frame, int64_t frame_number,
+							   int horizontal, int vertical);
+
+		/// The diagonal blur as its planned chain (diagonalBlurChain: decimate along each
+		/// diagonal, Gaussian, expand). False means the caller must run the C++.
+		bool ApplyDiagonalBlurOnGpu(std::shared_ptr<openshot::Frame> frame, int64_t frame_number,
+									int authored_radius);
+
+		/// The rotational blur as its planned chain (rotationalBlurChain: passes of rotated
+		/// bilinear taps, each finer than the last). False means the caller must run the C++.
+		bool ApplyRotationalBlurOnGpu(std::shared_ptr<openshot::Frame> frame, int64_t frame_number,
+									  double angle_degrees);
+
+		/// The zoom blur as its planned chain (zoomBlurChain: passes of bilinear taps along
+		/// each pixel's ray from the centre). False means the caller must run the C++;
+		/// nothing is attached to the frame until the last pass lands, so a failure half way
+		/// through leaves the frame untouched.
+		bool ApplyZoomBlurOnGpu(std::shared_ptr<openshot::Frame> frame, int64_t frame_number,
+								int authored_strength, double center_x, double center_y);
+
+		/// Plan one of the four modes through the shared planner and run it: true when it ran
+		/// or had nothing to do, false when the caller must run the C++ (no GPU, or the plan
+		/// is a CPU step -- a case no fragment covers).
+		bool ApplyPlannedBlurOnGpu(std::shared_ptr<openshot::Frame> frame, int64_t frame_number,
+								   const std::map<std::string, double>& params);
 	};
 
 }

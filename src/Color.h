@@ -14,7 +14,10 @@
 #define OPENSHOT_COLOR_H
 
 #include "KeyFrame.h"
-#include <QColor>
+
+// Color.h is a public header and Color itself no longer needs Qt: only the QColor
+// constructor below does, and a forward declaration is enough to declare it.
+class QColor;
 
 namespace openshot {
 

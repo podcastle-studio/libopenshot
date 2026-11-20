@@ -1,14 +1,20 @@
 #pragma once
 
 #include "../ReaderBase.h"
+#include "../subtitle/SubtitleTypes.h"
 #include "TextAnimationEngine.h"
 #include "TextClipRenderer.h"
 #include "TextClipTypes.h"
+#include "TextGlowRenderer.h"
 #include "TextStyleKeyframes.h"
 
 #include <memory>
 #include <optional>
 #include <string>
+
+class SkCanvas;
+
+namespace openshot { class GpuFrame; }
 
 class QImage;
 
@@ -123,6 +129,9 @@ private:
     void initInfo();
     void buildPlan();      ///< (Re)compute paint/layout/background/frame-size from data.
     void renderToImage();  ///< Render the static (non-animated) frame into rendered_image.
+    /// The animation frame the resting render is drawn with: the static 3D tilt, and the confined
+    /// block-texture path for a clip that ever animates (see renderToImage). nullopt = flat.
+    std::optional<text::TextClipAnimationFrame> restingFrame() const;
 
     /// The per-frame render inputs: cached plan for static/animation, or resolved from the style
     /// keyframe overlay. Layout is always the cached plan_layout (only curveAngle varies geometry,
@@ -142,9 +151,30 @@ private:
     /// Sample the style keyframe overlay at `frame` into a ResolvedPlan (keyframed path).
     ResolvedPlan resolvePlanAtFrame(int64_t frame) const;
 
+    /// Draw one frame's content onto @a canvas. Everything below this — the glow
+    /// silhouettes, the baked 3D block textures, the large-sigma shadow — matches its
+    /// offscreens to that canvas (GpuOffscreen), so this one call decides where the whole
+    /// text engine renders. @a convention must suit where the canvas's pixels end up.
+    void drawFrame(SkCanvas* canvas, subtitle::ColorConvention convention,
+                   const ResolvedPlan& plan,
+                   const std::optional<text::TextClipAnimationFrame>& animation);
+
     /// Render one frame using the supplied plan (static when `animation` is empty) into a QImage.
     std::shared_ptr<QImage> renderToQImage(const ResolvedPlan& plan,
                                            const std::optional<text::TextClipAnimationFrame>& animation);
+
+    /// The same frame, left on the GPU for the compositor to draw as a texture, or null
+    /// when there is no GPU (every caller then falls back to renderToQImage).
+    ///
+    /// The surface is kRGBA_8888 to match the Timeline canvas it will be drawn onto, and
+    /// is rendered with ColorConvention::Logical because those pixels are composited and
+    /// read back as kRGBA_8888 and so are never reinterpreted — unlike renderToQImage's,
+    /// which end up as QImage bytes. Handing this over instead of reading it back is what
+    /// W17 removes: a readback of the text frame, the QImage copy Clip::GetOrCreateFrame
+    /// makes of it, and the upload back onto the timeline canvas.
+    std::shared_ptr<openshot::GpuFrame> renderToGpuFrame(
+        const ResolvedPlan& plan,
+        const std::optional<text::TextClipAnimationFrame>& animation);
 
     int project_width;
     int project_height;
@@ -156,6 +186,20 @@ private:
     double frame_center_project_y{0.0};
     text::TextClipData data;
     std::shared_ptr<QImage> rendered_image;
+
+    /// The resting frame kept on the GPU, for the compositor to draw as a texture every resting
+    /// frame -- instead of a readback into rendered_image, a copy of it per frame and an upload of
+    /// that copy. Every resting Frame shares this one surface, which nothing draws into once it is
+    /// rendered: effects write new frames and draw_to_canvas only snapshots it. Only usable on the
+    /// thread that made it, and dropped with the device (rendered_gpu_generation).
+    std::shared_ptr<openshot::GpuFrame> rendered_gpu;
+    unsigned long long rendered_gpu_generation{0};
+
+    /// One composited glow image reused across frames of a block-mode animation, where the glow is
+    /// marched in block-local space and so does not depend on the frame (see text::GlowFrameCache).
+    /// Offered to the renderer only when no style keyframe can move the glow; cleared whenever the
+    /// plan is rebuilt. A hit is bit-identical to a march — the same image drawn the same way.
+    text::GlowFrameCache glow_cache;
     bool is_open;
     bool dirty;            ///< True when data changed and the plan / rendered_image is stale
     bool has_tilt{false};  ///< True when transformation.tiltX/tiltY carry a static 3D tilt

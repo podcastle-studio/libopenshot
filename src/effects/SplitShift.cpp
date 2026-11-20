@@ -11,6 +11,15 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
 #include "SplitShift.h"
+
+#include "skia/include/core/SkM44.h"
+#include "EffectShaders.h"
+#include "image-processing-lib/src/Planner/EffectPlan.h"
+
+#include "skia/include/effects/SkRuntimeEffect.h"
+
+#include <algorithm>
+#include <cmath>
 #include "Exceptions.h"
 #include "./image-processing-lib/src/Effects/effects.h"
 
@@ -50,6 +59,11 @@ std::shared_ptr<openshot::Frame> SplitShift::GetFrame(std::shared_ptr<openshot::
     double shiftAmountValue = shiftAmount.GetValue(frame_number);
     double splitPointValue = splitPoint.GetValue(frame_number);
 
+    // The shader when there is a GPU to run it on, OpenCV otherwise. Before GetImageCV(), which
+    // on a GPU-backed frame is a readback AND two full-frame cv::Mat conversions.
+    if (ApplyOnGpu(frame, frame_number))
+        return frame;
+
     // Get the frame's image
     auto imageCv = frame->GetImageCV();
 
@@ -58,6 +72,33 @@ std::shared_ptr<openshot::Frame> SplitShift::GetFrame(std::shared_ptr<openshot::
 
 	// return the modified frame
 	return frame;
+}
+
+// The shared SkSL source lives in image-processing-lib/shaders/ so the editor loads the
+// same bytes through CanvasKit; it is embedded here at build time. Read it there --
+// including why it is written the way it is.
+const char* SplitShift::GpuShaderSource() const
+{
+	return openshot::shaders::kSplitShift;
+}
+
+bool SplitShift::SetGpuUniforms(SkRuntimeEffectBuilder& builder, int64_t frame_number,
+					int width, int height) const
+{
+	// Resolved by the shared planner (image-processing-lib/src/Planner), the same code the editor
+	// runs, so the two cannot disagree about what these values mean. It declines -- and the C++
+	// twin runs -- for every case the fragment does not cover.
+	Podcastle::Effects::EffectPlan plan;
+	PlanForFrame(frame_number, width, height, plan);
+	return BindPlan(builder, plan);
+}
+
+bool SplitShift::PlanForFrame(int64_t frame_number, int width, int height,
+							  Podcastle::Effects::EffectPlan& plan) const
+{
+	plan = Podcastle::Effects::planEffect(
+		"SPLIT_SHIFT", {{"shiftAmount", shiftAmount.GetValue(frame_number)}, {"shiftPoint", splitPoint.GetValue(frame_number)}, {"isHorizontal", isHorizontal ? 1.0 : 0.0}}, width, height);
+	return true;
 }
 
 // Generate JSON string of this object

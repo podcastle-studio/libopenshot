@@ -1,0 +1,5760 @@
+{
+ "requestId": "6abcfe5629f1ddf8a4e5f966",
+ "exportId": "8a22618f-7046-4729-af8f-ecc5a5b0a4e0",
+ "projectId": "6abceb0129f1ddf8a4e5f951",
+ "name": "videos change speed",
+ "settings": {
+  "width": 1920.0,
+  "height": 1080.0,
+  "previewOverlay": null
+ },
+ "start": 0,
+ "end": 101816,
+ "tracks": [
+  {
+   "trackId": "741650242462018",
+   "type": "VISUAL_MEDIA",
+   "zindex": 2,
+   "visible": true,
+   "muted": false,
+   "clips": [
+    {
+     "type": "IMAGE",
+     "clipId": "237336827919256",
+     "priority": 0,
+     "start": 0,
+     "end": 5000,
+     "speed": 1.0,
+     "trimStart": 0,
+     "trimEnd": 0,
+     "volume": 0.0,
+     "muted": false,
+     "visible": true,
+     "fadeIn": 0,
+     "fadeOut": 0,
+     "opacity": 1.0,
+     "file": {
+      "audio": null,
+      "video": null,
+      "image": {
+       "fileId": "c25fe0c8-ed43-41f4-bbda-1d4c2d93a393",
+       "fileUrl": "https://storage.googleapis.com/dev-file-storage-images/f8972789-233f-4930-8f87-e093b2057cf0.jpeg?X-Goog-Algorithm=GOOG4-RSA-SHA256&X-Goog-Credential=file-storage-service%40podcastle-dev.iam.gserviceaccount.com%2F20260930%2Fauto%2Fstorage%2Fgoog4_request&X-Goog-Date=20260930T110232Z&X-Goog-Expires=86400&X-Goog-SignedHeaders=host&response-content-disposition=attachment%3B%20filename%3D%22StoryBlock_350966112_b4072c85-88ca-4a44-a8ca-ca8994249041.jpeg%22%3B%20filename%2A%3DUTF-8%27%27StoryBlock_350966112_b4072c85-88ca-4a44-a8ca-ca8994249041.jpeg&X-Goog-Signature=911e4e8d5861db5d834c1d35d2b63af3e8738abd2af8f593f54ecbad83f873c346fa87289225b6a1f0c912c884853eeba220036df5a9bde062f73c3701c1b52820eafded45ea2b9086ba9b7077c816aa1f351111836cfed148a9458042dffbeb6bfe8cb32727acb931601f5ab0a12da23319a2631f3587290853ea3617ff665b813930509fe2f35ebf091605e987998da9dba9007953f90943df9002a096a6d7f9bc7bae81ae9dbf5b55d4c21815feca6daef259a5b6d68155b0437c514f305bae68b99acb1c9ecce9e5e61c995b3a73e7d020f3d2d2a7dd23f12bcb7267a2b103f63af6f40e8106fe104fbfbb94bc128dc766418ca5ae3bf86abf9fc075a40a"
+      }
+     },
+     "originalFile": null,
+     "effectIntensity": null,
+     "crop": {
+      "x": null,
+      "y": null,
+      "w": 1.0,
+      "h": 1.0,
+      "cy": 0.5,
+      "cx": 0.5
+     },
+     "transformation": {
+      "boundingBox": {
+       "x": null,
+       "y": null,
+       "h": 2.1333333333333333,
+       "w": 2.1333333333333333,
+       "cx": 0.5,
+       "cy": 0.5
+      },
+      "scale": {
+       "horizontalScale": 0.46875,
+       "verticalScale": 0.46875
+      },
+      "rotation": 0
+     },
+     "value": null,
+     "style": null,
+     "textAnimations": null,
+     "loopable": false,
+     "duration": 0,
+     "cornerRadius": 0.0,
+     "filters": [],
+     "lutId": null,
+     "opacityFade": {
+      "opacityFadeIn": 0,
+      "opacityFadeOut": 0,
+      "interpolation": {
+       "value": [
+        0.0,
+        0.0,
+        0.67,
+        1.0
+       ],
+       "type": "BEZIER"
+      }
+     },
+     "keyframes": [],
+     "mask": null,
+     "audioEffects": null,
+     "flip": {
+      "horizontal": false,
+      "vertical": false
+     },
+     "shapeConfig": null,
+     "path": null,
+     "baseStyle": null,
+     "lineStart": null,
+     "lineEnd": null,
+     "blendMode": "normal"
+    },
+    {
+     "type": "IMAGE",
+     "clipId": "675374029123905",
+     "priority": 0,
+     "start": 5000,
+     "end": 10000,
+     "speed": 1.0,
+     "trimStart": 0,
+     "trimEnd": 0,
+     "volume": 0.0,
+     "muted": false,
+     "visible": true,
+     "fadeIn": 0,
+     "fadeOut": 0,
+     "opacity": 1.0,
+     "file": {
+      "audio": null,
+      "video": null,
+      "image": {
+       "fileId": "94e1e6bc-a072-4fc4-9394-2bcec39e33ef",
+       "fileUrl": "https://storage.googleapis.com/dev-file-storage-images/5bd7cc62-3b8a-46f8-acab-8704befddac0.jpeg?X-Goog-Algorithm=GOOG4-RSA-SHA256&X-Goog-Credential=file-storage-service%40podcastle-dev.iam.gserviceaccount.com%2F20260930%2Fauto%2Fstorage%2Fgoog4_request&X-Goog-Date=20260930T110232Z&X-Goog-Expires=86400&X-Goog-SignedHeaders=host&response-content-disposition=attachment%3B%20filename%3D%22StoryBlock_349453745_0064dd7d-e3e4-4bbf-abcd-643a65e1b157.jpeg%22%3B%20filename%2A%3DUTF-8%27%27StoryBlock_349453745_0064dd7d-e3e4-4bbf-abcd-643a65e1b157.jpeg&X-Goog-Signature=468ed1675141c2c9b15892f24b4d10b521884efe5fb93e4f040002f10cbb9cfcf190b2d7424feb318e17ce17e2ec8d77aba8c40ff603b56217b4a6509e7277685e6d4919382b4eaa98d6366e57183f117ec1ffa7b09183f1b5d5a6c006a1f63f62a06091f19a1dcf912b15a49374a45ba7b30802f95507bd8a6e4120cc7e04b76e6553bf202e14e233839a664a4bdcb8a4e404c4af5b6301b413e43c8fc9013427935054cacd50d389dfbcfc096e558441faa8b4fd91b5e468ff8c3224d128218ab6c6015be216f95771d2893faa3fb99d2929c60312c25f43995113211bfcc8d51f8fbeeb5952b3ef6531b1dcadecc10df018a392147f1e805cd033bd30fcf4"
+      }
+     },
+     "originalFile": null,
+     "effectIntensity": null,
+     "crop": {
+      "x": null,
+      "y": null,
+      "w": 1.0,
+      "h": 1.0,
+      "cy": 0.5,
+      "cx": 0.5
+     },
+     "transformation": {
+      "boundingBox": {
+       "x": null,
+       "y": null,
+       "h": 2.0,
+       "w": 2.0,
+       "cx": 0.5,
+       "cy": 0.5
+      },
+      "scale": {
+       "horizontalScale": 0.5,
+       "verticalScale": 0.5
+      },
+      "rotation": 0
+     },
+     "value": null,
+     "style": null,
+     "textAnimations": null,
+     "loopable": false,
+     "duration": 0,
+     "cornerRadius": 0.0,
+     "filters": [],
+     "lutId": null,
+     "opacityFade": {
+      "opacityFadeIn": 0,
+      "opacityFadeOut": 0,
+      "interpolation": {
+       "value": [
+        0.0,
+        0.0,
+        0.67,
+        1.0
+       ],
+       "type": "BEZIER"
+      }
+     },
+     "keyframes": [],
+     "mask": null,
+     "audioEffects": null,
+     "flip": {
+      "horizontal": false,
+      "vertical": false
+     },
+     "shapeConfig": null,
+     "path": null,
+     "baseStyle": null,
+     "lineStart": null,
+     "lineEnd": null,
+     "blendMode": "normal"
+    },
+    {
+     "type": "VIDEO",
+     "clipId": "394107518499180",
+     "priority": 0,
+     "start": 10000,
+     "end": 25434,
+     "speed": 1.0,
+     "trimStart": 0,
+     "trimEnd": 10614,
+     "volume": 1.0,
+     "muted": false,
+     "visible": true,
+     "fadeIn": 0,
+     "fadeOut": 0,
+     "opacity": 1.0,
+     "file": {
+      "audio": {
+       "fileId": "d8e3d08a-40b4-4ee9-b7e3-f8d461073c1a",
+       "fileUrl": "https://storage.googleapis.com/dev-file-storage-service/2e5b1102-bc1b-435d-8bc2-aaf38a51ade7.wav?X-Goog-Algorithm=GOOG4-RSA-SHA256&X-Goog-Credential=file-storage-service%40podcastle-dev.iam.gserviceaccount.com%2F20260930%2Fauto%2Fstorage%2Fgoog4_request&X-Goog-Date=20260930T110232Z&X-Goog-Expires=86400&X-Goog-SignedHeaders=host&response-content-disposition=attachment%3B%20filename%3D%2203-business-focused-hour.wav%22%3B%20filename%2A%3DUTF-8%27%2703-business-focused-hour.wav&X-Goog-Signature=6ba4096d3a5e94d9b895b636cb23e142065fe1daaf42041ecd838b8c9da1246d9910301a2feeb9860900097a98d3bf4d7fa4978afa33d465298a3c4d6d755f513dd4ac3847208ca220f2daa0ca9768af47149642adc1958a85bb81db4cba032ff914ab3272b8e707e026387772a6982723dfd2fea620668d18a057e35f4a56e9c339f12a3681484330d1be77294adfcf29c5e026749d33b1b06feb2ea0813506751d57e8afe15c36151db1954cf3b354a40c25cd9a43bd616e5453c12d25de55e81d6778829d0f4b5134d0fd3f33c49467eb3e126fef2734785e5434681e76d1cee171bee8d7bf0857202050da2c0577eaecf1add156e1fb923ff82192912c97"
+      },
+      "video": {
+       "fileId": "14aa7ca9-228d-4a22-9e20-6083d04ba57f",
+       "fileUrl": "https://storage.googleapis.com/dev-file-storage-service/6164e714-e4e4-4f74-9691-bde60555cdae.mp4?X-Goog-Algorithm=GOOG4-RSA-SHA256&X-Goog-Credential=file-storage-service%40podcastle-dev.iam.gserviceaccount.com%2F20260930%2Fauto%2Fstorage%2Fgoog4_request&X-Goog-Date=20260930T110232Z&X-Goog-Expires=86400&X-Goog-SignedHeaders=host&response-content-disposition=attachment%3B%20filename%3D%2203-business-focused-hour.mp4%22%3B%20filename%2A%3DUTF-8%27%2703-business-focused-hour.mp4&X-Goog-Signature=1bac8d96dff8addf76c5f7b813b4757069cf9a5d48e0625a33fb86dace0bd0fe7f4b8db5034f7f8f0f4c38cbd5a313d3c1a3592cd16eca7196034b65931be11897f890d21a999bb4d500db939f9e7dbcc61aa248f907e28fd80ce9d16db77b4f7939d53d48f79f95809d9a0104b504cb1105a229fe7b2e64ae6ca78fdcc42a326ef10babff624dd9e49340fa174c40e9541a76ce845acfd1e1c838584003efce5b90a670d199027db2d3651158933d0a5d582b31aa3d06b95831cc615fe86f974dd4719afda5c9d6799006c841da2a8e956701949b8192b9eeab7a45b4c98dd8cfab01a329a2fe4b0afe0119bb21d71ce2fbaa1d100751feb4a1b590a819a7c5"
+      },
+      "image": null
+     },
+     "originalFile": null,
+     "effectIntensity": 100,
+     "crop": {
+      "x": null,
+      "y": null,
+      "w": 1.0,
+      "h": 1.0,
+      "cy": 0.5,
+      "cx": 0.5
+     },
+     "transformation": {
+      "boundingBox": {
+       "x": null,
+       "y": null,
+       "h": 1.1851851851851851,
+       "w": 0.375,
+       "cx": 0.5,
+       "cy": 0.5
+      },
+      "scale": {
+       "horizontalScale": 0.84375,
+       "verticalScale": 0.84375
+      },
+      "rotation": 0
+     },
+     "value": null,
+     "style": null,
+     "textAnimations": null,
+     "loopable": false,
+     "duration": 4820,
+     "cornerRadius": 0.0,
+     "filters": [],
+     "lutId": null,
+     "opacityFade": {
+      "opacityFadeIn": 0,
+      "opacityFadeOut": 0,
+      "interpolation": {
+       "value": [
+        0.0,
+        0.0,
+        0.67,
+        1.0
+       ],
+       "type": "BEZIER"
+      }
+     },
+     "keyframes": [],
+     "mask": null,
+     "audioEffects": [],
+     "flip": {
+      "horizontal": false,
+      "vertical": false
+     },
+     "shapeConfig": null,
+     "path": null,
+     "baseStyle": null,
+     "lineStart": null,
+     "lineEnd": null,
+     "blendMode": "normal"
+    },
+    {
+     "type": "VIDEO",
+     "clipId": "378640799546094",
+     "priority": 0,
+     "start": 10000,
+     "end": 25434,
+     "speed": 1.0,
+     "trimStart": 4820,
+     "trimEnd": 5272,
+     "volume": 1.0,
+     "muted": false,
+     "visible": true,
+     "fadeIn": 0,
+     "fadeOut": 0,
+     "opacity": 1.0,
+     "file": {
+      "audio": {
+       "fileId": "d8e3d08a-40b4-4ee9-b7e3-f8d461073c1a",
+       "fileUrl": "https://storage.googleapis.com/dev-file-storage-service/2e5b1102-bc1b-435d-8bc2-aaf38a51ade7.wav?X-Goog-Algorithm=GOOG4-RSA-SHA256&X-Goog-Credential=file-storage-service%40podcastle-dev.iam.gserviceaccount.com%2F20260930%2Fauto%2Fstorage%2Fgoog4_request&X-Goog-Date=20260930T110232Z&X-Goog-Expires=86400&X-Goog-SignedHeaders=host&response-content-disposition=attachment%3B%20filename%3D%2203-business-focused-hour.wav%22%3B%20filename%2A%3DUTF-8%27%2703-business-focused-hour.wav&X-Goog-Signature=6ba4096d3a5e94d9b895b636cb23e142065fe1daaf42041ecd838b8c9da1246d9910301a2feeb9860900097a98d3bf4d7fa4978afa33d465298a3c4d6d755f513dd4ac3847208ca220f2daa0ca9768af47149642adc1958a85bb81db4cba032ff914ab3272b8e707e026387772a6982723dfd2fea620668d18a057e35f4a56e9c339f12a3681484330d1be77294adfcf29c5e026749d33b1b06feb2ea0813506751d57e8afe15c36151db1954cf3b354a40c25cd9a43bd616e5453c12d25de55e81d6778829d0f4b5134d0fd3f33c49467eb3e126fef2734785e5434681e76d1cee171bee8d7bf0857202050da2c0577eaecf1add156e1fb923ff82192912c97"
+      },
+      "video": {
+       "fileId": "14aa7ca9-228d-4a22-9e20-6083d04ba57f",
+       "fileUrl": "https://storage.googleapis.com/dev-file-storage-service/6164e714-e4e4-4f74-9691-bde60555cdae.mp4?X-Goog-Algorithm=GOOG4-RSA-SHA256&X-Goog-Credential=file-storage-service%40podcastle-dev.iam.gserviceaccount.com%2F20260930%2Fauto%2Fstorage%2Fgoog4_request&X-Goog-Date=20260930T110232Z&X-Goog-Expires=86400&X-Goog-SignedHeaders=host&response-content-disposition=attachment%3B%20filename%3D%2203-business-focused-hour.mp4%22%3B%20filename%2A%3DUTF-8%27%2703-business-focused-hour.mp4&X-Goog-Signature=1bac8d96dff8addf76c5f7b813b4757069cf9a5d48e0625a33fb86dace0bd0fe7f4b8db5034f7f8f0f4c38cbd5a313d3c1a3592cd16eca7196034b65931be11897f890d21a999bb4d500db939f9e7dbcc61aa248f907e28fd80ce9d16db77b4f7939d53d48f79f95809d9a0104b504cb1105a229fe7b2e64ae6ca78fdcc42a326ef10babff624dd9e49340fa174c40e9541a76ce845acfd1e1c838584003efce5b90a670d199027db2d3651158933d0a5d582b31aa3d06b95831cc615fe86f974dd4719afda5c9d6799006c841da2a8e956701949b8192b9eeab7a45b4c98dd8cfab01a329a2fe4b0afe0119bb21d71ce2fbaa1d100751feb4a1b590a819a7c5"
+      },
+      "image": null
+     },
+     "originalFile": null,
+     "effectIntensity": 100,
+     "crop": {
+      "x": null,
+      "y": null,
+      "w": 1.0,
+      "h": 1.0,
+      "cy": 0.5,
+      "cx": 0.5
+     },
+     "transformation": {
+      "boundingBox": {
+       "x": null,
+       "y": null,
+       "h": 1.1851851851851851,
+       "w": 0.375,
+       "cx": 0.5,
+       "cy": 0.5
+      },
+      "scale": {
+       "horizontalScale": 0.84375,
+       "verticalScale": 0.84375
+      },
+      "rotation": 0
+     },
+     "value": null,
+     "style": null,
+     "textAnimations": null,
+     "loopable": false,
+     "duration": 5342,
+     "cornerRadius": 0.0,
+     "filters": [],
+     "lutId": null,
+     "opacityFade": {
+      "opacityFadeIn": 0,
+      "opacityFadeOut": 0,
+      "interpolation": {
+       "value": [
+        0.0,
+        0.0,
+        0.67,
+        1.0
+       ],
+       "type": "BEZIER"
+      }
+     },
+     "keyframes": [],
+     "mask": null,
+     "audioEffects": [],
+     "flip": {
+      "horizontal": false,
+      "vertical": false
+     },
+     "shapeConfig": null,
+     "path": null,
+     "baseStyle": null,
+     "lineStart": null,
+     "lineEnd": null,
+     "blendMode": "normal"
+    },
+    {
+     "type": "VIDEO",
+     "clipId": "428672426476392",
+     "priority": 0,
+     "start": 10000,
+     "end": 25454,
+     "speed": 1.0,
+     "trimStart": 10162,
+     "trimEnd": 0,
+     "volume": 1.0,
+     "muted": false,
+     "visible": true,
+     "fadeIn": 0,
+     "fadeOut": 0,
+     "opacity": 1.0,
+     "file": {
+      "audio": {
+       "fileId": "d8e3d08a-40b4-4ee9-b7e3-f8d461073c1a",
+       "fileUrl": "https://storage.googleapis.com/dev-file-storage-service/2e5b1102-bc1b-435d-8bc2-aaf38a51ade7.wav?X-Goog-Algorithm=GOOG4-RSA-SHA256&X-Goog-Credential=file-storage-service%40podcastle-dev.iam.gserviceaccount.com%2F20260930%2Fauto%2Fstorage%2Fgoog4_request&X-Goog-Date=20260930T110232Z&X-Goog-Expires=86400&X-Goog-SignedHeaders=host&response-content-disposition=attachment%3B%20filename%3D%2203-business-focused-hour.wav%22%3B%20filename%2A%3DUTF-8%27%2703-business-focused-hour.wav&X-Goog-Signature=6ba4096d3a5e94d9b895b636cb23e142065fe1daaf42041ecd838b8c9da1246d9910301a2feeb9860900097a98d3bf4d7fa4978afa33d465298a3c4d6d755f513dd4ac3847208ca220f2daa0ca9768af47149642adc1958a85bb81db4cba032ff914ab3272b8e707e026387772a6982723dfd2fea620668d18a057e35f4a56e9c339f12a3681484330d1be77294adfcf29c5e026749d33b1b06feb2ea0813506751d57e8afe15c36151db1954cf3b354a40c25cd9a43bd616e5453c12d25de55e81d6778829d0f4b5134d0fd3f33c49467eb3e126fef2734785e5434681e76d1cee171bee8d7bf0857202050da2c0577eaecf1add156e1fb923ff82192912c97"
+      },
+      "video": {
+       "fileId": "14aa7ca9-228d-4a22-9e20-6083d04ba57f",
+       "fileUrl": "https://storage.googleapis.com/dev-file-storage-service/6164e714-e4e4-4f74-9691-bde60555cdae.mp4?X-Goog-Algorithm=GOOG4-RSA-SHA256&X-Goog-Credential=file-storage-service%40podcastle-dev.iam.gserviceaccount.com%2F20260930%2Fauto%2Fstorage%2Fgoog4_request&X-Goog-Date=20260930T110232Z&X-Goog-Expires=86400&X-Goog-SignedHeaders=host&response-content-disposition=attachment%3B%20filename%3D%2203-business-focused-hour.mp4%22%3B%20filename%2A%3DUTF-8%27%2703-business-focused-hour.mp4&X-Goog-Signature=1bac8d96dff8addf76c5f7b813b4757069cf9a5d48e0625a33fb86dace0bd0fe7f4b8db5034f7f8f0f4c38cbd5a313d3c1a3592cd16eca7196034b65931be11897f890d21a999bb4d500db939f9e7dbcc61aa248f907e28fd80ce9d16db77b4f7939d53d48f79f95809d9a0104b504cb1105a229fe7b2e64ae6ca78fdcc42a326ef10babff624dd9e49340fa174c40e9541a76ce845acfd1e1c838584003efce5b90a670d199027db2d3651158933d0a5d582b31aa3d06b95831cc615fe86f974dd4719afda5c9d6799006c841da2a8e956701949b8192b9eeab7a45b4c98dd8cfab01a329a2fe4b0afe0119bb21d71ce2fbaa1d100751feb4a1b590a819a7c5"
+      },
+      "image": null
+     },
+     "originalFile": null,
+     "effectIntensity": 100,
+     "crop": {
+      "x": null,
+      "y": null,
+      "w": 1.0,
+      "h": 1.0,
+      "cy": 0.5,
+      "cx": 0.5
+     },
+     "transformation": {
+      "boundingBox": {
+       "x": null,
+       "y": null,
+       "h": 1.1851851851851851,
+       "w": 0.375,
+       "cx": 0.5,
+       "cy": 0.5
+      },
+      "scale": {
+       "horizontalScale": 0.84375,
+       "verticalScale": 0.84375
+      },
+      "rotation": 0
+     },
+     "value": null,
+     "style": null,
+     "textAnimations": null,
+     "loopable": false,
+     "duration": 5292,
+     "cornerRadius": 0.0,
+     "filters": [],
+     "lutId": null,
+     "opacityFade": {
+      "opacityFadeIn": 0,
+      "opacityFadeOut": 0,
+      "interpolation": {
+       "value": [
+        0.0,
+        0.0,
+        0.67,
+        1.0
+       ],
+       "type": "BEZIER"
+      }
+     },
+     "keyframes": [],
+     "mask": null,
+     "audioEffects": [],
+     "flip": {
+      "horizontal": false,
+      "vertical": false
+     },
+     "shapeConfig": null,
+     "path": null,
+     "baseStyle": null,
+     "lineStart": null,
+     "lineEnd": null,
+     "blendMode": "normal"
+    },
+    {
+     "type": "IMAGE",
+     "clipId": "963305197193468",
+     "priority": 0,
+     "start": 25454,
+     "end": 30454,
+     "speed": 1.0,
+     "trimStart": 0,
+     "trimEnd": 0,
+     "volume": 0.0,
+     "muted": false,
+     "visible": true,
+     "fadeIn": 0,
+     "fadeOut": 0,
+     "opacity": 1.0,
+     "file": {
+      "audio": null,
+      "video": null,
+      "image": {
+       "fileId": "c25fe0c8-ed43-41f4-bbda-1d4c2d93a393",
+       "fileUrl": "https://storage.googleapis.com/dev-file-storage-images/f8972789-233f-4930-8f87-e093b2057cf0.jpeg?X-Goog-Algorithm=GOOG4-RSA-SHA256&X-Goog-Credential=file-storage-service%40podcastle-dev.iam.gserviceaccount.com%2F20260930%2Fauto%2Fstorage%2Fgoog4_request&X-Goog-Date=20260930T110232Z&X-Goog-Expires=86400&X-Goog-SignedHeaders=host&response-content-disposition=attachment%3B%20filename%3D%22StoryBlock_350966112_b4072c85-88ca-4a44-a8ca-ca8994249041.jpeg%22%3B%20filename%2A%3DUTF-8%27%27StoryBlock_350966112_b4072c85-88ca-4a44-a8ca-ca8994249041.jpeg&X-Goog-Signature=911e4e8d5861db5d834c1d35d2b63af3e8738abd2af8f593f54ecbad83f873c346fa87289225b6a1f0c912c884853eeba220036df5a9bde062f73c3701c1b52820eafded45ea2b9086ba9b7077c816aa1f351111836cfed148a9458042dffbeb6bfe8cb32727acb931601f5ab0a12da23319a2631f3587290853ea3617ff665b813930509fe2f35ebf091605e987998da9dba9007953f90943df9002a096a6d7f9bc7bae81ae9dbf5b55d4c21815feca6daef259a5b6d68155b0437c514f305bae68b99acb1c9ecce9e5e61c995b3a73e7d020f3d2d2a7dd23f12bcb7267a2b103f63af6f40e8106fe104fbfbb94bc128dc766418ca5ae3bf86abf9fc075a40a"
+      }
+     },
+     "originalFile": null,
+     "effectIntensity": null,
+     "crop": {
+      "x": null,
+      "y": null,
+      "w": 1.0,
+      "h": 1.0,
+      "cy": 0.5,
+      "cx": 0.5
+     },
+     "transformation": {
+      "boundingBox": {
+       "x": null,
+       "y": null,
+       "h": 2.1333333333333333,
+       "w": 2.1333333333333333,
+       "cx": 0.5,
+       "cy": 0.5
+      },
+      "scale": {
+       "horizontalScale": 0.46875,
+       "verticalScale": 0.46875
+      },
+      "rotation": 0
+     },
+     "value": null,
+     "style": null,
+     "textAnimations": null,
+     "loopable": false,
+     "duration": 0,
+     "cornerRadius": 0.0,
+     "filters": [],
+     "lutId": null,
+     "opacityFade": {
+      "opacityFadeIn": 0,
+      "opacityFadeOut": 0,
+      "interpolation": {
+       "value": [
+        0.0,
+        0.0,
+        0.67,
+        1.0
+       ],
+       "type": "BEZIER"
+      }
+     },
+     "keyframes": [],
+     "mask": null,
+     "audioEffects": null,
+     "flip": {
+      "horizontal": false,
+      "vertical": false
+     },
+     "shapeConfig": null,
+     "path": null,
+     "baseStyle": null,
+     "lineStart": null,
+     "lineEnd": null,
+     "blendMode": "normal"
+    },
+    {
+     "type": "IMAGE",
+     "clipId": "534238772405406",
+     "priority": 0,
+     "start": 30454,
+     "end": 35454,
+     "speed": 1.0,
+     "trimStart": 0,
+     "trimEnd": 0,
+     "volume": 0.0,
+     "muted": false,
+     "visible": true,
+     "fadeIn": 0,
+     "fadeOut": 0,
+     "opacity": 1.0,
+     "file": {
+      "audio": null,
+      "video": null,
+      "image": {
+       "fileId": "94e1e6bc-a072-4fc4-9394-2bcec39e33ef",
+       "fileUrl": "https://storage.googleapis.com/dev-file-storage-images/5bd7cc62-3b8a-46f8-acab-8704befddac0.jpeg?X-Goog-Algorithm=GOOG4-RSA-SHA256&X-Goog-Credential=file-storage-service%40podcastle-dev.iam.gserviceaccount.com%2F20260930%2Fauto%2Fstorage%2Fgoog4_request&X-Goog-Date=20260930T110232Z&X-Goog-Expires=86400&X-Goog-SignedHeaders=host&response-content-disposition=attachment%3B%20filename%3D%22StoryBlock_349453745_0064dd7d-e3e4-4bbf-abcd-643a65e1b157.jpeg%22%3B%20filename%2A%3DUTF-8%27%27StoryBlock_349453745_0064dd7d-e3e4-4bbf-abcd-643a65e1b157.jpeg&X-Goog-Signature=468ed1675141c2c9b15892f24b4d10b521884efe5fb93e4f040002f10cbb9cfcf190b2d7424feb318e17ce17e2ec8d77aba8c40ff603b56217b4a6509e7277685e6d4919382b4eaa98d6366e57183f117ec1ffa7b09183f1b5d5a6c006a1f63f62a06091f19a1dcf912b15a49374a45ba7b30802f95507bd8a6e4120cc7e04b76e6553bf202e14e233839a664a4bdcb8a4e404c4af5b6301b413e43c8fc9013427935054cacd50d389dfbcfc096e558441faa8b4fd91b5e468ff8c3224d128218ab6c6015be216f95771d2893faa3fb99d2929c60312c25f43995113211bfcc8d51f8fbeeb5952b3ef6531b1dcadecc10df018a392147f1e805cd033bd30fcf4"
+      }
+     },
+     "originalFile": null,
+     "effectIntensity": null,
+     "crop": {
+      "x": null,
+      "y": null,
+      "w": 1.0,
+      "h": 1.0,
+      "cy": 0.5,
+      "cx": 0.5
+     },
+     "transformation": {
+      "boundingBox": {
+       "x": null,
+       "y": null,
+       "h": 2.0,
+       "w": 2.0,
+       "cx": 0.5,
+       "cy": 0.5
+      },
+      "scale": {
+       "horizontalScale": 0.5,
+       "verticalScale": 0.5
+      },
+      "rotation": 0
+     },
+     "value": null,
+     "style": null,
+     "textAnimations": null,
+     "loopable": false,
+     "duration": 0,
+     "cornerRadius": 0.0,
+     "filters": [],
+     "lutId": null,
+     "opacityFade": {
+      "opacityFadeIn": 0,
+      "opacityFadeOut": 0,
+      "interpolation": {
+       "value": [
+        0.0,
+        0.0,
+        0.67,
+        1.0
+       ],
+       "type": "BEZIER"
+      }
+     },
+     "keyframes": [],
+     "mask": null,
+     "audioEffects": null,
+     "flip": {
+      "horizontal": false,
+      "vertical": false
+     },
+     "shapeConfig": null,
+     "path": null,
+     "baseStyle": null,
+     "lineStart": null,
+     "lineEnd": null,
+     "blendMode": "normal"
+    },
+    {
+     "type": "VIDEO",
+     "clipId": "988807040170013",
+     "priority": 0,
+     "start": 35454,
+     "end": 50888,
+     "speed": 1.0,
+     "trimStart": 0,
+     "trimEnd": 10614,
+     "volume": 1.0,
+     "muted": false,
+     "visible": true,
+     "fadeIn": 0,
+     "fadeOut": 0,
+     "opacity": 1.0,
+     "file": {
+      "audio": {
+       "fileId": "d8e3d08a-40b4-4ee9-b7e3-f8d461073c1a",
+       "fileUrl": "https://storage.googleapis.com/dev-file-storage-service/2e5b1102-bc1b-435d-8bc2-aaf38a51ade7.wav?X-Goog-Algorithm=GOOG4-RSA-SHA256&X-Goog-Credential=file-storage-service%40podcastle-dev.iam.gserviceaccount.com%2F20260930%2Fauto%2Fstorage%2Fgoog4_request&X-Goog-Date=20260930T110232Z&X-Goog-Expires=86400&X-Goog-SignedHeaders=host&response-content-disposition=attachment%3B%20filename%3D%2203-business-focused-hour.wav%22%3B%20filename%2A%3DUTF-8%27%2703-business-focused-hour.wav&X-Goog-Signature=6ba4096d3a5e94d9b895b636cb23e142065fe1daaf42041ecd838b8c9da1246d9910301a2feeb9860900097a98d3bf4d7fa4978afa33d465298a3c4d6d755f513dd4ac3847208ca220f2daa0ca9768af47149642adc1958a85bb81db4cba032ff914ab3272b8e707e026387772a6982723dfd2fea620668d18a057e35f4a56e9c339f12a3681484330d1be77294adfcf29c5e026749d33b1b06feb2ea0813506751d57e8afe15c36151db1954cf3b354a40c25cd9a43bd616e5453c12d25de55e81d6778829d0f4b5134d0fd3f33c49467eb3e126fef2734785e5434681e76d1cee171bee8d7bf0857202050da2c0577eaecf1add156e1fb923ff82192912c97"
+      },
+      "video": {
+       "fileId": "14aa7ca9-228d-4a22-9e20-6083d04ba57f",
+       "fileUrl": "https://storage.googleapis.com/dev-file-storage-service/6164e714-e4e4-4f74-9691-bde60555cdae.mp4?X-Goog-Algorithm=GOOG4-RSA-SHA256&X-Goog-Credential=file-storage-service%40podcastle-dev.iam.gserviceaccount.com%2F20260930%2Fauto%2Fstorage%2Fgoog4_request&X-Goog-Date=20260930T110232Z&X-Goog-Expires=86400&X-Goog-SignedHeaders=host&response-content-disposition=attachment%3B%20filename%3D%2203-business-focused-hour.mp4%22%3B%20filename%2A%3DUTF-8%27%2703-business-focused-hour.mp4&X-Goog-Signature=1bac8d96dff8addf76c5f7b813b4757069cf9a5d48e0625a33fb86dace0bd0fe7f4b8db5034f7f8f0f4c38cbd5a313d3c1a3592cd16eca7196034b65931be11897f890d21a999bb4d500db939f9e7dbcc61aa248f907e28fd80ce9d16db77b4f7939d53d48f79f95809d9a0104b504cb1105a229fe7b2e64ae6ca78fdcc42a326ef10babff624dd9e49340fa174c40e9541a76ce845acfd1e1c838584003efce5b90a670d199027db2d3651158933d0a5d582b31aa3d06b95831cc615fe86f974dd4719afda5c9d6799006c841da2a8e956701949b8192b9eeab7a45b4c98dd8cfab01a329a2fe4b0afe0119bb21d71ce2fbaa1d100751feb4a1b590a819a7c5"
+      },
+      "image": null
+     },
+     "originalFile": null,
+     "effectIntensity": 100,
+     "crop": {
+      "x": null,
+      "y": null,
+      "w": 1.0,
+      "h": 1.0,
+      "cy": 0.5,
+      "cx": 0.5
+     },
+     "transformation": {
+      "boundingBox": {
+       "x": null,
+       "y": null,
+       "h": 1.1851851851851851,
+       "w": 0.375,
+       "cx": 0.5,
+       "cy": 0.5
+      },
+      "scale": {
+       "horizontalScale": 0.84375,
+       "verticalScale": 0.84375
+      },
+      "rotation": 0
+     },
+     "value": null,
+     "style": null,
+     "textAnimations": null,
+     "loopable": false,
+     "duration": 4820,
+     "cornerRadius": 0.0,
+     "filters": [],
+     "lutId": null,
+     "opacityFade": {
+      "opacityFadeIn": 0,
+      "opacityFadeOut": 0,
+      "interpolation": {
+       "value": [
+        0.0,
+        0.0,
+        0.67,
+        1.0
+       ],
+       "type": "BEZIER"
+      }
+     },
+     "keyframes": [],
+     "mask": null,
+     "audioEffects": [],
+     "flip": {
+      "horizontal": false,
+      "vertical": false
+     },
+     "shapeConfig": null,
+     "path": null,
+     "baseStyle": null,
+     "lineStart": null,
+     "lineEnd": null,
+     "blendMode": "normal"
+    },
+    {
+     "type": "VIDEO",
+     "clipId": "811938023583247",
+     "priority": 0,
+     "start": 35454,
+     "end": 50888,
+     "speed": 1.0,
+     "trimStart": 4820,
+     "trimEnd": 5272,
+     "volume": 1.0,
+     "muted": false,
+     "visible": true,
+     "fadeIn": 0,
+     "fadeOut": 0,
+     "opacity": 1.0,
+     "file": {
+      "audio": {
+       "fileId": "d8e3d08a-40b4-4ee9-b7e3-f8d461073c1a",
+       "fileUrl": "https://storage.googleapis.com/dev-file-storage-service/2e5b1102-bc1b-435d-8bc2-aaf38a51ade7.wav?X-Goog-Algorithm=GOOG4-RSA-SHA256&X-Goog-Credential=file-storage-service%40podcastle-dev.iam.gserviceaccount.com%2F20260930%2Fauto%2Fstorage%2Fgoog4_request&X-Goog-Date=20260930T110232Z&X-Goog-Expires=86400&X-Goog-SignedHeaders=host&response-content-disposition=attachment%3B%20filename%3D%2203-business-focused-hour.wav%22%3B%20filename%2A%3DUTF-8%27%2703-business-focused-hour.wav&X-Goog-Signature=6ba4096d3a5e94d9b895b636cb23e142065fe1daaf42041ecd838b8c9da1246d9910301a2feeb9860900097a98d3bf4d7fa4978afa33d465298a3c4d6d755f513dd4ac3847208ca220f2daa0ca9768af47149642adc1958a85bb81db4cba032ff914ab3272b8e707e026387772a6982723dfd2fea620668d18a057e35f4a56e9c339f12a3681484330d1be77294adfcf29c5e026749d33b1b06feb2ea0813506751d57e8afe15c36151db1954cf3b354a40c25cd9a43bd616e5453c12d25de55e81d6778829d0f4b5134d0fd3f33c49467eb3e126fef2734785e5434681e76d1cee171bee8d7bf0857202050da2c0577eaecf1add156e1fb923ff82192912c97"
+      },
+      "video": {
+       "fileId": "14aa7ca9-228d-4a22-9e20-6083d04ba57f",
+       "fileUrl": "https://storage.googleapis.com/dev-file-storage-service/6164e714-e4e4-4f74-9691-bde60555cdae.mp4?X-Goog-Algorithm=GOOG4-RSA-SHA256&X-Goog-Credential=file-storage-service%40podcastle-dev.iam.gserviceaccount.com%2F20260930%2Fauto%2Fstorage%2Fgoog4_request&X-Goog-Date=20260930T110232Z&X-Goog-Expires=86400&X-Goog-SignedHeaders=host&response-content-disposition=attachment%3B%20filename%3D%2203-business-focused-hour.mp4%22%3B%20filename%2A%3DUTF-8%27%2703-business-focused-hour.mp4&X-Goog-Signature=1bac8d96dff8addf76c5f7b813b4757069cf9a5d48e0625a33fb86dace0bd0fe7f4b8db5034f7f8f0f4c38cbd5a313d3c1a3592cd16eca7196034b65931be11897f890d21a999bb4d500db939f9e7dbcc61aa248f907e28fd80ce9d16db77b4f7939d53d48f79f95809d9a0104b504cb1105a229fe7b2e64ae6ca78fdcc42a326ef10babff624dd9e49340fa174c40e9541a76ce845acfd1e1c838584003efce5b90a670d199027db2d3651158933d0a5d582b31aa3d06b95831cc615fe86f974dd4719afda5c9d6799006c841da2a8e956701949b8192b9eeab7a45b4c98dd8cfab01a329a2fe4b0afe0119bb21d71ce2fbaa1d100751feb4a1b590a819a7c5"
+      },
+      "image": null
+     },
+     "originalFile": null,
+     "effectIntensity": 100,
+     "crop": {
+      "x": null,
+      "y": null,
+      "w": 1.0,
+      "h": 1.0,
+      "cy": 0.5,
+      "cx": 0.5
+     },
+     "transformation": {
+      "boundingBox": {
+       "x": null,
+       "y": null,
+       "h": 1.1851851851851851,
+       "w": 0.375,
+       "cx": 0.5,
+       "cy": 0.5
+      },
+      "scale": {
+       "horizontalScale": 0.84375,
+       "verticalScale": 0.84375
+      },
+      "rotation": 0
+     },
+     "value": null,
+     "style": null,
+     "textAnimations": null,
+     "loopable": false,
+     "duration": 5342,
+     "cornerRadius": 0.0,
+     "filters": [],
+     "lutId": null,
+     "opacityFade": {
+      "opacityFadeIn": 0,
+      "opacityFadeOut": 0,
+      "interpolation": {
+       "value": [
+        0.0,
+        0.0,
+        0.67,
+        1.0
+       ],
+       "type": "BEZIER"
+      }
+     },
+     "keyframes": [],
+     "mask": null,
+     "audioEffects": [],
+     "flip": {
+      "horizontal": false,
+      "vertical": false
+     },
+     "shapeConfig": null,
+     "path": null,
+     "baseStyle": null,
+     "lineStart": null,
+     "lineEnd": null,
+     "blendMode": "normal"
+    },
+    {
+     "type": "VIDEO",
+     "clipId": "456673663970070",
+     "priority": 0,
+     "start": 35454,
+     "end": 50908,
+     "speed": 1.0,
+     "trimStart": 10162,
+     "trimEnd": 0,
+     "volume": 1.0,
+     "muted": false,
+     "visible": true,
+     "fadeIn": 0,
+     "fadeOut": 0,
+     "opacity": 1.0,
+     "file": {
+      "audio": {
+       "fileId": "d8e3d08a-40b4-4ee9-b7e3-f8d461073c1a",
+       "fileUrl": "https://storage.googleapis.com/dev-file-storage-service/2e5b1102-bc1b-435d-8bc2-aaf38a51ade7.wav?X-Goog-Algorithm=GOOG4-RSA-SHA256&X-Goog-Credential=file-storage-service%40podcastle-dev.iam.gserviceaccount.com%2F20260930%2Fauto%2Fstorage%2Fgoog4_request&X-Goog-Date=20260930T110232Z&X-Goog-Expires=86400&X-Goog-SignedHeaders=host&response-content-disposition=attachment%3B%20filename%3D%2203-business-focused-hour.wav%22%3B%20filename%2A%3DUTF-8%27%2703-business-focused-hour.wav&X-Goog-Signature=6ba4096d3a5e94d9b895b636cb23e142065fe1daaf42041ecd838b8c9da1246d9910301a2feeb9860900097a98d3bf4d7fa4978afa33d465298a3c4d6d755f513dd4ac3847208ca220f2daa0ca9768af47149642adc1958a85bb81db4cba032ff914ab3272b8e707e026387772a6982723dfd2fea620668d18a057e35f4a56e9c339f12a3681484330d1be77294adfcf29c5e026749d33b1b06feb2ea0813506751d57e8afe15c36151db1954cf3b354a40c25cd9a43bd616e5453c12d25de55e81d6778829d0f4b5134d0fd3f33c49467eb3e126fef2734785e5434681e76d1cee171bee8d7bf0857202050da2c0577eaecf1add156e1fb923ff82192912c97"
+      },
+      "video": {
+       "fileId": "14aa7ca9-228d-4a22-9e20-6083d04ba57f",
+       "fileUrl": "https://storage.googleapis.com/dev-file-storage-service/6164e714-e4e4-4f74-9691-bde60555cdae.mp4?X-Goog-Algorithm=GOOG4-RSA-SHA256&X-Goog-Credential=file-storage-service%40podcastle-dev.iam.gserviceaccount.com%2F20260930%2Fauto%2Fstorage%2Fgoog4_request&X-Goog-Date=20260930T110232Z&X-Goog-Expires=86400&X-Goog-SignedHeaders=host&response-content-disposition=attachment%3B%20filename%3D%2203-business-focused-hour.mp4%22%3B%20filename%2A%3DUTF-8%27%2703-business-focused-hour.mp4&X-Goog-Signature=1bac8d96dff8addf76c5f7b813b4757069cf9a5d48e0625a33fb86dace0bd0fe7f4b8db5034f7f8f0f4c38cbd5a313d3c1a3592cd16eca7196034b65931be11897f890d21a999bb4d500db939f9e7dbcc61aa248f907e28fd80ce9d16db77b4f7939d53d48f79f95809d9a0104b504cb1105a229fe7b2e64ae6ca78fdcc42a326ef10babff624dd9e49340fa174c40e9541a76ce845acfd1e1c838584003efce5b90a670d199027db2d3651158933d0a5d582b31aa3d06b95831cc615fe86f974dd4719afda5c9d6799006c841da2a8e956701949b8192b9eeab7a45b4c98dd8cfab01a329a2fe4b0afe0119bb21d71ce2fbaa1d100751feb4a1b590a819a7c5"
+      },
+      "image": null
+     },
+     "originalFile": null,
+     "effectIntensity": 100,
+     "crop": {
+      "x": null,
+      "y": null,
+      "w": 1.0,
+      "h": 1.0,
+      "cy": 0.5,
+      "cx": 0.5
+     },
+     "transformation": {
+      "boundingBox": {
+       "x": null,
+       "y": null,
+       "h": 1.1851851851851851,
+       "w": 0.375,
+       "cx": 0.5,
+       "cy": 0.5
+      },
+      "scale": {
+       "horizontalScale": 0.84375,
+       "verticalScale": 0.84375
+      },
+      "rotation": 0
+     },
+     "value": null,
+     "style": null,
+     "textAnimations": null,
+     "loopable": false,
+     "duration": 5292,
+     "cornerRadius": 0.0,
+     "filters": [],
+     "lutId": null,
+     "opacityFade": {
+      "opacityFadeIn": 0,
+      "opacityFadeOut": 0,
+      "interpolation": {
+       "value": [
+        0.0,
+        0.0,
+        0.67,
+        1.0
+       ],
+       "type": "BEZIER"
+      }
+     },
+     "keyframes": [],
+     "mask": null,
+     "audioEffects": [],
+     "flip": {
+      "horizontal": false,
+      "vertical": false
+     },
+     "shapeConfig": null,
+     "path": null,
+     "baseStyle": null,
+     "lineStart": null,
+     "lineEnd": null,
+     "blendMode": "normal"
+    },
+    {
+     "type": "IMAGE",
+     "clipId": "397990503686005",
+     "priority": 0,
+     "start": 50908,
+     "end": 55908,
+     "speed": 1.0,
+     "trimStart": 0,
+     "trimEnd": 0,
+     "volume": 0.0,
+     "muted": false,
+     "visible": true,
+     "fadeIn": 0,
+     "fadeOut": 0,
+     "opacity": 1.0,
+     "file": {
+      "audio": null,
+      "video": null,
+      "image": {
+       "fileId": "c25fe0c8-ed43-41f4-bbda-1d4c2d93a393",
+       "fileUrl": "https://storage.googleapis.com/dev-file-storage-images/f8972789-233f-4930-8f87-e093b2057cf0.jpeg?X-Goog-Algorithm=GOOG4-RSA-SHA256&X-Goog-Credential=file-storage-service%40podcastle-dev.iam.gserviceaccount.com%2F20260930%2Fauto%2Fstorage%2Fgoog4_request&X-Goog-Date=20260930T110232Z&X-Goog-Expires=86400&X-Goog-SignedHeaders=host&response-content-disposition=attachment%3B%20filename%3D%22StoryBlock_350966112_b4072c85-88ca-4a44-a8ca-ca8994249041.jpeg%22%3B%20filename%2A%3DUTF-8%27%27StoryBlock_350966112_b4072c85-88ca-4a44-a8ca-ca8994249041.jpeg&X-Goog-Signature=911e4e8d5861db5d834c1d35d2b63af3e8738abd2af8f593f54ecbad83f873c346fa87289225b6a1f0c912c884853eeba220036df5a9bde062f73c3701c1b52820eafded45ea2b9086ba9b7077c816aa1f351111836cfed148a9458042dffbeb6bfe8cb32727acb931601f5ab0a12da23319a2631f3587290853ea3617ff665b813930509fe2f35ebf091605e987998da9dba9007953f90943df9002a096a6d7f9bc7bae81ae9dbf5b55d4c21815feca6daef259a5b6d68155b0437c514f305bae68b99acb1c9ecce9e5e61c995b3a73e7d020f3d2d2a7dd23f12bcb7267a2b103f63af6f40e8106fe104fbfbb94bc128dc766418ca5ae3bf86abf9fc075a40a"
+      }
+     },
+     "originalFile": null,
+     "effectIntensity": null,
+     "crop": {
+      "x": null,
+      "y": null,
+      "w": 1.0,
+      "h": 1.0,
+      "cy": 0.5,
+      "cx": 0.5
+     },
+     "transformation": {
+      "boundingBox": {
+       "x": null,
+       "y": null,
+       "h": 2.1333333333333333,
+       "w": 2.1333333333333333,
+       "cx": 0.5,
+       "cy": 0.5
+      },
+      "scale": {
+       "horizontalScale": 0.46875,
+       "verticalScale": 0.46875
+      },
+      "rotation": 0
+     },
+     "value": null,
+     "style": null,
+     "textAnimations": null,
+     "loopable": false,
+     "duration": 0,
+     "cornerRadius": 0.0,
+     "filters": [],
+     "lutId": null,
+     "opacityFade": {
+      "opacityFadeIn": 0,
+      "opacityFadeOut": 0,
+      "interpolation": {
+       "value": [
+        0.0,
+        0.0,
+        0.67,
+        1.0
+       ],
+       "type": "BEZIER"
+      }
+     },
+     "keyframes": [],
+     "mask": null,
+     "audioEffects": null,
+     "flip": {
+      "horizontal": false,
+      "vertical": false
+     },
+     "shapeConfig": null,
+     "path": null,
+     "baseStyle": null,
+     "lineStart": null,
+     "lineEnd": null,
+     "blendMode": "normal"
+    },
+    {
+     "type": "IMAGE",
+     "clipId": "100223961169887",
+     "priority": 0,
+     "start": 55908,
+     "end": 60908,
+     "speed": 1.0,
+     "trimStart": 0,
+     "trimEnd": 0,
+     "volume": 0.0,
+     "muted": false,
+     "visible": true,
+     "fadeIn": 0,
+     "fadeOut": 0,
+     "opacity": 1.0,
+     "file": {
+      "audio": null,
+      "video": null,
+      "image": {
+       "fileId": "94e1e6bc-a072-4fc4-9394-2bcec39e33ef",
+       "fileUrl": "https://storage.googleapis.com/dev-file-storage-images/5bd7cc62-3b8a-46f8-acab-8704befddac0.jpeg?X-Goog-Algorithm=GOOG4-RSA-SHA256&X-Goog-Credential=file-storage-service%40podcastle-dev.iam.gserviceaccount.com%2F20260930%2Fauto%2Fstorage%2Fgoog4_request&X-Goog-Date=20260930T110232Z&X-Goog-Expires=86400&X-Goog-SignedHeaders=host&response-content-disposition=attachment%3B%20filename%3D%22StoryBlock_349453745_0064dd7d-e3e4-4bbf-abcd-643a65e1b157.jpeg%22%3B%20filename%2A%3DUTF-8%27%27StoryBlock_349453745_0064dd7d-e3e4-4bbf-abcd-643a65e1b157.jpeg&X-Goog-Signature=468ed1675141c2c9b15892f24b4d10b521884efe5fb93e4f040002f10cbb9cfcf190b2d7424feb318e17ce17e2ec8d77aba8c40ff603b56217b4a6509e7277685e6d4919382b4eaa98d6366e57183f117ec1ffa7b09183f1b5d5a6c006a1f63f62a06091f19a1dcf912b15a49374a45ba7b30802f95507bd8a6e4120cc7e04b76e6553bf202e14e233839a664a4bdcb8a4e404c4af5b6301b413e43c8fc9013427935054cacd50d389dfbcfc096e558441faa8b4fd91b5e468ff8c3224d128218ab6c6015be216f95771d2893faa3fb99d2929c60312c25f43995113211bfcc8d51f8fbeeb5952b3ef6531b1dcadecc10df018a392147f1e805cd033bd30fcf4"
+      }
+     },
+     "originalFile": null,
+     "effectIntensity": null,
+     "crop": {
+      "x": null,
+      "y": null,
+      "w": 1.0,
+      "h": 1.0,
+      "cy": 0.5,
+      "cx": 0.5
+     },
+     "transformation": {
+      "boundingBox": {
+       "x": null,
+       "y": null,
+       "h": 2.0,
+       "w": 2.0,
+       "cx": 0.5,
+       "cy": 0.5
+      },
+      "scale": {
+       "horizontalScale": 0.5,
+       "verticalScale": 0.5
+      },
+      "rotation": 0
+     },
+     "value": null,
+     "style": null,
+     "textAnimations": null,
+     "loopable": false,
+     "duration": 0,
+     "cornerRadius": 0.0,
+     "filters": [],
+     "lutId": null,
+     "opacityFade": {
+      "opacityFadeIn": 0,
+      "opacityFadeOut": 0,
+      "interpolation": {
+       "value": [
+        0.0,
+        0.0,
+        0.67,
+        1.0
+       ],
+       "type": "BEZIER"
+      }
+     },
+     "keyframes": [],
+     "mask": null,
+     "audioEffects": null,
+     "flip": {
+      "horizontal": false,
+      "vertical": false
+     },
+     "shapeConfig": null,
+     "path": null,
+     "baseStyle": null,
+     "lineStart": null,
+     "lineEnd": null,
+     "blendMode": "normal"
+    },
+    {
+     "type": "VIDEO",
+     "clipId": "993844451261546",
+     "priority": 0,
+     "start": 60908,
+     "end": 76342,
+     "speed": 1.0,
+     "trimStart": 0,
+     "trimEnd": 10614,
+     "volume": 1.0,
+     "muted": false,
+     "visible": true,
+     "fadeIn": 0,
+     "fadeOut": 0,
+     "opacity": 1.0,
+     "file": {
+      "audio": {
+       "fileId": "d8e3d08a-40b4-4ee9-b7e3-f8d461073c1a",
+       "fileUrl": "https://storage.googleapis.com/dev-file-storage-service/2e5b1102-bc1b-435d-8bc2-aaf38a51ade7.wav?X-Goog-Algorithm=GOOG4-RSA-SHA256&X-Goog-Credential=file-storage-service%40podcastle-dev.iam.gserviceaccount.com%2F20260930%2Fauto%2Fstorage%2Fgoog4_request&X-Goog-Date=20260930T110232Z&X-Goog-Expires=86400&X-Goog-SignedHeaders=host&response-content-disposition=attachment%3B%20filename%3D%2203-business-focused-hour.wav%22%3B%20filename%2A%3DUTF-8%27%2703-business-focused-hour.wav&X-Goog-Signature=6ba4096d3a5e94d9b895b636cb23e142065fe1daaf42041ecd838b8c9da1246d9910301a2feeb9860900097a98d3bf4d7fa4978afa33d465298a3c4d6d755f513dd4ac3847208ca220f2daa0ca9768af47149642adc1958a85bb81db4cba032ff914ab3272b8e707e026387772a6982723dfd2fea620668d18a057e35f4a56e9c339f12a3681484330d1be77294adfcf29c5e026749d33b1b06feb2ea0813506751d57e8afe15c36151db1954cf3b354a40c25cd9a43bd616e5453c12d25de55e81d6778829d0f4b5134d0fd3f33c49467eb3e126fef2734785e5434681e76d1cee171bee8d7bf0857202050da2c0577eaecf1add156e1fb923ff82192912c97"
+      },
+      "video": {
+       "fileId": "14aa7ca9-228d-4a22-9e20-6083d04ba57f",
+       "fileUrl": "https://storage.googleapis.com/dev-file-storage-service/6164e714-e4e4-4f74-9691-bde60555cdae.mp4?X-Goog-Algorithm=GOOG4-RSA-SHA256&X-Goog-Credential=file-storage-service%40podcastle-dev.iam.gserviceaccount.com%2F20260930%2Fauto%2Fstorage%2Fgoog4_request&X-Goog-Date=20260930T110232Z&X-Goog-Expires=86400&X-Goog-SignedHeaders=host&response-content-disposition=attachment%3B%20filename%3D%2203-business-focused-hour.mp4%22%3B%20filename%2A%3DUTF-8%27%2703-business-focused-hour.mp4&X-Goog-Signature=1bac8d96dff8addf76c5f7b813b4757069cf9a5d48e0625a33fb86dace0bd0fe7f4b8db5034f7f8f0f4c38cbd5a313d3c1a3592cd16eca7196034b65931be11897f890d21a999bb4d500db939f9e7dbcc61aa248f907e28fd80ce9d16db77b4f7939d53d48f79f95809d9a0104b504cb1105a229fe7b2e64ae6ca78fdcc42a326ef10babff624dd9e49340fa174c40e9541a76ce845acfd1e1c838584003efce5b90a670d199027db2d3651158933d0a5d582b31aa3d06b95831cc615fe86f974dd4719afda5c9d6799006c841da2a8e956701949b8192b9eeab7a45b4c98dd8cfab01a329a2fe4b0afe0119bb21d71ce2fbaa1d100751feb4a1b590a819a7c5"
+      },
+      "image": null
+     },
+     "originalFile": null,
+     "effectIntensity": 100,
+     "crop": {
+      "x": null,
+      "y": null,
+      "w": 1.0,
+      "h": 1.0,
+      "cy": 0.5,
+      "cx": 0.5
+     },
+     "transformation": {
+      "boundingBox": {
+       "x": null,
+       "y": null,
+       "h": 1.1851851851851851,
+       "w": 0.375,
+       "cx": 0.5,
+       "cy": 0.5
+      },
+      "scale": {
+       "horizontalScale": 0.84375,
+       "verticalScale": 0.84375
+      },
+      "rotation": 0
+     },
+     "value": null,
+     "style": null,
+     "textAnimations": null,
+     "loopable": false,
+     "duration": 4820,
+     "cornerRadius": 0.0,
+     "filters": [],
+     "lutId": null,
+     "opacityFade": {
+      "opacityFadeIn": 0,
+      "opacityFadeOut": 0,
+      "interpolation": {
+       "value": [
+        0.0,
+        0.0,
+        0.67,
+        1.0
+       ],
+       "type": "BEZIER"
+      }
+     },
+     "keyframes": [],
+     "mask": null,
+     "audioEffects": [],
+     "flip": {
+      "horizontal": false,
+      "vertical": false
+     },
+     "shapeConfig": null,
+     "path": null,
+     "baseStyle": null,
+     "lineStart": null,
+     "lineEnd": null,
+     "blendMode": "normal"
+    },
+    {
+     "type": "VIDEO",
+     "clipId": "374786515554697",
+     "priority": 0,
+     "start": 60908,
+     "end": 76342,
+     "speed": 1.0,
+     "trimStart": 4820,
+     "trimEnd": 5272,
+     "volume": 1.0,
+     "muted": false,
+     "visible": true,
+     "fadeIn": 0,
+     "fadeOut": 0,
+     "opacity": 1.0,
+     "file": {
+      "audio": {
+       "fileId": "d8e3d08a-40b4-4ee9-b7e3-f8d461073c1a",
+       "fileUrl": "https://storage.googleapis.com/dev-file-storage-service/2e5b1102-bc1b-435d-8bc2-aaf38a51ade7.wav?X-Goog-Algorithm=GOOG4-RSA-SHA256&X-Goog-Credential=file-storage-service%40podcastle-dev.iam.gserviceaccount.com%2F20260930%2Fauto%2Fstorage%2Fgoog4_request&X-Goog-Date=20260930T110232Z&X-Goog-Expires=86400&X-Goog-SignedHeaders=host&response-content-disposition=attachment%3B%20filename%3D%2203-business-focused-hour.wav%22%3B%20filename%2A%3DUTF-8%27%2703-business-focused-hour.wav&X-Goog-Signature=6ba4096d3a5e94d9b895b636cb23e142065fe1daaf42041ecd838b8c9da1246d9910301a2feeb9860900097a98d3bf4d7fa4978afa33d465298a3c4d6d755f513dd4ac3847208ca220f2daa0ca9768af47149642adc1958a85bb81db4cba032ff914ab3272b8e707e026387772a6982723dfd2fea620668d18a057e35f4a56e9c339f12a3681484330d1be77294adfcf29c5e026749d33b1b06feb2ea0813506751d57e8afe15c36151db1954cf3b354a40c25cd9a43bd616e5453c12d25de55e81d6778829d0f4b5134d0fd3f33c49467eb3e126fef2734785e5434681e76d1cee171bee8d7bf0857202050da2c0577eaecf1add156e1fb923ff82192912c97"
+      },
+      "video": {
+       "fileId": "14aa7ca9-228d-4a22-9e20-6083d04ba57f",
+       "fileUrl": "https://storage.googleapis.com/dev-file-storage-service/6164e714-e4e4-4f74-9691-bde60555cdae.mp4?X-Goog-Algorithm=GOOG4-RSA-SHA256&X-Goog-Credential=file-storage-service%40podcastle-dev.iam.gserviceaccount.com%2F20260930%2Fauto%2Fstorage%2Fgoog4_request&X-Goog-Date=20260930T110232Z&X-Goog-Expires=86400&X-Goog-SignedHeaders=host&response-content-disposition=attachment%3B%20filename%3D%2203-business-focused-hour.mp4%22%3B%20filename%2A%3DUTF-8%27%2703-business-focused-hour.mp4&X-Goog-Signature=1bac8d96dff8addf76c5f7b813b4757069cf9a5d48e0625a33fb86dace0bd0fe7f4b8db5034f7f8f0f4c38cbd5a313d3c1a3592cd16eca7196034b65931be11897f890d21a999bb4d500db939f9e7dbcc61aa248f907e28fd80ce9d16db77b4f7939d53d48f79f95809d9a0104b504cb1105a229fe7b2e64ae6ca78fdcc42a326ef10babff624dd9e49340fa174c40e9541a76ce845acfd1e1c838584003efce5b90a670d199027db2d3651158933d0a5d582b31aa3d06b95831cc615fe86f974dd4719afda5c9d6799006c841da2a8e956701949b8192b9eeab7a45b4c98dd8cfab01a329a2fe4b0afe0119bb21d71ce2fbaa1d100751feb4a1b590a819a7c5"
+      },
+      "image": null
+     },
+     "originalFile": null,
+     "effectIntensity": 100,
+     "crop": {
+      "x": null,
+      "y": null,
+      "w": 1.0,
+      "h": 1.0,
+      "cy": 0.5,
+      "cx": 0.5
+     },
+     "transformation": {
+      "boundingBox": {
+       "x": null,
+       "y": null,
+       "h": 1.1851851851851851,
+       "w": 0.375,
+       "cx": 0.5,
+       "cy": 0.5
+      },
+      "scale": {
+       "horizontalScale": 0.84375,
+       "verticalScale": 0.84375
+      },
+      "rotation": 0
+     },
+     "value": null,
+     "style": null,
+     "textAnimations": null,
+     "loopable": false,
+     "duration": 5342,
+     "cornerRadius": 0.0,
+     "filters": [],
+     "lutId": null,
+     "opacityFade": {
+      "opacityFadeIn": 0,
+      "opacityFadeOut": 0,
+      "interpolation": {
+       "value": [
+        0.0,
+        0.0,
+        0.67,
+        1.0
+       ],
+       "type": "BEZIER"
+      }
+     },
+     "keyframes": [],
+     "mask": null,
+     "audioEffects": [],
+     "flip": {
+      "horizontal": false,
+      "vertical": false
+     },
+     "shapeConfig": null,
+     "path": null,
+     "baseStyle": null,
+     "lineStart": null,
+     "lineEnd": null,
+     "blendMode": "normal"
+    },
+    {
+     "type": "VIDEO",
+     "clipId": "908946013689660",
+     "priority": 0,
+     "start": 60908,
+     "end": 76362,
+     "speed": 1.0,
+     "trimStart": 10162,
+     "trimEnd": 0,
+     "volume": 1.0,
+     "muted": false,
+     "visible": true,
+     "fadeIn": 0,
+     "fadeOut": 0,
+     "opacity": 1.0,
+     "file": {
+      "audio": {
+       "fileId": "d8e3d08a-40b4-4ee9-b7e3-f8d461073c1a",
+       "fileUrl": "https://storage.googleapis.com/dev-file-storage-service/2e5b1102-bc1b-435d-8bc2-aaf38a51ade7.wav?X-Goog-Algorithm=GOOG4-RSA-SHA256&X-Goog-Credential=file-storage-service%40podcastle-dev.iam.gserviceaccount.com%2F20260930%2Fauto%2Fstorage%2Fgoog4_request&X-Goog-Date=20260930T110232Z&X-Goog-Expires=86400&X-Goog-SignedHeaders=host&response-content-disposition=attachment%3B%20filename%3D%2203-business-focused-hour.wav%22%3B%20filename%2A%3DUTF-8%27%2703-business-focused-hour.wav&X-Goog-Signature=6ba4096d3a5e94d9b895b636cb23e142065fe1daaf42041ecd838b8c9da1246d9910301a2feeb9860900097a98d3bf4d7fa4978afa33d465298a3c4d6d755f513dd4ac3847208ca220f2daa0ca9768af47149642adc1958a85bb81db4cba032ff914ab3272b8e707e026387772a6982723dfd2fea620668d18a057e35f4a56e9c339f12a3681484330d1be77294adfcf29c5e026749d33b1b06feb2ea0813506751d57e8afe15c36151db1954cf3b354a40c25cd9a43bd616e5453c12d25de55e81d6778829d0f4b5134d0fd3f33c49467eb3e126fef2734785e5434681e76d1cee171bee8d7bf0857202050da2c0577eaecf1add156e1fb923ff82192912c97"
+      },
+      "video": {
+       "fileId": "14aa7ca9-228d-4a22-9e20-6083d04ba57f",
+       "fileUrl": "https://storage.googleapis.com/dev-file-storage-service/6164e714-e4e4-4f74-9691-bde60555cdae.mp4?X-Goog-Algorithm=GOOG4-RSA-SHA256&X-Goog-Credential=file-storage-service%40podcastle-dev.iam.gserviceaccount.com%2F20260930%2Fauto%2Fstorage%2Fgoog4_request&X-Goog-Date=20260930T110232Z&X-Goog-Expires=86400&X-Goog-SignedHeaders=host&response-content-disposition=attachment%3B%20filename%3D%2203-business-focused-hour.mp4%22%3B%20filename%2A%3DUTF-8%27%2703-business-focused-hour.mp4&X-Goog-Signature=1bac8d96dff8addf76c5f7b813b4757069cf9a5d48e0625a33fb86dace0bd0fe7f4b8db5034f7f8f0f4c38cbd5a313d3c1a3592cd16eca7196034b65931be11897f890d21a999bb4d500db939f9e7dbcc61aa248f907e28fd80ce9d16db77b4f7939d53d48f79f95809d9a0104b504cb1105a229fe7b2e64ae6ca78fdcc42a326ef10babff624dd9e49340fa174c40e9541a76ce845acfd1e1c838584003efce5b90a670d199027db2d3651158933d0a5d582b31aa3d06b95831cc615fe86f974dd4719afda5c9d6799006c841da2a8e956701949b8192b9eeab7a45b4c98dd8cfab01a329a2fe4b0afe0119bb21d71ce2fbaa1d100751feb4a1b590a819a7c5"
+      },
+      "image": null
+     },
+     "originalFile": null,
+     "effectIntensity": 100,
+     "crop": {
+      "x": null,
+      "y": null,
+      "w": 1.0,
+      "h": 1.0,
+      "cy": 0.5,
+      "cx": 0.5
+     },
+     "transformation": {
+      "boundingBox": {
+       "x": null,
+       "y": null,
+       "h": 1.1851851851851851,
+       "w": 0.375,
+       "cx": 0.5,
+       "cy": 0.5
+      },
+      "scale": {
+       "horizontalScale": 0.84375,
+       "verticalScale": 0.84375
+      },
+      "rotation": 0
+     },
+     "value": null,
+     "style": null,
+     "textAnimations": null,
+     "loopable": false,
+     "duration": 5292,
+     "cornerRadius": 0.0,
+     "filters": [],
+     "lutId": null,
+     "opacityFade": {
+      "opacityFadeIn": 0,
+      "opacityFadeOut": 0,
+      "interpolation": {
+       "value": [
+        0.0,
+        0.0,
+        0.67,
+        1.0
+       ],
+       "type": "BEZIER"
+      }
+     },
+     "keyframes": [],
+     "mask": null,
+     "audioEffects": [],
+     "flip": {
+      "horizontal": false,
+      "vertical": false
+     },
+     "shapeConfig": null,
+     "path": null,
+     "baseStyle": null,
+     "lineStart": null,
+     "lineEnd": null,
+     "blendMode": "normal"
+    },
+    {
+     "type": "IMAGE",
+     "clipId": "274060859342029",
+     "priority": 0,
+     "start": 76362,
+     "end": 81362,
+     "speed": 1.0,
+     "trimStart": 0,
+     "trimEnd": 0,
+     "volume": 0.0,
+     "muted": false,
+     "visible": true,
+     "fadeIn": 0,
+     "fadeOut": 0,
+     "opacity": 1.0,
+     "file": {
+      "audio": null,
+      "video": null,
+      "image": {
+       "fileId": "c25fe0c8-ed43-41f4-bbda-1d4c2d93a393",
+       "fileUrl": "https://storage.googleapis.com/dev-file-storage-images/f8972789-233f-4930-8f87-e093b2057cf0.jpeg?X-Goog-Algorithm=GOOG4-RSA-SHA256&X-Goog-Credential=file-storage-service%40podcastle-dev.iam.gserviceaccount.com%2F20260930%2Fauto%2Fstorage%2Fgoog4_request&X-Goog-Date=20260930T110232Z&X-Goog-Expires=86400&X-Goog-SignedHeaders=host&response-content-disposition=attachment%3B%20filename%3D%22StoryBlock_350966112_b4072c85-88ca-4a44-a8ca-ca8994249041.jpeg%22%3B%20filename%2A%3DUTF-8%27%27StoryBlock_350966112_b4072c85-88ca-4a44-a8ca-ca8994249041.jpeg&X-Goog-Signature=911e4e8d5861db5d834c1d35d2b63af3e8738abd2af8f593f54ecbad83f873c346fa87289225b6a1f0c912c884853eeba220036df5a9bde062f73c3701c1b52820eafded45ea2b9086ba9b7077c816aa1f351111836cfed148a9458042dffbeb6bfe8cb32727acb931601f5ab0a12da23319a2631f3587290853ea3617ff665b813930509fe2f35ebf091605e987998da9dba9007953f90943df9002a096a6d7f9bc7bae81ae9dbf5b55d4c21815feca6daef259a5b6d68155b0437c514f305bae68b99acb1c9ecce9e5e61c995b3a73e7d020f3d2d2a7dd23f12bcb7267a2b103f63af6f40e8106fe104fbfbb94bc128dc766418ca5ae3bf86abf9fc075a40a"
+      }
+     },
+     "originalFile": null,
+     "effectIntensity": null,
+     "crop": {
+      "x": null,
+      "y": null,
+      "w": 1.0,
+      "h": 1.0,
+      "cy": 0.5,
+      "cx": 0.5
+     },
+     "transformation": {
+      "boundingBox": {
+       "x": null,
+       "y": null,
+       "h": 2.1333333333333333,
+       "w": 2.1333333333333333,
+       "cx": 0.5,
+       "cy": 0.5
+      },
+      "scale": {
+       "horizontalScale": 0.46875,
+       "verticalScale": 0.46875
+      },
+      "rotation": 0
+     },
+     "value": null,
+     "style": null,
+     "textAnimations": null,
+     "loopable": false,
+     "duration": 0,
+     "cornerRadius": 0.0,
+     "filters": [],
+     "lutId": null,
+     "opacityFade": {
+      "opacityFadeIn": 0,
+      "opacityFadeOut": 0,
+      "interpolation": {
+       "value": [
+        0.0,
+        0.0,
+        0.67,
+        1.0
+       ],
+       "type": "BEZIER"
+      }
+     },
+     "keyframes": [],
+     "mask": null,
+     "audioEffects": null,
+     "flip": {
+      "horizontal": false,
+      "vertical": false
+     },
+     "shapeConfig": null,
+     "path": null,
+     "baseStyle": null,
+     "lineStart": null,
+     "lineEnd": null,
+     "blendMode": "normal"
+    },
+    {
+     "type": "IMAGE",
+     "clipId": "907805858782015",
+     "priority": 0,
+     "start": 81362,
+     "end": 86362,
+     "speed": 1.0,
+     "trimStart": 0,
+     "trimEnd": 0,
+     "volume": 0.0,
+     "muted": false,
+     "visible": true,
+     "fadeIn": 0,
+     "fadeOut": 0,
+     "opacity": 1.0,
+     "file": {
+      "audio": null,
+      "video": null,
+      "image": {
+       "fileId": "94e1e6bc-a072-4fc4-9394-2bcec39e33ef",
+       "fileUrl": "https://storage.googleapis.com/dev-file-storage-images/5bd7cc62-3b8a-46f8-acab-8704befddac0.jpeg?X-Goog-Algorithm=GOOG4-RSA-SHA256&X-Goog-Credential=file-storage-service%40podcastle-dev.iam.gserviceaccount.com%2F20260930%2Fauto%2Fstorage%2Fgoog4_request&X-Goog-Date=20260930T110232Z&X-Goog-Expires=86400&X-Goog-SignedHeaders=host&response-content-disposition=attachment%3B%20filename%3D%22StoryBlock_349453745_0064dd7d-e3e4-4bbf-abcd-643a65e1b157.jpeg%22%3B%20filename%2A%3DUTF-8%27%27StoryBlock_349453745_0064dd7d-e3e4-4bbf-abcd-643a65e1b157.jpeg&X-Goog-Signature=468ed1675141c2c9b15892f24b4d10b521884efe5fb93e4f040002f10cbb9cfcf190b2d7424feb318e17ce17e2ec8d77aba8c40ff603b56217b4a6509e7277685e6d4919382b4eaa98d6366e57183f117ec1ffa7b09183f1b5d5a6c006a1f63f62a06091f19a1dcf912b15a49374a45ba7b30802f95507bd8a6e4120cc7e04b76e6553bf202e14e233839a664a4bdcb8a4e404c4af5b6301b413e43c8fc9013427935054cacd50d389dfbcfc096e558441faa8b4fd91b5e468ff8c3224d128218ab6c6015be216f95771d2893faa3fb99d2929c60312c25f43995113211bfcc8d51f8fbeeb5952b3ef6531b1dcadecc10df018a392147f1e805cd033bd30fcf4"
+      }
+     },
+     "originalFile": null,
+     "effectIntensity": null,
+     "crop": {
+      "x": null,
+      "y": null,
+      "w": 1.0,
+      "h": 1.0,
+      "cy": 0.5,
+      "cx": 0.5
+     },
+     "transformation": {
+      "boundingBox": {
+       "x": null,
+       "y": null,
+       "h": 2.0,
+       "w": 2.0,
+       "cx": 0.5,
+       "cy": 0.5
+      },
+      "scale": {
+       "horizontalScale": 0.5,
+       "verticalScale": 0.5
+      },
+      "rotation": 0
+     },
+     "value": null,
+     "style": null,
+     "textAnimations": null,
+     "loopable": false,
+     "duration": 0,
+     "cornerRadius": 0.0,
+     "filters": [],
+     "lutId": null,
+     "opacityFade": {
+      "opacityFadeIn": 0,
+      "opacityFadeOut": 0,
+      "interpolation": {
+       "value": [
+        0.0,
+        0.0,
+        0.67,
+        1.0
+       ],
+       "type": "BEZIER"
+      }
+     },
+     "keyframes": [],
+     "mask": null,
+     "audioEffects": null,
+     "flip": {
+      "horizontal": false,
+      "vertical": false
+     },
+     "shapeConfig": null,
+     "path": null,
+     "baseStyle": null,
+     "lineStart": null,
+     "lineEnd": null,
+     "blendMode": "normal"
+    },
+    {
+     "type": "VIDEO",
+     "clipId": "613666608257229",
+     "priority": 0,
+     "start": 86362,
+     "end": 101796,
+     "speed": 1.0,
+     "trimStart": 0,
+     "trimEnd": 10614,
+     "volume": 1.0,
+     "muted": false,
+     "visible": true,
+     "fadeIn": 0,
+     "fadeOut": 0,
+     "opacity": 1.0,
+     "file": {
+      "audio": {
+       "fileId": "d8e3d08a-40b4-4ee9-b7e3-f8d461073c1a",
+       "fileUrl": "https://storage.googleapis.com/dev-file-storage-service/2e5b1102-bc1b-435d-8bc2-aaf38a51ade7.wav?X-Goog-Algorithm=GOOG4-RSA-SHA256&X-Goog-Credential=file-storage-service%40podcastle-dev.iam.gserviceaccount.com%2F20260930%2Fauto%2Fstorage%2Fgoog4_request&X-Goog-Date=20260930T110232Z&X-Goog-Expires=86400&X-Goog-SignedHeaders=host&response-content-disposition=attachment%3B%20filename%3D%2203-business-focused-hour.wav%22%3B%20filename%2A%3DUTF-8%27%2703-business-focused-hour.wav&X-Goog-Signature=6ba4096d3a5e94d9b895b636cb23e142065fe1daaf42041ecd838b8c9da1246d9910301a2feeb9860900097a98d3bf4d7fa4978afa33d465298a3c4d6d755f513dd4ac3847208ca220f2daa0ca9768af47149642adc1958a85bb81db4cba032ff914ab3272b8e707e026387772a6982723dfd2fea620668d18a057e35f4a56e9c339f12a3681484330d1be77294adfcf29c5e026749d33b1b06feb2ea0813506751d57e8afe15c36151db1954cf3b354a40c25cd9a43bd616e5453c12d25de55e81d6778829d0f4b5134d0fd3f33c49467eb3e126fef2734785e5434681e76d1cee171bee8d7bf0857202050da2c0577eaecf1add156e1fb923ff82192912c97"
+      },
+      "video": {
+       "fileId": "14aa7ca9-228d-4a22-9e20-6083d04ba57f",
+       "fileUrl": "https://storage.googleapis.com/dev-file-storage-service/6164e714-e4e4-4f74-9691-bde60555cdae.mp4?X-Goog-Algorithm=GOOG4-RSA-SHA256&X-Goog-Credential=file-storage-service%40podcastle-dev.iam.gserviceaccount.com%2F20260930%2Fauto%2Fstorage%2Fgoog4_request&X-Goog-Date=20260930T110232Z&X-Goog-Expires=86400&X-Goog-SignedHeaders=host&response-content-disposition=attachment%3B%20filename%3D%2203-business-focused-hour.mp4%22%3B%20filename%2A%3DUTF-8%27%2703-business-focused-hour.mp4&X-Goog-Signature=1bac8d96dff8addf76c5f7b813b4757069cf9a5d48e0625a33fb86dace0bd0fe7f4b8db5034f7f8f0f4c38cbd5a313d3c1a3592cd16eca7196034b65931be11897f890d21a999bb4d500db939f9e7dbcc61aa248f907e28fd80ce9d16db77b4f7939d53d48f79f95809d9a0104b504cb1105a229fe7b2e64ae6ca78fdcc42a326ef10babff624dd9e49340fa174c40e9541a76ce845acfd1e1c838584003efce5b90a670d199027db2d3651158933d0a5d582b31aa3d06b95831cc615fe86f974dd4719afda5c9d6799006c841da2a8e956701949b8192b9eeab7a45b4c98dd8cfab01a329a2fe4b0afe0119bb21d71ce2fbaa1d100751feb4a1b590a819a7c5"
+      },
+      "image": null
+     },
+     "originalFile": null,
+     "effectIntensity": 100,
+     "crop": {
+      "x": null,
+      "y": null,
+      "w": 1.0,
+      "h": 1.0,
+      "cy": 0.5,
+      "cx": 0.5
+     },
+     "transformation": {
+      "boundingBox": {
+       "x": null,
+       "y": null,
+       "h": 1.1851851851851851,
+       "w": 0.375,
+       "cx": 0.5,
+       "cy": 0.5
+      },
+      "scale": {
+       "horizontalScale": 0.84375,
+       "verticalScale": 0.84375
+      },
+      "rotation": 0
+     },
+     "value": null,
+     "style": null,
+     "textAnimations": null,
+     "loopable": false,
+     "duration": 4820,
+     "cornerRadius": 0.0,
+     "filters": [],
+     "lutId": null,
+     "opacityFade": {
+      "opacityFadeIn": 0,
+      "opacityFadeOut": 0,
+      "interpolation": {
+       "value": [
+        0.0,
+        0.0,
+        0.67,
+        1.0
+       ],
+       "type": "BEZIER"
+      }
+     },
+     "keyframes": [],
+     "mask": null,
+     "audioEffects": [],
+     "flip": {
+      "horizontal": false,
+      "vertical": false
+     },
+     "shapeConfig": null,
+     "path": null,
+     "baseStyle": null,
+     "lineStart": null,
+     "lineEnd": null,
+     "blendMode": "normal"
+    },
+    {
+     "type": "VIDEO",
+     "clipId": "179419635559867",
+     "priority": 0,
+     "start": 86362,
+     "end": 101796,
+     "speed": 1.0,
+     "trimStart": 4820,
+     "trimEnd": 5272,
+     "volume": 1.0,
+     "muted": false,
+     "visible": true,
+     "fadeIn": 0,
+     "fadeOut": 0,
+     "opacity": 1.0,
+     "file": {
+      "audio": {
+       "fileId": "d8e3d08a-40b4-4ee9-b7e3-f8d461073c1a",
+       "fileUrl": "https://storage.googleapis.com/dev-file-storage-service/2e5b1102-bc1b-435d-8bc2-aaf38a51ade7.wav?X-Goog-Algorithm=GOOG4-RSA-SHA256&X-Goog-Credential=file-storage-service%40podcastle-dev.iam.gserviceaccount.com%2F20260930%2Fauto%2Fstorage%2Fgoog4_request&X-Goog-Date=20260930T110232Z&X-Goog-Expires=86400&X-Goog-SignedHeaders=host&response-content-disposition=attachment%3B%20filename%3D%2203-business-focused-hour.wav%22%3B%20filename%2A%3DUTF-8%27%2703-business-focused-hour.wav&X-Goog-Signature=6ba4096d3a5e94d9b895b636cb23e142065fe1daaf42041ecd838b8c9da1246d9910301a2feeb9860900097a98d3bf4d7fa4978afa33d465298a3c4d6d755f513dd4ac3847208ca220f2daa0ca9768af47149642adc1958a85bb81db4cba032ff914ab3272b8e707e026387772a6982723dfd2fea620668d18a057e35f4a56e9c339f12a3681484330d1be77294adfcf29c5e026749d33b1b06feb2ea0813506751d57e8afe15c36151db1954cf3b354a40c25cd9a43bd616e5453c12d25de55e81d6778829d0f4b5134d0fd3f33c49467eb3e126fef2734785e5434681e76d1cee171bee8d7bf0857202050da2c0577eaecf1add156e1fb923ff82192912c97"
+      },
+      "video": {
+       "fileId": "14aa7ca9-228d-4a22-9e20-6083d04ba57f",
+       "fileUrl": "https://storage.googleapis.com/dev-file-storage-service/6164e714-e4e4-4f74-9691-bde60555cdae.mp4?X-Goog-Algorithm=GOOG4-RSA-SHA256&X-Goog-Credential=file-storage-service%40podcastle-dev.iam.gserviceaccount.com%2F20260930%2Fauto%2Fstorage%2Fgoog4_request&X-Goog-Date=20260930T110232Z&X-Goog-Expires=86400&X-Goog-SignedHeaders=host&response-content-disposition=attachment%3B%20filename%3D%2203-business-focused-hour.mp4%22%3B%20filename%2A%3DUTF-8%27%2703-business-focused-hour.mp4&X-Goog-Signature=1bac8d96dff8addf76c5f7b813b4757069cf9a5d48e0625a33fb86dace0bd0fe7f4b8db5034f7f8f0f4c38cbd5a313d3c1a3592cd16eca7196034b65931be11897f890d21a999bb4d500db939f9e7dbcc61aa248f907e28fd80ce9d16db77b4f7939d53d48f79f95809d9a0104b504cb1105a229fe7b2e64ae6ca78fdcc42a326ef10babff624dd9e49340fa174c40e9541a76ce845acfd1e1c838584003efce5b90a670d199027db2d3651158933d0a5d582b31aa3d06b95831cc615fe86f974dd4719afda5c9d6799006c841da2a8e956701949b8192b9eeab7a45b4c98dd8cfab01a329a2fe4b0afe0119bb21d71ce2fbaa1d100751feb4a1b590a819a7c5"
+      },
+      "image": null
+     },
+     "originalFile": null,
+     "effectIntensity": 100,
+     "crop": {
+      "x": null,
+      "y": null,
+      "w": 1.0,
+      "h": 1.0,
+      "cy": 0.5,
+      "cx": 0.5
+     },
+     "transformation": {
+      "boundingBox": {
+       "x": null,
+       "y": null,
+       "h": 1.1851851851851851,
+       "w": 0.375,
+       "cx": 0.5,
+       "cy": 0.5
+      },
+      "scale": {
+       "horizontalScale": 0.84375,
+       "verticalScale": 0.84375
+      },
+      "rotation": 0
+     },
+     "value": null,
+     "style": null,
+     "textAnimations": null,
+     "loopable": false,
+     "duration": 5342,
+     "cornerRadius": 0.0,
+     "filters": [],
+     "lutId": null,
+     "opacityFade": {
+      "opacityFadeIn": 0,
+      "opacityFadeOut": 0,
+      "interpolation": {
+       "value": [
+        0.0,
+        0.0,
+        0.67,
+        1.0
+       ],
+       "type": "BEZIER"
+      }
+     },
+     "keyframes": [],
+     "mask": null,
+     "audioEffects": [],
+     "flip": {
+      "horizontal": false,
+      "vertical": false
+     },
+     "shapeConfig": null,
+     "path": null,
+     "baseStyle": null,
+     "lineStart": null,
+     "lineEnd": null,
+     "blendMode": "normal"
+    },
+    {
+     "type": "VIDEO",
+     "clipId": "28124239034419",
+     "priority": 0,
+     "start": 86362,
+     "end": 101816,
+     "speed": 1.0,
+     "trimStart": 10162,
+     "trimEnd": 0,
+     "volume": 1.0,
+     "muted": false,
+     "visible": true,
+     "fadeIn": 0,
+     "fadeOut": 0,
+     "opacity": 1.0,
+     "file": {
+      "audio": {
+       "fileId": "d8e3d08a-40b4-4ee9-b7e3-f8d461073c1a",
+       "fileUrl": "https://storage.googleapis.com/dev-file-storage-service/2e5b1102-bc1b-435d-8bc2-aaf38a51ade7.wav?X-Goog-Algorithm=GOOG4-RSA-SHA256&X-Goog-Credential=file-storage-service%40podcastle-dev.iam.gserviceaccount.com%2F20260930%2Fauto%2Fstorage%2Fgoog4_request&X-Goog-Date=20260930T110232Z&X-Goog-Expires=86400&X-Goog-SignedHeaders=host&response-content-disposition=attachment%3B%20filename%3D%2203-business-focused-hour.wav%22%3B%20filename%2A%3DUTF-8%27%2703-business-focused-hour.wav&X-Goog-Signature=6ba4096d3a5e94d9b895b636cb23e142065fe1daaf42041ecd838b8c9da1246d9910301a2feeb9860900097a98d3bf4d7fa4978afa33d465298a3c4d6d755f513dd4ac3847208ca220f2daa0ca9768af47149642adc1958a85bb81db4cba032ff914ab3272b8e707e026387772a6982723dfd2fea620668d18a057e35f4a56e9c339f12a3681484330d1be77294adfcf29c5e026749d33b1b06feb2ea0813506751d57e8afe15c36151db1954cf3b354a40c25cd9a43bd616e5453c12d25de55e81d6778829d0f4b5134d0fd3f33c49467eb3e126fef2734785e5434681e76d1cee171bee8d7bf0857202050da2c0577eaecf1add156e1fb923ff82192912c97"
+      },
+      "video": {
+       "fileId": "14aa7ca9-228d-4a22-9e20-6083d04ba57f",
+       "fileUrl": "https://storage.googleapis.com/dev-file-storage-service/6164e714-e4e4-4f74-9691-bde60555cdae.mp4?X-Goog-Algorithm=GOOG4-RSA-SHA256&X-Goog-Credential=file-storage-service%40podcastle-dev.iam.gserviceaccount.com%2F20260930%2Fauto%2Fstorage%2Fgoog4_request&X-Goog-Date=20260930T110232Z&X-Goog-Expires=86400&X-Goog-SignedHeaders=host&response-content-disposition=attachment%3B%20filename%3D%2203-business-focused-hour.mp4%22%3B%20filename%2A%3DUTF-8%27%2703-business-focused-hour.mp4&X-Goog-Signature=1bac8d96dff8addf76c5f7b813b4757069cf9a5d48e0625a33fb86dace0bd0fe7f4b8db5034f7f8f0f4c38cbd5a313d3c1a3592cd16eca7196034b65931be11897f890d21a999bb4d500db939f9e7dbcc61aa248f907e28fd80ce9d16db77b4f7939d53d48f79f95809d9a0104b504cb1105a229fe7b2e64ae6ca78fdcc42a326ef10babff624dd9e49340fa174c40e9541a76ce845acfd1e1c838584003efce5b90a670d199027db2d3651158933d0a5d582b31aa3d06b95831cc615fe86f974dd4719afda5c9d6799006c841da2a8e956701949b8192b9eeab7a45b4c98dd8cfab01a329a2fe4b0afe0119bb21d71ce2fbaa1d100751feb4a1b590a819a7c5"
+      },
+      "image": null
+     },
+     "originalFile": null,
+     "effectIntensity": 100,
+     "crop": {
+      "x": null,
+      "y": null,
+      "w": 1.0,
+      "h": 1.0,
+      "cy": 0.5,
+      "cx": 0.5
+     },
+     "transformation": {
+      "boundingBox": {
+       "x": null,
+       "y": null,
+       "h": 1.1851851851851851,
+       "w": 0.375,
+       "cx": 0.5,
+       "cy": 0.5
+      },
+      "scale": {
+       "horizontalScale": 0.84375,
+       "verticalScale": 0.84375
+      },
+      "rotation": 0
+     },
+     "value": null,
+     "style": null,
+     "textAnimations": null,
+     "loopable": false,
+     "duration": 5292,
+     "cornerRadius": 0.0,
+     "filters": [],
+     "lutId": null,
+     "opacityFade": {
+      "opacityFadeIn": 0,
+      "opacityFadeOut": 0,
+      "interpolation": {
+       "value": [
+        0.0,
+        0.0,
+        0.67,
+        1.0
+       ],
+       "type": "BEZIER"
+      }
+     },
+     "keyframes": [],
+     "mask": null,
+     "audioEffects": [],
+     "flip": {
+      "horizontal": false,
+      "vertical": false
+     },
+     "shapeConfig": null,
+     "path": null,
+     "baseStyle": null,
+     "lineStart": null,
+     "lineEnd": null,
+     "blendMode": "normal"
+    }
+   ]
+  },
+  {
+   "trackId": "279809670220754",
+   "type": "VISUAL_MEDIA",
+   "zindex": 1,
+   "visible": true,
+   "muted": false,
+   "clips": []
+  }
+ ],
+ "watermarkUrl": null,
+ "background": {
+  "type": "COLOR",
+  "color": "#222326"
+ },
+ "subtitles": null,
+ "transitions": [
+  {
+   "id": "transition-63624c4b-2e3b-407a-83ab-f752a8d73a7c",
+   "name": "FADE",
+   "inClip": "675374029123905",
+   "outClip": "237336827919256",
+   "duration": 500,
+   "soundEffect": null,
+   "preset": {
+    "inEffects": [
+     {
+      "name": "ALPHA",
+      "params": [
+       {
+        "keyframes": [
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0,
+            0,
+            0.37,
+            0
+           ]
+          },
+          "time": 0,
+          "value": 0
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0.63,
+            1,
+            0,
+            0
+           ]
+          },
+          "time": 1,
+          "value": 1
+         }
+        ],
+        "name": "alpha"
+       }
+      ]
+     }
+    ],
+    "outEffects": [
+     {
+      "name": "ALPHA",
+      "params": [
+       {
+        "keyframes": [
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0,
+            0,
+            0.37,
+            0
+           ]
+          },
+          "time": 0,
+          "value": 1
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0.63,
+            1,
+            0,
+            0
+           ]
+          },
+          "time": 1,
+          "value": 0
+         }
+        ],
+        "name": "alpha"
+       }
+      ]
+     }
+    ],
+    "isOverlapping": false,
+    "label": "Fade",
+    "preview": "transitions/previews/FADE.webm",
+    "thumbnail": "transitions/thumbnails/Fade.webp",
+    "transitionName": "FADE",
+    "overlayClip": null
+   }
+  },
+  {
+   "id": "transition-7ec05a60-2e6e-4849-8bb2-85bbb86d0493",
+   "name": "DISSOLVE",
+   "inClip": "394107518499180",
+   "outClip": "675374029123905",
+   "duration": 500,
+   "soundEffect": null,
+   "preset": {
+    "inEffects": null,
+    "outEffects": [
+     {
+      "name": "ALPHA",
+      "params": [
+       {
+        "keyframes": [
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0,
+            0,
+            0.3,
+            0.12
+           ]
+          },
+          "time": 0,
+          "value": 1
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0.3,
+            1,
+            0,
+            0
+           ]
+          },
+          "time": 1,
+          "value": 0
+         }
+        ],
+        "name": "alpha"
+       }
+      ]
+     }
+    ],
+    "isOverlapping": true,
+    "label": "Dissolve",
+    "preview": "transitions/previews/DISSOLVE.webm",
+    "thumbnail": "transitions/thumbnails/Dissolve.webp",
+    "transitionName": "DISSOLVE",
+    "overlayClip": null
+   }
+  },
+  {
+   "id": "transition-6ff00ed2-a202-421e-bc79-afbb7a9f53df",
+   "name": "DISSOLVE_BLUR",
+   "inClip": "378640799546094",
+   "outClip": "394107518499180",
+   "duration": 500,
+   "soundEffect": null,
+   "preset": {
+    "inEffects": [
+     {
+      "name": "BLUR",
+      "params": [
+       {
+        "keyframes": [
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0,
+            0,
+            0.3,
+            0.1
+           ]
+          },
+          "time": 0,
+          "value": 95
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0.5,
+            0.85,
+            0.3,
+            0
+           ]
+          },
+          "time": 0.5,
+          "value": 40
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0.4,
+            1,
+            0,
+            0
+           ]
+          },
+          "time": 0.9,
+          "value": 0
+         }
+        ],
+        "name": "verticalRadius"
+       },
+       {
+        "keyframes": [
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0,
+            0,
+            0.3,
+            0.1
+           ]
+          },
+          "time": 0,
+          "value": 95
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0.5,
+            0.85,
+            0.3,
+            0
+           ]
+          },
+          "time": 0.5,
+          "value": 40
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0.4,
+            1,
+            0,
+            0
+           ]
+          },
+          "time": 0.9,
+          "value": 0
+         }
+        ],
+        "name": "horizontalRadius"
+       }
+      ]
+     }
+    ],
+    "outEffects": [
+     {
+      "name": "BLUR",
+      "params": [
+       {
+        "keyframes": [
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0,
+            0,
+            0.18,
+            0.4
+           ]
+          },
+          "time": 0,
+          "value": 0
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0.4,
+            0.92,
+            0.4,
+            0
+           ]
+          },
+          "time": 0.45,
+          "value": 38
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0.7,
+            0.55,
+            0,
+            0
+           ]
+          },
+          "time": 1,
+          "value": 88
+         }
+        ],
+        "name": "verticalRadius"
+       },
+       {
+        "keyframes": [
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0,
+            0,
+            0.18,
+            0.4
+           ]
+          },
+          "time": 0,
+          "value": 0
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0.4,
+            0.92,
+            0.4,
+            0
+           ]
+          },
+          "time": 0.45,
+          "value": 38
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0.7,
+            0.55,
+            0,
+            0
+           ]
+          },
+          "time": 1,
+          "value": 88
+         }
+        ],
+        "name": "horizontalRadius"
+       }
+      ]
+     },
+     {
+      "name": "ALPHA",
+      "params": [
+       {
+        "keyframes": [
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0,
+            0,
+            0.5,
+            0
+           ]
+          },
+          "time": 0,
+          "value": 1
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0.45,
+            1,
+            0,
+            0
+           ]
+          },
+          "time": 1,
+          "value": 0
+         }
+        ],
+        "name": "alpha"
+       }
+      ]
+     }
+    ],
+    "isOverlapping": true,
+    "label": "Dissolve blur",
+    "preview": "transitions/previews/DISSOLVE_BLUR.webm",
+    "thumbnail": "transitions/thumbnails/Dissolve blur.webp",
+    "transitionName": "DISSOLVE_BLUR",
+    "overlayClip": null
+   }
+  },
+  {
+   "id": "transition-c539fd31-6a93-42dd-ae5d-567dd86ef4ec",
+   "name": "LIGHT_LEAK",
+   "inClip": "428672426476392",
+   "outClip": "378640799546094",
+   "duration": 500,
+   "soundEffect": {
+    "name": "BURN",
+    "volume": 0,
+    "preset": {
+     "fadeOut": 0.0,
+     "filePath": "transitions/sound-effects/burn.opus",
+     "label": "Burn Film",
+     "name": "BURN"
+    }
+   },
+   "preset": {
+    "inEffects": [
+     {
+      "name": "EXPOSURE",
+      "params": [
+       {
+        "keyframes": [
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0,
+            0,
+            0,
+            0
+           ]
+          },
+          "time": 0,
+          "value": 1
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0,
+            0,
+            0.28,
+            0
+           ]
+          },
+          "time": 0.18,
+          "value": 1
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0.3,
+            1,
+            0.05,
+            0.8
+           ]
+          },
+          "time": 0.44,
+          "value": 4.2
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0.35,
+            1,
+            0,
+            0
+           ]
+          },
+          "time": 0.94,
+          "value": 1
+         }
+        ],
+        "name": "exposure"
+       }
+      ]
+     }
+    ],
+    "outEffects": [
+     {
+      "name": "EXPOSURE",
+      "params": [
+       {
+        "keyframes": [
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0,
+            0,
+            0,
+            0
+           ]
+          },
+          "time": 0,
+          "value": 1
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0,
+            0,
+            0.28,
+            0
+           ]
+          },
+          "time": 0.18,
+          "value": 1
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0.3,
+            1,
+            0.05,
+            0.8
+           ]
+          },
+          "time": 0.44,
+          "value": 4.2
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0.35,
+            1,
+            0,
+            0
+           ]
+          },
+          "time": 0.94,
+          "value": 1
+         }
+        ],
+        "name": "exposure"
+       }
+      ]
+     },
+     {
+      "name": "ALPHA",
+      "params": [
+       {
+        "keyframes": [
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0,
+            0,
+            0,
+            0
+           ]
+          },
+          "time": 0,
+          "value": 1
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0,
+            0,
+            0,
+            0
+           ]
+          },
+          "time": 0.43999,
+          "value": 1
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0,
+            0,
+            0,
+            0
+           ]
+          },
+          "time": 0.44,
+          "value": 0
+         }
+        ],
+        "name": "alpha"
+       }
+      ]
+     }
+    ],
+    "isOverlapping": true,
+    "label": "Light leak",
+    "preview": "transitions/previews/LIGHT_LEAK.webm",
+    "thumbnail": "transitions/thumbnails/Light.webp",
+    "transitionName": "LIGHT_LEAK",
+    "overlayClip": null
+   }
+  },
+  {
+   "id": "transition-a8a47163-3945-482d-9e78-d0534bcc064b",
+   "name": "LIGHT_FOOTAGE",
+   "inClip": "963305197193468",
+   "outClip": "428672426476392",
+   "duration": 500,
+   "soundEffect": {
+    "name": "BURN",
+    "volume": 0,
+    "preset": {
+     "fadeOut": 0.0,
+     "filePath": "transitions/sound-effects/burn.opus",
+     "label": "Burn Film",
+     "name": "BURN"
+    }
+   },
+   "preset": {
+    "inEffects": [
+     {
+      "name": "BRIGHTNESS",
+      "params": [
+       {
+        "keyframes": [
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0,
+            0,
+            0,
+            0
+           ]
+          },
+          "time": 0,
+          "value": 0
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0,
+            0,
+            0.25,
+            0
+           ]
+          },
+          "time": 0.16,
+          "value": 0
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0.3,
+            1,
+            0.05,
+            0.75
+           ]
+          },
+          "time": 0.44,
+          "value": 0.55
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0.4,
+            1,
+            0,
+            0
+           ]
+          },
+          "time": 0.95,
+          "value": 0
+         }
+        ],
+        "name": "brightness"
+       }
+      ]
+     }
+    ],
+    "outEffects": [
+     {
+      "name": "BRIGHTNESS",
+      "params": [
+       {
+        "keyframes": [
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0,
+            0,
+            0,
+            0
+           ]
+          },
+          "time": 0,
+          "value": 0
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0,
+            0,
+            0.25,
+            0
+           ]
+          },
+          "time": 0.16,
+          "value": 0
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0.3,
+            1,
+            0.05,
+            0.75
+           ]
+          },
+          "time": 0.44,
+          "value": 0.55
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0.4,
+            1,
+            0,
+            0
+           ]
+          },
+          "time": 0.95,
+          "value": 0
+         }
+        ],
+        "name": "brightness"
+       }
+      ]
+     },
+     {
+      "name": "ALPHA",
+      "params": [
+       {
+        "keyframes": [
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0,
+            0,
+            0,
+            0
+           ]
+          },
+          "time": 0,
+          "value": 1
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0,
+            0,
+            0,
+            0
+           ]
+          },
+          "time": 0.43999,
+          "value": 1
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0,
+            0,
+            0,
+            0
+           ]
+          },
+          "time": 0.44,
+          "value": 0
+         }
+        ],
+        "name": "alpha"
+       }
+      ]
+     }
+    ],
+    "isOverlapping": true,
+    "label": "Light footage",
+    "preview": "transitions/previews/LIGHT_FOOTAGE.webm",
+    "thumbnail": "transitions/thumbnails/Light.webp",
+    "transitionName": "LIGHT_FOOTAGE",
+    "overlayClip": {
+     "path": "transitions/overlay-clips/light_leaks.mp4",
+     "clipEffects": [
+      {
+       "name": "BRIGHTNESS",
+       "params": [
+        {
+         "keyframes": [
+          {
+           "interpolation": {
+            "type": "BEZIER",
+            "value": [
+             0,
+             0,
+             0.83,
+             0
+            ]
+           },
+           "time": 0,
+           "value": -1
+          },
+          {
+           "interpolation": {
+            "type": "LINEAR"
+           },
+           "time": 0.2,
+           "value": 0
+          },
+          {
+           "interpolation": {
+            "type": "LINEAR"
+           },
+           "time": 0.8,
+           "value": 0
+          },
+          {
+           "interpolation": {
+            "type": "BEZIER",
+            "value": [
+             0.17,
+             1,
+             0,
+             0
+            ]
+           },
+           "time": 1,
+           "value": -1
+          }
+         ],
+         "name": "brightness"
+        }
+       ]
+      }
+     ],
+     "previewPath": "transitions/overlay-clips/light_leaks.webm",
+     "overlayType": {
+      "name": "ADDITIVE_BLEND"
+     }
+    }
+   }
+  },
+  {
+   "id": "transition-12543b67-9930-4b5d-8d13-e1ae6f1c9e7c",
+   "name": "BLUR",
+   "inClip": "534238772405406",
+   "outClip": "963305197193468",
+   "duration": 500,
+   "soundEffect": null,
+   "preset": {
+    "inEffects": [
+     {
+      "name": "BLUR",
+      "params": [
+       {
+        "keyframes": [
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0,
+            0,
+            0.66,
+            0
+           ]
+          },
+          "time": 0,
+          "value": 80
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0.24,
+            1,
+            0,
+            0
+           ]
+          },
+          "time": 0.92,
+          "value": 0
+         }
+        ],
+        "name": "horizontalRadius"
+       },
+       {
+        "keyframes": [
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0,
+            0,
+            0.66,
+            0
+           ]
+          },
+          "time": 0,
+          "value": 80
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0.24,
+            1,
+            0,
+            0
+           ]
+          },
+          "time": 0.92,
+          "value": 0
+         }
+        ],
+        "name": "verticalRadius"
+       }
+      ]
+     }
+    ],
+    "outEffects": [
+     {
+      "name": "BLUR",
+      "params": [
+       {
+        "keyframes": [
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0,
+            0,
+            0.66,
+            0
+           ]
+          },
+          "time": 0,
+          "value": 0
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0.24,
+            1,
+            0,
+            0
+           ]
+          },
+          "time": 1,
+          "value": 70
+         }
+        ],
+        "name": "horizontalRadius"
+       },
+       {
+        "keyframes": [
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0,
+            0,
+            0.66,
+            0
+           ]
+          },
+          "time": 0,
+          "value": 0
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0.24,
+            1,
+            0,
+            0
+           ]
+          },
+          "time": 1,
+          "value": 70
+         }
+        ],
+        "name": "verticalRadius"
+       }
+      ]
+     },
+     {
+      "name": "ALPHA",
+      "params": [
+       {
+        "keyframes": [
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0,
+            0,
+            0,
+            0
+           ]
+          },
+          "time": 0,
+          "value": 1
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0,
+            0,
+            0.52,
+            0.04
+           ]
+          },
+          "time": 0.3,
+          "value": 1
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0.42,
+            0.96,
+            0,
+            0
+           ]
+          },
+          "time": 0.74,
+          "value": 0
+         }
+        ],
+        "name": "alpha"
+       }
+      ]
+     }
+    ],
+    "isOverlapping": true,
+    "label": "Blur",
+    "preview": "transitions/previews/BLUR.webm",
+    "thumbnail": "transitions/thumbnails/Blur.webp",
+    "transitionName": "BLUR",
+    "overlayClip": null
+   }
+  },
+  {
+   "id": "transition-20c1c4ae-4aff-4d84-8995-dede5c4bef4e",
+   "name": "BLUR_VERTICAL",
+   "inClip": "988807040170013",
+   "outClip": "534238772405406",
+   "duration": 500,
+   "soundEffect": null,
+   "preset": {
+    "inEffects": [
+     {
+      "name": "BLUR",
+      "params": [
+       {
+        "keyframes": [
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0,
+            0,
+            0.66,
+            0
+           ]
+          },
+          "time": 0,
+          "value": 360
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0.24,
+            1,
+            0,
+            0
+           ]
+          },
+          "time": 0.9,
+          "value": 0
+         }
+        ],
+        "name": "verticalRadius"
+       },
+       {
+        "name": "horizontalBlur",
+        "value": 0
+       }
+      ]
+     }
+    ],
+    "outEffects": [
+     {
+      "name": "BLUR",
+      "params": [
+       {
+        "keyframes": [
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0,
+            0,
+            0.66,
+            0
+           ]
+          },
+          "time": 0,
+          "value": 0
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0.24,
+            1,
+            0,
+            0
+           ]
+          },
+          "time": 1,
+          "value": 340
+         }
+        ],
+        "name": "verticalRadius"
+       },
+       {
+        "name": "horizontalBlur",
+        "value": 0
+       }
+      ]
+     },
+     {
+      "name": "ALPHA",
+      "params": [
+       {
+        "keyframes": [
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0,
+            0,
+            0,
+            0
+           ]
+          },
+          "time": 0,
+          "value": 1
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0,
+            0,
+            0.52,
+            0.04
+           ]
+          },
+          "time": 0.3,
+          "value": 1
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0.42,
+            0.96,
+            0,
+            0
+           ]
+          },
+          "time": 0.72,
+          "value": 0
+         }
+        ],
+        "name": "alpha"
+       }
+      ]
+     }
+    ],
+    "isOverlapping": true,
+    "label": "Blur vertical",
+    "preview": "transitions/previews/BLUR_VERTICAL.webm",
+    "thumbnail": "transitions/thumbnails/Blur vertical.webp",
+    "transitionName": "BLUR_VERTICAL",
+    "overlayClip": null
+   }
+  },
+  {
+   "id": "transition-c7387e0e-730a-4d70-a9b9-7f59da7095c8",
+   "name": "ROTATE_RIGHT",
+   "inClip": "811938023583247",
+   "outClip": "988807040170013",
+   "duration": 500,
+   "soundEffect": {
+    "name": "ROTATE",
+    "volume": 0,
+    "preset": {
+     "fadeOut": 0.0,
+     "filePath": "transitions/sound-effects/rotate.opus",
+     "label": "Rotate",
+     "name": "ROTATE"
+    }
+   },
+   "preset": {
+    "inEffects": [
+     {
+      "name": "BORDER_REFLECTED_ROTATION",
+      "params": [
+       {
+        "keyframes": [
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0,
+            0,
+            0.54,
+            0
+           ]
+          },
+          "time": 0,
+          "value": -110
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0.14,
+            1,
+            0,
+            0
+           ]
+          },
+          "time": 1,
+          "value": 0
+         }
+        ],
+        "name": "angle"
+       }
+      ]
+     },
+     {
+      "name": "ROTATIONAL_BLUR",
+      "params": [
+       {
+        "keyframes": [
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0,
+            0,
+            0.4,
+            0
+           ]
+          },
+          "time": 0,
+          "value": 10
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0.34,
+            1,
+            0.3,
+            0
+           ]
+          },
+          "time": 0.45,
+          "value": 28
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0.42,
+            1,
+            0,
+            0
+           ]
+          },
+          "time": 0.85,
+          "value": 0
+         }
+        ],
+        "name": "rotationalRadius"
+       }
+      ]
+     }
+    ],
+    "outEffects": [
+     {
+      "name": "BORDER_REFLECTED_ROTATION",
+      "params": [
+       {
+        "keyframes": [
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0,
+            0,
+            0.54,
+            0
+           ]
+          },
+          "time": 0,
+          "value": 0
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0.14,
+            1,
+            0,
+            0
+           ]
+          },
+          "time": 1,
+          "value": 110
+         }
+        ],
+        "name": "angle"
+       }
+      ]
+     },
+     {
+      "name": "ROTATIONAL_BLUR",
+      "params": [
+       {
+        "keyframes": [
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0,
+            0,
+            0.52,
+            0
+           ]
+          },
+          "time": 0,
+          "value": 0
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0.34,
+            1,
+            0.4,
+            0
+           ]
+          },
+          "time": 0.55,
+          "value": 28
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0.6,
+            1,
+            0,
+            0
+           ]
+          },
+          "time": 1,
+          "value": 10
+         }
+        ],
+        "name": "rotationalRadius"
+       }
+      ]
+     },
+     {
+      "name": "ALPHA",
+      "params": [
+       {
+        "keyframes": [
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0,
+            0,
+            0,
+            0
+           ]
+          },
+          "time": 0,
+          "value": 1
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0,
+            0,
+            0.48,
+            0.04
+           ]
+          },
+          "time": 0.34,
+          "value": 1
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0.42,
+            0.96,
+            0,
+            0
+           ]
+          },
+          "time": 0.66,
+          "value": 0
+         }
+        ],
+        "name": "alpha"
+       }
+      ]
+     }
+    ],
+    "isOverlapping": true,
+    "label": "Rotate right",
+    "preview": "transitions/previews/ROTATE_RIGHT.webm",
+    "thumbnail": "transitions/thumbnails/Rotate.webp",
+    "transitionName": "ROTATE_RIGHT",
+    "overlayClip": null
+   }
+  },
+  {
+   "id": "transition-437f3ab9-e5eb-4014-82fb-da4ea8bc2947",
+   "name": "ROTATE_LEFT",
+   "inClip": "456673663970070",
+   "outClip": "811938023583247",
+   "duration": 500,
+   "soundEffect": {
+    "name": "ROTATE",
+    "volume": 0,
+    "preset": {
+     "fadeOut": 0.0,
+     "filePath": "transitions/sound-effects/rotate.opus",
+     "label": "Rotate",
+     "name": "ROTATE"
+    }
+   },
+   "preset": {
+    "inEffects": [
+     {
+      "name": "BORDER_REFLECTED_ROTATION",
+      "params": [
+       {
+        "keyframes": [
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0,
+            0,
+            0.54,
+            0
+           ]
+          },
+          "time": 0,
+          "value": 110
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0.14,
+            1,
+            0,
+            0
+           ]
+          },
+          "time": 1,
+          "value": 0
+         }
+        ],
+        "name": "angle"
+       }
+      ]
+     },
+     {
+      "name": "ROTATIONAL_BLUR",
+      "params": [
+       {
+        "keyframes": [
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0,
+            0,
+            0.4,
+            0
+           ]
+          },
+          "time": 0,
+          "value": 10
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0.34,
+            1,
+            0.3,
+            0
+           ]
+          },
+          "time": 0.45,
+          "value": 28
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0.42,
+            1,
+            0,
+            0
+           ]
+          },
+          "time": 0.85,
+          "value": 0
+         }
+        ],
+        "name": "rotationalRadius"
+       }
+      ]
+     }
+    ],
+    "outEffects": [
+     {
+      "name": "BORDER_REFLECTED_ROTATION",
+      "params": [
+       {
+        "keyframes": [
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0,
+            0,
+            0.54,
+            0
+           ]
+          },
+          "time": 0,
+          "value": 0
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0.14,
+            1,
+            0,
+            0
+           ]
+          },
+          "time": 1,
+          "value": -110
+         }
+        ],
+        "name": "angle"
+       }
+      ]
+     },
+     {
+      "name": "ROTATIONAL_BLUR",
+      "params": [
+       {
+        "keyframes": [
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0,
+            0,
+            0.52,
+            0
+           ]
+          },
+          "time": 0,
+          "value": 0
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0.34,
+            1,
+            0.4,
+            0
+           ]
+          },
+          "time": 0.55,
+          "value": 28
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0.6,
+            1,
+            0,
+            0
+           ]
+          },
+          "time": 1,
+          "value": 10
+         }
+        ],
+        "name": "rotationalRadius"
+       }
+      ]
+     },
+     {
+      "name": "ALPHA",
+      "params": [
+       {
+        "keyframes": [
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0,
+            0,
+            0,
+            0
+           ]
+          },
+          "time": 0,
+          "value": 1
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0,
+            0,
+            0.48,
+            0.04
+           ]
+          },
+          "time": 0.34,
+          "value": 1
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0.42,
+            0.96,
+            0,
+            0
+           ]
+          },
+          "time": 0.66,
+          "value": 0
+         }
+        ],
+        "name": "alpha"
+       }
+      ]
+     }
+    ],
+    "isOverlapping": true,
+    "label": "Rotate left",
+    "preview": "transitions/previews/ROTATE_LEFT.webm",
+    "thumbnail": "transitions/thumbnails/Rotate.webp",
+    "transitionName": "ROTATE_LEFT",
+    "overlayClip": null
+   }
+  },
+  {
+   "id": "transition-9a56d255-a4dc-46be-b625-db27488aeba3",
+   "name": "SPLIT_HORIZONTAL",
+   "inClip": "397990503686005",
+   "outClip": "456673663970070",
+   "duration": 500,
+   "soundEffect": null,
+   "preset": {
+    "inEffects": [
+     {
+      "name": "SPLIT_SHIFT",
+      "params": [
+       {
+        "keyframes": [
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0,
+            0,
+            0.72,
+            0
+           ]
+          },
+          "time": 0,
+          "value": -1
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0.2,
+            1,
+            0,
+            0
+           ]
+          },
+          "time": 1,
+          "value": 0
+         }
+        ],
+        "name": "shiftAmount"
+       },
+       {
+        "name": "shiftPoint",
+        "value": 0.5
+       },
+       {
+        "name": "isHorizontal",
+        "value": true
+       }
+      ]
+     }
+    ],
+    "outEffects": [
+     {
+      "name": "SPLIT_SHIFT",
+      "params": [
+       {
+        "keyframes": [
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0,
+            0,
+            0.72,
+            0
+           ]
+          },
+          "time": 0,
+          "value": 0
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0.2,
+            1,
+            0,
+            0
+           ]
+          },
+          "time": 1,
+          "value": 1
+         }
+        ],
+        "name": "shiftAmount"
+       },
+       {
+        "name": "shiftPoint",
+        "value": 0.5
+       },
+       {
+        "name": "isHorizontal",
+        "value": true
+       }
+      ]
+     }
+    ],
+    "isOverlapping": true,
+    "label": "Split horizontal",
+    "preview": "transitions/previews/SPLIT_HORIZONTAL.webm",
+    "thumbnail": "transitions/thumbnails/Split.webp",
+    "transitionName": "SPLIT_HORIZONTAL",
+    "overlayClip": null
+   }
+  },
+  {
+   "id": "transition-ab8b18f0-fcc9-48a8-a3d4-411a14fcda87",
+   "name": "SPLIT_VERTICAL",
+   "inClip": "100223961169887",
+   "outClip": "397990503686005",
+   "duration": 500,
+   "soundEffect": null,
+   "preset": {
+    "inEffects": [
+     {
+      "name": "SPLIT_SHIFT",
+      "params": [
+       {
+        "keyframes": [
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0,
+            0,
+            0.72,
+            0
+           ]
+          },
+          "time": 0,
+          "value": -1
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0.2,
+            1,
+            0,
+            0
+           ]
+          },
+          "time": 1,
+          "value": 0
+         }
+        ],
+        "name": "shiftAmount"
+       },
+       {
+        "name": "shiftPoint",
+        "value": 0.5
+       },
+       {
+        "name": "isHorizontal",
+        "value": 0
+       }
+      ]
+     }
+    ],
+    "outEffects": [
+     {
+      "name": "SPLIT_SHIFT",
+      "params": [
+       {
+        "keyframes": [
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0,
+            0,
+            0.72,
+            0
+           ]
+          },
+          "time": 0,
+          "value": 0
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0.2,
+            1,
+            0,
+            0
+           ]
+          },
+          "time": 1,
+          "value": 1
+         }
+        ],
+        "name": "shiftAmount"
+       },
+       {
+        "name": "shiftPoint",
+        "value": 0.5
+       },
+       {
+        "name": "isHorizontal",
+        "value": 0
+       }
+      ]
+     }
+    ],
+    "isOverlapping": true,
+    "label": "Split vertical",
+    "preview": "transitions/previews/SPLIT_VERTICAL.webm",
+    "thumbnail": "transitions/thumbnails/Split.webp",
+    "transitionName": "SPLIT_VERTICAL",
+    "overlayClip": null
+   }
+  },
+  {
+   "id": "transition-7465ee2b-6382-4476-86eb-e6c538913c57",
+   "name": "ZOOM_IN",
+   "inClip": "993844451261546",
+   "outClip": "100223961169887",
+   "duration": 500,
+   "soundEffect": {
+    "name": "WHOOSH",
+    "volume": 0,
+    "preset": {
+     "fadeOut": 0.1,
+     "filePath": "transitions/sound-effects/whoosh.opus",
+     "label": "Whoosh",
+     "name": "WHOOSH"
+    }
+   },
+   "preset": {
+    "inEffects": [
+     {
+      "name": "ZOOM",
+      "params": [
+       {
+        "keyframes": [
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0,
+            0,
+            0.48,
+            0
+           ]
+          },
+          "time": 0,
+          "value": 34
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0.2,
+            1,
+            0,
+            0
+           ]
+          },
+          "time": 1,
+          "value": 100
+         }
+        ],
+        "name": "zoomPercent"
+       },
+       {
+        "name": "anchorX",
+        "value": 0.5
+       },
+       {
+        "name": "anchorY",
+        "value": 0.5
+       }
+      ]
+     }
+    ],
+    "outEffects": [
+     {
+      "name": "ZOOM",
+      "params": [
+       {
+        "keyframes": [
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0,
+            0,
+            0.48,
+            0
+           ]
+          },
+          "time": 0,
+          "value": 100
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0.2,
+            1,
+            0,
+            0
+           ]
+          },
+          "time": 1,
+          "value": 380
+         }
+        ],
+        "name": "zoomPercent"
+       },
+       {
+        "name": "anchorX",
+        "value": 0.5
+       },
+       {
+        "name": "anchorY",
+        "value": 0.5
+       }
+      ]
+     },
+     {
+      "name": "ALPHA",
+      "params": [
+       {
+        "keyframes": [
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0,
+            0,
+            0,
+            0
+           ]
+          },
+          "time": 0,
+          "value": 1
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0,
+            0,
+            0.48,
+            0.04
+           ]
+          },
+          "time": 0.38,
+          "value": 1
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0.42,
+            0.96,
+            0,
+            0
+           ]
+          },
+          "time": 0.68,
+          "value": 0
+         }
+        ],
+        "name": "alpha"
+       }
+      ]
+     }
+    ],
+    "isOverlapping": true,
+    "label": "Zoom in",
+    "preview": "transitions/previews/ZOOM_IN.webm",
+    "thumbnail": "transitions/thumbnails/Zoom in.webp",
+    "transitionName": "ZOOM_IN",
+    "overlayClip": null
+   }
+  },
+  {
+   "id": "transition-0a8640c4-432c-4952-9c63-262edd0c9a40",
+   "name": "ZOOM_OUT",
+   "inClip": "374786515554697",
+   "outClip": "993844451261546",
+   "duration": 500,
+   "soundEffect": {
+    "name": "WHOOSH",
+    "volume": 0,
+    "preset": {
+     "fadeOut": 0.1,
+     "filePath": "transitions/sound-effects/whoosh.opus",
+     "label": "Whoosh",
+     "name": "WHOOSH"
+    }
+   },
+   "preset": {
+    "inEffects": [
+     {
+      "name": "ZOOM",
+      "params": [
+       {
+        "keyframes": [
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0,
+            0,
+            0.48,
+            0
+           ]
+          },
+          "time": 0,
+          "value": 250
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0.2,
+            1,
+            0,
+            0
+           ]
+          },
+          "time": 1,
+          "value": 100
+         }
+        ],
+        "name": "zoomPercent"
+       },
+       {
+        "name": "anchorX",
+        "value": 0.5
+       },
+       {
+        "name": "anchorY",
+        "value": 0.5
+       }
+      ]
+     }
+    ],
+    "outEffects": [
+     {
+      "name": "ZOOM",
+      "params": [
+       {
+        "keyframes": [
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0,
+            0,
+            0.48,
+            0
+           ]
+          },
+          "time": 0,
+          "value": 100
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0.2,
+            1,
+            0,
+            0
+           ]
+          },
+          "time": 1,
+          "value": 66
+         }
+        ],
+        "name": "zoomPercent"
+       },
+       {
+        "name": "anchorX",
+        "value": 0.5
+       },
+       {
+        "name": "anchorY",
+        "value": 0.5
+       }
+      ]
+     },
+     {
+      "name": "ALPHA",
+      "params": [
+       {
+        "keyframes": [
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0,
+            0,
+            0,
+            0
+           ]
+          },
+          "time": 0,
+          "value": 1
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0,
+            0,
+            0.48,
+            0.04
+           ]
+          },
+          "time": 0.34,
+          "value": 1
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0.42,
+            0.96,
+            0,
+            0
+           ]
+          },
+          "time": 0.64,
+          "value": 0
+         }
+        ],
+        "name": "alpha"
+       }
+      ]
+     }
+    ],
+    "isOverlapping": true,
+    "label": "Zoom out",
+    "preview": "transitions/previews/ZOOM_OUT.webm",
+    "thumbnail": "transitions/thumbnails/Zoom out.webp",
+    "transitionName": "ZOOM_OUT",
+    "overlayClip": null
+   }
+  },
+  {
+   "id": "transition-aed2896f-cd84-49bc-882d-5155d3769d07",
+   "name": "WHOOSH",
+   "inClip": "908946013689660",
+   "outClip": "374786515554697",
+   "duration": 500,
+   "soundEffect": {
+    "name": "WHOOSH",
+    "volume": 0,
+    "preset": {
+     "fadeOut": 0.1,
+     "filePath": "transitions/sound-effects/whoosh.opus",
+     "label": "Whoosh",
+     "name": "WHOOSH"
+    }
+   },
+   "preset": {
+    "inEffects": [
+     {
+      "name": "BORDER_REFLECTED_MOVE",
+      "params": [
+       {
+        "keyframes": [
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0,
+            0,
+            0.25,
+            0.55
+           ]
+          },
+          "time": 0,
+          "value": 0.62
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0.2,
+            1,
+            0,
+            0
+           ]
+          },
+          "time": 1,
+          "value": 0
+         }
+        ],
+        "name": "dx"
+       },
+       {
+        "name": "dy",
+        "value": 0
+       }
+      ]
+     },
+     {
+      "name": "ZOOM",
+      "params": [
+       {
+        "keyframes": [
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0,
+            0,
+            0.3,
+            0.5
+           ]
+          },
+          "time": 0,
+          "value": 113
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0.15,
+            1,
+            0,
+            0
+           ]
+          },
+          "time": 1,
+          "value": 100
+         }
+        ],
+        "name": "zoomPercent"
+       },
+       {
+        "keyframes": [
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0,
+            0,
+            0.3,
+            0.5
+           ]
+          },
+          "time": 0,
+          "value": 0.38
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0.15,
+            1,
+            0,
+            0
+           ]
+          },
+          "time": 1,
+          "value": 0.5
+         }
+        ],
+        "name": "anchorX"
+       },
+       {
+        "name": "anchorY",
+        "value": 0.5
+       }
+      ]
+     },
+     {
+      "name": "BLUR",
+      "params": [
+       {
+        "keyframes": [
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0,
+            0,
+            0.35,
+            0.08
+           ]
+          },
+          "time": 0,
+          "value": 140
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0.45,
+            0.9,
+            0.35,
+            0
+           ]
+          },
+          "time": 0.45,
+          "value": 60
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0.45,
+            1,
+            0,
+            0
+           ]
+          },
+          "time": 0.85,
+          "value": 0
+         }
+        ],
+        "name": "horizontalRadius"
+       },
+       {
+        "keyframes": [
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0,
+            0,
+            0.15,
+            0.8
+           ]
+          },
+          "time": 0,
+          "value": 12
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0.35,
+            1,
+            0,
+            0
+           ]
+          },
+          "time": 0.5,
+          "value": 0
+         }
+        ],
+        "name": "verticalRadius"
+       }
+      ]
+     },
+     {
+      "name": "ZOOM_BLUR",
+      "params": [
+       {
+        "keyframes": [
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0,
+            0,
+            0.15,
+            0.8
+           ]
+          },
+          "time": 0,
+          "value": 45
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0.35,
+            1,
+            0,
+            0
+           ]
+          },
+          "time": 0.42,
+          "value": 0
+         }
+        ],
+        "name": "zoomBlurRadius"
+       },
+       {
+        "name": "anchorX",
+        "value": 0.5
+       },
+       {
+        "name": "anchorY",
+        "value": 0.5
+       }
+      ]
+     }
+    ],
+    "outEffects": [
+     {
+      "name": "BORDER_REFLECTED_MOVE",
+      "params": [
+       {
+        "keyframes": [
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0,
+            0,
+            0.22,
+            0.1
+           ]
+          },
+          "time": 0,
+          "value": 0
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0.62,
+            0.35,
+            0,
+            0
+           ]
+          },
+          "time": 1,
+          "value": -0.7
+         }
+        ],
+        "name": "dx"
+       },
+       {
+        "name": "dy",
+        "value": 0
+       }
+      ]
+     },
+     {
+      "name": "ZOOM",
+      "params": [
+       {
+        "keyframes": [
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0,
+            0,
+            0.3,
+            0.05
+           ]
+          },
+          "time": 0,
+          "value": 100
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0.7,
+            0.45,
+            0,
+            0
+           ]
+          },
+          "time": 1,
+          "value": 108
+         }
+        ],
+        "name": "zoomPercent"
+       },
+       {
+        "keyframes": [
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0,
+            0,
+            0.35,
+            0.05
+           ]
+          },
+          "time": 0,
+          "value": 0.5
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0.68,
+            0.55,
+            0,
+            0
+           ]
+          },
+          "time": 1,
+          "value": 0.64
+         }
+        ],
+        "name": "anchorX"
+       },
+       {
+        "name": "anchorY",
+        "value": 0.5
+       }
+      ]
+     },
+     {
+      "name": "BLUR",
+      "params": [
+       {
+        "keyframes": [
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0,
+            0,
+            0.3,
+            0.05
+           ]
+          },
+          "time": 0,
+          "value": 0
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0.55,
+            0.55,
+            0.5,
+            0
+           ]
+          },
+          "time": 0.3,
+          "value": 40
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0.78,
+            0.42,
+            0,
+            0
+           ]
+          },
+          "time": 1,
+          "value": 150
+         }
+        ],
+        "name": "horizontalRadius"
+       },
+       {
+        "keyframes": [
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0,
+            0,
+            0.45,
+            0
+           ]
+          },
+          "time": 0,
+          "value": 0
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0.78,
+            0.42,
+            0,
+            0
+           ]
+          },
+          "time": 1,
+          "value": 12
+         }
+        ],
+        "name": "verticalRadius"
+       }
+      ]
+     },
+     {
+      "name": "ZOOM_BLUR",
+      "params": [
+       {
+        "keyframes": [
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0,
+            0,
+            0.55,
+            0
+           ]
+          },
+          "time": 0,
+          "value": 0
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0.4,
+            1,
+            0.52,
+            0
+           ]
+          },
+          "time": 0.3,
+          "value": 0
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0.85,
+            0.4,
+            0,
+            0
+           ]
+          },
+          "time": 1,
+          "value": 55
+         }
+        ],
+        "name": "zoomBlurRadius"
+       },
+       {
+        "name": "anchorX",
+        "value": 0.5
+       },
+       {
+        "name": "anchorY",
+        "value": 0.5
+       }
+      ]
+     },
+     {
+      "name": "ALPHA",
+      "params": [
+       {
+        "keyframes": [
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0,
+            0,
+            0,
+            0
+           ]
+          },
+          "time": 0,
+          "value": 1
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0,
+            0,
+            0.45,
+            0.05
+           ]
+          },
+          "time": 0.3,
+          "value": 1
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0.55,
+            0.95,
+            0,
+            0
+           ]
+          },
+          "time": 0.62,
+          "value": 0
+         }
+        ],
+        "name": "alpha"
+       }
+      ]
+     }
+    ],
+    "isOverlapping": true,
+    "label": "Whoosh",
+    "preview": "transitions/previews/WHOOSH.webm",
+    "thumbnail": "transitions/thumbnails/Whoosh.webp",
+    "transitionName": "WHOOSH",
+    "overlayClip": null
+   }
+  },
+  {
+   "id": "transition-8ad6f341-1062-46bc-8fbb-c5d32622fc7e",
+   "name": "GLITCH",
+   "inClip": "274060859342029",
+   "outClip": "908946013689660",
+   "duration": 500,
+   "soundEffect": {
+    "name": "GLITCH",
+    "volume": 0,
+    "preset": {
+     "fadeOut": 0.0,
+     "filePath": "transitions/sound-effects/glitch.opus",
+     "label": "Glitch",
+     "name": "GLITCH"
+    }
+   },
+   "preset": {
+    "inEffects": [
+     {
+      "name": "COLOR_SHIFT",
+      "params": [
+       {
+        "keyframes": [
+         {
+          "interpolation": {
+           "type": "CONSTANT"
+          },
+          "time": 0,
+          "value": 1
+         },
+         {
+          "interpolation": {
+           "type": "CONSTANT"
+          },
+          "time": 0.1,
+          "value": 1
+         },
+         {
+          "interpolation": {
+           "type": "CONSTANT"
+          },
+          "time": 0.2,
+          "value": 1.0114
+         },
+         {
+          "interpolation": {
+           "type": "CONSTANT"
+          },
+          "time": 0.35,
+          "value": 1
+         },
+         {
+          "interpolation": {
+           "type": "CONSTANT"
+          },
+          "time": 0.9,
+          "value": 1.0114
+         },
+         {
+          "interpolation": {
+           "type": "CONSTANT"
+          },
+          "time": 1,
+          "value": 1
+         }
+        ],
+        "name": "redX"
+       },
+       {
+        "keyframes": [
+         {
+          "interpolation": {
+           "type": "CONSTANT"
+          },
+          "time": 0,
+          "value": 1
+         },
+         {
+          "interpolation": {
+           "type": "CONSTANT"
+          },
+          "time": 0.1,
+          "value": 1.012
+         },
+         {
+          "interpolation": {
+           "type": "CONSTANT"
+          },
+          "time": 0.2,
+          "value": 0.96
+         },
+         {
+          "interpolation": {
+           "type": "CONSTANT"
+          },
+          "time": 0.35,
+          "value": 1
+         },
+         {
+          "interpolation": {
+           "type": "CONSTANT"
+          },
+          "time": 0.9,
+          "value": 0.96
+         },
+         {
+          "interpolation": {
+           "type": "CONSTANT"
+          },
+          "time": 1,
+          "value": 1
+         }
+        ],
+        "name": "redY"
+       },
+       {
+        "keyframes": [
+         {
+          "interpolation": {
+           "type": "CONSTANT"
+          },
+          "time": 0,
+          "value": 1
+         },
+         {
+          "interpolation": {
+           "type": "CONSTANT"
+          },
+          "time": 0.1,
+          "value": 1
+         },
+         {
+          "interpolation": {
+           "type": "CONSTANT"
+          },
+          "time": 0.2,
+          "value": 0.971
+         },
+         {
+          "interpolation": {
+           "type": "CONSTANT"
+          },
+          "time": 0.35,
+          "value": 1.007
+         },
+         {
+          "interpolation": {
+           "type": "CONSTANT"
+          },
+          "time": 0.9,
+          "value": 0.971
+         },
+         {
+          "interpolation": {
+           "type": "CONSTANT"
+          },
+          "time": 1,
+          "value": 1
+         }
+        ],
+        "name": "greenX"
+       },
+       {
+        "keyframes": [
+         {
+          "interpolation": {
+           "type": "CONSTANT"
+          },
+          "time": 0,
+          "value": 1
+         },
+         {
+          "interpolation": {
+           "type": "CONSTANT"
+          },
+          "time": 0.1,
+          "value": 1.018
+         },
+         {
+          "interpolation": {
+           "type": "CONSTANT"
+          },
+          "time": 0.2,
+          "value": 1.018
+         },
+         {
+          "interpolation": {
+           "type": "CONSTANT"
+          },
+          "time": 0.35,
+          "value": 0.997
+         },
+         {
+          "interpolation": {
+           "type": "CONSTANT"
+          },
+          "time": 0.9,
+          "value": 1.018
+         },
+         {
+          "interpolation": {
+           "type": "CONSTANT"
+          },
+          "time": 1,
+          "value": 1
+         }
+        ],
+        "name": "greenY"
+       }
+      ]
+     }
+    ],
+    "outEffects": [
+     {
+      "name": "COLOR_SHIFT",
+      "params": [
+       {
+        "keyframes": [
+         {
+          "interpolation": {
+           "type": "CONSTANT"
+          },
+          "time": 0,
+          "value": 1
+         },
+         {
+          "interpolation": {
+           "type": "CONSTANT"
+          },
+          "time": 0.1,
+          "value": 1
+         },
+         {
+          "interpolation": {
+           "type": "CONSTANT"
+          },
+          "time": 0.2,
+          "value": 1.0114
+         },
+         {
+          "interpolation": {
+           "type": "CONSTANT"
+          },
+          "time": 0.35,
+          "value": 1
+         },
+         {
+          "interpolation": {
+           "type": "CONSTANT"
+          },
+          "time": 0.9,
+          "value": 1.0114
+         },
+         {
+          "interpolation": {
+           "type": "CONSTANT"
+          },
+          "time": 1,
+          "value": 1
+         }
+        ],
+        "name": "redX"
+       },
+       {
+        "keyframes": [
+         {
+          "interpolation": {
+           "type": "CONSTANT"
+          },
+          "time": 0,
+          "value": 1
+         },
+         {
+          "interpolation": {
+           "type": "CONSTANT"
+          },
+          "time": 0.1,
+          "value": 1.012
+         },
+         {
+          "interpolation": {
+           "type": "CONSTANT"
+          },
+          "time": 0.2,
+          "value": 0.96
+         },
+         {
+          "interpolation": {
+           "type": "CONSTANT"
+          },
+          "time": 0.35,
+          "value": 1
+         },
+         {
+          "interpolation": {
+           "type": "CONSTANT"
+          },
+          "time": 0.9,
+          "value": 0.96
+         },
+         {
+          "interpolation": {
+           "type": "CONSTANT"
+          },
+          "time": 1,
+          "value": 1
+         }
+        ],
+        "name": "redY"
+       },
+       {
+        "keyframes": [
+         {
+          "interpolation": {
+           "type": "CONSTANT"
+          },
+          "time": 0,
+          "value": 1
+         },
+         {
+          "interpolation": {
+           "type": "CONSTANT"
+          },
+          "time": 0.1,
+          "value": 1
+         },
+         {
+          "interpolation": {
+           "type": "CONSTANT"
+          },
+          "time": 0.2,
+          "value": 0.971
+         },
+         {
+          "interpolation": {
+           "type": "CONSTANT"
+          },
+          "time": 0.35,
+          "value": 1.007
+         },
+         {
+          "interpolation": {
+           "type": "CONSTANT"
+          },
+          "time": 0.9,
+          "value": 0.971
+         },
+         {
+          "interpolation": {
+           "type": "CONSTANT"
+          },
+          "time": 1,
+          "value": 1
+         }
+        ],
+        "name": "greenX"
+       },
+       {
+        "keyframes": [
+         {
+          "interpolation": {
+           "type": "CONSTANT"
+          },
+          "time": 0,
+          "value": 1
+         },
+         {
+          "interpolation": {
+           "type": "CONSTANT"
+          },
+          "time": 0.1,
+          "value": 1.018
+         },
+         {
+          "interpolation": {
+           "type": "CONSTANT"
+          },
+          "time": 0.2,
+          "value": 1.018
+         },
+         {
+          "interpolation": {
+           "type": "CONSTANT"
+          },
+          "time": 0.35,
+          "value": 0.997
+         },
+         {
+          "interpolation": {
+           "type": "CONSTANT"
+          },
+          "time": 0.9,
+          "value": 1.018
+         },
+         {
+          "interpolation": {
+           "type": "CONSTANT"
+          },
+          "time": 1,
+          "value": 1
+         }
+        ],
+        "name": "greenY"
+       },
+       {
+        "name": "blurX",
+        "value": 0
+       },
+       {
+        "name": "blurY",
+        "value": 0
+       }
+      ]
+     },
+     {
+      "name": "ALPHA",
+      "params": [
+       {
+        "keyframes": [
+         {
+          "interpolation": {
+           "type": "LINEAR"
+          },
+          "time": 0,
+          "value": 1
+         },
+         {
+          "interpolation": {
+           "type": "LINEAR"
+          },
+          "time": 0.699999,
+          "value": 1
+         },
+         {
+          "interpolation": {
+           "type": "LINEAR"
+          },
+          "time": 0.7,
+          "value": 0
+         }
+        ],
+        "name": "alpha"
+       }
+      ]
+     }
+    ],
+    "isOverlapping": true,
+    "label": "Glitch",
+    "preview": "transitions/previews/GLITCH.webm",
+    "thumbnail": "transitions/thumbnails/Glitch.webp",
+    "transitionName": "GLITCH",
+    "overlayClip": {
+     "path": "transitions/overlay-clips/glitch_map.mp4",
+     "previewPath": "transitions/overlay-clips/glitch_map.webm",
+     "overlayType": {
+      "name": "DISPLACEMENT_MAP",
+      "params": [
+       {
+        "keyframes": [
+         {
+          "interpolation": {
+           "type": "CONSTANT"
+          },
+          "time": 0,
+          "value": 0
+         },
+         {
+          "interpolation": {
+           "type": "CONSTANT"
+          },
+          "time": 0.1,
+          "value": 0.2697
+         },
+         {
+          "interpolation": {
+           "type": "CONSTANT"
+          },
+          "time": 0.2,
+          "value": 0.0104
+         },
+         {
+          "interpolation": {
+           "type": "CONSTANT"
+          },
+          "time": 0.35,
+          "value": 0.2697
+         },
+         {
+          "interpolation": {
+           "type": "CONSTANT"
+          },
+          "time": 0.9,
+          "value": -0.07135
+         },
+         {
+          "interpolation": {
+           "type": "CONSTANT"
+          },
+          "time": 1,
+          "value": 0
+         }
+        ],
+        "name": "horizontalDisplacement"
+       },
+       {
+        "keyframes": [
+         {
+          "interpolation": {
+           "type": "CONSTANT"
+          },
+          "time": 0,
+          "value": 0
+         },
+         {
+          "interpolation": {
+           "type": "CONSTANT"
+          },
+          "time": 0.1,
+          "value": 0.0185
+         },
+         {
+          "interpolation": {
+           "type": "CONSTANT"
+          },
+          "time": 0.2,
+          "value": 0.23
+         },
+         {
+          "interpolation": {
+           "type": "CONSTANT"
+          },
+          "time": 0.35,
+          "value": 0.0185
+         },
+         {
+          "interpolation": {
+           "type": "CONSTANT"
+          },
+          "time": 0.9,
+          "value": 0.37
+         },
+         {
+          "interpolation": {
+           "type": "CONSTANT"
+          },
+          "time": 1,
+          "value": 0
+         }
+        ],
+        "name": "verticalDisplacement"
+       }
+      ]
+     }
+    }
+   }
+  },
+  {
+   "id": "transition-985d347e-b52e-4e0f-a87c-cf003c03ac1b",
+   "name": "CONTRAST",
+   "inClip": "907805858782015",
+   "outClip": "274060859342029",
+   "duration": 500,
+   "soundEffect": {
+    "name": "PAPER",
+    "volume": 0,
+    "preset": {
+     "fadeOut": 0.0,
+     "filePath": "transitions/sound-effects/paper.opus",
+     "label": "Paper",
+     "name": "PAPER"
+    }
+   },
+   "preset": {
+    "inEffects": null,
+    "outEffects": [
+     {
+      "name": "THRESHOLD_WIPE_MASK",
+      "params": [
+       {
+        "keyframes": [
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0,
+            0,
+            0.3,
+            0.1
+           ]
+          },
+          "time": 0,
+          "value": 100
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0.3,
+            1,
+            0,
+            0
+           ]
+          },
+          "time": 1,
+          "value": 0
+         }
+        ],
+        "name": "lowPercent"
+       },
+       {
+        "keyframes": [
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0,
+            0,
+            0.3,
+            0.1
+           ]
+          },
+          "time": 0,
+          "value": 100
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0.3,
+            1,
+            0,
+            0
+           ]
+          },
+          "time": 1,
+          "value": 0
+         }
+        ],
+        "name": "highPercent"
+       }
+      ]
+     }
+    ],
+    "isOverlapping": true,
+    "label": "Contrast",
+    "preview": "transitions/previews/CONTRAST.webm",
+    "thumbnail": "transitions/thumbnails/Contrast.webp",
+    "transitionName": "CONTRAST",
+    "overlayClip": null
+   }
+  },
+  {
+   "id": "transition-e4cf6667-dba4-4b7a-af96-ef349da12b07",
+   "name": "CIRCLE_MASK",
+   "inClip": "613666608257229",
+   "outClip": "907805858782015",
+   "duration": 500,
+   "soundEffect": null,
+   "preset": {
+    "inEffects": [
+     {
+      "name": "CIRCLE_MASK",
+      "params": [
+       {
+        "keyframes": [
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0,
+            0,
+            0.25,
+            0.65
+           ]
+          },
+          "time": 0,
+          "value": 0
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0.25,
+            1,
+            0,
+            0
+           ]
+          },
+          "time": 1,
+          "value": 1
+         }
+        ],
+        "name": "circleRadius"
+       }
+      ]
+     }
+    ],
+    "outEffects": [
+     {
+      "name": "CIRCLE_MASK",
+      "params": [
+       {
+        "keyframes": [
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0,
+            0,
+            0.5,
+            0
+           ]
+          },
+          "time": 0,
+          "value": 1
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0.4,
+            1,
+            0,
+            0
+           ]
+          },
+          "time": 1,
+          "value": 0
+         }
+        ],
+        "name": "circleRadius"
+       }
+      ]
+     }
+    ],
+    "isOverlapping": true,
+    "label": "Circle mask",
+    "preview": "transitions/previews/CIRCLE_MASK.webm",
+    "thumbnail": "transitions/thumbnails/Circle mask.webp",
+    "transitionName": "CIRCLE_MASK",
+    "overlayClip": null
+   }
+  },
+  {
+   "id": "transition-6102851d-fe4f-4d0d-8adb-c2f76db617f2",
+   "name": "BARN_DOORS",
+   "inClip": "179419635559867",
+   "outClip": "613666608257229",
+   "duration": 500,
+   "soundEffect": null,
+   "preset": {
+    "inEffects": [
+     {
+      "name": "BARS",
+      "params": [
+       {
+        "keyframes": [
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0,
+            0,
+            0.08,
+            0.88
+           ]
+          },
+          "time": 0,
+          "value": 0.5
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0.16,
+            1,
+            0,
+            0
+           ]
+          },
+          "time": 1,
+          "value": 0
+         }
+        ],
+        "name": "top"
+       },
+       {
+        "keyframes": [
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0,
+            0,
+            0.08,
+            0.88
+           ]
+          },
+          "time": 0,
+          "value": 0.5
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0.16,
+            1,
+            0,
+            0
+           ]
+          },
+          "time": 1,
+          "value": 0
+         }
+        ],
+        "name": "bottom"
+       },
+       {
+        "name": "left",
+        "value": 0
+       },
+       {
+        "name": "right",
+        "value": 0
+       }
+      ]
+     }
+    ],
+    "outEffects": [
+     {
+      "name": "BARS",
+      "params": [
+       {
+        "keyframes": [
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0,
+            0,
+            0.5,
+            0.01
+           ]
+          },
+          "time": 0,
+          "value": 0
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0.85,
+            0.5,
+            0,
+            0
+           ]
+          },
+          "time": 1,
+          "value": 0.5
+         }
+        ],
+        "name": "left"
+       },
+       {
+        "keyframes": [
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0,
+            0,
+            0.5,
+            0.01
+           ]
+          },
+          "time": 0,
+          "value": 0
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0.85,
+            0.5,
+            0,
+            0
+           ]
+          },
+          "time": 1,
+          "value": 0.5
+         }
+        ],
+        "name": "right"
+       },
+       {
+        "name": "top",
+        "value": 0
+       },
+       {
+        "name": "bottom",
+        "value": 0
+       }
+      ]
+     }
+    ],
+    "isOverlapping": false,
+    "label": "Barn doors",
+    "preview": "transitions/previews/BARN_DOORS.webm",
+    "thumbnail": "transitions/thumbnails/Barn doors.webp",
+    "transitionName": "BARN_DOORS",
+    "overlayClip": null
+   }
+  },
+  {
+   "id": "transition-69ced4cd-fe50-4b7e-a16c-f1d43b91c0b8",
+   "name": "PAN_DIAGONAL",
+   "inClip": "28124239034419",
+   "outClip": "179419635559867",
+   "duration": 500,
+   "soundEffect": {
+    "name": "WHOOSH",
+    "volume": 0,
+    "preset": {
+     "fadeOut": 0.1,
+     "filePath": "transitions/sound-effects/whoosh.opus",
+     "label": "Whoosh",
+     "name": "WHOOSH"
+    }
+   },
+   "preset": {
+    "inEffects": [
+     {
+      "name": "BORDER_REFLECTED_MOVE",
+      "params": [
+       {
+        "keyframes": [
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0,
+            0,
+            0.72,
+            0
+           ]
+          },
+          "time": 0,
+          "value": -0.72
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0.2,
+            1,
+            0,
+            0
+           ]
+          },
+          "time": 1,
+          "value": 0
+         }
+        ],
+        "name": "dx"
+       },
+       {
+        "keyframes": [
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0,
+            0,
+            0.72,
+            0
+           ]
+          },
+          "time": 0,
+          "value": -0.72
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0.2,
+            1,
+            0,
+            0
+           ]
+          },
+          "time": 1,
+          "value": 0
+         }
+        ],
+        "name": "dy"
+       }
+      ]
+     },
+     {
+      "name": "DIAGONAL_BLUR",
+      "params": [
+       {
+        "keyframes": [
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0,
+            0,
+            0.52,
+            0
+           ]
+          },
+          "time": 0,
+          "value": 57.5
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0.3,
+            1,
+            0.3,
+            0
+           ]
+          },
+          "time": 0.44,
+          "value": 115
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0.4,
+            1,
+            0,
+            0
+           ]
+          },
+          "time": 0.88,
+          "value": 0
+         }
+        ],
+        "name": "diagonalRadius"
+       }
+      ]
+     }
+    ],
+    "outEffects": [
+     {
+      "name": "BORDER_REFLECTED_MOVE",
+      "params": [
+       {
+        "keyframes": [
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0,
+            0,
+            0.72,
+            0
+           ]
+          },
+          "time": 0,
+          "value": 0
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0.2,
+            1,
+            0,
+            0
+           ]
+          },
+          "time": 1,
+          "value": 0.72
+         }
+        ],
+        "name": "dx"
+       },
+       {
+        "keyframes": [
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0,
+            0,
+            0.72,
+            0
+           ]
+          },
+          "time": 0,
+          "value": 0
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0.2,
+            1,
+            0,
+            0
+           ]
+          },
+          "time": 1,
+          "value": 0.72
+         }
+        ],
+        "name": "dy"
+       }
+      ]
+     },
+     {
+      "name": "DIAGONAL_BLUR",
+      "params": [
+       {
+        "keyframes": [
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0,
+            0,
+            0.7,
+            0
+           ]
+          },
+          "time": 0,
+          "value": 0
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0.28,
+            1,
+            0,
+            0
+           ]
+          },
+          "time": 0.58,
+          "value": 100
+         }
+        ],
+        "name": "diagonalRadius"
+       }
+      ]
+     },
+     {
+      "name": "ALPHA",
+      "params": [
+       {
+        "keyframes": [
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0,
+            0,
+            0,
+            0
+           ]
+          },
+          "time": 0,
+          "value": 1
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0,
+            0,
+            0.48,
+            0.04
+           ]
+          },
+          "time": 0.36,
+          "value": 1
+         },
+         {
+          "interpolation": {
+           "type": "BEZIER",
+           "value": [
+            0.42,
+            0.96,
+            0,
+            0
+           ]
+          },
+          "time": 0.7,
+          "value": 0
+         }
+        ],
+        "name": "alpha"
+       }
+      ]
+     }
+    ],
+    "isOverlapping": true,
+    "label": "Pan diagonal",
+    "preview": "transitions/previews/PAN_DIAGONAL.webm",
+    "thumbnail": "transitions/thumbnails/Pan diagonal.webp",
+    "transitionName": "PAN_DIAGONAL",
+    "overlayClip": null
+   }
+  }
+ ],
+ "animations": [],
+ "systemFilesBucket": "system-public-files",
+ "source": "PROJECT",
+ "fontUrls": {},
+ "lutFileUrls": {},
+ "textAnimationPresets": {}
+}

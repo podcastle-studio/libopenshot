@@ -21,6 +21,8 @@
 
 // Include FFmpeg headers and macros
 #include "FFmpegUtilities.h"
+#include <functional>
+#include <set>
 
 namespace openshot {
 
@@ -113,6 +115,9 @@ namespace openshot {
 	 * r.Close();
 	 * @endcode
 	 */
+	class GpuFrame;
+	class GpuImage;
+
 	class FFmpegWriter : public WriterBase {
 	private:
 		std::string path;
@@ -128,6 +133,10 @@ namespace openshot {
 		bool silent_audio_mode_ = false; ///< When true, write silent audio instead of decoding frame audio
 		bool pipeline_mode_ = false;
 		size_t pipeline_queue_capacity_ = 8;
+		/// Called after each frame is handed to the encoder, so a caller can report progress without
+		/// having to chop the export into short WriteFrame() calls. See SetProgressCallback.
+		std::function<void(int64_t, int64_t)> progress_callback_;
+		bool allow_b_frames;
 
 		AVFormatContext* oc;
 		AVStream *audio_st, *video_st;
@@ -179,6 +188,9 @@ namespace openshot {
 		/// Close the video codec
 		void close_video(AVFormatContext *oc, AVStream *st);
 
+		/// Free everything Open() and the constructor allocated, without writing a trailer
+		void release();
+
 		/// Flush encoders
 		void flush_encoders();
 
@@ -193,6 +205,30 @@ namespace openshot {
 
 		/// process video frame
 		void process_video_packet(std::shared_ptr<openshot::Frame> frame);
+
+		// W25: NVENC takes the composited frame straight from the GPU. encode_on_device is set
+		// when the encoder's CUDA device is CudaInterop's context and stream; the Timeline then
+		// hands each GPU frame to EncodeOnDevice (on its own thread) instead of reading it back.
+		bool encode_on_device = false;
+		std::shared_ptr<openshot::GpuImage> encode_packed;   ///< NV12, packed; see CudaInterop
+		std::set<AVFrame *> device_frames;                    ///< av_frames that are CUDA frames
+		AVBufferRef *hw_device_ctx = nullptr;                 ///< this writer's encode device (was a process global)
+		void *encode_stream = nullptr;                        ///< CUstream of its own for NVENC (CudaInterop::createStream)
+		AVDictionary *mux_dict = nullptr;                      ///< muxer options from SetOption (was a process global)
+		// Was process-global: one export on libx264 while another used NVENC sent each down the
+		// other's encode branch.
+		int hw_en_on = 1;
+		int hw_en_supported = 0;
+		AVPixelFormat hw_en_av_pix_fmt = AV_PIX_FMT_NONE;
+		AVHWDeviceType hw_en_av_device_type = AV_HWDEVICE_TYPE_VAAPI;
+		std::shared_ptr<void> EncodeOnDevice(openshot::GpuFrame& gpu);
+		struct DeviceFrame;
+
+		// The matrix RGB is encoded with (BT.709 exports, 2026-09-23): the one the output is
+		// tagged with -- colorspace on the codec context, or colormatrix= inside x264-params,
+		// which is how x264 callers tag -- and BT.601 when it says nothing, as swscale always did.
+		std::string x264_params_;
+		int EncodeColorSpace() const;
 
 		/// write all queued frames' audio to the video file
 		void write_audio_packets(bool is_final, std::shared_ptr<openshot::Frame> frame);
@@ -210,6 +246,9 @@ namespace openshot {
 		///
 		/// @param path The file path of the video file you want to open and read
 		FFmpegWriter(const std::string& path);
+
+		/// Releases the encoder, devices and output context of a writer that was not closed
+		~FFmpegWriter() override;
 
 		/// Close the writer
 		void Close();
@@ -303,6 +342,14 @@ namespace openshot {
 		/// \note This is an overloaded function.
 		void WriteFrame(std::shared_ptr<openshot::Frame> frame);
 
+		/// @brief Add a frame at a specific output video frame number.
+		/// @param frame The openshot::Frame object to write
+		/// @param frame_number The 1-based output video frame number used for video PTS
+		///
+		/// \note Audio is still written sequentially. This overload is intended for
+		/// timestamped live video capture where missing frame numbers represent gaps.
+		void WriteFrameAt(std::shared_ptr<openshot::Frame> frame, int64_t frame_number);
+
 		/// @brief Write a block of frames from a reader
 		/// @param reader A openshot::ReaderBase object which will provide frames to be written
 		/// @param start The starting frame number of the reader
@@ -345,6 +392,16 @@ namespace openshot {
 		/// Larger values allow more overlap but use more memory. Call before WriteFrame.
 		/// @param capacity desired queue size (0 or 1 = minimum 1)
 		void SetPipelineQueueCapacity(size_t capacity);
+
+		/// @brief Report progress from inside WriteFrame(reader, start, length).
+		///
+		/// Without this a caller that wants progress has to call WriteFrame() in short ranges, and in
+		/// pipeline mode every one of those calls builds a queue, starts a producer and a consumer
+		/// thread and joins them again -- so an 8-frame progress step tears the pipeline down 8 frames
+		/// at a time. The callback is invoked on the encoding thread after each frame is written, with
+		/// (frames_written, total_frames) counted within the current call. Keep it cheap and do not
+		/// call back into the writer from it.
+		void SetProgressCallback(std::function<void(int64_t frames_written, int64_t total_frames)> cb);
 
 	};
 

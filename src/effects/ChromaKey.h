@@ -13,7 +13,7 @@
 #ifndef OPENSHOT_CHROMAKEY_EFFECT_H
 #define OPENSHOT_CHROMAKEY_EFFECT_H
 
-#include "../EffectBase.h"
+#include "../GpuEffect.h"
 
 #include "../Color.h"
 #include "../Frame.h"
@@ -33,7 +33,7 @@ namespace openshot
 	 * The greenscreen / bluescreen effect replaces matching colors in the video image with
 	 * transparent pixels, revealing lower layers in the timeline.
 	 */
-	class ChromaKey : public EffectBase
+	class ChromaKey : public GpuEffect
 	{
 	private:
 		Color color;
@@ -43,6 +43,17 @@ namespace openshot
 
 		/// Init effect settings
 		void init_effect_details();
+
+	protected:
+		/// The SkSL twin of the CHROMAKEY_YCBCR method only. See SetGpuUniforms.
+		const char* GpuShaderSource() const override;
+
+		/// The key's Cb/Cr and the two thresholds, or **false for every method other
+		/// than CHROMAKEY_YCBCR** -- the rest key on HSV, HSL or CIE coordinates that
+		/// babl computes, and reproducing babl's colour science in SkSL is a much
+		/// larger undertaking than this item. YCbCr is the one the service asks for.
+		bool SetGpuUniforms(SkRuntimeEffectBuilder& builder, int64_t frame_number,
+							int width, int height) const override;
 
 	public:
 
@@ -56,13 +67,14 @@ namespace openshot
 		///
 		/// The keying method determines the algorithm to use to determine the distance
 		/// between the key color and the pixel color. The default keying method,
-		/// CHROMAKEY_BASIC, treates each of the R,G,B values as a vector and calculates
+		/// CHROMAKEY_BASIC_SOFT, uses the BASIC RGB-distance metric with optional halo feathering.
+		/// CHROMAKEY_BASIC treats each of the R,G,B values as a vector and calculates
 		/// the length of the difference between those vectors.
 		///
 		/// Pixels that are less than "fuzz" distance from the key color are eliminated
 		/// by setting their alpha values to zero.
 		///
-		/// If halo is non-zero, pixels that are withing the halo distance of the fuzz
+		/// If halo is non-zero, pixels that are within the halo distance of the fuzz
 		/// distance are given an alpha value that increases with the distance from the
 		/// fuzz boundary.
 		///
@@ -76,7 +88,7 @@ namespace openshot
 		/// @param fuzz The fuzz factor (or threshold)
 		/// @param halo The additional threshold for halo elimination.
 		/// @param method The keying method
-		ChromaKey(Color color, Keyframe fuzz, Keyframe halo = 0.0, ChromaKeyMethod method = CHROMAKEY_BASIC);
+		ChromaKey(Color color, Keyframe fuzz, Keyframe halo = 0.0, ChromaKeyMethod method = CHROMAKEY_BASIC_SOFT);
 
 		/// @brief This method is required for all derived classes of ClipBase, and returns a
 		/// new openshot::Frame object. All Clip keyframes and effects are resolved into

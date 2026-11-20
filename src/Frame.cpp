@@ -13,9 +13,11 @@
 #include <thread>	// for std::this_thread::sleep_for
 #include <chrono>	// for std::chrono::milliseconds
 #include <iomanip>
+#include <limits>
 
 #include "Frame.h"
 #include "AudioBufferSource.h"
+#include "gpu/GpuFrame.h"
 #include "AudioResampler.h"
 #include "QtUtilities.h"
 
@@ -23,7 +25,6 @@
 #include <juce_audio_basics/juce_audio_basics.h>
 #include <juce_audio_devices/juce_audio_devices.h>
 
-#include <QApplication>
 #include <QImage>
 #include <QPixmap>
 #include <QBitmap>
@@ -31,11 +32,15 @@
 #include <QString>
 #include <QVector>
 #include <QPainter>
+#include <QPointF>
+
+// Qt Widgets is needed only by Display() and DisplayWaveform(), the debug preview windows.
+#ifdef USE_QT_PLAYER
+#include <QApplication>
 #include <QHBoxLayout>
 #include <QWidget>
 #include <QLabel>
-#include <QPointF>
-#include <QWidget>
+#endif
 
 using namespace std;
 using namespace openshot;
@@ -43,12 +48,12 @@ using namespace openshot;
 // Constructor - image & audio
 Frame::Frame(int64_t number, int width, int height, std::string color, int samples, int channels)
 	: audio(std::make_shared<juce::AudioBuffer<float>>(channels, samples)),
-	  number(number), width(width), height(height),
+	  number(number), capture_timestamp(std::numeric_limits<double>::quiet_NaN()), width(width), height(height),
 	  pixel_ratio(1,1), color(color),
 	  channels(channels), channel_layout(LAYOUT_STEREO),
 	  sample_rate(44100),
 	  has_audio_data(false), has_image_data(false),
-	  max_audio_sample(0)
+	  max_audio_sample(0), audio_is_increasing(true)
 {
 	// zero (fill with silence) the audio buffer
 	audio->clear();
@@ -86,6 +91,7 @@ Frame& Frame::operator= (const Frame& other)
 void Frame::DeepCopy(const Frame& other)
 {
 	number = other.number;
+	capture_timestamp = other.capture_timestamp;
 	channels = other.channels;
 	width = other.width;
 	height = other.height;
@@ -96,7 +102,15 @@ void Frame::DeepCopy(const Frame& other)
 	pixel_ratio = Fraction(other.pixel_ratio.num, other.pixel_ratio.den);
 	color = other.color;
 	max_audio_sample = other.max_audio_sample;
+	audio_is_increasing = other.audio_is_increasing;
 
+	// Share the GPU surface rather than copying or flattening it. The copy exists so a
+	// clip can modify pixels without touching the reader's frame, and that still holds:
+	// every mutator drops this frame's own gpu_frame and installs a CPU image, so a
+	// write on either side leaves the other alone. Readers hand out GPU-backed frames
+	// (TextClipReader) and Clip::GetOrCreateFrame copies every one of them, so without
+	// this the copy would arrive with no image and no surface and composite as blank.
+	gpu_frame = other.gpu_frame;
 	if (other.image)
 		image = std::make_shared<QImage>(*(other.image));
 	if (other.audio)
@@ -115,6 +129,7 @@ Frame::~Frame() {
 	#endif
 }
 
+#ifdef USE_QT_PLAYER
 // Display the frame image to the screen (primarily used for debugging reasons)
 void Frame::Display()
 {
@@ -153,6 +168,7 @@ void Frame::Display()
 	previewWindow.show();
 	previewApp->exec();
 }
+#endif   // USE_QT_PLAYER
 
 // Get an audio waveform image
 std::shared_ptr<QImage> Frame::GetWaveform(int width, int height, int Red, int Green, int Blue, int Alpha)
@@ -263,6 +279,7 @@ const unsigned char* Frame::GetWaveformPixels(int width, int height, int Red, in
 	return wave_image->constBits();
 }
 
+#ifdef USE_QT_PLAYER
 // Display the wave form
 void Frame::DisplayWaveform()
 {
@@ -295,6 +312,7 @@ void Frame::DisplayWaveform()
 	// Deallocate waveform image
 	ClearWaveform();
 }
+#endif   // USE_QT_PLAYER
 
 // Get magnitude of range of samples (if channel is -1, return average of all channels for that sample)
 float Frame::GetAudioSample(int channel, int sample, int magnitude_range)
@@ -382,6 +400,13 @@ int64_t Frame::GetBytes()
 	if (image) {
 		total_bytes += static_cast<int64_t>(
 			width * height * sizeof(char) * 4);
+	} else if (gpu_frame) {
+		// A GPU-backed frame has no QImage, and reporting zero here would hide it from every
+		// cache that budgets in bytes -- CacheMemory would never evict one, and a reader handing
+		// out GPU frames would retain surfaces without bound. The surface costs the same four
+		// bytes a pixel as the image it stands in for, just in VRAM.
+		total_bytes += static_cast<int64_t>(
+			width * height * sizeof(char) * 4);
 	}
 	if (audio) {
 		// approximate audio size (sample rate / 24 fps)
@@ -395,6 +420,11 @@ int64_t Frame::GetBytes()
 // Get pixel data (as packets)
 const unsigned char* Frame::GetPixels()
 {
+	// A GPU-backed frame keeps its pixels in a texture; without this the blank-image
+	// branch below would quietly hand back a black frame.
+	if (gpu_frame)
+		FlattenGpuFrame();
+
 	// Check for blank image
 	if (!image)
 		// Fill with black
@@ -407,6 +437,9 @@ const unsigned char* Frame::GetPixels()
 // Get pixel data (for only a single scan-line)
 const unsigned char* Frame::GetPixels(int row)
 {
+	if (gpu_frame)
+		FlattenGpuFrame();
+
 	// Check for blank image
 	if (!image)
 		// Fill with black
@@ -454,9 +487,9 @@ void Frame::SetFrameNumber(int64_t new_number)
 // Calculate the # of samples per video frame (for a specific frame number and frame rate)
 int Frame::GetSamplesPerFrame(int64_t number, Fraction fps, int sample_rate, int channels)
 {
-	// Directly return 0 if there are no channels
+	// Directly return 0 for invalid audio/frame-rate parameters
 	// so that we do not need to deal with NaNs later
-	if (channels == 0) return 0;
+	if (channels <= 0 || sample_rate <= 0 || fps.num <= 0 || fps.den <= 0) return 0;
 
 	// Get the total # of samples for the previous frame, and the current frame (rounded)
 	double fps_rate = fps.Reciprocal().ToDouble();
@@ -540,7 +573,7 @@ void Frame::Save(std::string path, float scale, std::string format, int quality)
 
 // Thumbnail the frame image to the specified path.  The image format is determined from the extension (i.e. image.PNG, image.JPEG)
 void Frame::Thumbnail(std::string path, int new_width, int new_height, std::string mask_path, std::string overlay_path,
-		std::string background_color, bool ignore_aspect, std::string format, int quality, float rotate) {
+		std::string background_color, bool ignore_aspect, std::string format, int quality, float rotate, ScaleType scale_mode) {
 
 	// Create blank thumbnail image & fill background color
 	auto thumbnail = std::make_shared<QImage>(
@@ -568,16 +601,28 @@ void Frame::Thumbnail(std::string path, int new_width, int new_height, std::stri
 	}
 
 	// Resize frame image
-	if (ignore_aspect)
-		// Ignore aspect ratio
-		previewImage = std::make_shared<QImage>(previewImage->scaled(
-			new_width, new_height,
-			Qt::IgnoreAspectRatio, Qt::SmoothTransformation));
-	else
-		// Maintain aspect ratio
-		previewImage = std::make_shared<QImage>(previewImage->scaled(
-			new_width, new_height,
-			Qt::KeepAspectRatio, Qt::SmoothTransformation));
+	Qt::AspectRatioMode aspect_ratio_mode = Qt::KeepAspectRatio;
+	if (ignore_aspect) {
+		aspect_ratio_mode = Qt::IgnoreAspectRatio;
+	} else {
+		switch (scale_mode) {
+			case SCALE_CROP:
+				aspect_ratio_mode = Qt::KeepAspectRatioByExpanding;
+				break;
+			case SCALE_STRETCH:
+				aspect_ratio_mode = Qt::IgnoreAspectRatio;
+				break;
+			case SCALE_FIT:
+			case SCALE_NONE:
+			default:
+				aspect_ratio_mode = Qt::KeepAspectRatio;
+				break;
+		}
+	}
+
+	previewImage = std::make_shared<QImage>(previewImage->scaled(
+		new_width, new_height,
+		aspect_ratio_mode, Qt::SmoothTransformation));
 
 	// Composite frame image onto background (centered)
 	int x = (new_width - previewImage->size().width()) / 2.0; // center
@@ -688,6 +733,7 @@ void Frame::AddColor(const QColor& new_color)
 {
 	// Create new image object, and fill with pixel data
 	const std::lock_guard<std::recursive_mutex> lock(addingImageMutex);
+	gpu_frame.reset();   // a solid fill supersedes whatever was on the GPU
 	image = std::make_shared<QImage>(width, height, QImage::Format_RGBA8888_Premultiplied);
 
 	// Fill with solid color
@@ -726,6 +772,9 @@ void Frame::AddImage(std::shared_ptr<QImage> new_image)
 
 	// assign image data
 	const std::lock_guard<std::recursive_mutex> lock(addingImageMutex);
+	// A CPU image replaces the frame's pixels outright, so any GPU surface behind it is
+	// now stale. Drop it without a readback — reading it back would only be overwritten.
+	gpu_frame.reset();
 	image = new_image;
 
 	// Always convert to Format_RGBA8888_Premultiplied (if different)
@@ -801,14 +850,16 @@ void Frame::ResizeAudio(int channels, int length, int rate, ChannelLayout layout
 	max_audio_sample = length;
 }
 
-// Reverse the audio buffer of this frame (will only reverse a single time, regardless of how many times
-// you invoke this method)
-void Frame::ReverseAudio() {
-	if (audio && !audio_reversed) {
+/// Set the direction of the audio buffer of this frame
+void Frame::SetAudioDirection(bool is_increasing) {
+	if (audio && !audio_is_increasing && is_increasing) {
+		// Forward audio buffer
+		audio->reverse(0, audio->getNumSamples());
+	} else if (audio && audio_is_increasing && !is_increasing) {
 		// Reverse audio buffer
 		audio->reverse(0, audio->getNumSamples());
-		audio_reversed = true;
 	}
+	audio_is_increasing = is_increasing;
 }
 
 // Add audio samples to a specific channel
@@ -838,8 +889,8 @@ void Frame::AddAudio(bool replaceSamples, int destChannel, int destStartSample, 
 	if (new_length > max_audio_sample)
 		max_audio_sample = new_length;
 
-	// Reset audio reverse flag
-	audio_reversed = false;
+	// Reset audio direction
+	audio_is_increasing = true;
 }
 
 // Apply gain ramp (i.e. fading volume)
@@ -854,12 +905,75 @@ void Frame::ApplyGainRamp(int destChannel, int destStartSample, int numSamples, 
 // Get pointer to Magick++ image object
 std::shared_ptr<QImage> Frame::GetImage()
 {
+	// A GPU-backed frame keeps its pixels in a texture. Bring them across once, here,
+	// so that every path written against GetImage() — the whole QPainter composite, the
+	// effects, the writer — keeps working untouched on a frame the Timeline rendered on
+	// the GPU. After this the frame is an ordinary CPU frame.
+	if (gpu_frame)
+		FlattenGpuFrame();
+
 	// Check for blank image
 	if (!image)
 		// Fill with black
 		AddColor(width, height, color);
 
 	return image;
+}
+
+void Frame::AttachGpuFrame(std::shared_ptr<openshot::GpuFrame> gpu)
+{
+	const std::lock_guard<std::recursive_mutex> lock(addingImageMutex);
+	gpu_frame = std::move(gpu);
+	if (gpu_frame) {
+		// The surface now holds the truth; anything cached from before it does not.
+		width = gpu_frame->width();
+		height = gpu_frame->height();
+		image.reset();
+		has_image_data = true;
+	}
+}
+
+void Frame::AttachEncoderFrame(std::shared_ptr<void> encoded, int w, int h)
+{
+	const std::lock_guard<std::recursive_mutex> lock(addingImageMutex);
+	encoder_frame = std::move(encoded);
+	width = w;
+	height = h;
+	has_image_data = true;
+}
+
+void Frame::DropGpuFrame()
+{
+	const std::lock_guard<std::recursive_mutex> lock(addingImageMutex);
+	gpu_frame.reset();
+}
+
+void Frame::FlattenGpuFrame()
+{
+	const std::lock_guard<std::recursive_mutex> lock(addingImageMutex);
+	if (!gpu_frame)
+		return;
+
+	// Detach first, unconditionally. A failed readback must leave an ordinary CPU frame
+	// rather than a frame that tries the same failing readback on every GetImage().
+	std::shared_ptr<openshot::GpuFrame> gpu = std::move(gpu_frame);
+	gpu_frame.reset();
+
+	const int w = gpu->width();
+	const int h = gpu->height();
+	auto flattened = std::make_shared<QImage>(w, h, QImage::Format_RGBA8888_Premultiplied);
+
+	// Format_RGBA8888_Premultiplied is byte-for-byte kRGBA_8888 premultiplied, so the
+	// readback lands directly in the QImage with no conversion and no channel swap.
+	const SkPixmap dst(SkImageInfo::Make(w, h, kRGBA_8888_SkColorType, kPremul_SkAlphaType),
+					   flattened->bits(), flattened->bytesPerLine());
+	if (!gpu->readback(dst))
+		return;
+
+	image = flattened;
+	width = w;
+	height = h;
+	has_image_data = true;
 }
 
 #ifdef USE_OPENCV
@@ -873,6 +987,7 @@ std::shared_ptr<QImage> Frame::GetImage()
 // 	cv::cvtColor(mat2, mat2, cv::COLOR_RGBA2BGRA);
 // 	return mat2;
 // }
+
 
 cv::Mat Frame::Qimage2mat(std::shared_ptr<QImage> qimage) {
 	// 1. Wrap QImage memory as RGBA (4 channels). No copy yet.
@@ -890,6 +1005,11 @@ cv::Mat Frame::Qimage2mat(std::shared_ptr<QImage> qimage) {
 // Get pointer to OpenCV image object
 cv::Mat Frame::GetImageCV()
 {
+	// As GetImage(): bring a GPU-backed frame across once, or the blank-image branch
+	// below converts a black frame. Reachable through the overlay-clip path.
+	if (gpu_frame)
+		FlattenGpuFrame();
+
 	// Check for blank image
 	if (!image)
 		// Fill with black
@@ -903,38 +1023,33 @@ cv::Mat Frame::GetImageCV()
 }
 
 std::shared_ptr<QImage> Frame::Mat2Qimage(const cv::Mat& srcMat) {
-	cv::Mat rgbaMat;
+	// Allocate the destination QImage first and let OpenCV convert straight into its buffer.
+	// This used to convert into a temporary cv::Mat, wrap that in a QImage and then copy(),
+	// which is two full-frame passes and two allocations per call for the same pixels. At 1080p
+	// that was the single most expensive thing in the effect chain -- 1.04 ms a call against
+	// Qimage2mat's 0.37 ms, measured over transitions_chain and heavy_effects.
+	auto out = std::make_shared<QImage>(srcMat.cols, srcMat.rows,
+										QImage::Format_RGBA8888_Premultiplied);
+
+	// Wraps the QImage's own pixels. cvtColor calls dst.create(), which is a no-op when the size
+	// and type already match, so the external buffer survives and nothing is reallocated.
+	cv::Mat dst(out->height(), out->width(), CV_8UC4, out->bits(), out->bytesPerLine());
 
 	if (srcMat.channels() == 4) {
 		// BGRA (OpenCV) -> RGBA (Qt), still premultiplied
-		cv::cvtColor(srcMat, rgbaMat, cv::COLOR_BGRA2RGBA);
+		cv::cvtColor(srcMat, dst, cv::COLOR_BGRA2RGBA);
 	} else if (srcMat.channels() == 3) {
-		// BGR -> RGB
-		cv::cvtColor(srcMat, rgbaMat, cv::COLOR_BGR2RGB);
-
-		// Add opaque alpha so we can produce RGBA8888_Premultiplied
-		cv::Mat alpha(srcMat.rows, srcMat.cols, CV_8UC1, cv::Scalar(255));
-		std::vector<cv::Mat> rgb;
-		cv::split(rgbaMat, rgb);   // R,G,B
-		rgb.push_back(alpha);      // A=255
-		cv::merge(rgb, rgbaMat);   // now RGBA
+		// BGR -> RGBA, with the opaque alpha OpenCV adds itself. The old code did this as a
+		// BGR2RGB plus a split/merge to staple an alpha plane on; one conversion is the same
+		// result.
+		cv::cvtColor(srcMat, dst, cv::COLOR_BGR2RGBA);
 	} else {
 		// fallback: force opaque black
-		rgbaMat = cv::Mat(srcMat.rows, srcMat.cols, CV_8UC4,
-						  cv::Scalar(0,0,0,255));
+		out->fill(QColor(0, 0, 0, 255));
 	}
 
-	// Now rgbaMat is RGBA, and we are *treating it as premultiplied*.
-	// Construct QImage using premultiplied format.
-	QImage qimg(
-		(uchar*)rgbaMat.data,
-		rgbaMat.cols,
-		rgbaMat.rows,
-		rgbaMat.step,
-		QImage::Format_RGBA8888_Premultiplied
-	);
-
-	return std::make_shared<QImage>(qimg.copy());
+	// The RGBA data is *treated as premultiplied*, which is what the format above declares.
+	return out;
 }
 
 // std::shared_ptr<QImage> Frame::Mat2Qimage(cv::Mat f){
@@ -972,6 +1087,8 @@ std::shared_ptr<QImage> Frame::Mat2Qimage(const cv::Mat& srcMat) {
 // Set pointer to OpenCV image object
 void Frame::SetImageCV(const cv::Mat& imageCv)
 {
+	const std::lock_guard<std::recursive_mutex> lock(addingImageMutex);
+	gpu_frame.reset();   // the CPU image supersedes whatever was on the GPU
 	image = Mat2Qimage(imageCv);
 }
 #endif
@@ -1060,6 +1177,6 @@ void Frame::AddAudioSilence(int numSamples)
 	// Calculate max audio sample added
 	max_audio_sample = numSamples;
 
-	// Reset audio reverse flag
-	audio_reversed = false;
+	// Reset audio direction
+	audio_is_increasing = true;
 }

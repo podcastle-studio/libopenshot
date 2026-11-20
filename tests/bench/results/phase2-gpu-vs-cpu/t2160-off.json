@@ -1,0 +1,69 @@
+{
+  "cases" : 
+  [
+    {
+      "agg_fps" : 13.056080216556852,
+      "avg_ms" : 76.593000000000004,
+      "build_ms" : 83.799999999999997,
+      "cpu_cores" : 1.0304817818736289,
+      "cpu_seconds" : 11.992964000000001,
+      "description" : "four static styled text clips (gradient+stroke+shadow, box, curved, plain) over video",
+      "error" : "",
+      "fps" : 13.055999999999999,
+      "frames" : 150,
+      "height" : 2160,
+      "max_ms" : 276.899,
+      "max_rss_kb" : 657028,
+      "mode" : "render",
+      "ok" : true,
+      "p50_ms" : 73.709000000000003,
+      "p95_ms" : 85.293000000000006,
+      "parallel" : 1,
+      "res" : "2160p",
+      "scenario" : "text_static_4",
+      "wall_s" : 11.488899999999999,
+      "width" : 3840
+    },
+    {
+      "agg_fps" : 1.257612749175006,
+      "avg_ms" : 795.15700000000004,
+      "build_ms" : 67.900000000000006,
+      "cpu_cores" : 1.0002273294839839,
+      "cpu_seconds" : 119.410831,
+      "description" : "three animated text clips with glow, 3D tilt and style keyframes (per-frame Skia)",
+      "error" : "",
+      "fps" : 1.258,
+      "frames" : 150,
+      "height" : 2160,
+      "max_ms" : 1256.9369999999999,
+      "max_rss_kb" : 594436,
+      "mode" : "render",
+      "ok" : true,
+      "p50_ms" : 863.58500000000004,
+      "p95_ms" : 1210.674,
+      "parallel" : 1,
+      "res" : "2160p",
+      "scenario" : "text_animated_glow_3",
+      "wall_s" : 119.2736,
+      "width" : 3840
+    }
+  ],
+  "date" : "2026-09-15T05:06:28",
+  "frames" : 150,
+  "label" : "t2160-off",
+  "machine" : 
+  {
+    "build_type" : "Release",
+    "cpu" : "12th Gen Intel(R) Core(TM) i7-12700H",
+    "ffmpeg" : "6.1",
+    "git" : "e2340c09",
+    "git_branch" : "feature/gpu-rendering",
+    "gpu" : "NVIDIA RTX A2000 8GB Laptop GPU, 580.126.20, 8192 MiB",
+    "hardware_threads" : 20,
+    "kernel" : "7.0.0-31-generic",
+    "mem_total" : "32521724 kB",
+    "threads_setting" : "library defaults (FF_THREADS=16, OMP_THREADS=16)"
+  },
+  "parallel" : 1,
+  "total_seconds" : 131.02224027599999
+}

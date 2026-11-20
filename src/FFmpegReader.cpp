@@ -15,21 +15,35 @@
 
 #include <thread>	// for std::this_thread::sleep_for
 #include <chrono>	// for std::chrono::milliseconds
+#include <algorithm>
+#include <cmath>
+#include <map>
+#include <mutex>
+#include <sstream>
 #include <unistd.h>
+#include <vector>
+
+#include <QTransform>
 
 #include "FFmpegUtilities.h"
+#include "HardwareCodecLock.h"
+#include "effects/CropHelpers.h"
 
 #include "FFmpegReader.h"
 #include "Exceptions.h"
+#include "MemoryTrim.h"
+#include "QtUtilities.h"   // aligned_free, for the frame-buffer pool below
+#include "gpu/CudaInterop.h"
+#include "gpu/GpuDevice.h"
+#include "gpu/GpuFrame.h"
+#include "gpu/GpuTelemetry.h"
+#include "gpu/GpuYuv.h"
 #include "Timeline.h"
 #include "ZmqLogger.h"
 
 #define ENABLE_VAAPI 0
 
 #if USE_HW_ACCEL
-#define MAX_SUPPORTED_WIDTH 1950
-#define MAX_SUPPORTED_HEIGHT 1100
-
 #if ENABLE_VAAPI
 #include "libavutil/hwcontext_vaapi.h"
 
@@ -59,23 +73,59 @@ typedef struct VAAPIDecodeContext {
 #endif // ENABLE_VAAPI
 #endif // USE_HW_ACCEL
 
+// NVDEC straight into CUDA-Vulkan interop images (W23): needs hardware decode, a GPU Skia and the
+// CUDA driver headers. Without any of them the reader downloads NVDEC's frames as it always has.
+#if USE_HW_ACCEL && defined(OPENSHOT_HAVE_SKIA_GPU) && defined(OPENSHOT_HAVE_CUDA)
+#define OPENSHOT_NVDEC_ON_DEVICE 1
+extern "C" {
+#include <libavutil/hwcontext_cuda.h>
+}
+#endif
 
 using namespace openshot;
 
-int hw_de_on = 0;
-#if USE_HW_ACCEL
-	AVPixelFormat hw_de_av_pix_fmt_global = AV_PIX_FMT_NONE;
-	AVHWDeviceType hw_de_av_device_type_global = AV_HWDEVICE_TYPE_NONE;
+// Serialises every reader's copy -> draw -> submit -> re-arm step on the device (see
+// ConvertOnDevice), and a hardware decoder's destruction against it (see Close).
+static std::mutex gConvertSequence;
+
+// Normalize deprecated JPEG-range YUVJ formats before creating swscale contexts.
+// swscale expects non-YUVJ formats plus explicit color-range metadata.
+static AVPixelFormat NormalizeDeprecatedPixFmt(AVPixelFormat pix_fmt, bool& is_full_range) {
+	switch (pix_fmt) {
+		case AV_PIX_FMT_YUVJ420P:
+			is_full_range = true;
+			return AV_PIX_FMT_YUV420P;
+		case AV_PIX_FMT_YUVJ422P:
+			is_full_range = true;
+			return AV_PIX_FMT_YUV422P;
+		case AV_PIX_FMT_YUVJ444P:
+			is_full_range = true;
+			return AV_PIX_FMT_YUV444P;
+		case AV_PIX_FMT_YUVJ440P:
+			is_full_range = true;
+			return AV_PIX_FMT_YUV440P;
+#ifdef AV_PIX_FMT_YUVJ411P
+		case AV_PIX_FMT_YUVJ411P:
+			is_full_range = true;
+			return AV_PIX_FMT_YUV411P;
 #endif
+		default:
+			return pix_fmt;
+	}
+}
 
 FFmpegReader::FFmpegReader(const std::string &path, bool inspect_reader)
-		: last_frame(0), is_seeking(0), seeking_pts(0), seeking_frame(0), seek_count(0), NO_PTS_OFFSET(-99999),
-		  path(path), is_video_seek(true), check_interlace(false), check_fps(false), enable_seek(true), is_open(false),
-		  seek_audio_frame_found(0), seek_video_frame_found(0),is_duration_known(false), largest_frame_processed(0),
-		  current_video_frame(0), packet(NULL), max_concurrent_frames(OPEN_MP_NUM_PROCESSORS), audio_pts(0),
-		  video_pts(0), pFormatCtx(NULL), videoStream(-1), audioStream(-1), pCodecCtx(NULL), aCodecCtx(NULL),
-		pStream(NULL), aStream(NULL), pFrame(NULL), previous_packet_location{-1,0},
-		hold_packet(false) {
+		: FFmpegReader(path, DurationStrategy::VideoPreferred, inspect_reader) {}
+
+FFmpegReader::FFmpegReader(const std::string &path, DurationStrategy duration_strategy, bool inspect_reader)
+		: path(path), pFormatCtx(NULL), videoStream(-1), audioStream(-1), pCodecCtx(NULL), aCodecCtx(NULL),
+		  pStream(NULL), aStream(NULL), packet(NULL), pFrame(NULL), is_open(false), is_duration_known(false),
+		  check_interlace(false), check_fps(false), duration_strategy(duration_strategy), previous_packet_location{-1, 0},
+		  is_seeking(false), seeking_pts(0), seeking_frame(0), is_video_seek(true), seek_count(0),
+		  seek_audio_frame_found(0), seek_video_frame_found(0), last_seek_max_frame(-1), seek_stagnant_count(0),
+		  last_frame(0), largest_frame_processed(0), current_video_frame(0), audio_pts(0), video_pts(0),
+		  hold_packet(false), pts_offset_seconds(0.0), audio_pts_seconds(0.0), video_pts_seconds(0.0),
+		  NO_PTS_OFFSET(-99999), source_width(0), source_height(0), source_rotation(0.0), enable_seek(true) {
 
 	// Initialize FFMpeg, and register all formats and codecs
 	AV_REGISTER_ALL
@@ -87,10 +137,15 @@ FFmpegReader::FFmpegReader(const std::string &path, bool inspect_reader)
 	audio_pts_seconds = NO_PTS_OFFSET;
 
 	// Init cache
-	working_cache.SetMaxBytesFromInfo(Settings::Instance()->DISABLE_CACHING ? 1 : max_concurrent_frames * info.fps.ToDouble() * 2,
-		info.width, info.height, info.sample_rate, info.channels);
-	final_cache.SetMaxBytesFromInfo(Settings::Instance()->DISABLE_CACHING ? 1 : max_concurrent_frames * 2 ,
-		info.width, info.height, info.sample_rate, info.channels);
+	// DISABLE_CACHING is on by default in this fork: an export reads each frame once, so the
+	// reader caches cost memory without buying anything. Upstream's floor applies otherwise.
+	const bool no_cache = Settings::Instance()->DISABLE_CACHING;
+	const int init_working_cache_frames = no_cache ? 1
+		: std::max(Settings::Instance()->CACHE_MIN_FRAMES, int(OPEN_MP_NUM_PROCESSORS * info.fps.ToDouble() * 2));
+	const int init_final_cache_frames = no_cache ? 1
+		: std::max(Settings::Instance()->CACHE_MIN_FRAMES, OPEN_MP_NUM_PROCESSORS * 2);
+	working_cache.SetMaxBytesFromInfo(init_working_cache_frames, info.width, info.height, info.sample_rate, info.channels);
+	final_cache.SetMaxBytesFromInfo(init_final_cache_frames, info.width, info.height, info.sample_rate, info.channels);
 
 	// Open and Close the reader, to populate its attributes (such as height, width, etc...)
 	if (inspect_reader) {
@@ -100,9 +155,25 @@ FFmpegReader::FFmpegReader(const std::string &path, bool inspect_reader)
 }
 
 FFmpegReader::~FFmpegReader() {
-	if (is_open)
-		// Auto close reader if not already done
-		Close();
+	if (is_open) {
+		// Auto close reader if not already done.
+		//
+		// Close() drains the decoder, which runs ProcessVideoPacket, which can throw -- and an
+		// exception leaving a destructor is terminate(), so a reader that failed to decode used to
+		// abort the whole process instead of failing its job. Swallow it here; an explicit Close()
+		// still reports.
+		try {
+			Close();
+		} catch (const std::exception& e) {
+			ZmqLogger::Instance()->AppendDebugMethod(
+				"FFmpegReader::~FFmpegReader (Close threw, swallowed so the destructor cannot "
+				"terminate) " + path + ": " + e.what());
+		} catch (...) {
+			ZmqLogger::Instance()->AppendDebugMethod(
+				"FFmpegReader::~FFmpegReader (Close threw, swallowed so the destructor cannot "
+				"terminate) " + path);
+		}
+	}
 }
 
 // This struct holds the associated video frame and starting sample # for an audio packet.
@@ -125,57 +196,149 @@ bool AudioLocation::is_near(AudioLocation location, int samples_per_frame, int64
 
 #if USE_HW_ACCEL
 
+namespace {
+
+/// Recycles the RGBA buffers the reader hands to each decoded Frame.
+///
+/// Every decoded frame needs its own width*height*4 buffer, and at 4K that is 33 MB — above
+/// glibc's mmap threshold (which caps at 32 MB), so each frame mmap'd 33 MB and munmap'd it again
+/// when its Frame died. The kernel then had to fault and zero every page of it, and because the
+/// first thing to touch the buffer is sws_scale, that cost landed *inside* the conversion: 6.5 ms
+/// per 4K frame against ffmpeg's 2.7 ms for the identical unscaled yuv420p→rgba converter, and
+/// 612k minor faults over 150 frames against ffmpeg's 271k. Reusing the buffers is what closes
+/// that gap; there is nothing wrong with the conversion itself.
+///
+/// Buffers come back through Release(), which is the QImageCleanupFunction on the QImage that
+/// wraps them — so a buffer returns when its Frame is destroyed, wherever and whenever that
+/// happens. The pool is therefore process-wide, locked, and deliberately never destroyed: a
+/// QImage can outlive any static destructor that would take the pool with it.
+///
+/// Stale contents are not a problem: sws_scale writes every pixel of the destination, which is the
+/// same reason the memset W08 removed was not needed.
+class FrameBufferPool
+{
+public:
+	static FrameBufferPool& Instance() {
+		static FrameBufferPool* pool = new FrameBufferPool();   // leaked on purpose, see above
+		return *pool;
+	}
+
+	/// A 32-byte-aligned buffer of at least @a bytes, recycled when one of that exact size is
+	/// free. Null on allocation failure.
+	unsigned char* acquire(std::size_t bytes) {
+		if (bytes == 0)
+			return nullptr;
+		{
+			const std::lock_guard<std::mutex> lock(mutex);
+			for (auto it = free_blocks.begin(); it != free_blocks.end(); ++it) {
+				if (it->second != bytes)
+					continue;
+				unsigned char* address = it->first;
+				free_bytes -= bytes;
+				free_blocks.erase(it);
+				return address;
+			}
+		}
+		unsigned char* address = static_cast<unsigned char*>(aligned_malloc(bytes, 32));
+		if (!address)
+			return nullptr;
+		const std::lock_guard<std::mutex> lock(mutex);
+		sizes[address] = bytes;
+		return address;
+	}
+
+	/// QImageCleanupFunction: hand a buffer back rather than freeing it.
+	static void Release(void* address) {
+		if (address)
+			Instance().put(static_cast<unsigned char*>(address));
+	}
+
+private:
+	/// How much free memory the pool may sit on. A 4K RGBA frame is 33 MB, so this is about
+	/// eight of them — enough to keep several readers and a couple of sizes in flight without
+	/// the pool becoming a memory leak in disguise. Peak RSS is a first-class constraint here.
+	static constexpr std::size_t kMaxFreeBytes = 256u * 1024u * 1024u;
+
+	void put(unsigned char* address) {
+		const std::lock_guard<std::mutex> lock(mutex);
+		const auto known = sizes.find(address);
+		if (known == sizes.end()) {
+			// Not ours — should not happen, but freeing is the safe answer.
+			openshot::aligned_free(address);
+			return;
+		}
+		const std::size_t bytes = known->second;
+		if (free_bytes + bytes > kMaxFreeBytes) {
+			sizes.erase(known);
+			openshot::aligned_free(address);
+			return;
+		}
+		free_blocks.emplace_back(address, bytes);
+		free_bytes += bytes;
+	}
+
+	std::mutex mutex;
+	std::vector<std::pair<unsigned char*, std::size_t>> free_blocks;
+	std::map<unsigned char*, std::size_t> sizes;   // every buffer the pool still owns
+	std::size_t free_bytes = 0;
+};
+
+}   // namespace
+
 // Get hardware pix format
 static enum AVPixelFormat get_hw_dec_format(AVCodecContext *ctx, const enum AVPixelFormat *pix_fmts)
 {
 	const enum AVPixelFormat *p;
+
+	// Prefer only the format matching the selected hardware decoder
+	int selected = openshot::Settings::Instance()->HARDWARE_DECODER;
 
 	for (p = pix_fmts; *p != AV_PIX_FMT_NONE; p++) {
 		switch (*p) {
 #if defined(__linux__)
 			// Linux pix formats
 			case AV_PIX_FMT_VAAPI:
-				hw_de_av_pix_fmt_global = AV_PIX_FMT_VAAPI;
-				hw_de_av_device_type_global = AV_HWDEVICE_TYPE_VAAPI;
-				return *p;
+				if (selected == 1) {
+					return *p;
+				}
 				break;
 			case AV_PIX_FMT_VDPAU:
-				hw_de_av_pix_fmt_global = AV_PIX_FMT_VDPAU;
-				hw_de_av_device_type_global = AV_HWDEVICE_TYPE_VDPAU;
-				return *p;
+				if (selected == 6) {
+					return *p;
+				}
 				break;
 #endif
 #if defined(_WIN32)
 			// Windows pix formats
 			case AV_PIX_FMT_DXVA2_VLD:
-				hw_de_av_pix_fmt_global = AV_PIX_FMT_DXVA2_VLD;
-				hw_de_av_device_type_global = AV_HWDEVICE_TYPE_DXVA2;
-				return *p;
+				if (selected == 3) {
+					return *p;
+				}
 				break;
 			case AV_PIX_FMT_D3D11:
-				hw_de_av_pix_fmt_global = AV_PIX_FMT_D3D11;
-				hw_de_av_device_type_global = AV_HWDEVICE_TYPE_D3D11VA;
-				return *p;
+				if (selected == 4) {
+					return *p;
+				}
 				break;
 #endif
 #if defined(__APPLE__)
 			// Apple pix formats
 			case AV_PIX_FMT_VIDEOTOOLBOX:
-				hw_de_av_pix_fmt_global = AV_PIX_FMT_VIDEOTOOLBOX;
-				hw_de_av_device_type_global = AV_HWDEVICE_TYPE_VIDEOTOOLBOX;
-				return *p;
+				if (selected == 5) {
+					return *p;
+				}
 				break;
 #endif
 				// Cross-platform pix formats
 			case AV_PIX_FMT_CUDA:
-				hw_de_av_pix_fmt_global = AV_PIX_FMT_CUDA;
-				hw_de_av_device_type_global = AV_HWDEVICE_TYPE_CUDA;
-				return *p;
+				if (selected == 2) {
+					return *p;
+				}
 				break;
 			case AV_PIX_FMT_QSV:
-				hw_de_av_pix_fmt_global = AV_PIX_FMT_QSV;
-				hw_de_av_device_type_global = AV_HWDEVICE_TYPE_QSV;
-				return *p;
+				if (selected == 7) {
+					return *p;
+				}
 				break;
 			default:
 				// This is only here to silence unused-enum warnings
@@ -196,6 +359,14 @@ int FFmpegReader::IsHardwareDecodeSupported(int codecid)
 		case AV_CODEC_ID_WMV1:
 		case AV_CODEC_ID_WMV2:
 		case AV_CODEC_ID_WMV3:
+		// The webm codecs and HEVC (2026-09-24): NVDEC decodes all four on every GPU the service
+		// targets, and FFmpeg's native decoders expose the CUDA hwaccel for them. A stream the
+		// card refuses (an AV1 profile it lacks, 4:4:4) fails before its first frame and
+		// ReopenWithoutHardwareDecode() takes it to software, as for H.264.
+		case AV_CODEC_ID_HEVC:
+		case AV_CODEC_ID_VP8:
+		case AV_CODEC_ID_VP9:
+		case AV_CODEC_ID_AV1:
 			ret = 1;
 			break;
 		default :
@@ -207,15 +378,102 @@ int FFmpegReader::IsHardwareDecodeSupported(int codecid)
 #endif // USE_HW_ACCEL
 
 void FFmpegReader::Open() {
+	if (is_open)
+		return;
+	// Prevent async calls to the following code
+	const std::lock_guard<std::recursive_mutex> lock(getFrameMutex);
+	try {
+		OpenStreams();
+	} catch (...) {
+		// A throw half way used to leave is_open false with everything opened so far still
+		// allocated -- format context, codec contexts, the hardware device and this decoder's
+		// CUDA stream -- and neither Close() nor the destructor would free it (review L2,
+		// 2026-10-01). Past "is_open = true" (the Seek) Close() owns the cleanup.
+		if (is_open) {
+			try {
+				Close();
+			} catch (...) {
+			}
+		} else {
+			ReleaseFailedOpen();
+		}
+		throw;
+	}
+}
+
+// Free whatever a failed OpenStreams() allocated before it marked the reader open.
+void FFmpegReader::ReleaseFailedOpen() {
+	{
+		const std::lock_guard<std::mutex> codec_lock(HardwareCodecMutex());
+		if (pCodecCtx)
+			AV_FREE_CONTEXT(pCodecCtx);
+		pCodecCtx = nullptr;
+		if (aCodecCtx)
+			AV_FREE_CONTEXT(aCodecCtx);
+		aCodecCtx = nullptr;
+#if USE_HW_ACCEL
+		if (hw_device_ctx)
+			av_buffer_unref(&hw_device_ctx);
+		hw_device_ctx = nullptr;
+		hw_frames_on_device = false;
+		device_luma.reset();
+		device_chroma.reset();
+#if OPENSHOT_NVDEC_ON_DEVICE
+		if (decode_stream) {
+			openshot::CudaInterop::Instance().destroyStream(decode_stream);
+			decode_stream = nullptr;
+		}
+#endif
+#endif // USE_HW_ACCEL
+	}
+	if (pFormatCtx)
+		avformat_close_input(&pFormatCtx);
+	pFormatCtx = nullptr;
+}
+
+bool FFmpegReader::RewindFreshOpen() {
+	if (!is_open || !pFormatCtx)
+		return false;
+	if (packet) {
+		RemoveAVPacket(packet);
+		packet = nullptr;
+	}
+	avformat_close_input(&pFormatCtx);
+	pFormatCtx = nullptr;
+	if (avformat_open_input(&pFormatCtx, path.c_str(), NULL, NULL) != 0 ||
+		avformat_find_stream_info(pFormatCtx, NULL) < 0 ||
+		(videoStream >= 0 && videoStream >= (int) pFormatCtx->nb_streams) ||
+		(audioStream >= 0 && audioStream >= (int) pFormatCtx->nb_streams)) {
+		// Leave a state Close() can free: it closes a null format context fine.
+		if (pFormatCtx)
+			avformat_close_input(&pFormatCtx);
+		pFormatCtx = nullptr;
+		return false;
+	}
+	if (videoStream >= 0)
+		pStream = pFormatCtx->streams[videoStream];
+	if (audioStream >= 0)
+		aStream = pFormatCtx->streams[audioStream];
+	// Nothing was decoded, but packets the scans sent are dropped all the same.
+	if (pCodecCtx && avcodec_is_open(pCodecCtx))
+		avcodec_flush_buffers(pCodecCtx);
+	if (aCodecCtx && avcodec_is_open(aCodecCtx))
+		avcodec_flush_buffers(aCodecCtx);
+	return true;
+}
+
+void FFmpegReader::OpenStreams() {
 	// Open reader if not already open
 	if (!is_open) {
-		// Prevent async calls to the following code
-		const std::lock_guard<std::recursive_mutex> lock(getFrameMutex);
 
 		// Initialize format context
 		pFormatCtx = NULL;
 		{
-			hw_de_on = (openshot::Settings::Instance()->HARDWARE_DECODER == 0 ? 0 : 1);
+			// force_sw_decode: a reopen after the hardware decoder refused this stream must not
+			// pick the hardware decoder again (it did: hw_de_supported is recomputed below).
+			hw_de_on = (!force_sw_decode && openshot::Settings::Instance()->HARDWARE_DECODER != 0 ? 1 : 0);
+			hw_decode_failed = false;
+			hw_decode_error_count = 0;
 			ZmqLogger::Instance()->AppendDebugMethod("Decode hardware acceleration settings", "hw_de_on", hw_de_on, "HARDWARE_DECODER", openshot::Settings::Instance()->HARDWARE_DECODER);
 		}
 
@@ -293,18 +551,38 @@ void FFmpegReader::Open() {
 			// Get codec and codec context from stream
 			const AVCodec *pCodec = avcodec_find_decoder(codecId);
 
-			if (codecId == AV_CODEC_ID_VP9) {
-				// Does the stream metadata say alpha_mode=1?
+#if USE_HW_ACCEL
+			// FFmpeg prefers libdav1d for AV1, which has no hwaccel; the native decoder has one and
+			// nothing else -- it cannot decode in software. So it is chosen only when hardware
+			// decode is on, and a stream NVDEC refuses reopens without it (force_sw_decode, set by
+			// ReopenWithoutHardwareDecode), back on libdav1d.
+			if (codecId == AV_CODEC_ID_AV1 && hw_de_on && !force_sw_decode) {
+				if (const AVCodec *native = avcodec_find_decoder_by_name("av1"))
+					pCodec = native;
+			}
+#endif
+			// A WebM with alpha (VP8 or VP9) carries the alpha plane as a second stream in
+			// Matroska's BlockAdditional, flagged by the track tag alpha_mode=1. Only libvpx
+			// decodes it: FFmpeg's native vp8/vp9 decoders and NVDEC drop it and the clip renders
+			// opaque (info.has_alpha still says true). av_dict_get matches the key case-
+			// insensitively, so a remuxed file's ALPHA_MODE is found too. The choice does not
+			// depend on hardware decode, so a reopen with force_sw_decode keeps libvpx.
+			if (codecId == AV_CODEC_ID_VP8 || codecId == AV_CODEC_ID_VP9) {
 				AVDictionaryEntry *alpha =
 					av_dict_get(pFormatCtx->streams[videoStream]->metadata, "alpha_mode", NULL, 0);
 				if (alpha && strcmp(alpha->value, "1") == 0) {
-					const AVCodec *pref = avcodec_find_decoder_by_name("libvpx-vp9");
+					const AVCodec *pref = avcodec_find_decoder_by_name(
+						codecId == AV_CODEC_ID_VP8 ? "libvpx" : "libvpx-vp9");
 					if (pref) pCodec = pref;               // override native decoder
 				}
 			}
 
 			AVDictionary *opts = NULL;
+			struct DictGuard { AVDictionary **d; ~DictGuard() { av_dict_free(d); } } opts_guard{&opts};
 			int retry_decode_open = 2;
+			// One codec opens at a time, process-wide (HardwareCodecLock.h): concurrent NVDEC
+			// opens and closes from several exports corrupted the driver's state.
+			const std::lock_guard<std::mutex> codec_lock(HardwareCodecMutex());
 			// If hw accel is selected but hardware cannot handle repeat with software decoding
 			do {
 				pCodecCtx = AV_GET_CODEC_CONTEXT(pStream, pCodec);
@@ -312,12 +590,27 @@ void FFmpegReader::Open() {
 				if (hw_de_on && (retry_decode_open==2)) {
 					// Up to here no decision is made if hardware or software decode
 					hw_de_supported = IsHardwareDecodeSupported(pCodecCtx->codec_id);
+					// A VP8 or VP9 with alpha is decoded by libvpx (above; "libvpx" and
+					// "libvpx-vp9" both match): NVDEC has no alpha plane and libvpx no hwaccel,
+					// so that stream stays in software.
+					if (hw_de_supported && pCodec && std::strncmp(pCodec->name, "libvpx", 6) == 0)
+						hw_de_supported = 0;
 				}
 #endif
 				retry_decode_open = 0;
 
 				// Set number of threads equal to number of processors (not to exceed 16)
 				pCodecCtx->thread_count = std::min(FF_VIDEO_NUM_PROCESSORS, 16);
+				// A hardware decoder does the work on the device; FFmpeg's frame threads would only
+				// parse the bitstream and each one carries a copy of the codec context, a frame of
+				// latency and, with NVDEC, a hwaccel context that four exports times twelve clips
+				// times sixteen threads made 768 of on one CUDA context. One run in eight of that
+				// crashed inside libnvcuvid's own thread at a decoder's teardown (2026-10-01),
+				// invisible to AddressSanitizer. One thread per hardware decoder.
+				if (hw_de_on && hw_de_supported) {
+					pCodecCtx->thread_count = 1;
+					pCodecCtx->thread_type &= ~FF_THREAD_FRAME;
+				}
 
 				if (pCodec == NULL) {
 					throw InvalidCodec("A valid video codec could not be found for this file.", path);
@@ -333,7 +626,8 @@ void FFmpegReader::Open() {
 					char *adapter_ptr = NULL;
 					int adapter_num;
 					adapter_num = openshot::Settings::Instance()->HW_DE_DEVICE_SET;
-					fprintf(stderr, "Hardware decoding device number: %d\n", adapter_num);
+					ZmqLogger::Instance()->AppendDebugMethod(
+						"FFmpegReader::Open (hardware decoding device)", "adapter_num", adapter_num);
 
 					// Set hardware pix format (callback)
 					pCodecCtx->get_format = get_hw_dec_format;
@@ -417,8 +711,40 @@ void FFmpegReader::Open() {
 					}
 
 					hw_device_ctx = NULL;
+					hw_frames_on_device = false;
+#if OPENSHOT_NVDEC_ON_DEVICE
+					// NVDEC in the CUDA context that shares memory with the Vulkan device, so its
+					// frames can be copied into images Skia samples and never visit host memory.
+					// Only with GPU_DECODE on: that is the switch for converting on the GPU at all.
+					// Anything short of this is the ordinary device below and the download path.
+					if (hw_de_av_device_type == AV_HWDEVICE_TYPE_CUDA &&
+						openshot::Settings::Instance()->GPU_DECODE &&
+						openshot::CudaInterop::Instance().available()) {
+						AVBufferRef *device = av_hwdevice_ctx_alloc(AV_HWDEVICE_TYPE_CUDA);
+						if (device) {
+							auto *cuda = static_cast<AVCUDADeviceContext *>(
+								reinterpret_cast<AVHWDeviceContext *>(device->data)->hwctx);
+							openshot::CudaInterop &interop = openshot::CudaInterop::Instance();
+							cuda->cuda_ctx = static_cast<CUcontext>(interop.cudaContext());
+							// A stream of this decoder's own: NVDEC's output copy and copyNV12 queue
+							// in order on it with nothing to synchronise between them, and no other
+							// decoder's work shares it (see CudaInterop::createStream for the crash
+							// the shared stream caused). The interop's stream is the fallback.
+							if (!decode_stream)
+								decode_stream = interop.createStream();
+							cuda->stream = static_cast<CUstream>(decode_stream ? decode_stream : interop.cudaStream());
+							if (av_hwdevice_ctx_init(device) >= 0) {
+								hw_device_ctx = device;
+								hw_frames_on_device = true;
+							} else {
+								av_buffer_unref(&device);
+							}
+						}
+					}
+#endif
 					// Here the first hardware initialisations are made
-					if (av_hwdevice_ctx_create(&hw_device_ctx, hw_de_av_device_type, adapter_ptr, NULL, 0) >= 0) {
+					if (hw_device_ctx ||
+						av_hwdevice_ctx_create(&hw_device_ctx, hw_de_av_device_type, adapter_ptr, NULL, 0) >= 0) {
 						if (!(pCodecCtx->hw_device_ctx = av_buffer_ref(hw_device_ctx))) {
 							throw InvalidCodec("Hardware device reference create failed.", path);
 						}
@@ -451,7 +777,25 @@ void FFmpegReader::Open() {
 						*/
 					}
 					else {
-						  throw InvalidCodec("Hardware device create failed.", path);
+						// No device (CUDA gone after an Xid, a driver without NVDEC): decode in
+						// software instead of failing the open. Throwing here failed every later
+						// export at its first reader (review NEW-9, 2026-10-01). Same retry as the
+						// size constraints below; the second pass sees hw_de_supported == 0.
+						ZmqLogger::Instance()->AppendDebugMethod(
+							"FFmpegReader::Open (hardware device create failed, decoding in software)",
+							"hw_de_av_device_type", (int) hw_de_av_device_type);
+						openshot::GpuCounters::Add(openshot::GpuCounters::HardwareDecodeFallback);
+						hw_de_supported = 0;
+						retry_decode_open = 1;
+						AV_FREE_CONTEXT(pCodecCtx);
+						pCodecCtx = nullptr;
+#if OPENSHOT_NVDEC_ON_DEVICE
+						if (decode_stream) {
+							openshot::CudaInterop::Instance().destroyStream(decode_stream);
+							decode_stream = nullptr;
+						}
+#endif
+						continue;
 					}
 				}
 #endif // USE_HW_ACCEL
@@ -508,30 +852,14 @@ void FFmpegReader::Open() {
 						}
 					}
 					else {
-						int max_h, max_w;
-						//max_h = ((getenv( "LIMIT_HEIGHT_MAX" )==NULL) ? MAX_SUPPORTED_HEIGHT : atoi(getenv( "LIMIT_HEIGHT_MAX" )));
-						max_h = openshot::Settings::Instance()->DE_LIMIT_HEIGHT_MAX;
-						//max_w = ((getenv( "LIMIT_WIDTH_MAX" )==NULL) ? MAX_SUPPORTED_WIDTH : atoi(getenv( "LIMIT_WIDTH_MAX" )));
-						max_w = openshot::Settings::Instance()->DE_LIMIT_WIDTH_MAX;
-						ZmqLogger::Instance()->AppendDebugMethod("Constraints could not be found using default limit\n");
-						//cerr << "Constraints could not be found using default limit\n";
-						if (pCodecCtx->coded_width < 0  	||
-								pCodecCtx->coded_height < 0 	||
-								pCodecCtx->coded_width > max_w ||
-								pCodecCtx->coded_height > max_h ) {
-							ZmqLogger::Instance()->AppendDebugMethod("DIMENSIONS ARE TOO LARGE for hardware acceleration\n", "Max Width :", max_w, "Max Height :", max_h, "Frame width :", pCodecCtx->coded_width, "Frame height :", pCodecCtx->coded_height);
-							hw_de_supported = 0;
-							retry_decode_open = 1;
-							AV_FREE_CONTEXT(pCodecCtx);
-							if (hw_device_ctx) {
-								av_buffer_unref(&hw_device_ctx);
-								hw_device_ctx = NULL;
-							}
-						}
-						else {
-							ZmqLogger::Instance()->AppendDebugMethod("\nDecode hardware acceleration is used\n", "Max Width :", max_w, "Max Height :", max_h, "Frame width :", pCodecCtx->coded_width, "Frame height :", pCodecCtx->coded_height);
-							retry_decode_open = 0;
-						}
+						// No constraints to check against -- the case for every device but VAAPI,
+						// NVDEC included. There used to be a fixed 1950x1100 cap here
+						// (DE_LIMIT_*), which silently sent everything above 1080p to software
+						// decode and hid that hardware decode was broken (W23). The decoder is the
+						// authority on what it can do: one that refuses a stream fails before its
+						// first frame, and ReopenWithoutHardwareDecode() takes it from there.
+						ZmqLogger::Instance()->AppendDebugMethod("\nDecode hardware acceleration is used (no device constraints)\n", "Frame width :", pCodecCtx->coded_width, "Frame height :", pCodecCtx->coded_height);
+						retry_decode_open = 0;
 					}
 				} // if hw_de_on && hw_de_supported
 				else {
@@ -601,6 +929,7 @@ void FFmpegReader::Open() {
 
 			// Init options
 			AVDictionary *opts = NULL;
+			struct DictGuard { AVDictionary **d; ~DictGuard() { av_dict_free(d); } } opts_guard{&opts};
 			av_dict_set(&opts, "strict", "experimental", 0);
 
 			// Open audio codec
@@ -673,9 +1002,12 @@ void FFmpegReader::Open() {
 		previous_packet_location.sample_start = 0;
 
 		// Adjust cache size based on size of frame and audio
-		const auto cacheFramesNum = Settings::Instance()->DISABLE_CACHING ? 1 : max_concurrent_frames;
+		const auto cacheFramesNum = Settings::Instance()->DISABLE_CACHING ? 1 : OPEN_MP_NUM_PROCESSORS;
 		working_cache.SetMaxBytesFromInfo(cacheFramesNum * info.fps.ToDouble() * 2, info.width, info.height, info.sample_rate, info.channels);
-		final_cache.SetMaxBytesFromInfo(cacheFramesNum * 2, info.width, info.height, info.sample_rate, info.channels);
+		// Room for the read-ahead window too, or the worker's frames are evicted before they are
+		// asked for and every one of them is decoded twice.
+		const int read_ahead = std::max(0, Settings::Instance()->READ_AHEAD_FRAMES);
+		final_cache.SetMaxBytesFromInfo(std::max(cacheFramesNum * 2, read_ahead + 2), info.width, info.height, info.sample_rate, info.channels);
 
 		// Scan PTS for any offsets (i.e. non-zero starting streams). At least 1 stream must start at zero timestamp.
 		// This method allows us to shift timestamps to ensure at least 1 stream is starting at zero.
@@ -688,17 +1020,35 @@ void FFmpegReader::Open() {
 			CheckFPS();
 		}
 
+		// Audio the caller does not want is treated as absent: its packets are dropped unread
+		// and frames are final as soon as the video stream is past them (see DecodeAudio()).
+		// Before the Seek below, whose override keeps it through every reopen.
+		if (!decode_audio)
+			info.has_audio = false;
+
 		// Mark as "open"
 		is_open = true;
 
-		// Seek back to beginning of file (if not already seeking)
+		// Seek back to beginning of file (if not already seeking). UpdatePTSOffset and CheckFPS
+		// above read packets but decode none, so Seek can rewind the demuxer alone (see Seek).
 		if (!is_seeking) {
+			fresh_open = true;
 			Seek(1);
+			fresh_open = false;
 		}
 	}
 }
 
+void FFmpegReader::DecodeAudio(bool enable) {
+	decode_audio = enable;
+	if (is_open)
+		info.has_audio = enable && audioStream != -1;
+}
+
 void FFmpegReader::Close() {
+	// The worker first, and outside getFrameMutex: it may be waiting on that mutex to decode.
+	StopReadAhead();
+
 	// Close all objects, if reader is 'open'
 	if (is_open) {
 		// Prevent async calls to the following code
@@ -733,8 +1083,28 @@ void FFmpegReader::Close() {
 			RemoveAVPacket(recent_packet);
 		}
 
-		// Close the video codec
+		// Close the video codec -- one at a time, process-wide (HardwareCodecLock.h). A hardware
+		// decoder is destroyed with its own stream drained and under the conversion sequence
+		// lock, so no reader is between its copy and its submit while a decoder goes away.
+		// (Not under a reader-writer lock around all decoding: readers wait on GPU work that
+		// other readers have yet to submit, and with a writer queued those readers never get
+		// in -- three exports hung that way, 2026-10-01.)
+		// The interop images outlive the locks below on purpose (review P2, 2026-10-01): releasing
+		// one drains the Vulkan queue and the interop's streams, and doing that under the
+		// process-wide codec lock stalled every other export's codec opens and closes behind it.
+		std::shared_ptr<openshot::GpuImage> released_luma, released_chroma;
 		if (info.has_video) {
+			const std::lock_guard<std::mutex> codec_lock(HardwareCodecMutex());
+			std::unique_lock<std::mutex> sequence_guard(gConvertSequence, std::defer_lock);
+#if USE_HW_ACCEL
+			if (hw_de_on && hw_de_supported) {
+#if OPENSHOT_NVDEC_ON_DEVICE
+				if (hw_frames_on_device && decode_stream)
+					openshot::CudaInterop::Instance().synchronizeStream(decode_stream);
+#endif
+				sequence_guard.lock();
+			}
+#endif
 			if(avcodec_is_open(pCodecCtx)) {
 				avcodec_flush_buffers(pCodecCtx);
 			}
@@ -746,6 +1116,17 @@ void FFmpegReader::Close() {
 					hw_device_ctx = NULL;
 				}
 			}
+			hw_frames_on_device = false;
+#if OPENSHOT_NVDEC_ON_DEVICE
+			// After the decoder is gone (above): nothing else queues on it. Before the images
+			// (review C6): the last copy into them ran on this stream, and destroyStream drains it.
+			if (decode_stream) {
+				openshot::CudaInterop::Instance().destroyStream(decode_stream);
+				decode_stream = nullptr;
+			}
+#endif
+			released_luma = std::move(device_luma);
+			released_chroma = std::move(device_chroma);
 #endif // USE_HW_ACCEL
 			if (img_convert_ctx) {
 				sws_freeContext(img_convert_ctx);
@@ -755,18 +1136,23 @@ void FFmpegReader::Close() {
 				AV_FREE_FRAME(&pFrameRGB_cached);
 			}
 		}
+		released_luma.reset();
+		released_chroma.reset();
 
-		// Close the audio codec
-		if (info.has_audio) {
+		// Close the audio codec. By what was opened, not by info.has_audio: a reader with
+		// DecodeAudio(false) opens the codec and then reports has_audio false, and keying on the
+		// flag leaked one AVCodecContext per Open()/Close() cycle (2026-10-01).
+		if (aCodecCtx) {
 			if(avcodec_is_open(aCodecCtx)) {
 				avcodec_flush_buffers(aCodecCtx);
 			}
 			AV_FREE_CONTEXT(aCodecCtx);
-			if (avr_ctx) {
-				SWR_CLOSE(avr_ctx);
-				SWR_FREE(&avr_ctx);
-				avr_ctx = nullptr;
-			}
+			aCodecCtx = nullptr;
+		}
+		if (avr_ctx) {
+			SWR_CLOSE(avr_ctx);
+			SWR_FREE(&avr_ctx);
+			avr_ctx = nullptr;
 		}
 
 		// Clear final cache
@@ -794,6 +1180,74 @@ bool FFmpegReader::HasAlbumArt() {
 	// like an MKV file with an attached image file
 	return pFormatCtx && videoStream >= 0 && pFormatCtx->streams[videoStream]
 		&& (pFormatCtx->streams[videoStream]->disposition & AV_DISPOSITION_ATTACHED_PIC);
+}
+
+double FFmpegReader::PickDurationSeconds() const {
+	auto has_value = [](double value) { return value > 0.0; };
+
+	switch (duration_strategy) {
+		case DurationStrategy::VideoPreferred:
+			if (has_value(video_stream_duration_seconds))
+				return video_stream_duration_seconds;
+			if (has_value(audio_stream_duration_seconds))
+				return audio_stream_duration_seconds;
+			if (has_value(format_duration_seconds))
+				return format_duration_seconds;
+			break;
+		case DurationStrategy::AudioPreferred:
+			if (has_value(audio_stream_duration_seconds))
+				return audio_stream_duration_seconds;
+			if (has_value(video_stream_duration_seconds))
+				return video_stream_duration_seconds;
+			if (has_value(format_duration_seconds))
+				return format_duration_seconds;
+			break;
+		case DurationStrategy::LongestStream:
+		default:
+			{
+				double longest = 0.0;
+				if (has_value(video_stream_duration_seconds))
+					longest = std::max(longest, video_stream_duration_seconds);
+				if (has_value(audio_stream_duration_seconds))
+					longest = std::max(longest, audio_stream_duration_seconds);
+				if (has_value(format_duration_seconds))
+					longest = std::max(longest, format_duration_seconds);
+				if (has_value(longest))
+					return longest;
+			}
+			break;
+	}
+
+	if (has_value(format_duration_seconds))
+		return format_duration_seconds;
+	if (has_value(inferred_duration_seconds))
+		return inferred_duration_seconds;
+
+	return 0.0;
+}
+
+void FFmpegReader::ApplyDurationStrategy() {
+	const double fps_value = info.fps.ToDouble();
+	const double chosen_seconds = PickDurationSeconds();
+
+	if (chosen_seconds <= 0.0 || fps_value <= 0.0) {
+		info.duration = 0.0f;
+		info.video_length = 0;
+		is_duration_known = false;
+		return;
+	}
+
+	const int64_t frames = static_cast<int64_t>(std::llround(chosen_seconds * fps_value));
+	if (frames <= 0) {
+		info.duration = 0.0f;
+		info.video_length = 0;
+		is_duration_known = false;
+		return;
+	}
+
+	info.video_length = frames;
+	info.duration = static_cast<float>(static_cast<double>(frames) / fps_value);
+	is_duration_known = true;
 }
 
 void FFmpegReader::UpdateAudioInfo() {
@@ -1050,11 +1504,226 @@ void FFmpegReader::UpdateVideoInfo() {
 	info.has_alpha = ffmpeg_has_alpha(AV_GET_CODEC_PIXEL_FORMAT(pStream, pCodecCtx), pStream);
 }
 
+void FFmpegReader::UpdateOrientedVideoInfo() {
+	if (!ApplyOrientationMetadata() || !info.has_video)
+		return;
+
+	if (source_width <= 0 || source_height <= 0) {
+		source_width = info.width;
+		source_height = info.height;
+	}
+	if (source_width <= 0 || source_height <= 0)
+		return;
+
+	source_rotation = 0.0;
+	const auto rotate_meta = info.metadata.find("rotate");
+	if (rotate_meta != info.metadata.end())
+		source_rotation = strtod(rotate_meta->second.c_str(), nullptr);
+
+	const double radians = source_rotation * M_PI / 180.0;
+	const int oriented_width = static_cast<int>(std::round(
+		std::fabs(source_width * std::cos(radians)) +
+		std::fabs(source_height * std::sin(radians))));
+	const int oriented_height = static_cast<int>(std::round(
+		std::fabs(source_width * std::sin(radians)) +
+		std::fabs(source_height * std::cos(radians))));
+
+	if (oriented_width > 0 && oriented_height > 0) {
+		info.width = oriented_width;
+		info.height = oriented_height;
+
+		Fraction size(info.width * info.pixel_ratio.num, info.height * info.pixel_ratio.den);
+		size.Reduce();
+		info.display_ratio.num = size.num;
+		info.display_ratio.den = size.den;
+	}
+}
+
+void FFmpegReader::ApplyFrameOrientation(std::shared_ptr<openshot::Frame> frame) {
+	if (!ApplyOrientationMetadata() || std::fabs(source_rotation) < 0.0001 || !frame || !frame->has_image_data)
+		return;
+
+	auto image = frame->GetImage();
+	if (!image || image->isNull())
+		return;
+
+	QImage oriented = image->transformed(QTransform().rotate(source_rotation), Qt::SmoothTransformation);
+	frame->AddImage(std::make_shared<QImage>(oriented));
+}
+
 bool FFmpegReader::GetIsDurationKnown() {
 	return this->is_duration_known;
 }
 
+namespace {
+
+/// A cached frame is only usable if this thread can actually read its pixels.
+///
+/// A GPU-backed frame's surface belongs to the recorder that made it, and recorders are per
+/// thread; it also dies with the device. A cached frame that fails either test is dropped so the
+/// caller decodes it again rather than reading a surface it does not own. Costs a re-decode in a
+/// case the render path does not hit -- Timeline -> Clip -> reader is one thread -- and is what
+/// makes handing out GPU frames safe for the callers that are not.
+// A frame the stream has no picture for (a gap, a variable-frame-rate webm) repeats the previous
+// one. A GPU-backed previous frame shares its surface, as Frame's copy constructor and FrameMapper
+// do -- nothing draws into a frame's backing after the fact -- instead of being read back for a
+// copy (which also flattened the cached frame it came from).
+void copyPicture(openshot::Frame& to, openshot::Frame& from) {
+	if (from.IsGpuBacked()) {
+		const std::shared_ptr<openshot::GpuFrame>& gpu = from.GpuBacking();
+		if (gpu && gpu->ownedByThisThread()) {
+			to.AttachGpuFrame(gpu);
+			return;
+		}
+	}
+	to.AddImage(std::make_shared<QImage>(from.GetImage()->copy()));
+}
+
+bool cachedFrameIsUsable(const std::shared_ptr<openshot::Frame>& frame) {
+	if (!frame || !frame->IsGpuBacked())
+		return true;
+	const std::shared_ptr<openshot::GpuFrame>& gpu = frame->GpuBacking();
+	return gpu && gpu->ownedByThisThread();
+}
+
+}   // namespace
+
 std::shared_ptr<Frame> FFmpegReader::GetFrame(int64_t requested_frame) {
+	// The window follows the caller: record where it is before decoding, so a worker that is
+	// about to start on a frame behind a seek can see that it no longer wants it.
+	{
+		const std::lock_guard<std::mutex> lock(read_ahead_mutex);
+		read_ahead_requested = requested_frame;
+	}
+	std::shared_ptr<Frame> frame = DecodeFrame(requested_frame);
+	ScheduleReadAhead(requested_frame);
+	return frame;
+}
+
+// Frames that live in host memory only: a GPU-decoded frame belongs to the recorder of the thread
+// that made it, so one decoded on the worker would be unusable on the caller's thread and
+// cachedFrameIsUsable() would throw it away.
+//
+// With GPU decode on that is still most streams, but not all: one NVDEC is not asked to decode and
+// whose layout GpuYuv does not convert -- the ProRes 4444 watermark every export carries, say --
+// goes through swscale into host memory whatever the switch says, and used to decode on the
+// compositing thread for nothing. Conservative on purpose: any stream that could reach the GPU
+// (NVDEC, or a layout GpuYuv::Supports) keeps read-ahead off, and if one ever did, the frame
+// would only be dropped and decoded again by cachedFrameIsUsable().
+bool FFmpegReader::ReadAheadApplies() const {
+	if (Settings::Instance()->READ_AHEAD_FRAMES <= 0 || !info.has_video)
+		return false;
+	if (!(Settings::Instance()->GPU_DECODE && openshot::GpuDevice::Instance().available()))
+		return true;
+#if USE_HW_ACCEL
+	if (hw_de_on && hw_de_supported)
+		return false;
+#endif
+	return !openshot::GpuYuv::Supports(info.pixel_format);
+}
+
+void FFmpegReader::ScheduleReadAhead(int64_t requested_frame) {
+	if (!is_open || !ReadAheadApplies())
+		return;
+	{
+		const std::lock_guard<std::mutex> lock(read_ahead_mutex);
+		read_ahead_requested = requested_frame;
+		read_ahead_depth = Settings::Instance()->READ_AHEAD_FRAMES;
+		read_ahead_stop = false;
+	}
+	if (read_ahead_thread.joinable() && !read_ahead_running) {
+		read_ahead_thread.join();   // one that stopped itself (it reached Close(); see below)
+	}
+	if (!read_ahead_thread.joinable()) {
+		read_ahead_running = true;
+		read_ahead_thread = std::thread([this, block = openshot::GpuCounters::ThreadBlock()] {
+			const openshot::GpuCounters::Inherit attribution(block);   // the opening export's counters
+			ReadAheadLoop();
+		});
+	}
+	read_ahead_wake.notify_one();
+}
+
+void FFmpegReader::StopReadAhead() {
+	{
+		const std::lock_guard<std::mutex> lock(read_ahead_mutex);
+		read_ahead_stop = true;
+	}
+	read_ahead_wake.notify_one();
+	// The worker itself can get here -- a decode failure reopens the reader through Close() --
+	// and cannot join itself. It sees the flag and exits; ScheduleReadAhead reaps it.
+	if (read_ahead_thread.joinable() && read_ahead_thread.get_id() != std::this_thread::get_id()) {
+		read_ahead_thread.join();
+		read_ahead_stop = false;
+	}
+}
+
+void FFmpegReader::ReadAheadLoop() {
+	int64_t done_through = 0;   // the last frame this worker made sure of
+	struct Running {
+		std::atomic<bool>& flag;
+		~Running() { flag = false; }
+	} running{read_ahead_running};
+	std::unique_lock<std::mutex> lock(read_ahead_mutex);
+	while (true) {
+		// Next frame the window wants: after the caller, after what is already done.
+		const auto wanted = [&]() -> int64_t {
+			const int64_t first = std::max(read_ahead_requested, done_through) + 1;
+			const int64_t last = std::min<int64_t>(read_ahead_requested + read_ahead_depth,
+												   info.video_length);
+			return first <= last ? first : 0;
+		};
+		read_ahead_wake.wait(lock, [&] { return read_ahead_stop || wanted() != 0; });
+		if (read_ahead_stop)
+			return;
+		const int64_t frame_number = wanted();
+		lock.unlock();
+
+		// getFrameMutex without blocking on it: Close() can be called with it held (the
+		// hardware-decode fallback reopens the reader from inside a decode) and then joins this
+		// thread, which must not be parked on that very mutex.
+		bool locked = false;
+		while (!(locked = getFrameMutex.try_lock())) {
+			{
+				const std::lock_guard<std::mutex> check(read_ahead_mutex);
+				if (read_ahead_stop)
+					break;
+			}
+			std::this_thread::sleep_for(std::chrono::microseconds(200));
+		}
+		if (!locked) {
+			lock.lock();
+			continue;   // stopping; the wait at the top returns
+		}
+		{
+			const std::lock_guard<std::recursive_mutex> held(getFrameMutex, std::adopt_lock);
+			// Re-checked under the lock: the caller may have seeked while we waited for it,
+			// and decoding a frame behind it would seek the stream back.
+			int64_t caller = 0;
+			{
+				const std::lock_guard<std::mutex> check(read_ahead_mutex);
+				caller = read_ahead_requested;
+			}
+			if (is_open && frame_number > caller && !final_cache.GetFrame(frame_number)) {
+				try {
+					DecodeFrame(frame_number);
+				} catch (...) {
+					// Nothing may escape a thread. The caller asks for this frame itself in a
+					// moment and gets the same error where it can handle it.
+					ZmqLogger::Instance()->AppendDebugMethod(
+						"FFmpegReader::ReadAheadLoop (decode failed; the caller will retry)",
+						"frame", (float) frame_number);
+				}
+			}
+		}
+
+		lock.lock();
+		// A seek backwards leaves done_through ahead of the caller; start again from it.
+		done_through = frame_number < read_ahead_requested ? read_ahead_requested : frame_number;
+	}
+}
+
+std::shared_ptr<Frame> FFmpegReader::DecodeFrame(int64_t requested_frame) {
 	// Check for open reader (or throw exception)
 	if (!is_open)
 		throw ReaderClosed("The FFmpegReader is closed.  Call Open() before calling this method.", path);
@@ -1073,6 +1742,10 @@ std::shared_ptr<Frame> FFmpegReader::GetFrame(int64_t requested_frame) {
 
 	// Check the cache for this frame
 	std::shared_ptr<Frame> frame = final_cache.GetFrame(requested_frame);
+	if (frame && !cachedFrameIsUsable(frame)) {
+		final_cache.Remove(requested_frame);
+		frame.reset();
+	}
 	if (frame) {
 		// Debug output
 		ZmqLogger::Instance()->AppendDebugMethod("FFmpegReader::GetFrame", "returned cached frame", requested_frame);
@@ -1086,6 +1759,10 @@ std::shared_ptr<Frame> FFmpegReader::GetFrame(int64_t requested_frame) {
 
 		// Check the cache a 2nd time (due to the potential previous lock)
 		frame = final_cache.GetFrame(requested_frame);
+		if (frame && !cachedFrameIsUsable(frame)) {
+			final_cache.Remove(requested_frame);
+			frame.reset();
+		}
 		if (frame) {
 			// Debug output
 			ZmqLogger::Instance()->AppendDebugMethod("FFmpegReader::GetFrame", "returned cached frame on 2nd look", requested_frame);
@@ -1129,7 +1806,7 @@ std::shared_ptr<Frame> FFmpegReader::ReadStream(int64_t requested_frame) {
 	int retry_count = 0;
 
 	// Debug output
-	ZmqLogger::Instance()->AppendDebugMethod("FFmpegReader::ReadStream", "requested_frame", requested_frame, "max_concurrent_frames", max_concurrent_frames);
+	ZmqLogger::Instance()->AppendDebugMethod("FFmpegReader::ReadStream", "requested_frame", requested_frame, "OPEN_MP_NUM_PROCESSORS", OPEN_MP_NUM_PROCESSORS);
 
 	// Loop through the stream until the correct frame is found
 	while (true) {
@@ -1185,6 +1862,11 @@ std::shared_ptr<Frame> FFmpegReader::ReadStream(int64_t requested_frame) {
 			(info.has_video && !packet && !packet_status.video_eof)) {
 			// Process Video Packet
 			ProcessVideoPacket(requested_frame);
+			// A stream the hardware decoder refuses (three AVERROR_INVALIDDATA before its first
+			// frame) reopens in software here. The call was lost between upstream's d0ef5961 and
+			// this fork, so the fallback the comments promised never ran (review C7, 2026-10-01).
+			if (ReopenWithoutHardwareDecode(requested_frame))
+				continue;
 		}
 		// Audio packet
 		if ((info.has_audio && packet && packet->stream_index == audioStream) ||
@@ -1316,6 +1998,26 @@ int FFmpegReader::GetNextPacket() {
 // Get an AVFrame (if any)
 bool FFmpegReader::GetAVFrame() {
 	int frameFinished = 0;
+	auto note_hw_decode_failure = [&](int err, const char* stage) {
+#if USE_HW_ACCEL
+		if (!hw_de_on || !hw_de_supported || force_sw_decode) {
+			return;
+		}
+		if (err == AVERROR_INVALIDDATA && packet_status.video_decoded == 0) {
+			hw_decode_error_count++;
+			ZmqLogger::Instance()->AppendDebugMethod(
+				std::string("FFmpegReader::GetAVFrame (hardware decode failure candidate during ") + stage + ")",
+				"error_count", hw_decode_error_count,
+				"error", err);
+			if (hw_decode_error_count >= 3) {
+				hw_decode_failed = true;
+			}
+		}
+#else
+		(void) err;
+		(void) stage;
+#endif
+	};
 
 	// Decode video frame
 	AVFrame *next_frame = AV_ALLOCATE_FRAME();
@@ -1334,12 +2036,16 @@ bool FFmpegReader::GetAVFrame() {
 	}
 
 	#if USE_HW_ACCEL
-		// Get the format from the variables set in get_hw_dec_format
-		hw_de_av_pix_fmt = hw_de_av_pix_fmt_global;
-		hw_de_av_device_type = hw_de_av_device_type_global;
+		// What get_hw_dec_format chose: FFmpeg stores the callback's answer in the codec context.
+		// It used to come back through globals (thread-local since 2026-10-01), which were empty
+		// on any thread other than the one that decoded the first packet: a reader decoded by the
+		// read-ahead worker and the caller in turn passed its CUDA frames on undownloaded
+		// (decoded_on_device > 0 with GPU_DECODE off; review verification NEW-1).
+		hw_de_av_pix_fmt = pCodecCtx->pix_fmt;
 	#endif // USE_HW_ACCEL
 		if (send_packet_err < 0 && send_packet_err != AVERROR_EOF) {
 			ZmqLogger::Instance()->AppendDebugMethod("FFmpegReader::GetAVFrame (send packet: Not sent [" + av_err2string(send_packet_err) + "])", "send_packet_err", send_packet_err, "send_packet_pts", send_packet_pts);
+			note_hw_decode_failure(send_packet_err, "send_packet");
 			if (send_packet_err == AVERROR(EAGAIN)) {
 				hold_packet = true;
 				ZmqLogger::Instance()->AppendDebugMethod("FFmpegReader::GetAVFrame (send packet: AVERROR(EAGAIN): user must read output with avcodec_receive_frame()", "send_packet_pts", send_packet_pts);
@@ -1356,6 +2062,7 @@ bool FFmpegReader::GetAVFrame() {
 		// Even if the above avcodec_send_packet failed to send,
 		// we might still need to receive a packet.
 		int receive_frame_err = 0;
+		AVFrame *decoded_frame = next_frame;
 		AVFrame *next_frame2;
 #if USE_HW_ACCEL
 		if (hw_de_on && hw_de_supported) {
@@ -1372,6 +2079,7 @@ bool FFmpegReader::GetAVFrame() {
 
 			if (receive_frame_err != 0) {
 				ZmqLogger::Instance()->AppendDebugMethod("FFmpegReader::GetAVFrame (receive frame: frame not ready yet from decoder [\" + av_err2string(receive_frame_err) + \"])", "receive_frame_err", receive_frame_err, "send_packet_pts", send_packet_pts);
+				note_hw_decode_failure(receive_frame_err, "receive_frame");
 
 				if (receive_frame_err == AVERROR_EOF) {
 					ZmqLogger::Instance()->AppendDebugMethod(
@@ -1401,45 +2109,115 @@ bool FFmpegReader::GetAVFrame() {
 #if USE_HW_ACCEL
 			if (hw_de_on && hw_de_supported) {
 				int err;
-				if (next_frame2->format == hw_de_av_pix_fmt) {
-					next_frame->format = AV_PIX_FMT_YUV420P;
-					if ((err = av_hwframe_transfer_data(next_frame,next_frame2,0)) < 0) {
-						ZmqLogger::Instance()->AppendDebugMethod("FFmpegReader::GetAVFrame (Failed to transfer data to output frame)", "hw_de_on", hw_de_on);
+				// NV12 in the interop's CUDA context stays where NVDEC put it: ProcessVideoPacket
+				// converts it on the GPU, and downloads it there only if that declines. Anything
+				// else -- 10-bit, 4:4:4, an ordinary device -- is downloaded here as before.
+				bool keep_on_device = false;
+#if OPENSHOT_NVDEC_ON_DEVICE
+				if (hw_frames_on_device && next_frame2->format == AV_PIX_FMT_CUDA &&
+					next_frame2->hw_frames_ctx) {
+					const auto *frames = reinterpret_cast<const AVHWFramesContext *>(
+						next_frame2->hw_frames_ctx->data);
+					keep_on_device = frames->sw_format == AV_PIX_FMT_NV12;
+				}
+#endif
+				if (keep_on_device) {
+					decoded_frame = next_frame2;
+				} else if (next_frame2->hw_frames_ctx) {
+					// A hardware frame (its format is the device's, hw_de_av_pix_fmt): bring it down.
+					if ((err = av_hwframe_transfer_data(next_frame, next_frame2, 0)) < 0) {
+						ZmqLogger::Instance()->AppendDebugMethod(
+							"FFmpegReader::GetAVFrame (Failed to transfer data to output frame)",
+							"hw_de_on", hw_de_on,
+							"error", err);
+						note_hw_decode_failure(AVERROR_INVALIDDATA, "hwframe_transfer");
+						break;
 					}
-					if ((err = av_frame_copy_props(next_frame,next_frame2)) < 0) {
-						ZmqLogger::Instance()->AppendDebugMethod("FFmpegReader::GetAVFrame (Failed to copy props to output frame)", "hw_de_on", hw_de_on);
+					if ((err = av_frame_copy_props(next_frame, next_frame2)) < 0) {
+						ZmqLogger::Instance()->AppendDebugMethod(
+							"FFmpegReader::GetAVFrame (Failed to copy props to output frame)",
+							"hw_de_on", hw_de_on,
+							"error", err);
+						note_hw_decode_failure(AVERROR_INVALIDDATA, "hwframe_copy_props");
+						break;
 					}
+					if (next_frame->format == AV_PIX_FMT_NONE) {
+						next_frame->format = pCodecCtx->sw_pix_fmt;
+					}
+					if (next_frame->width <= 0) {
+						next_frame->width = next_frame2->width;
+					}
+					if (next_frame->height <= 0) {
+						next_frame->height = next_frame2->height;
+					}
+					decoded_frame = next_frame;
+				} else {
+					// Some hardware decoders can still return software-readable frames.
+					decoded_frame = next_frame2;
 				}
 			}
 			else
 #endif // USE_HW_ACCEL
 			{	// No hardware acceleration used -> no copy from GPU memory needed
-				next_frame = next_frame2;
+				decoded_frame = next_frame2;
+			}
+
+			if (!decoded_frame->data[0]) {
+				ZmqLogger::Instance()->AppendDebugMethod(
+					"FFmpegReader::GetAVFrame (Decoded frame missing image data)",
+					"format", decoded_frame->format,
+					"width", decoded_frame->width,
+					"height", decoded_frame->height);
+				note_hw_decode_failure(AVERROR_INVALIDDATA, "decoded_frame_empty");
+				break;
 			}
 
 			// TODO also handle possible further frames
 			// Use only the first frame like avcodec_decode_video2
 			frameFinished = 1;
+			hw_decode_error_count = 0;
+#if USE_HW_ACCEL
+			if (hw_de_on && hw_de_supported && !force_sw_decode) {
+				hw_decode_succeeded = true;
+			}
+#endif
 			packet_status.video_decoded++;
 
 			// Allocate image (align 32 for simd)
-			if (AV_ALLOCATE_IMAGE(pFrame, pCodecCtx->pix_fmt, info.width, info.height) <= 0) {
-				throw OutOfMemory("Failed to allocate image buffer", path);
+			AVPixelFormat decoded_pix_fmt = (AVPixelFormat)(decoded_frame->format);
+			if (decoded_pix_fmt == AV_PIX_FMT_NONE)
+				decoded_pix_fmt = (AVPixelFormat)(pStream->codecpar->format);
+			const int decoded_width = decoded_frame->width > 0 ? decoded_frame->width : info.width;
+			const int decoded_height = decoded_frame->height > 0 ? decoded_frame->height : info.height;
+			// Take a reference to the decoder's buffer rather than allocating a second one and
+			// copying into it. Decoded frames are refcounted, so the decoder simply gets a fresh
+			// buffer for the next frame and this one lives until RemoveAVFrame drops the
+			// reference -- which is what the copy was protecting against. It was 252 ms of a
+			// 2426 ms source_4k run at 4K, and 40 ms at 1080p.
+			av_frame_unref(pFrame);
+			if (av_frame_ref(pFrame, decoded_frame) < 0) {
+				throw OutOfMemory("Failed to reference decoded frame buffer", path);
 			}
-			av_image_copy(pFrame->data, pFrame->linesize, (const uint8_t**)next_frame->data, next_frame->linesize,
-										pCodecCtx->pix_fmt, info.width, info.height);
+			pFrame->format = decoded_pix_fmt;
+			pFrame->width = decoded_width;
+			pFrame->height = decoded_height;
+			pFrame->color_range = decoded_frame->color_range;
+			pFrame->colorspace = decoded_frame->colorspace;
+			pFrame->color_primaries = decoded_frame->color_primaries;
+			pFrame->color_trc = decoded_frame->color_trc;
+			pFrame->chroma_location = decoded_frame->chroma_location;
 
 			// Get display PTS from video frame, often different than packet->pts.
 			// Sending packets to the decoder (i.e. packet->pts) is async,
 			// and retrieving packets from the decoder (frame->pts) is async. In most decoders
 			// sending and retrieving are separated by multiple calls to this method.
-			if (next_frame->pts != AV_NOPTS_VALUE) {
+			if (decoded_frame->pts != AV_NOPTS_VALUE) {
 				// This is the current decoded frame (and should be the pts used) for
 				// processing this data
-				video_pts = next_frame->pts;
-			} else if (next_frame->pkt_dts != AV_NOPTS_VALUE) {
+				video_pts = decoded_frame->pts;
+			} else if (decoded_frame->pkt_dts != AV_NOPTS_VALUE) {
 				// Some videos only set this timestamp (fallback)
-				video_pts = next_frame->pkt_dts;
+				video_pts = decoded_frame->pkt_dts;
 			}
 
 			ZmqLogger::Instance()->AppendDebugMethod(
@@ -1449,7 +2227,7 @@ bool FFmpegReader::GetAVFrame() {
 			break;
 		}
 #if USE_HW_ACCEL
-		if (hw_de_on && hw_de_supported) {
+		if (hw_de_on && hw_de_supported && next_frame2 != next_frame) {
 			AV_FREE_FRAME(&next_frame2);
 		}
 	#endif // USE_HW_ACCEL
@@ -1474,6 +2252,42 @@ bool FFmpegReader::GetAVFrame() {
 
 	// Did we get a video frame?
 	return frameFinished;
+}
+
+bool FFmpegReader::ReopenWithoutHardwareDecode(int64_t requested_frame) {
+#if USE_HW_ACCEL
+	if (!hw_decode_failed || force_sw_decode) {
+		return false;
+	}
+
+	ZmqLogger::Instance()->AppendDebugMethod(
+		"FFmpegReader::ReopenWithoutHardwareDecode (falling back to software decode)",
+		"requested_frame", requested_frame,
+		"video_packets_read", packet_status.video_read,
+		"video_packets_decoded", packet_status.video_decoded,
+		"hw_decode_error_count", hw_decode_error_count);
+
+	openshot::GpuCounters::Add(openshot::GpuCounters::HardwareDecodeFallback);
+	force_sw_decode = true;
+	hw_decode_failed = false;
+	hw_decode_error_count = 0;
+
+	Close();
+	Open();
+	Seek(requested_frame);
+	return true;
+#else
+	(void) requested_frame;
+	return false;
+#endif
+}
+
+bool FFmpegReader::HardwareDecodeSuccessful() const {
+#if USE_HW_ACCEL
+	return hw_decode_succeeded;
+#else
+	return false;
+#endif
 }
 
 // Check the current seek position and determine if we need to seek again
@@ -1527,6 +2341,97 @@ bool FFmpegReader::CheckSeek(bool is_video) {
 }
 
 // Process a video packet
+// NVDEC's frame -> an RGBA GPU frame, without leaving the device (W23).
+//
+// copyNV12 puts the two planes into this reader's interop images, GpuYuv samples them, and the
+// submit waits on the copy. Null means "download it instead": no interop, the device went away,
+// or anything failed.
+std::shared_ptr<openshot::GpuFrame> FFmpegReader::ConvertOnDevice(int out_width, int out_height) {
+#if OPENSHOT_NVDEC_ON_DEVICE
+	openshot::CudaInterop &interop = openshot::CudaInterop::Instance();
+	if (!pFrame || pFrame->format != AV_PIX_FMT_CUDA || !openshot::GpuDevice::Instance().available() ||
+		!interop.available())
+		return nullptr;
+
+	const int width = pFrame->width;
+	const int height = pFrame->height;
+	if (!device_luma || !device_chroma || !device_luma->valid() || !device_chroma->valid() ||
+		device_luma->width() != width || device_luma->height() != height) {
+		device_luma = interop.createImage(width, height, openshot::GpuImage::Format::R8);
+		device_chroma = interop.createImage((width + 1) / 2, (height + 1) / 2,
+											openshot::GpuImage::Format::R8G8);
+		if (!device_luma || !device_chroma)
+			return nullptr;
+	}
+
+	// Each copy must be waited on by exactly the next submit that names its semaphore, and a
+	// submit takes everything this thread's recorder holds, so copy, draw, submit and re-arm
+	// happen as one step whichever reader, on whichever thread, gets here first. Close() takes
+	// the same lock to destroy a hardware decoder.
+	std::shared_ptr<openshot::GpuFrame> converted;
+	bool submitted = false;
+	bool inserted = false;
+	{
+		const std::lock_guard<std::mutex> lock(gConvertSequence);
+		if (!interop.copyNV12(pFrame, *device_luma, *device_chroma, decode_stream)) {
+			// It can fail after queuing part of its work (the semaphore wait, a plane's copy):
+			// drain it before the caller downloads and frees pFrame, and take new images, since
+			// whether their semaphores were consumed or signalled is no longer known.
+			interop.synchronizeStream(decode_stream ? decode_stream : interop.cudaStream());
+			device_luma.reset();
+			device_chroma.reset();
+			return nullptr;
+		}
+
+		converted = openshot::GpuYuv::Convert(
+			*device_luma, *device_chroma,
+			openshot::GpuYuv::MatrixOf((int) pFrame->colorspace, width, height),
+			pFrame->color_range == AVCOL_RANGE_JPEG, out_width, out_height);
+
+		// Submitted even if the conversion declined: the copy has signalled, and only a submit
+		// that waits on it clears the semaphore for the next frame.
+		const unsigned long long copied = interop.waitSemaphore(*device_luma);
+		submitted = openshot::GpuDevice::Instance().submit(false, &copied, 1, nullptr, 0, nullptr, &inserted);
+		// The conversion above is the only thing that samples these images -- the compositor
+		// gets the RGBA frame it drew -- so this is the submit prepareForCopy() has to follow.
+		// Re-arming them now takes the Vulkan-to-CUDA handshake off the next frame's critical
+		// path.
+		if (submitted)
+			interop.prepareForCopy(*device_luma, *device_chroma);
+	}
+	// The caller frees pFrame -- which unmaps the decoder's surface -- as soon as this returns,
+	// so the copy out of it must have run by then (CudaInterop::waitForNV12Copy), failed submit
+	// or not. Outside the sequence lock (review P1, 2026-10-01): the copy and its event are this
+	// reader's own, and holding the process-wide lock across a host wait made every NVDEC reader
+	// of every export take turns through it.
+	//
+	// A false return means the event could not be recorded or waited on: then drain the whole
+	// stream, which is this reader's own (review C6, 2026-10-01: the result used to be ignored).
+	if (!interop.waitForNV12Copy(*device_luma))
+		interop.synchronizeStream(decode_stream ? decode_stream : interop.cudaStream());
+	if (!submitted) {
+		// Inserted but not submitted: the recording that waits on the copy's semaphore is queued
+		// and the next submit (anyone's) sends it, which consumes the signal -- the images stay.
+		// Not inserted: the semaphore is signalled and nothing will ever wait on it, so the next
+		// copy into these images would signal it a second time (review C8). New images, new
+		// semaphores; the copy event above was recorded after the signal, so nothing is pending
+		// on them any more.
+		if (!inserted) {
+			device_luma.reset();
+			device_chroma.reset();
+		}
+		return nullptr;
+	}
+	if (converted)
+		openshot::GpuCounters::Add(openshot::GpuCounters::DecodedOnDevice);
+	return converted;
+#else
+	(void) out_width;
+	(void) out_height;
+	return nullptr;
+#endif
+}
+
 void FFmpegReader::ProcessVideoPacket(int64_t requested_frame) {
     // 1. Decode next frame (sets video_pts)
     int frame_finished = GetAVFrame();
@@ -1551,7 +2456,15 @@ void FFmpegReader::ProcessVideoPacket(int64_t requested_frame) {
     );
 
     // 3. Sizes / formats
-    const PixelFormat src_pix_fmt = pCodecCtx->pix_fmt; // accurate src fmt
+    // The source format is the one pFrame actually holds, NOT pCodecCtx->pix_fmt. With hardware
+    // decode on, the codec context's format is the hardware one (AV_PIX_FMT_CUDA for NVDEC) while
+    // pFrame is the frame that came back from av_hwframe_transfer_data, in a software format
+    // (NV12). Handing swscale the hardware format makes sws_getCachedContext return null --
+    // "cuda is not supported as input pixel format" -- and the reader threw OutOfMemory on the
+    // first frame. That was the whole of the hardware-decode breakage; see GPU-WORKLIST W23.
+    PixelFormat src_pix_fmt = (PixelFormat) pFrame->format;
+    if (src_pix_fmt == AV_PIX_FMT_NONE)
+        src_pix_fmt = pCodecCtx->pix_fmt;
     const int src_w = info.width;
     const int src_h = info.height;
 
@@ -1624,7 +2537,76 @@ void FFmpegReader::ProcessVideoPacket(int64_t requested_frame) {
         );
     }
 
-    // 5. Allocate aligned RGBA buffer and cached RGB frame
+    // 5. The GPU converts and pre-scales in one pass when there is one.
+    //
+    // This is the point of the whole GPU path: the frame is born on the GPU and stays there for
+    // the compositor, so the only thing that crosses the bus is the YUV (1.5 bytes a pixel against
+    // 4 for the RGBA that would come back), and sws_scale -- 95 % of this reader's wall clock --
+    // does not run at all. Null means "no GPU, or a layout this does not handle", and the swscale
+    // path below is unchanged.
+    std::shared_ptr<Frame> f = CreateFrame(current_frame);
+    std::shared_ptr<openshot::GpuFrame> gpu_converted;
+#if USE_HW_ACCEL
+    // NVDEC's frame, still on the device (GetAVFrame kept it there). Converted where it is, or
+    // brought down to the host and handed to the ordinary path below if that declines.
+    if (src_pix_fmt == AV_PIX_FMT_CUDA) {
+        gpu_converted = ConvertOnDevice(output_width, output_height);
+        if (!gpu_converted) {
+            AVFrame *host = AV_ALLOCATE_FRAME();
+            if (!host || av_hwframe_transfer_data(host, pFrame, 0) < 0 ||
+                av_frame_copy_props(host, pFrame) < 0) {
+                AV_FREE_FRAME(&host);
+                throw OutOfMemory("Failed to download a hardware-decoded frame", path);
+            }
+            av_frame_unref(pFrame);
+            av_frame_move_ref(pFrame, host);
+            AV_FREE_FRAME(&host);
+            src_pix_fmt = (PixelFormat) pFrame->format;
+        }
+    }
+#endif
+    if (!gpu_converted && openshot::Settings::Instance()->GPU_DECODE &&
+        openshot::GpuDevice::Instance().available() &&
+        openshot::GpuYuv::Supports((int) src_pix_fmt)) {
+        openshot::GpuYuvPlane gpu_planes[3];
+        const int plane_count =
+            openshot::GpuYuv::LayoutOf((int) src_pix_fmt) == openshot::GpuYuv::Layout::NV12 ? 2 : 3;
+        const bool chroma_half_height = true;   // every layout here is 4:2:0
+        for (int plane = 0; plane < plane_count; ++plane) {
+            gpu_planes[plane].data = pFrame->data[plane];
+            gpu_planes[plane].stride = pFrame->linesize[plane];
+            const bool is_luma = plane == 0;
+            gpu_planes[plane].width = is_luma ? src_w : (src_w + 1) / 2;
+            gpu_planes[plane].height =
+                is_luma || !chroma_half_height ? src_h : (src_h + 1) / 2;
+        }
+        gpu_converted = openshot::GpuYuv::Convert(
+            openshot::GpuYuv::LayoutOf((int) src_pix_fmt),
+            openshot::GpuYuv::MatrixOf((int) pFrame->colorspace, src_w, src_h),
+            openshot::GpuYuv::IsFullRange((int) src_pix_fmt) ||
+                pFrame->color_range == AVCOL_RANGE_JPEG,
+            gpu_planes, plane_count, output_width, output_height);
+    }
+
+    if (gpu_converted) {
+        if (src_pix_fmt != AV_PIX_FMT_CUDA)
+            openshot::GpuCounters::Add(openshot::GpuCounters::DecodedOnGpu);
+        f->AttachGpuFrame(gpu_converted);
+        working_cache.Add(f);
+        last_video_frame = f;
+        RemoveAVFrame(pFrame);
+
+        video_pts_seconds = (double(video_pts) * info.video_timebase.ToDouble()) + pts_offset_seconds;
+        ZmqLogger::Instance()->AppendDebugMethod(
+            "FFmpegReader::ProcessVideoPacket (After, on the GPU)",
+            "requested_frame", (float)requested_frame,
+            "current_frame",   (float)current_frame,
+            "f->number",       (float)f->number
+        );
+        return;
+    }
+
+    // 5b. Allocate aligned RGBA buffer and cached RGB frame
     const int bytes_per_pixel = 4;
 
     // Force a tight bytes-per-line (no hidden alignment that can truncate the effective width).
@@ -1638,11 +2620,16 @@ void FFmpegReader::ProcessVideoPacket(int64_t requested_frame) {
     constexpr size_t ALIGN = 32;
     const int aligned_size = ((buf_size + SWS_SIMD_PADDING + int(ALIGN) - 1) / int(ALIGN)) * int(ALIGN);
 
-    uint8_t *buffer = (uint8_t*) aligned_malloc(aligned_size, ALIGN);
+    // From the pool, not from malloc: see FrameBufferPool above for what allocating this fresh
+    // every frame was costing.
+    uint8_t *buffer = FrameBufferPool::Instance().acquire(aligned_size);
     if (!buffer) throw OutOfMemory("Failed to allocate image buffer", path);
 
     // Defensive: avoid visible garbage if anything is left unwritten
-    memset(buffer, 0, buf_size);
+    // No memset here. sws_scale writes every pixel of the destination, so zeroing it first is a
+    // second full-frame pass over the same memory for nothing -- 153 ms of a 1279 ms single_video
+    // run at 1080p, more than sws_scale itself cost there. The SWS_SIMD_PADDING above is what
+    // absorbs the SIMD overshoot; it is deliberately never read.
 
     AVFrame *pFrameRGB = pFrameRGB_cached;
     if (!pFrameRGB) {
@@ -1659,6 +2646,11 @@ void FFmpegReader::ProcessVideoPacket(int64_t requested_frame) {
 
     // 6. Reuse sws context; convert to RGBA
     int sws_flags = openshot::Settings::Instance()->HIGH_QUALITY_SCALING ? SWS_BICUBIC : SWS_FAST_BILINEAR;
+
+    // swscale slice threading was tried here and does nothing: with the decoder thread count held
+    // fixed, source_4k measured 663.8 / 674.0 / 650.0 / 682.9 ms of sws_scale at 1, 2, 4 and 8
+    // threads -- flat within noise. The conversion is memory-bandwidth bound, not compute bound,
+    // so the cached helper is kept and W08's "thread swscale" sub-task is closed on measurement.
     img_convert_ctx = sws_getCachedContext(
         img_convert_ctx,
         src_w, src_h, src_pix_fmt,
@@ -1668,18 +2660,39 @@ void FFmpegReader::ProcessVideoPacket(int64_t requested_frame) {
     if (!img_convert_ctx)
         throw OutOfMemory("Failed to initialize sws context", path);
 
+    // Decode with the matrix and range the stream declares (2026-09-23), as the GPU conversion
+    // already did. swscale otherwise assumes BT.601 limited whatever the file says, which put a
+    // colour shift on every BT.709-tagged input -- invisible only while the writer made the
+    // opposite mistake. Undeclared streams keep BT.601, so untagged media decodes as it did.
+    {
+        const int space = pFrame->colorspace;
+        const int sws_space = space == AVCOL_SPC_BT709 ? SWS_CS_ITU709
+                            : (space == AVCOL_SPC_BT2020_NCL || space == AVCOL_SPC_BT2020_CL) ? SWS_CS_BT2020
+                            : SWS_CS_DEFAULT;
+        const int full_range = pFrame->color_range == AVCOL_RANGE_JPEG ||
+                               src_pix_fmt == AV_PIX_FMT_YUVJ420P || src_pix_fmt == AV_PIX_FMT_YUVJ422P ||
+                               src_pix_fmt == AV_PIX_FMT_YUVJ444P;
+        const AVPixFmtDescriptor* desc = av_pix_fmt_desc_get((AVPixelFormat) src_pix_fmt);
+        const bool is_rgb = desc && (desc->flags & AV_PIX_FMT_FLAG_RGB);
+        if (sws_space != SWS_CS_DEFAULT && !is_rgb) {
+            sws_setColorspaceDetails(img_convert_ctx, sws_getCoefficients(sws_space), full_range,
+                                     sws_getCoefficients(SWS_CS_DEFAULT), 1, 0, 1 << 16, 1 << 16);
+        }
+    }
+
+    openshot::GpuCounters::Add(openshot::GpuCounters::DecodedOnCpu);
     sws_scale(img_convert_ctx, pFrame->data, pFrame->linesize, 0, src_h,
               pFrameRGB->data, pFrameRGB->linesize);
 
     // 7. Wrap in Frame and cache
-    std::shared_ptr<Frame> f = CreateFrame(current_frame);
-    if (!info.has_alpha) {
-        f->AddImage(output_width, output_height, bytes_per_pixel,
-                    QImage::Format_RGBA8888_Premultiplied, buffer);
-    } else {
-        f->AddImage(output_width, output_height, bytes_per_pixel,
-                    QImage::Format_RGBA8888, buffer);
-    }
+    //
+    // The QImage is built here rather than through AddImage(raw), because that overload hard-codes
+    // openshot::cleanUpBuffer as the cleanup and this buffer has to go back to the pool instead.
+    auto wrapped = std::make_shared<QImage>(
+        buffer, output_width, output_height, bytes_per_line,
+        info.has_alpha ? QImage::Format_RGBA8888 : QImage::Format_RGBA8888_Premultiplied,
+        (QImageCleanupFunction) &FrameBufferPool::Release, (void*) buffer);
+    f->AddImage(wrapped);
     working_cache.Add(f);
     last_video_frame = f;
 
@@ -1970,14 +2983,21 @@ void FFmpegReader::Seek(int64_t requested_frame) {
 	seek_count++;
 
 	// If seeking near frame 1, we need to close and re-open the file (this is more reliable than seeking)
-	int buffer_amount = std::max(max_concurrent_frames, 8);
+	int buffer_amount = std::max(OPEN_MP_NUM_PROCESSORS, 8);
 	if (requested_frame - buffer_amount < 20) {
 		// prevent Open() from seeking again
 		is_seeking = true;
 
-		// Close and re-open file (basically seeking to frame 1)
-		Close();
-		Open();
+		// Close and re-open file (basically seeking to frame 1). Straight after Open() only the
+		// demuxer has moved, so only the demuxer is reopened: a full Close()/Open() here destroyed
+		// and created every hardware decoder a second time per clip, each under the process-wide
+		// codec lock (review P2, 2026-10-01).
+		const bool rewound = fresh_open && RewindFreshOpen();
+		fresh_open = false;
+		if (!rewound) {
+			Close();
+			Open();
+		}
 
 		// Update overrides (since closing and re-opening might update these)
 		info.has_audio = has_audio_override;
@@ -2359,14 +3379,14 @@ void FFmpegReader::CheckWorkingFrames(int64_t requested_frame) {
 					std::shared_ptr<Frame> previous_frame_instance = final_cache.GetFrame(previous_frame);
 					if (previous_frame_instance && previous_frame_instance->has_image_data) {
 						// Copy image from last decoded frame
-						f->AddImage(std::make_shared<QImage>(previous_frame_instance->GetImage()->copy()));
+						copyPicture(*f, *previous_frame_instance);
 						break;
 					}
 				}
 
 				if (last_video_frame && !f->has_image_data) {
 					// Copy image from last decoded frame
-					f->AddImage(std::make_shared<QImage>(last_video_frame->GetImage()->copy()));
+					copyPicture(*f, *last_video_frame);
 				} else if (!f->has_image_data) {
 					f->AddColor("#000000");
 				}
@@ -2510,8 +3530,15 @@ void FFmpegReader::CheckFPS() {
 void FFmpegReader::RemoveAVFrame(AVFrame *remove_frame) {
 	// Remove pFrame (if exists)
 	if (remove_frame) {
+#if IS_FFMPEG_3_2
+		// pFrame holds a *reference* to the decoder's buffer (see GetAVFrame), not an allocation
+		// of its own, so the buffer goes when the reference does. av_frame_free unrefs first, so
+		// this is a single call -- and the av_freep(data[0]) the manual allocation needed would
+		// now free memory the decoder still owns.
+#else
 		// Free memory
 		av_freep(&remove_frame->data[0]);
+#endif
 #ifndef WIN32
 		AV_FREE_FRAME(&remove_frame);
 #endif
@@ -2541,6 +3568,18 @@ Json::Value FFmpegReader::JsonValue() const {
 	Json::Value root = ReaderBase::JsonValue(); // get parent properties
 	root["type"] = "FFmpegReader";
 	root["path"] = path;
+	switch (duration_strategy) {
+		case DurationStrategy::VideoPreferred:
+			root["duration_strategy"] = "VideoPreferred";
+			break;
+		case DurationStrategy::AudioPreferred:
+			root["duration_strategy"] = "AudioPreferred";
+			break;
+		case DurationStrategy::LongestStream:
+		default:
+			root["duration_strategy"] = "LongestStream";
+			break;
+	}
 
 	// return JsonValue
 	return root;
@@ -2570,10 +3609,14 @@ void FFmpegReader::SetJsonValue(const Json::Value root) {
 	// Set data from Json (if key is found)
 	if (!root["path"].isNull())
 		path = root["path"].asString();
-
-	// Re-Open path, and re-init everything (if needed)
-	if (is_open) {
-		Close();
-		Open();
+	if (!root["duration_strategy"].isNull()) {
+		const std::string strategy = root["duration_strategy"].asString();
+		if (strategy == "VideoPreferred") {
+			duration_strategy = DurationStrategy::VideoPreferred;
+		} else if (strategy == "AudioPreferred") {
+			duration_strategy = DurationStrategy::AudioPreferred;
+		} else {
+			duration_strategy = DurationStrategy::LongestStream;
+		}
 	}
 }

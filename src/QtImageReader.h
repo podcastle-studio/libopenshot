@@ -79,6 +79,10 @@ namespace openshot
 		std::shared_ptr<QImage> cached_image;	///> Scaled for performance
 		bool is_open;	///> Is Reader opened
 		QSize max_size;	///> Current max_size as calculated with Clip properties
+		/// The box cached_image was made for. Compared instead of max_size (the image's own size,
+		/// which differs whenever the aspect ratio does not match the box), which missed on every
+		/// frame and re-rasterised an SVG -- or rescaled a large still -- every frame.
+		QSize cached_for_size;
 
 #if RESVG_VERSION_MIN(0, 11)
         ResvgOptions resvg_options;

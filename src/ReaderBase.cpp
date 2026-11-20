@@ -12,6 +12,7 @@
 
 #include <iostream>
 #include <iomanip>
+#include <algorithm>
 
 #include "ReaderBase.h"
 #include "ClipBase.h"
@@ -54,6 +55,9 @@ ReaderBase::ReaderBase()
 
 	// Init parent clip
 	clip = NULL;
+	max_decode_width = 0;
+	max_decode_height = 0;
+	apply_orientation_metadata = true;
 }
 
 // Display file information
@@ -244,4 +248,29 @@ openshot::ClipBase* ReaderBase::ParentClip() {
 /// Set parent clip object of this reader
 void ReaderBase::ParentClip(openshot::ClipBase* new_clip) {
 	clip = new_clip;
+}
+
+void ReaderBase::SetMaxDecodeSize(int width, int height) {
+	max_decode_width = std::max(0, width);
+	max_decode_height = std::max(0, height);
+}
+
+int ReaderBase::MaxDecodeWidth() const {
+	return max_decode_width;
+}
+
+int ReaderBase::MaxDecodeHeight() const {
+	return max_decode_height;
+}
+
+bool ReaderBase::HasMaxDecodeSize() const {
+	return max_decode_width > 0 && max_decode_height > 0;
+}
+
+void ReaderBase::ApplyOrientationMetadata(bool value) {
+	apply_orientation_metadata = value;
+}
+
+bool ReaderBase::ApplyOrientationMetadata() const {
+	return apply_orientation_metadata;
 }

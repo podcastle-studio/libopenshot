@@ -215,6 +215,16 @@ std::vector<WordAnimation> processSegmentAnimation(const std::vector<WordDetail>
 
     const float segStart = wordDetails.front().startMs;
 
+    // ONE_WORD draws every word at the same spot, so a word may not show before the one it replaces
+    // is gone. The in-animation is centred on the word's start, which puts its first half inside
+    // the previous word's (fully opaque) last frames: for inDuration/2 two words were drawn on top
+    // of each other at every word boundary (2026-10-02). The incoming word's in-animation therefore
+    // starts no earlier than the frame before the outgoing word's end frame: still invisible there
+    // (it is at its initial value), visible from the very frame the previous word disappears on,
+    // so the swap neither overlaps nor leaves a blank frame. PER_TIME lays words side by side, so
+    // overlapping in time is how it is meant to look there and it is left alone.
+    int64_t prevEndFrame = 0;
+
     for (size_t idx = 0; idx < wordDetails.size(); ++idx) {
         const WordDetail& wd = wordDetails[idx];
         WordAnimation anim;  anim.word = wd.word;
@@ -243,6 +253,27 @@ std::vector<WordAnimation> processSegmentAnimation(const std::vector<WordDetail>
             inDur = outDur = duration * 0.5f;
         }
 
+        const bool afterPrevWord = oneWord && idx > 0;
+        auto clampOneWordIn = [&](int64_t& fS, int64_t& fInEnd) {
+            if (!afterPrevWord || fS >= prevEndFrame - 1) return;
+            fS = prevEndFrame - 1;
+            fInEnd = std::max(fInEnd, fS + 1);
+        };
+
+        // Holds the initial value up to fS, then animates to the in value by fInEnd. With no
+        // in-animation (inDuration 0, or one shorter than a frame) both land on the same frame and
+        // Keyframe::AddPoint overwrites the hold point with the in point, so the value ramped from
+        // the segment's start to the word's: every ONE_WORD word faded in under all the words
+        // before it (2026-10-02). Such a change is a jump at fS instead.
+        auto addIn = [&](openshot::Keyframe& k, int64_t fS, int64_t fInEnd, double i, double a) {
+            if (fInEnd > fS) {
+                k.AddPoint(fS, i, CONSTANT);
+                k.AddPoint(fInEnd, a, animSet.inInterpolation);
+            } else {
+                k.AddPoint(fS, a, CONSTANT);
+            }
+        };
+
         for (const std::string& key : numKeys) {
             double init  = getBaseValue(key, baseStyle);
             double animV = animSet.inStyles.count(key)  ? animSet.inStyles[key]  : init;
@@ -251,14 +282,14 @@ std::vector<WordAnimation> processSegmentAnimation(const std::vector<WordDetail>
             int64_t f0        = msToFrame(0, fps);
             int64_t fS        = msToFrame(relStart - inDur / 2, fps);
             int64_t fInEnd    = msToFrame(relStart + inDur / 2, fps);
+            clampOneWordIn(fS, fInEnd);
             int64_t fOutStart = msToFrame(relEnd   - outDur, fps);
             int64_t fEnd      = msToFrame(relEnd, fps);
 
             AnimationParam p;
             p.name = key;
             p.keyframe.AddPoint(f0, init, CONSTANT);
-            p.keyframe.AddPoint(fS, init, CONSTANT);
-            p.keyframe.AddPoint(fInEnd, animV, animSet.inInterpolation);
+            addIn(p.keyframe, fS, fInEnd, init, animV);
 
             if (outDur > 0) {
                 if (fOutStart > fInEnd) {
@@ -286,14 +317,14 @@ std::vector<WordAnimation> processSegmentAnimation(const std::vector<WordDetail>
             int64_t f0        = msToFrame(0, fps);
             int64_t fS        = msToFrame(relStart, fps);
             int64_t fInEnd    = msToFrame(relStart + inDur, fps);
+            clampOneWordIn(fS, fInEnd);
             int64_t fOutStart = msToFrame(relEnd   - outDur, fps);
             int64_t fEnd      = msToFrame(relEnd, fps);
 
             auto add = [&](const char* suf, double i, double a, double f){
                 AnimationParam p; p.name = key + suf;
                 p.keyframe.AddPoint(f0, i, CONSTANT);
-                p.keyframe.AddPoint(fS, i, CONSTANT);
-                p.keyframe.AddPoint(fInEnd, a, animSet.inInterpolation);
+                addIn(p.keyframe, fS, fInEnd, i, a);
                 if (outDur>0) {
                     if (fOutStart>fInEnd) {
                         p.keyframe.AddPoint(fOutStart, a, CONSTANT);
@@ -312,6 +343,7 @@ std::vector<WordAnimation> processSegmentAnimation(const std::vector<WordDetail>
             add(".b", ib, ab, fb);
         }
         animations.emplace_back(std::move(anim));
+        prevEndFrame = msToFrame(relEnd, fps);
     }
     return animations;
 }
