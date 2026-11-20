@@ -377,6 +377,17 @@ Consumers must rebuild against the new headers — `Clip`, `Mask`, `CircleMask`,
 `TextClipReader` and `GpuCounters` changed layout; `../video-rendering-service`'s `cpp-third-party`
 was refreshed.
 
+**Also done 2026-11-20: a faulted GPU fails the export instead of hanging it** (prod XID 43 on an
+L4: four exports blocked for good). Reproduced with the service's `tools/gpu-fault-inject`: once the
+CUDA side of the NV12 handshake stops, every NVDEC reader waits in `waitForNV12Copy` →
+`cuEventSynchronize` for ever. Now every host wait on the handshake is bounded
+(`OPENSHOT_GPU_WAIT_TIMEOUT_SEC`, 30 s) and a timeout or sticky CUDA error sets `CudaInterop::Lost()`;
+the reader throws `ErrorDecodingVideo` (new) then, and on `AVERROR_EXTERNAL` from NVDEC after the
+stream has decoded; the writer throws `ErrorEncodingVideo` when NVENC refuses a frame or its upload
+fails (it used to flush the encoder and drop every later frame). Skia's own waits
+(`SyncToCpu::kYes`, its fences) are still unbounded: the service's watchdog covers those. Four-way
+sweep green; the Vulkan+NVDEC arm keeps its 6 pre-existing pixel failures (same before the change).
+
 **Also done 2026-09-25: four encoder leaks fixed** (LeakSanitizer): every video and audio
 `AVPacket` struct (`AV_FREE_PACKET` only unrefs), the writer's RGBA→YUV conversion frames (a
 frame of YUV per export, 3.1 MB at 1080p), 384 KB of queued audio per export on a planar codec
