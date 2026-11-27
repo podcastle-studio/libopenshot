@@ -7,6 +7,8 @@
 #include "TextClipTypes.h"
 #include "TextGlowRenderer.h"
 #include "TextStyleKeyframes.h"
+#include "TextCounterRenderer.h"
+#include "counter/CounterEngine.h"
 
 #include <memory>
 #include <optional>
@@ -102,6 +104,20 @@ public:
 
     bool HasStyleKeyframes() const { return has_style_keyframes; }
 
+    /// Enable an animated number counter (src/text/counter): the numbers of `value` count up from
+    /// `counter.from` to the value as typed, over `counter.range` (fractions of `durationSec`, the
+    /// clip's visible duration). `fps` is the timeline frame rate; clip-local time is
+    /// (frame - 1) / fps, as for SetAnimations. `currency` is the ISO 4217 code of the money in the
+    /// text -- metadata only, nothing is converted. nullopt clears it (plain text, byte-identical
+    /// to a clip that never had one). The reader becomes a frame sequence while the count runs.
+    void SetCounter(const std::optional<text::counter::CounterFx>& counter, const std::string& currency,
+                    double fps, double durationSec);
+
+    /// True once Open() found the counter applicable (a number to animate, flat text).
+    bool HasCounter() const { return counter_plan.has_value(); }
+    /// Why the last plan rendered a counter as static text, or partly static ("" = nothing).
+    const std::vector<std::string>& CounterWarnings() const { return counter_warnings; }
+
     const text::TextClipData& Data() const { return data; }
     int ProjectWidth() const { return project_width; }
 
@@ -157,11 +173,13 @@ private:
     /// text engine renders. @a convention must suit where the canvas's pixels end up.
     void drawFrame(SkCanvas* canvas, subtitle::ColorConvention convention,
                    const ResolvedPlan& plan,
-                   const std::optional<text::TextClipAnimationFrame>& animation);
+                   const std::optional<text::TextClipAnimationFrame>& animation,
+                   double counterTime);
 
     /// Render one frame using the supplied plan (static when `animation` is empty) into a QImage.
     std::shared_ptr<QImage> renderToQImage(const ResolvedPlan& plan,
-                                           const std::optional<text::TextClipAnimationFrame>& animation);
+                                           const std::optional<text::TextClipAnimationFrame>& animation,
+                                           double counterTime);
 
     /// The same frame, left on the GPU for the compositor to draw as a texture, or null
     /// when there is no GPU (every caller then falls back to renderToQImage).
@@ -174,7 +192,13 @@ private:
     /// makes of it, and the upload back onto the timeline canvas.
     std::shared_ptr<openshot::GpuFrame> renderToGpuFrame(
         const ResolvedPlan& plan,
-        const std::optional<text::TextClipAnimationFrame>& animation);
+        const std::optional<text::TextClipAnimationFrame>& animation,
+        double counterTime);
+
+    /// Clip-local time of a frame, and whether a counter still moves around it (its exposure
+    /// included); a settled counter is served from the resting cache, drawn at the clip's end.
+    double counterRestTime() const;
+    bool counterMovingAt(double elapsedSec) const;
 
     int project_width;
     int project_height;
@@ -212,6 +236,14 @@ private:
     bool has_animation{false};
     std::optional<text::AnimationTimeline> timeline;
     text::UnitCounts anim_unit_counts;  ///< Stagger-unit tallies over the laid-out lines
+
+    // ---- Counter (animated numbers) --------------------------------------------
+    std::optional<text::counter::CounterFx> counter_fx;
+    std::string counter_currency;
+    double counter_fps{30.0};
+    double counter_duration_sec{0.0};
+    std::optional<text::CounterRenderPlan> counter_plan;   ///< built by buildPlan when applicable
+    std::vector<std::string> counter_warnings;
 
     // ---- Style keyframe overlay (glow/blur/curve/colours/tilt) ---------------
     text::TextStyleKeyframes style_keyframes;

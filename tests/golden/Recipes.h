@@ -165,6 +165,8 @@ struct TextSpec {
     std::optional<openshot::text::TextStyleKeyframes> styleKeyframes;
     float opacity = 1.f;
     std::optional<Fade> fade;
+    std::optional<openshot::text::counter::CounterFx> counter;   // the payload's `counter` (SetCounter)
+    std::string currency;
 };
 openshot::Clip* textClip(Scene& scene, const TextSpec& spec, double fps);
 

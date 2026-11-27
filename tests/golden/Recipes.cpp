@@ -406,6 +406,7 @@ Clip* textClip(Scene& scene, const TextSpec& spec, double fps) {
     const double durationSec = spec.end - spec.start;
     if (spec.animations) reader->SetAnimations(*spec.animations, presets(), fps, durationSec);
     if (spec.styleKeyframes) reader->SetStyleKeyframes(*spec.styleKeyframes, fps);
+    if (spec.counter) reader->SetCounter(*spec.counter, spec.currency, fps, durationSec);
     reader->Open();
 
     auto* clip = scene.own(new Clip(reader));

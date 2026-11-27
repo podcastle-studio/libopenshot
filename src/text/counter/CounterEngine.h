@@ -213,6 +213,8 @@ struct Glyph {
     double feather = 0;  ///< soft edge of that window, px; 0 = hard cut
     /// Index of the counter number this glyph belongs to, or -1 for plain text.
     int track = -1;
+    /// Row (line) of the compiled layer the glyph is on.
+    int line = 0;
 };
 
 struct CellMetrics {

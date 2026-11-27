@@ -70,6 +70,7 @@ set(OPENSHOT_SOURCES
   text/TextCurvedText.cpp
   text/TextAnimationEngine.cpp
   text/TextAnimationRenderer.cpp
+  text/TextCounterRenderer.cpp
   text/counter/CounterParse.cpp
   text/counter/CounterTrack.cpp
   text/counter/CounterLayer.cpp

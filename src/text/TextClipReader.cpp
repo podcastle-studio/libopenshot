@@ -10,6 +10,7 @@
 #include "TextClipRenderer.h"
 #include "TextDrawShared.h"
 #include "TextGlowShader.h"
+#include "counter/CounterJson.h"
 
 #include <skia/include/core/SkBitmap.h>
 #include <skia/include/core/SkCanvas.h>
@@ -22,6 +23,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <iostream>
 #include <regex>
 
 #ifndef M_PI
@@ -253,12 +255,14 @@ void TextClipReader::Close() {
 
 void TextClipReader::initInfo() {
     // Animated text is a frame SEQUENCE (each frame differs); static text is a single image.
-    const int fpsNum = has_animation ? std::max(1, static_cast<int>(std::lround(anim_fps))) : 30;
+    const bool sequence = has_animation || counter_plan.has_value();
+    const double seqFps = has_animation ? anim_fps : counter_fps;
+    const int fpsNum = sequence ? std::max(1, static_cast<int>(std::lround(seqFps))) : 30;
 
     info.has_audio = false;
     info.has_video = true;
     info.has_alpha = true;
-    info.has_single_image = !has_animation;
+    info.has_single_image = !sequence;
     info.file_size = 0;
     info.vcodec = "QImage";
     info.width = std::max(1, frame_width);
@@ -377,6 +381,23 @@ void TextClipReader::buildPlan() {
     frame_center_project_x = data.transformation.positionX + alignmentOffset;
     frame_center_project_y = data.transformation.positionY;
 
+    // 2b. Counter: the layout above is the FINAL text; the plan replaces each animated number's
+    //     span by the engine's digit cells. Placement stays that of the final text -- the content
+    //     box keeps its centre and the frame grows symmetrically by however far the counting
+    //     text reaches past it (counter_plan->over*).
+    counter_plan.reset();
+    counter_warnings.clear();
+    if (counter_fx.has_value()) {
+        counter_plan = text::buildCounterPlan(transformed, *counter_fx, layout, curvePaint, layoutPaint,
+                                              counter_duration_sec, counter_fps > 0.0 ? counter_fps : anim_fps,
+                                              &measureRenderer, counter_warnings);
+        for (const std::string& w : counter_warnings) std::cerr << "TextClipReader: " << w << std::endl;
+    }
+    // Whole pixels: the buffer is ceil()ed and the content centred in it, so a fractional pad
+    // would move the text by a fraction of a pixel against the same clip without a counter.
+    const double counterOverX = counter_plan ? std::ceil(std::max(counter_plan->overLeft, counter_plan->overRight)) : 0.0;
+    const double counterOverY = counter_plan ? std::ceil(std::max(counter_plan->overTop, counter_plan->overBottom)) : 0.0;
+
     // 3. Resolve the animation timeline. Active only when an animation slot is set, the clip has
     //    a positive duration, and preset keyframe data is available to drive it.
     timeline.reset();
@@ -385,7 +406,8 @@ void TextClipReader::buildPlan() {
     if (animations.hasActive() && anim_duration_sec > 0.0 && !presets.empty()) {
         timeline = text::buildAnimationTimeline(animations, anim_duration_sec);
         has_animation = timeline.has_value();
-        anim_unit_counts = text::countAnimationUnits(layout);
+        // A counter's number is one stagger unit whatever digits it shows.
+        anim_unit_counts = counter_plan ? counter_plan->unitCounts : text::countAnimationUnits(layout);
     }
 
     // Cache the plan for per-frame rendering. Origin = top-left of the content box; the
@@ -410,7 +432,8 @@ void TextClipReader::buildPlan() {
     double animHalfW = 0.0, animHalfH = 0.0;
     if (has_animation) {
         const text::AnimatedExtent extent = text::computeAnimatedExtent(
-            layout, paint, boundingWidth, boundingHeight, *timeline, presets, anim_unit_counts);
+            layout, paint, boundingWidth + 2.0 * counterOverX, boundingHeight + 2.0 * counterOverY,
+            *timeline, presets, anim_unit_counts);
         animHalfW = extent.halfWidth;
         animHalfH = extent.halfHeight;
     }
@@ -421,8 +444,8 @@ void TextClipReader::buildPlan() {
     const double rotS = std::abs(std::sin(rotationRad));
     auto extentFor = [&](const text::TextClipPaintStyle& p, double cw, double ch,
                          double padX, double padY, double tiltX, double tiltY) -> std::pair<double, double> {
-        double halfW = (cw + 2.0 * padX) / 2.0;
-        double halfH = (ch + 2.0 * padY) / 2.0;
+        double halfW = (cw + 2.0 * padX) / 2.0 + counterOverX;
+        double halfH = (ch + 2.0 * padY) / 2.0 + counterOverY;
         if (has_animation) { halfW = std::max(halfW, animHalfW); halfH = std::max(halfH, animHalfH); }
         if (tiltX != 0.0 || tiltY != 0.0) {
             const text::TextClipAnimationFrame f = text::buildStatic3DFrame(tiltX, tiltY);
@@ -574,7 +597,8 @@ TextClipReader::ResolvedPlan TextClipReader::resolvePlanAtFrame(int64_t frame) c
 
 void TextClipReader::drawFrame(SkCanvas* canvas, subtitle::ColorConvention convention,
                                const ResolvedPlan& plan,
-                               const std::optional<text::TextClipAnimationFrame>& animation) {
+                               const std::optional<text::TextClipAnimationFrame>& animation,
+                               double counterTime) {
     subtitle::SkiaRenderer renderer(canvas, convention);
 
     // Centre the content box at the frame's centre; rotate around that centre.
@@ -587,15 +611,21 @@ void TextClipReader::drawFrame(SkCanvas* canvas, subtitle::ColorConvention conve
     // A style keyframe can move the glow's colour, intensity or geometry between frames, so
     // only a clip without one gets the cache; everything else it depends on is fixed by the
     // plan. renderTextFrame narrows this further — only the BLOCK-mode paths take it.
-    text::renderTextFrame(plan_layout, plan.paint, plan.background,
-                          plan.origin_x, plan.origin_y, 1.0, animation, &renderer,
-                          has_style_keyframes ? nullptr : &glow_cache);
+    if (counter_plan) {
+        text::renderCounterFrame(*counter_plan, counterTime, plan_layout, plan.paint, plan.background,
+                                 plan.origin_x, plan.origin_y, 1.0, animation, &renderer);
+    } else {
+        text::renderTextFrame(plan_layout, plan.paint, plan.background,
+                              plan.origin_x, plan.origin_y, 1.0, animation, &renderer,
+                              has_style_keyframes ? nullptr : &glow_cache);
+    }
     canvas->restore();
 }
 
 std::shared_ptr<openshot::GpuFrame> TextClipReader::renderToGpuFrame(
     const ResolvedPlan& plan,
-    const std::optional<text::TextClipAnimationFrame>& animation) {
+    const std::optional<text::TextClipAnimationFrame>& animation,
+    double counterTime) {
     // An empty plan keeps the 1x1 transparent QImage: not worth a surface, and the caller
     // has a cheaper answer for it.
     if (plan_empty || !GpuDevice::Instance().available())
@@ -611,13 +641,14 @@ std::shared_ptr<openshot::GpuFrame> TextClipReader::renderToGpuFrame(
 
     // Pooled surfaces are recycled, so this is load-bearing, not tidiness.
     canvas->clear(SK_ColorTRANSPARENT);
-    drawFrame(canvas, subtitle::ColorConvention::Logical, plan, animation);
+    drawFrame(canvas, subtitle::ColorConvention::Logical, plan, animation, counterTime);
     return gpu;
 }
 
 std::shared_ptr<QImage> TextClipReader::renderToQImage(
     const ResolvedPlan& plan,
-    const std::optional<text::TextClipAnimationFrame>& animation) {
+    const std::optional<text::TextClipAnimationFrame>& animation,
+    double counterTime) {
     if (plan_empty) {
         auto img = std::make_shared<QImage>(1, 1, QImage::Format_RGBA8888_Premultiplied);
         img->fill(QColor(0, 0, 0, 0));
@@ -643,7 +674,7 @@ std::shared_ptr<QImage> TextClipReader::renderToQImage(
             if (canvas) {
                 // Pooled surfaces are recycled, so this is load-bearing, not tidiness.
                 canvas->clear(SK_ColorTRANSPARENT);
-                drawFrame(canvas, subtitle::ColorConvention::QImageBytes, plan, animation);
+                drawFrame(canvas, subtitle::ColorConvention::QImageBytes, plan, animation, counterTime);
                 SkPixmap pixels(skiaInfo, img->bits(), img->bytesPerLine());
                 if (gpu->readback(pixels))
                     return img;
@@ -659,13 +690,24 @@ std::shared_ptr<QImage> TextClipReader::renderToQImage(
         return img;
     }
     SkCanvas canvas(bitmap);
-    drawFrame(&canvas, subtitle::ColorConvention::QImageBytes, plan, animation);
+    drawFrame(&canvas, subtitle::ColorConvention::QImageBytes, plan, animation, counterTime);
 
     return img;
 }
 
 void TextClipReader::renderToImage() {
-    rendered_image = renderToQImage(cachedPlan(), restingFrame());
+    rendered_image = renderToQImage(cachedPlan(), restingFrame(), counterRestTime());
+}
+
+double TextClipReader::counterRestTime() const {
+    return counter_plan ? counter_plan->duration : 0.0;
+}
+
+bool TextClipReader::counterMovingAt(double elapsedSec) const {
+    if (!counter_plan) return false;
+    // Half an exposure past the settle time the shutter no longer sees any motion either.
+    const double halfShutter = std::max(0.0, counter_plan->fx.shutter) / 720.0 / counter_plan->fps;
+    return elapsedSec < counter_plan->settle + halfShutter + 1e-9;
 }
 
 std::optional<text::TextClipAnimationFrame> TextClipReader::restingFrame() const {
@@ -718,11 +760,17 @@ std::shared_ptr<Frame> TextClipReader::GetFrame(int64_t requested_frame) {
         }
     }
 
+    // A counter is drawn at the frame's clip-local time while it moves; once settled every frame
+    // is the clip-end frame, so the resting cache serves it.
+    const double clipElapsedSec = std::max(0.0, static_cast<double>(requested_frame - 1) /
+                                                    (has_animation ? anim_fps : (counter_fps > 0.0 ? counter_fps : anim_fps)));
+    const bool counterMoving = counterMovingAt(clipElapsedSec);
+
     std::shared_ptr<QImage> image;
     // Whether `image` is the shared resting-frame cache (which must not be handed to a Frame
     // that may draw over it) or a render made for this frame alone (which can be).
     bool image_is_cached = false;
-    if (!has_style_keyframes && !animFrame.has_value()) {
+    if (!has_style_keyframes && !animFrame.has_value() && !counterMoving) {
         // Static / resting phase: the frame is pixel-identical every frame (incl. any static 3D
         // tilt). Render ONCE and reuse the cache — this skips recomputing the (expensive) glow for
         // every resting frame. For a 5s clip with a 1.5s IN that's ~70% of frames served from cache.
@@ -733,7 +781,7 @@ std::shared_ptr<Frame> TextClipReader::GetFrame(int64_t requested_frame) {
         if (!plan_empty && GpuDevice::Instance().available()) {
             const unsigned long long generation = GpuDevice::Generation();
             if (!rendered_gpu || rendered_gpu_generation != generation || !rendered_gpu->ownedByThisThread()) {
-                rendered_gpu = renderToGpuFrame(cachedPlan(), restingFrame());
+                rendered_gpu = renderToGpuFrame(cachedPlan(), restingFrame(), counterRestTime());
                 rendered_gpu_generation = generation;
             }
             if (rendered_gpu) {
@@ -783,7 +831,8 @@ std::shared_ptr<Frame> TextClipReader::GetFrame(int64_t requested_frame) {
         // uploads it again (W17). Only this per-frame branch can do it -- the resting
         // image below is cached across frames and a pooled surface must not outlive the
         // frame that borrowed it.
-        if (std::shared_ptr<GpuFrame> gpu = renderToGpuFrame(rp, frame)) {
+        const double counterTime = counterMoving ? clipElapsedSec : counterRestTime();
+        if (std::shared_ptr<GpuFrame> gpu = renderToGpuFrame(rp, frame, counterTime)) {
             auto gpu_frame = std::make_shared<Frame>(
                 requested_frame, gpu->width(), gpu->height(),
                 "#00000000", sample_count, info.channels);
@@ -791,7 +840,7 @@ std::shared_ptr<Frame> TextClipReader::GetFrame(int64_t requested_frame) {
             return gpu_frame;
         }
 
-        image = renderToQImage(rp, frame);
+        image = renderToQImage(rp, frame, counterTime);
     }
 
     if (!image) {
@@ -841,6 +890,15 @@ void TextClipReader::SetStyleKeyframes(const text::TextStyleKeyframes& keyframes
     dirty = true;
 }
 
+void TextClipReader::SetCounter(const std::optional<text::counter::CounterFx>& counter, const std::string& currency,
+                                double fps, double durationSec) {
+    counter_fx = counter;
+    counter_currency = currency;
+    counter_fps = fps > 0.0 ? fps : 30.0;
+    counter_duration_sec = durationSec;
+    dirty = true;
+}
+
 void TextClipReader::SetAnimations(const text::TextAnimations& animations_,
                                    const text::AnimationPresetMap& presets_,
                                    double fps,
@@ -867,6 +925,12 @@ Json::Value TextClipReader::JsonValue() const {
     root["value"] = data.value;
     root["style"] = styleToJson(data.style);
     root["transformation"] = transformationToJson(data.transformation);
+    if (counter_fx.has_value()) {
+        root["counter"] = text::counter::counterFxToJson(*counter_fx);
+        root["counter_fps"] = counter_fps;
+        root["counter_duration"] = counter_duration_sec;
+        if (!counter_currency.empty()) root["currency"] = counter_currency;
+    }
     return root;
 }
 
@@ -886,6 +950,14 @@ void TextClipReader::SetJsonValue(const Json::Value root) {
     if (!root["value"].isNull())           data.value = root["value"].asString();
     if (root["style"].isObject())          styleFromJson(root["style"], data.style);
     if (root["transformation"].isObject()) transformationFromJson(root["transformation"], data.transformation);
+    if (root.isMember("counter")) {
+        std::vector<std::string> warnings;
+        counter_fx = text::counter::counterFxFromJson(root["counter"], &warnings);
+        for (const std::string& w : warnings) std::cerr << "TextClipReader: " << w << std::endl;
+        if (!root["counter_fps"].isNull()) counter_fps = root["counter_fps"].asDouble();
+        if (!root["counter_duration"].isNull()) counter_duration_sec = root["counter_duration"].asDouble();
+        counter_currency = root["currency"].isString() ? root["currency"].asString() : "";
+    }
 
     dirty = true;
 

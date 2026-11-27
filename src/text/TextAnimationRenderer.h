@@ -68,6 +68,22 @@ struct CurvedGlyphLocal {
     double rotationDeg = 0.0;   // glyph tangent minus anchor tangent
 };
 
+// A counter digit's own placement inside its cell (src/text/counter): a vertical window around the
+// baseline (hard, or with a soft feathered edge), then an offset and a scale about a pivot. Applied
+// after the unit transform, with the glyph's (offsetX, offsetY) as the cell centre on the baseline.
+struct CounterGlyphPlacement {
+    double textOffsetX = 0.0;   // draw origin relative to the cell centre (minus half the advance)
+    double dy = 0.0;
+    double sx = 1.0;
+    double sy = 1.0;
+    double pivot = 0.0;         // relative to the baseline, negative = above it
+    bool hasClip = false;
+    double clip0 = 0.0;         // window relative to the baseline
+    double clip1 = 0.0;
+    double feather = 0.0;       // soft edge, px; 0 = hard cut
+    double halfWidth = 0.0;     // horizontal half-extent of the window (the cell width)
+};
+
 // One glyph of a stagger unit. Draw offsets are stored relative to the unit box CENTRE so the
 // shared letter-drawing code works unchanged inside a rotated frame.
 struct AnimatedUnitGlyph {
@@ -75,6 +91,7 @@ struct AnimatedUnitGlyph {
     double offsetX = 0.0;       // draw origin (baseline-left) relative to the unit box centre
     double offsetY = 0.0;       // baseline Y relative to the unit box centre
     std::optional<CurvedGlyphLocal> local;
+    std::optional<CounterGlyphPlacement> counter;   // counter digits only; then offsetX is the cell centre
 };
 
 // One stagger unit: every glyph is drawn with the SAME evaluated props and the SAME pivot box,
@@ -89,6 +106,11 @@ struct AnimatedUnitItem {
     ResolvedAnimProps props;
     double opacity = 1.0;
     std::optional<CurvedUnitAnchor> curve;  // set for curved text
+    // Counter items only: a gaussian blur of the glyph itself (px, a digit style's blur), combined in
+    // quadrature with the animation / style blur in every pass; and a transform applied before the
+    // unit's own (the counter's layer-level grow / land-pop scale). Unset for ordinary text.
+    double extraBlur = 0.0;
+    std::optional<SkMatrix> preTransform;
 };
 
 void applyUnitTransform(subtitle::SkiaRenderer* renderer, SkCanvas* canvas,
@@ -190,13 +212,15 @@ public:
         const CurvedTextGeometry& geometry, const TextClipLine& line, const TextClipPaintStyle& style,
         double originX, double originY, const TextClipAnimationFrame& animation);
 
-private:
+    // Paint prepared items in the global passes (shadow -> glow -> stroke -> fill, gated by `layer`).
+    // Public for the counter renderer, which builds its own items (TextCounterRenderer).
     void drawAnimatedUnitItems(
         std::vector<AnimatedUnitItem>& items, const TextClipPaintStyle& style,
         const AnimationTransformFlags& flags,
         double contentWidth, double contentHeight, double originX, double originY, bool skipGlow = false,
         BlockDrawLayer layer = BlockDrawLayer::All);
 
+private:
     subtitle::SkiaRenderer* renderer;
     TextGlowRenderer* glowRenderer;
 };

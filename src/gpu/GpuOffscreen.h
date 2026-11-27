@@ -61,6 +61,10 @@ namespace openshot
 		/// when allocation failed; a raster @a target simply gets a raster surface.
 		static GpuOffscreen Match(const SkCanvas* target, int width, int height);
 
+		/// As Match(), with another colour type (premultiplied, no colour space) -- e.g.
+		/// kRGBA_F16 for an accumulation buffer that must not band. kN32 is Match() itself.
+		static GpuOffscreen Match(const SkCanvas* target, int width, int height, SkColorType colorType);
+
 		/// The step a GPU offscreen's pooled surface is rounded up to, in pixels
 		static constexpr int kSizeStep = 256;
 

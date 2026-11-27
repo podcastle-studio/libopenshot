@@ -27,6 +27,11 @@ int GpuOffscreen::PaddedSize(int size)
 
 GpuOffscreen GpuOffscreen::Match(const SkCanvas* target, int width, int height)
 {
+	return Match(target, width, height, kN32_SkColorType);
+}
+
+GpuOffscreen GpuOffscreen::Match(const SkCanvas* target, int width, int height, SkColorType colorType)
+{
 	GpuOffscreen offscreen;
 	if (width <= 0 || height <= 0)
 		return offscreen;
@@ -45,7 +50,7 @@ GpuOffscreen GpuOffscreen::Match(const SkCanvas* target, int width, int height)
 	// the matrix, which is all SkCanvas lets it do -- so a base-level clip would cut the
 	// surface's next user down to this size. Inside a save() the pool's reset pops it.
 	if (IsGpuBacked(target))
-		offscreen.gpu_frame = GpuFrame::Create(PaddedSize(width), PaddedSize(height), kN32_SkColorType);
+		offscreen.gpu_frame = GpuFrame::Create(PaddedSize(width), PaddedSize(height), colorType);
 	if (offscreen.gpu_frame) {
 		if (SkCanvas* canvas = offscreen.gpu_frame->canvas();
 			canvas && (offscreen.gpu_frame->width() != width || offscreen.gpu_frame->height() != height)) {
@@ -58,7 +63,9 @@ GpuOffscreen GpuOffscreen::Match(const SkCanvas* target, int width, int height)
 	// Raster destination, or the pool could not hand out a surface. N32 premultiplied
 	// with no colour space is what every call site used before this class existed;
 	// changing it would change blending, not just where the pixels live.
-	offscreen.raster_surface = SkSurfaces::Raster(SkImageInfo::MakeN32Premul(width, height));
+	offscreen.raster_surface = SkSurfaces::Raster(
+		colorType == kN32_SkColorType ? SkImageInfo::MakeN32Premul(width, height)
+		                              : SkImageInfo::Make(width, height, colorType, kPremul_SkAlphaType));
 	return offscreen;
 }
 

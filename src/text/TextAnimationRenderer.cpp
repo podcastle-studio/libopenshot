@@ -18,6 +18,7 @@
 #include <skia/include/core/SkPathBuilder.h>
 #include <skia/include/core/SkSamplingOptions.h>
 #include <skia/include/core/SkSurface.h>
+#include <skia/include/effects/SkGradient.h>
 #include <skia/include/effects/SkImageFilters.h>
 
 #include <algorithm>
@@ -167,8 +168,49 @@ void applyPolygonClip(SkCanvas* canvas, const std::vector<std::pair<double, doub
 
 // ── Per-unit primitives ──────────────────────────────────────────────────────
 
+namespace {
+
+// A counter digit (see CounterGlyphPlacement): its window is clipped in the cell's frame, before the
+// digit's own offset and scale, so the digit rolls / flips / slides THROUGH a fixed window. A soft
+// window is a clip shader: opaque inside [clip0, clip1], fading to nothing over `feather` outside it
+// (draw.ts's destination-in gradient, without a layer). The (dx, dy) shadow offset moves the window
+// with the digit, so a shadow is the shadow of what shows.
+void drawCounterGlyph(subtitle::SkiaRenderer* renderer, const AnimatedUnitGlyph& glyph,
+                      double dx, double dy, const SkPaint& paint, const TextClipPaintStyle& style,
+                      const EmojiPass& emoji) {
+    SkCanvas* canvas = renderer->getCanvas();
+    const CounterGlyphPlacement& c = *glyph.counter;
+    canvas->save();
+    canvas->translate(static_cast<float>(glyph.offsetX + dx), static_cast<float>(glyph.offsetY + dy));
+    if (c.hasClip) {
+        const float x0 = static_cast<float>(-c.halfWidth), x1 = static_cast<float>(c.halfWidth);
+        if (c.feather > 0.0) {
+            const float top = static_cast<float>(c.clip0 - c.feather);
+            const float bottom = static_cast<float>(c.clip1 + c.feather);
+            canvas->clipRect(SkRect::MakeLTRB(x0, top, x1, bottom), SkClipOp::kIntersect, true);
+            const float span = bottom - top;
+            const float edge = span > 0.0f ? static_cast<float>(c.feather) / span : 0.0f;
+            const SkColor4f colors[4] = {SkColors::kTransparent, SkColors::kBlack, SkColors::kBlack, SkColors::kTransparent};
+            const float pos[4] = {0.0f, edge, 1.0f - edge, 1.0f};
+            const SkPoint pts[2] = {SkPoint::Make(0.0f, top), SkPoint::Make(0.0f, bottom)};
+            const SkGradient::Colors ramp(SkSpan<const SkColor4f>(colors, 4), SkSpan<const float>(pos, 4), SkTileMode::kClamp);
+            canvas->clipShader(SkShaders::LinearGradient(pts, SkGradient(ramp, SkGradient::Interpolation{}), nullptr));
+        } else {
+            canvas->clipRect(SkRect::MakeLTRB(x0, static_cast<float>(c.clip0), x1, static_cast<float>(c.clip1)),
+                             SkClipOp::kIntersect, true);
+        }
+    }
+    canvas->translate(0.0f, static_cast<float>(c.dy + c.pivot));
+    if (c.sx != 1.0 || c.sy != 1.0) canvas->scale(static_cast<float>(c.sx), static_cast<float>(c.sy));
+    drawLetter(renderer, glyph.letter, c.textOffsetX, -c.pivot, paint, style, emoji);
+    canvas->restore();
+}
+
+} // namespace
+
 void applyUnitTransform(subtitle::SkiaRenderer* renderer, SkCanvas* canvas,
                         const AnimatedUnitItem& item, double fontSize, const AnimationTransformFlags& flags) {
+    if (item.preTransform.has_value()) canvas->concat(*item.preTransform);
     // Curved: (1) translate to the arc anchor, rotate by its tangent, shift baseline -> box centre.
     if (item.curve.has_value()) {
         canvas->translate(static_cast<float>(item.curve->arcX), static_cast<float>(item.curve->arcY));
@@ -190,6 +232,10 @@ void drawAnimatedUnit(subtitle::SkiaRenderer* renderer, const AnimatedUnitItem& 
                       const EmojiPass& emoji) {
     SkCanvas* canvas = renderer->getCanvas();
     for (const AnimatedUnitGlyph& glyph : item.glyphs) {
+        if (glyph.counter.has_value()) {
+            drawCounterGlyph(renderer, glyph, dx, dy, paint, style, emoji);
+            continue;
+        }
         if (!glyph.local.has_value()) {
             drawLetter(renderer, glyph.letter, glyph.offsetX + dx, glyph.offsetY + dy, paint, style, emoji);
             continue;
@@ -661,7 +707,8 @@ void UnitAnimationRenderer::drawAnimatedUnitItems(
         const double dy = std::sin(radians) * shadow.distance;
 
         for (const auto& item : items) {
-            const double animBlur = item.props.blur() > 0.0 ? item.props.blur() * fontSize : 0.0;
+            double animBlur = item.props.blur() > 0.0 ? item.props.blur() * fontSize : 0.0;
+            if (item.extraBlur > 0.0) animBlur = combineBlur(animBlur, item.extraBlur);
             // Match the flat/curved shadow paths: apply the CPU-vs-GPU blur calibration.
             const double combinedBlur =
                 std::sqrt(shadow.blur * shadow.blur + animBlur * animBlur + style.blur * style.blur)
@@ -691,7 +738,8 @@ void UnitAnimationRenderer::drawAnimatedUnitItems(
         const auto& stroke = *style.stroke;
         auto drawStrokes = [&] {
             for (const auto& item : items) {
-                const double animBlur = item.props.blur() > 0.0 ? item.props.blur() * fontSize : 0.0;
+                double animBlur = item.props.blur() > 0.0 ? item.props.blur() * fontSize : 0.0;
+                if (item.extraBlur > 0.0) animBlur = combineBlur(animBlur, item.extraBlur);
                 canvas->save();
                 applyUnitTransform(renderer, canvas, item, fontSize, flags);
                 withAnimatedPaint(renderer, {stroke.color, 1.0, stroke.width}, item.opacity, combineBlur(animBlur, calibratedTextBlur(style.blur)),
@@ -714,7 +762,8 @@ void UnitAnimationRenderer::drawAnimatedUnitItems(
     const double coreSoftBlur = style.glow.has_value() ? GLOW_CORE_TEXT_BLUR_RATIO * fontSize : 0.0;
     auto drawFills = [&] {
         for (const auto& item : items) {
-            const double animBlur = item.props.blur() > 0.0 ? item.props.blur() * fontSize : 0.0;
+            double animBlur = item.props.blur() > 0.0 ? item.props.blur() * fontSize : 0.0;
+            if (item.extraBlur > 0.0) animBlur = combineBlur(animBlur, item.extraBlur);
             canvas->save();
             applyUnitTransform(renderer, canvas, item, fontSize, flags);
             const double fillBlur = combineBlur(combineBlur(animBlur, calibratedTextBlur(style.blur)), coreSoftBlur);

@@ -433,7 +433,10 @@ LayerFrame evaluateLayer(const CompiledLayer& c, double t, std::optional<double>
             pose.push_back(0);
         }
         const double shift = style.align == Align::Left ? 0 : style.align == Align::Center ? -x / 2 : -x;
-        for (size_t i = first; i < glyphs.size(); i++) glyphs[i].x += shift;
+        for (size_t i = first; i < glyphs.size(); i++) {
+            glyphs[i].x += shift;
+            glyphs[i].line = static_cast<int>(row);
+        }
         minX = std::min(minX, shift);
         maxX = std::max(maxX, shift + x);
         frame.lineWidths.push_back(x);

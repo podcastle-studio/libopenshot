@@ -13,6 +13,8 @@
 
 #include "Recipes.h"
 #include "Timeline.h"
+#include "Image.h"
+#include "Clip.h"
 
 #include "text/counter/CounterEngine.h"
 #include "text/counter/CounterJson.h"
@@ -451,6 +453,83 @@ void engineChecks(std::vector<Check>& checks) {
     }
 }
 
+// ── render scenarios ─────────────────────────────────────────────────────────
+
+using namespace golden::recipes;
+
+C::CounterFx presetFx(const std::string& id, std::function<void(C::CounterFx&)> patch = {}) {
+    C::CounterFx fx = C::applyPreset(nullptr, *C::presetById(id));
+    if (patch) patch(fx);
+    return fx;
+}
+
+TextSpec counterSpec(Scene& s, const std::string& value, const C::CounterFx& fx, double size = 22.0) {
+    TextSpec t;
+    t.value = value;
+    t.style = baseStyle(s.font("NotoSans-Bold.ttf"));
+    t.style.fontWeight = 700;
+    t.transformation.size = size;
+    t.start = 0;
+    t.end = 3;
+    t.counter = fx;
+    return t;
+}
+
+void counterOne(Scene& s, const TextSpec& t) {
+    auto& tl = s.makeTimeline();
+    tl.AddClip(backgroundClip(s, s.media("background_960x540.png")));
+    tl.AddClip(textClip(s, t, s.fps.ToDouble()));
+    tl.Open();
+}
+
+// The reader of the scene's text clip (the last clip added).
+openshot::TextClipReader* counterReader(Scene& s) {
+    for (auto it = s.readers.rbegin(); it != s.readers.rend(); ++it)
+        if (auto* r = dynamic_cast<openshot::TextClipReader*>(*it)) return r;
+    return nullptr;
+}
+
+// A counter clip's last frame must read exactly as the typed text. With proportional digits and
+// no letter spacing its glyphs land exactly where the static text puts them, so the last frame of
+// the counter is compared with the same clip rendered without one.
+void finalFrameChecks(Scene&, std::vector<Captured>& captured, std::vector<Check>& checks) {
+    struct Case { std::string name, value; std::string preset; openshot::text::TextAlignment align; double maxWidth; };
+    const std::vector<Case> cases = {
+        {"money_center", "$1,250,000", "smooth-roll", openshot::text::TextAlignment::CENTER, 0},
+        {"label_left", "Revenue $1,250,000", "flip", openshot::text::TextAlignment::LEFT, 0},
+        {"wrapped_right", "We raised $4,815,162 from 1,024 backers", "slot", openshot::text::TextAlignment::RIGHT, 14},
+        {"clock", "1:24.50", "decode", openshot::text::TextAlignment::CENTER, 0},
+    };
+    for (const Case& c : cases) {
+        Image frames[2];
+        std::vector<std::string> lines;
+        bool hasCounter = false;
+        for (int k = 0; k < 2; ++k) {
+            Scene s;
+            s.width = 960; s.height = 540; s.fps = openshot::Fraction(30, 1);
+            s.mediaDir = GOLDEN_MEDIA_DIR;
+            TextSpec t = counterSpec(s, c.value, presetFx(c.preset, [](C::CounterFx& f) { f.tabular = false; }), 16.0);
+            t.style.textAlign = c.align;
+            t.transformation.maxWidth = c.maxWidth;
+            if (k == 1) t.counter.reset();
+            counterOne(s, t);
+            if (k == 0) {
+                auto* r = counterReader(s);
+                hasCounter = r && r->HasCounter();
+            }
+            frames[k] = fromFrame(s.timeline->GetFrame(90));
+        }
+        const Metrics m = compare(frames[1], frames[0]);
+        checks.push_back({c.name + "_has_counter", hasCounter, hasCounter ? "counter active" : "counter not applied"});
+        checks.push_back({c.name + "_last_frame_is_text", m.psnr >= 45.0, "PSNR vs static text " + fmt(m.psnr) + " dB"});
+        captured.push_back({"final_" + c.name, frames[0]});
+        if (m.psnr < 45.0) {   // show what differs: the static render and an amplified diff
+            captured.push_back({"static_" + c.name, frames[1]});
+            captured.push_back({"diff_" + c.name, diffHeatmap(frames[1], frames[0])});
+        }
+    }
+}
+
 } // namespace
 
 namespace golden {
@@ -462,6 +541,91 @@ void registerCounterScenarios() {
               [](Scene&, std::vector<Captured>&, std::vector<Check>& checks) { parityChecks(checks); });
     addCustom("unit.counter_engine", {"unit", "counter"}, counterScene,
               [](Scene&, std::vector<Captured>&, std::vector<Check>& checks) { engineChecks(checks); });
+
+    const Tolerance text = Tolerance::Loose();
+    const std::vector<int64_t> F = {1, 12, 24, 40, 60, 90};
+    using openshot::text::TextAlignment;
+    using openshot::text::TextAnimations;
+
+    add("text.counter_roll", {"text", "counter"}, F, [](Scene& s) {
+        counterOne(s, counterSpec(s, "$1,250,000", presetFx("smooth-roll")));
+    }, text);
+    add("text.counter_odometer", {"text", "counter"}, F, [](Scene& s) {
+        counterOne(s, counterSpec(s, "2026", presetFx("odometer", [](C::CounterFx& f) { f.from[0] = 1990; })));
+    }, text);
+    add("text.counter_flip", {"text", "counter"}, F, [](Scene& s) {
+        counterOne(s, counterSpec(s, "00:30", presetFx("flip-clock", [](C::CounterFx& f) { f.from[0] = 90; })));
+    }, text);
+    add("text.counter_slot", {"text", "counter"}, F, [](Scene& s) {
+        counterOne(s, counterSpec(s, "777", presetFx("jackpot")));
+    }, text);
+    add("text.counter_scramble", {"text", "counter"}, F, [](Scene& s) {
+        counterOne(s, counterSpec(s, "4815", presetFx("decode")));
+    }, text);
+    add("text.counter_turbo_shutter", {"text", "counter"}, F, [](Scene& s) {
+        counterOne(s, counterSpec(s, "1.2M followers", presetFx("turbo")));
+    }, text);
+    add("text.counter_pop_grow", {"text", "counter"}, F, [](Scene& s) {
+        counterOne(s, counterSpec(s, "+12.4%", presetFx("grow", [](C::CounterFx& f) { f.from[0] = -3.2; })));
+    }, text);
+    add("text.counter_stroke_shadow", {"text", "counter", "style"}, F, [](Scene& s) {
+        TextSpec t = counterSpec(s, "\xE2\x82\xAC" "49.99", presetFx("bouncy-roll"));
+        t.style.color = "linear-gradient(180deg, #ffe259 0%, #ff7a18 100%)";
+        t.style.strokeColor = "#1b1b3a";
+        t.style.strokeWidthRatio = 0.06;
+        t.style.shadowColor = "rgba(0,0,0,0.6)";
+        t.style.shadowBlurRatio = 0.08;
+        t.style.shadowDistanceRatio = 0.08;
+        t.style.shadowAngle = 45;
+        t.currency = "EUR";
+        counterOne(s, t);
+    }, text);
+    add("text.counter_align_left", {"text", "counter", "layout"}, F, [](Scene& s) {
+        TextSpec t = counterSpec(s, "Revenue $1,250,000\nup 87.5% in 2026", presetFx("cascade", [](C::CounterFx& f) {
+            f.targets = {0, 1, 2}; f.from[2] = 1990; }), 12.0);
+        t.style.textAlign = TextAlignment::LEFT;
+        t.posX = 0.1f;
+        counterOne(s, t);
+    }, text);
+    add("text.counter_align_right", {"text", "counter", "layout"}, F, [](Scene& s) {
+        TextSpec t = counterSpec(s, "Countdown 10", presetFx("pop", [](C::CounterFx& f) { f.from[0] = 250; }), 16.0);
+        t.style.textAlign = TextAlignment::RIGHT;
+        t.posX = 0.9f;
+        counterOne(s, t);
+    }, text);
+    add("text.counter_in_animation_chars", {"text", "counter", "animation"}, F, [](Scene& s) {
+        TextSpec t = counterSpec(s, "Users 10,000+", presetFx("drop"), 16.0);
+        TextAnimations a; a.inAnimationId = "rise-chars"; a.inAnimationDuration = 1.2;
+        t.animations = a;
+        counterOne(s, t);
+    }, text);
+    add("text.counter_in_animation_block", {"text", "counter", "animation"}, F, [](Scene& s) {
+        TextSpec t = counterSpec(s, "850K views", presetFx("slide"), 18.0);
+        // Not hyper-zoom: its frames after the zoom sit ~1 px apart on GPU and CPU, with or without
+        // a counter (pre-existing; doc/GPU-RENDERING.md, known issues).
+        TextAnimations a; a.inAnimationId = "fade-in"; a.inAnimationDuration = 1.0;
+        a.loopAnimationId = "pulse"; a.loopAnimationDuration = 1.0;
+        t.animations = a;
+        counterOne(s, t);
+    }, text);
+    add("text.counter_glow_background", {"text", "counter", "style"}, F, [](Scene& s) {
+        TextSpec t = counterSpec(s, "42.195 km", presetFx("drum"), 18.0);
+        t.style.backgroundColor = "rgba(20,20,40,0.85)";
+        t.style.backgroundPaddingXRatio = 0.4;
+        t.style.backgroundPaddingYRatio = 0.25;
+        t.style.backgroundRadiusRatio = 0.5;
+        t.style.glowColor = "#38bdf8";
+        t.style.glowIntensityRatio = 0.8;
+        t.style.glowRangeRatio = 0.3;
+        counterOne(s, t);
+    }, text);
+    add("text.counter_tilt", {"text", "counter", "style"}, F, [](Scene& s) {
+        TextSpec t = counterSpec(s, "1st", presetFx("zoom", [](C::CounterFx& f) { f.from[0] = 24; }), 24.0);
+        t.transformation.tiltX = 20;
+        t.transformation.tiltY = -25;
+        counterOne(s, t);
+    }, text);
+    addCustom("unit.counter_final_text", {"unit", "counter"}, counterScene, finalFrameChecks, text);
 }
 
 } // namespace golden
