@@ -8,19 +8,64 @@ using namespace golden::recipes;
 
 namespace {
 
-openshot::Clip* speedScene(Scene& s, double speed, double end = 3.0, double trimStart = 0.0) {
+openshot::Clip* speedScene(Scene& s, double speed, double end = 3.0, double trimStart = 0.0, bool reverse = false) {
     auto& tl = s.makeTimeline();
     tl.AddClip(backgroundClip(s, s.media("background_960x540.png")));
     MediaSpec m; m.path = s.media("clip_a_640x360_30.mp4"); m.end = end; m.speed = speed; m.trimStart = trimStart;
+    m.reverse = reverse;
     m.transform = Transform{BBox{0.5f, 0.5f, 0.9f, 0.9f}};
     auto* c = mediaClip(s, m);
     tl.AddClip(c);
     return c;
 }
 
+// A 2 s clip at 0.5 s grown by 0.5 s holds on both sides, as an overlapping transition at each end
+// does (Transition.cpp, pass 2).
+void heldScene(Scene& s, double speed, bool reverse) {
+    auto& tl = s.makeTimeline();
+    tl.AddClip(backgroundClip(s, s.media("background_960x540.png")));
+    MediaSpec m; m.path = s.media("clip_a_640x360_30.mp4");
+    m.speed = speed; m.reverse = reverse;
+    m.trimStart = 0.2; m.trimEnd = 0.2;
+    m.start = 0.5 - m.trimStart / speed; m.end = m.start + 2.0 * speed + m.trimStart + m.trimEnd;
+    m.transform = Transform{BBox{0.5f, 0.5f, 0.9f, 0.9f}};
+    auto* c = mediaClip(s, m);
+    const double fps = s.fps.ToDouble();
+    const float head = 0.5f, tail = 0.5f;
+    c->End(c->EndRaw() + head + tail);
+    const auto before = std::llround(c->Position() * fps);
+    c->Position(c->Position() - head);
+    c->mFreezeFramesCountAtBeginning = std::max<int64_t>(0, before - std::llround(c->Position() * fps));
+    c->mFreezeFramesCountAtEnd = std::max<int64_t>(0, std::llround((head + tail) * fps) - c->mFreezeFramesCountAtBeginning);
+    tl.AddClip(c);
+    tl.Open();
+}
+
 } // namespace
 
 void golden::registerTimeScenarios() {
+    // Reverse (the service's `reverse`): the trimmed range from its last frame to its first.
+    add("time.reverse", {"time", "reverse", "exact", "gpu-composite"}, {1, 30, 60, 89}, [](Scene& s) {
+        speedScene(s, 1.0, 3.0, 0.0, true);
+        s.timeline->Open();
+    });
+    add("time.reverse_2x", {"time", "reverse", "speed", "exact", "gpu-composite"}, {1, 15, 30, 45}, [](Scene& s) {
+        speedScene(s, 2.0, 3.0, 0.0, true);
+        s.timeline->Open();
+    });
+    add("time.reverse_half_trimmed", {"time", "reverse", "speed", "trim", "exact", "gpu-composite"}, {1, 30, 60, 89},
+        [](Scene& s) {
+            speedScene(s, 0.5, 3.0, 1.0, true);
+            s.timeline->Open();
+        });
+
+    // Holds on a clip with a `time` curve: the tail hold starts where the content ends (it used to
+    // start head + tail hold frames early, counted back from the curve-pinned End()).
+    add("time.freeze_head_tail_speed_2x", {"time", "freeze", "speed", "exact", "gpu-composite"},
+        {1, 15, 16, 30, 74, 75, 76, 89}, [](Scene& s) { heldScene(s, 2.0, false); });
+    add("time.freeze_head_tail_reverse", {"time", "freeze", "reverse", "exact", "gpu-composite"},
+        {1, 15, 16, 30, 74, 75, 76, 89}, [](Scene& s) { heldScene(s, 1.0, true); });
+
     add("time.speed_2x", {"time", "speed", "exact", "gpu-composite"}, {1, 15, 30, 45}, [](Scene& s) {
         speedScene(s, 2.0);
         s.timeline->Open();

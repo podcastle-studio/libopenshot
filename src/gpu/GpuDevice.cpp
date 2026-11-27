@@ -211,6 +211,13 @@ public:
 	// and Shutdown() read freed memory (lavapipe, 2 of 3 golden runs). ConstructStatics() takes no
 	// lock: this runs inside CudaInterop::available() when NVDEC setup is what first starts the
 	// device, and calling Shutdown() here deadlocked on the interop's own mutex.
+	//
+	// Registered again for every device, not once per process: a device torn down and rebuilt
+	// (SetBackend, or a lost device) unloads the driver with its instance and loads it afresh,
+	// and the fresh load registers its cleanup after the handler from the first device -- so the
+	// driver went first again and the exit SIGSEGV came back (every Vulkan golden sweep, which
+	// switches the backend off and on; 2026-11-27). The latest registration runs first. Extra
+	// runs are harmless: with no device, DestroyInstance() only empties what is already empty.
 	static void registerExitTeardown()
 	{
 		static std::once_flag once;
@@ -218,8 +225,8 @@ public:
 			GpuSurfacePool::ConstructStatics();
 			CudaInterop::ConstructStatics();
 			(void)GpuDevice::Generation();
-			std::atexit([] { GpuDevice::DestroyInstance(); });
 		});
+		std::atexit([] { GpuDevice::DestroyInstance(); });
 	}
 
 	void teardown()

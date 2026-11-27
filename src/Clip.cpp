@@ -578,13 +578,15 @@ std::shared_ptr<Frame> Clip::GetFrame(std::shared_ptr<openshot::Frame> backgroun
 	// clamp to that first source frame -- clamping to 1 would step *before* the trim-in point and
 	// play content the clip does not include. The tail hold pins the source frame at the last
 	// moving frame, so the extra length an overlapping transition adds to End() repeats that frame
-	// instead of reading past the trim-out point.
+	// instead of reading past the trim-out point. It counts back from EndRaw(), not End(): with a
+	// `time` curve End() is the curve's length, which does not grow with the holds, and the tail
+	// hold of a sped-up or reversed clip started head + tail hold frames early.
 	int64_t actual_clip_frame_number = requested_clip_frame_number - mFreezeFramesCountAtBeginning;
 	if (reader) {
 		const double clip_fps = reader->info.fps.ToDouble();
 		if (mFreezeFramesCountAtEnd > 0) {
 			const int64_t last_moving_clip_frame =
-				(int64_t) std::llround(End() * clip_fps) - mFreezeFramesCountAtEnd;
+				(int64_t) std::llround(EndRaw() * clip_fps) - mFreezeFramesCountAtEnd;
 			actual_clip_frame_number = std::min(
 				actual_clip_frame_number, last_moving_clip_frame - mFreezeFramesCountAtBeginning);
 		}

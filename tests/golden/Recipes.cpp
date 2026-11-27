@@ -242,6 +242,36 @@ Clip* backgroundClip(Scene& scene, const std::string& path) {
     return clip;
 }
 
+// The service's TimeCurve (constant speed and reverse; the golden suite has no speed ramps), verbatim
+// in what it computes: the shown local frames as Timeline::GetFrame numbers them, the source range
+// from the frame holding the trim-in to the frame starting nearest one frame before the trim-out.
+Keyframe timeCurve(const Clip& clip, const MediaSpec& spec, double fps) {
+    const int64_t firstLocal = static_cast<int64_t>(clip.Start() * fps) + 1;
+    const int64_t shown = std::llround((clip.Position() + clip.Duration()) * fps) - std::llround(clip.Position() * fps);
+    const int64_t lastLocal = firstLocal + std::max<int64_t>(1, shown) - 1;
+    const int64_t firstSrc = static_cast<int64_t>(static_cast<float>(spec.trimStart) * fps) + 1;
+    const double srcEnd = spec.end - spec.start - spec.trimEnd;
+    const int64_t lastSrc = std::max(firstSrc, static_cast<int64_t>(std::llround(srcEnd * fps)));
+    Keyframe k;
+    if (spec.reverse) {
+        k.AddPoint(Point(static_cast<float>(firstLocal), static_cast<float>(lastSrc), LINEAR));
+        k.AddPoint(Point(static_cast<float>(std::max(lastLocal, firstLocal + 1)),
+                         static_cast<float>(lastLocal > firstLocal ? firstSrc : lastSrc), LINEAR));
+        return k;
+    }
+    const int64_t endLocal = std::max(lastLocal, firstLocal + 1);
+    const double yEnd = static_cast<double>(firstSrc) + spec.speed * static_cast<double>(endLocal - firstLocal);
+    k.AddPoint(Point(static_cast<float>(firstLocal), static_cast<float>(firstSrc), LINEAR));
+    if (yEnd <= static_cast<double>(lastSrc)) {
+        k.AddPoint(Point(static_cast<float>(endLocal), static_cast<float>(yEnd), LINEAR));
+    } else {
+        const double reach = static_cast<double>(firstLocal) + static_cast<double>(lastSrc - firstSrc) / spec.speed;
+        k.AddPoint(Point(static_cast<float>(reach), static_cast<float>(lastSrc), LINEAR));
+        if (reach < static_cast<double>(endLocal)) k.AddPoint(Point(static_cast<float>(endLocal), static_cast<float>(lastSrc), LINEAR));
+    }
+    return k;
+}
+
 Clip* mediaClip(Scene& scene, const MediaSpec& spec) {
     const double fps = scene.fps.ToDouble();
     ReaderBase* reader = spec.isImage ? imageReader(scene, spec.path) : videoReader(scene, spec.path);
@@ -254,17 +284,7 @@ Clip* mediaClip(Scene& scene, const MediaSpec& spec) {
     clip->Start(spec.trimStart);
     clip->End(spec.trimStart + durOut);
     clip->Layer(layerOf(spec.track, spec.priority));
-    if (spec.speed != 1) {
-        const int64_t outFrames = static_cast<int64_t>(std::llround(durOut * fps)) + 1;
-        const int64_t x0 = static_cast<int64_t>(std::llround(clip->Start() * fps)) + 1;
-        const int64_t y0 = x0;
-        const int64_t x1 = x0 + outFrames - 1;
-        const int64_t y1 = y0 + static_cast<int64_t>(std::llround(spec.speed * (outFrames - 1)));
-        Keyframe timeKf;
-        timeKf.AddPoint(Point(static_cast<float>(x0), static_cast<float>(y0), LINEAR));
-        timeKf.AddPoint(Point(static_cast<float>(x1), static_cast<float>(y1), LINEAR));
-        clip->time = timeKf;
-    }
+    if (spec.speed != 1 || spec.reverse) clip->time = timeCurve(*clip, spec, fps);
     clip->volume = 0;
     clip->scale = SCALE_NONE;
     clip->gravity = GRAVITY_CENTER;

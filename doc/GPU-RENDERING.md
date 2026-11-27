@@ -645,9 +645,12 @@ identical on Vulkan) gate it. The service must rebuild against the new library.
   next requests from it (`Settings::REVERSE_DECODE_MB`, default 256: 30 frames at 1080p), with no
   read-ahead and played frames dropped at once. Same path for NVDEC and software decode; GPU-backed
   frames are decoded on the caller's thread, so `cachedFrameIsUsable` keeps them. Gate:
-  `unit.reverse_decode` (backwards == forward byte for byte, both decode paths). Pre-existing, seen
-  while validating: the full Vulkan golden sweep segfaults at process exit after a green run (develop
-  too).
+  `unit.reverse_decode` (backwards == forward byte for byte, both decode paths). Same day:
+  `Clip::GetFrame` counts the tail hold back from `EndRaw()` (with a `time` curve `End()` is the
+  curve's length, so a sped-up or reversed clip froze head + tail hold frames early;
+  `time.freeze_head_tail_speed_2x` / `_reverse`), and the exit teardown is registered again for
+  every device: after `SetBackend` off/on the reloaded driver's cleanup ran first and every Vulkan
+  golden sweep segfaulted at exit.
 
 ### 4. Worth doing, not blocking
 

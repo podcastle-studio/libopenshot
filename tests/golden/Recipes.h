@@ -103,6 +103,7 @@ struct MediaSpec {
     double start = 0, end = 3;          // timeline seconds
     double trimStart = 0, trimEnd = 0;
     double speed = 1;
+    bool reverse = false;               // the payload's `reverse`: the trimmed range plays backwards
     int track = 1, priority = 0;
     std::optional<Transform> transform;  // nullopt = leave library defaults (SCALE_NONE, centre)
     float opacity = 1.f;
@@ -125,7 +126,16 @@ public:
           sourceClip(clip) {}
 
     std::shared_ptr<openshot::Frame> GetFrame(int64_t frame_number) override {
-        int64_t sourceFrame = std::max<int64_t>(1, frame_number - sourceClip->mFreezeFramesCountAtBeginning);
+        // Clip::GetFrame's hold arithmetic, verbatim: the tail hold pins the frame at the last
+        // moving one (counted back from EndRaw()), the head hold never steps before the trim-in.
+        int64_t sourceFrame = frame_number - sourceClip->mFreezeFramesCountAtBeginning;
+        const double clipFps = info.fps.ToDouble();   // this mapper's fps is the timeline's, as the clip's reader
+        if (sourceClip->mFreezeFramesCountAtEnd > 0) {
+            const int64_t lastMoving = std::llround(sourceClip->EndRaw() * clipFps) - sourceClip->mFreezeFramesCountAtEnd;
+            sourceFrame = std::min(sourceFrame, lastMoving - sourceClip->mFreezeFramesCountAtBeginning);
+        }
+        sourceFrame = std::max<int64_t>(static_cast<int64_t>(sourceClip->Start() * clipFps) + 1, sourceFrame);
+        sourceFrame = std::max<int64_t>(1, sourceFrame);
         if (sourceClip->time.GetLength() > 1) {
             sourceFrame = std::max<int64_t>(1, sourceClip->time.GetLong(sourceFrame));
         }
