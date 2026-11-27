@@ -110,7 +110,7 @@ The two Skia builds, what the GPU installer adds and why, and the Vulkan 1.4 hea
 
 | gate | command | what it proves |
 |---|---|---|
-| four-way golden sweep | `tools/golden.sh check` (CPU Skia); `BUILD_DIR=$PWD/cmake-build-gpu tools/golden.sh check` with `OPENSHOT_GPU` unset, `=vulkan`, `=lavapipe` (give the GPU arms their own `GOLDEN_OUT`/`GOLDEN_REPORT`) | 133 scenarios, 336 frames; 53 checks with the GPU off, 80 with it on (2026-10-01); all four green |
+| four-way golden sweep | `tools/golden.sh check` (CPU Skia); `BUILD_DIR=$PWD/cmake-build-gpu tools/golden.sh check` with `OPENSHOT_GPU` unset, `=vulkan`, `=lavapipe` (give the GPU arms their own `GOLDEN_OUT`/`GOLDEN_REPORT`) | 170 scenarios, 467 frames; 163 checks with the GPU off, 191 with it on (2026-11-27, `feature/text-counters`); all four green |
 | GPU unit checks | `OPENSHOT_GPU=vulkan cmake-build-gpu/tests/gpu/openshot-gpu-checks` (and `=lavapipe`) | device lifetime, pools, the single control, readback |
 | effect parity | `OPENSHOT_GPU=vulkan cmake-build-gpu/tests/gpu/openshot-gpu-effect-parity` (and `=lavapipe`, ~45 min) | every fragment against its C++ twin over eight alpha-edge images; refuses a case that never reached the GPU. Exits non-zero today on the per-pass cost gate only (see "What is left", 4) |
 | CUDA interop | `cmake-build-gpu/tests/gpu/openshot-gpu-cuda-interop` | NVDEC/NVENC hand-off, per-pair semaphores |
@@ -290,6 +290,14 @@ without the "revisit if" condition being true.
 
 ## Known issues and divergences
 
+- **Hyper-zoom: the frames after the zoom differ by ~1 px between GPU and CPU** (found
+  2026-11-27 while adding counters; pre-existing, counter or not). A text clip with the editor's
+  Hyper Zoom IN renders its resting / loop frames after the zoom shifted ~1 px on Vulkan and
+  lavapipe alike against the CPU (PSNR 28.4 dB; during the zoom 47.8 dB). Hyper Zoom alone, or the
+  pulse loop alone, pass. Suspect the frame buffer it sizes (sx 10 hits the `visibleSpan` crop) and
+  the resting block-texture blit; not investigated. `text.anim_in_box_zoom_blur` only captures
+  frames during the zoom, so the suite does not see it.
+
 - **`FFmpegReader` throws when it cannot create the hardware device** (`Hardware device create
   failed.`) instead of decoding in software; only a failure *after* opening falls back
   (`ReopenWithoutHardwareDecode`). The service guards it by probing CUDA before setting
@@ -376,6 +384,14 @@ BT.709 end to end, and per-export telemetry. The editor has a shared planner and
 Consumers must rebuild against the new headers — `Clip`, `Mask`, `CircleMask`, `GpuEffect`,
 `TextClipReader` and `GpuCounters` changed layout; `../video-rendering-service`'s `cpp-third-party`
 was refreshed.
+
+**Also done 2026-11-27: animated number counters on text clips** (`feature/text-counters`, not
+merged). `src/text/counter` ports the design handoff's TS counter engine (parity-tested to 1e-6,
+`unit.counter_parity`); `TextCounterRenderer` draws it through the unit-mode paint passes, on the
+GPU like the rest of the text engine. Motion blur accumulates shutter samples in a kRGBA_F16
+`GpuOffscreen` (`Match` gained a colour type) aligned to device pixels. `TextClipReader`,
+`TextAnimationRenderer.h` (`AnimatedUnitItem`) and `GpuOffscreen` changed layout; cpp-third-party
+`feature/text-counters` vendors it. Contract: the service's `doc/TEXT-COUNTERS.md`.
 
 **Also done 2026-11-20: a faulted GPU fails the export instead of hanging it** (prod XID 43 on an
 L4: four exports blocked for good). Reproduced with the service's `tools/gpu-fault-inject`: once the

@@ -191,16 +191,8 @@ struct CompiledLayer {
     double countEnd = 0;
     double ascent = 0, descent = 0, digit = 0;
     double digitWidth = 0;
-    mutable std::unordered_map<std::string, double> widths;
-    const Measurer* measure = nullptr;   // only used inside compileLayer
-    std::unordered_map<std::string, double> charWidths;   // frozen after compile
-
-    double charWidth(const std::string& c) const {
-        auto it = charWidths.find(c);
-        if (it != charWidths.end()) return it->second;
-        auto w = widths.find(c);
-        return w != widths.end() ? w->second : 0.0;
-    }
+    /// Every glyph a slot can show, measured by compileLayer; evaluateLayer never measures.
+    std::unordered_map<std::string, double> charWidths;
 };
 
 namespace {

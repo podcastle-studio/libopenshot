@@ -419,4 +419,11 @@ GPU to take over. Earlier, lower figures in the docs were measured on an Intel i
   to padding both from `max(w, h)`.
 - `../text-metrics/vendor/text/` vendors this engine; `TextGlowRenderer.{h,cpp}` there is now behind
   `src/text/`.
+- **Text counters** (`src/text/counter`, `TextCounterRenderer`; 2026-11-27): the engine is a
+  line-for-line port of the design handoff's TypeScript engine and `unit.counter_parity` holds it
+  to fixtures generated from the TS (`tools/counter-fixtures/generate.sh`, Node 24 via nvm) --
+  port a TS change, regenerate, never hand-edit the JSON. `-ffp-contract=off` on those sources is
+  load-bearing. Counter glyphs are `AnimatedUnitItem`s (per-glyph `CounterGlyphPlacement`,
+  `extraBlur`, `preTransform`), so every paint pass and text animation applies; a number is one
+  unit. The frame pad is rounded to whole pixels or the text moves against the static clip.
 - Qt PNG "quality" 100 means no compression; the harness saves with 10.

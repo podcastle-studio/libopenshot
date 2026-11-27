@@ -418,7 +418,7 @@ struct CounterDraw {
         SkCanvas* scr = scratch.canvas();
         acc->clear(SK_ColorTRANSPARENT);
         const std::set<std::string>& still = ex.still;
-        const auto moving = [&still](const C::Glyph& g) { return still.count(signature(g)) > 0; };
+        const auto isStill = [&still](const C::Glyph& g) { return still.count(signature(g)) > 0; };
         const float share = 1.0f / static_cast<float>(ex.samples.size());
         SkPaint add;
         add.setBlendMode(SkBlendMode::kPlus);
@@ -429,7 +429,7 @@ struct CounterDraw {
             scr->translate(static_cast<float>(-region.left()), static_cast<float>(-region.top()));
             scr->concat(ctm);
             renderer->renderToCanvas(scr, [&] {
-                std::vector<AnimatedUnitItem> items = buildItems(plan, f, ox, oy, layout, unitAnim, opacityMul, renderer, moving);
+                std::vector<AnimatedUnitItem> items = buildItems(plan, f, ox, oy, layout, unitAnim, opacityMul, renderer, isStill);
                 pass(items, ox, oy, layer, flags);
             });
             scr->restore();
