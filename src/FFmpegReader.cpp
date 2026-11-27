@@ -16,6 +16,7 @@
 #include <thread>	// for std::this_thread::sleep_for
 #include <chrono>	// for std::chrono::milliseconds
 #include <algorithm>
+#include <limits>
 #include <cmath>
 #include <map>
 #include <mutex>
@@ -1607,15 +1608,92 @@ bool cachedFrameIsUsable(const std::shared_ptr<openshot::Frame>& frame) {
 
 }   // namespace
 
+// A step back larger than this is a jump (a seek), not backwards playback. Reversed clips step by
+// their speed: 2 at 2x, 5 at a ramp's 5x ceiling.
+constexpr int64_t kMaxBackwardStep = 8;
+
 std::shared_ptr<Frame> FFmpegReader::GetFrame(int64_t requested_frame) {
 	// The window follows the caller: record where it is before decoding, so a worker that is
 	// about to start on a frame behind a seek can see that it no longer wants it.
+	int64_t previous = 0;
+	bool backwards = false;
 	{
 		const std::lock_guard<std::mutex> lock(read_ahead_mutex);
 		read_ahead_requested = requested_frame;
+		previous = last_requested;
+		last_requested = requested_frame;
+		// Two steps back in a row before a reader counts as reversed, so that a forward reader
+		// asked for one frame out of order never decodes a block. A repeat keeps the direction.
+		if (previous > 0 && requested_frame < previous && previous - requested_frame <= kMaxBackwardStep)
+			++backward_steps;
+		else if (requested_frame != previous)
+			backward_steps = 0;
+		backwards = backward_steps >= 2 && Settings::Instance()->REVERSE_DECODE_MB > 0 && enable_seek;
+	}
+	if (backwards) {
+		// No read-ahead: it decodes the frames after this one, which a reversed clip is done with.
+		std::shared_ptr<Frame> frame = DecodeBackwards(requested_frame);
+		if (frame)
+			return frame;
 	}
 	std::shared_ptr<Frame> frame = DecodeFrame(requested_frame);
 	ScheduleReadAhead(requested_frame);
+	return frame;
+}
+
+// Frames per backwards block: as many decoded frames as fit in REVERSE_DECODE_MB. The frames are
+// the reader's output size (prescaled to the timeline), which the frame the caller had before
+// this one tells; the stream's own size is the fallback.
+int FFmpegReader::ReverseBlockFrames(int64_t previous_frame) {
+	int64_t width = info.width, height = info.height;
+	if (auto sample = final_cache.GetFrame(previous_frame)) {
+		if (sample->GetWidth() > 1 && sample->GetHeight() > 1) {
+			width = sample->GetWidth();
+			height = sample->GetHeight();
+		}
+	}
+	const int64_t frame_bytes = std::max<int64_t>(1, width * height * 4);
+	const int64_t budget = static_cast<int64_t>(Settings::Instance()->REVERSE_DECODE_MB) * 1024 * 1024;
+	return static_cast<int>(std::clamp<int64_t>(budget / frame_bytes, 8, 240));
+}
+
+// Backwards playback: decode the block of frames that ends at the requested one, forward from a
+// single seek, into final_cache; the requests that follow (requested - 1, - 2, ...) are then cache
+// hits until the block runs out. Frames after the requested one are dropped as the caller passes
+// them, so the cache holds about one block.
+std::shared_ptr<Frame> FFmpegReader::DecodeBackwards(int64_t requested_frame) {
+	if (requested_frame < 1)
+		requested_frame = 1;
+	if (requested_frame > info.video_length && is_duration_known)
+		requested_frame = info.video_length;
+
+	const std::lock_guard<std::recursive_mutex> lock(getFrameMutex);
+	std::shared_ptr<Frame> frame = final_cache.GetFrame(requested_frame);
+	if (frame && !cachedFrameIsUsable(frame)) {
+		final_cache.Remove(requested_frame);
+		frame.reset();
+	}
+	if (!frame) {
+		const int block = ReverseBlockFrames(requested_frame + 1);
+		// Room for the whole block, or its first frames are evicted before they are asked for.
+		const int cacheFramesNum = Settings::Instance()->DISABLE_CACHING ? 1 : OPEN_MP_NUM_PROCESSORS;
+		const int read_ahead = std::max(0, Settings::Instance()->READ_AHEAD_FRAMES);
+		final_cache.SetMaxBytesFromInfo(std::max(cacheFramesNum * 2, read_ahead + 2) + block + 8,
+			info.width, info.height, info.sample_rate, info.channels);
+
+		const int64_t first = std::max<int64_t>(1, requested_frame - block + 1);
+		ZmqLogger::Instance()->AppendDebugMethod("FFmpegReader::DecodeBackwards",
+			"requested_frame", requested_frame, "first", first, "block", block);
+		// DecodeFrame seeks for the first (it is behind the stream) and walks the stream for the
+		// rest, each into final_cache.
+		for (int64_t number = first; number <= requested_frame; ++number) {
+			std::shared_ptr<Frame> decoded = DecodeFrame(number);
+			if (number == requested_frame)
+				frame = decoded;
+		}
+	}
+	// Played: everything after this frame, bar a few a slow clip asks for again.
+	final_cache.Remove(requested_frame + kMaxBackwardStep + 1, std::numeric_limits<int64_t>::max());
 	return frame;
 }
 

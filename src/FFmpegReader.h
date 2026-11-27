@@ -205,6 +205,12 @@ namespace openshot {
 		int read_ahead_depth = 0;
 		bool read_ahead_stop = false;
 		std::atomic<bool> read_ahead_running{false};
+
+		// Backwards playback (a reversed clip): see Settings::REVERSE_DECODE_MB.
+		std::shared_ptr<openshot::Frame> DecodeBackwards(int64_t requested_frame);
+		int ReverseBlockFrames(int64_t previous_frame);
+		int64_t last_requested = 0;   ///< the caller's previous frame (GetFrame), under read_ahead_mutex
+		int backward_steps = 0;       ///< consecutive backward requests, under read_ahead_mutex
 #if USE_HW_ACCEL
 		AVPixelFormat hw_de_av_pix_fmt = AV_PIX_FMT_NONE;
 		AVHWDeviceType hw_de_av_device_type = AV_HWDEVICE_TYPE_NONE;

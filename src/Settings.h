@@ -193,6 +193,23 @@ namespace openshot {
  		/// Whether to dump ZeroMQ debug messages to stderr
 		bool DEBUG_TO_STDERR = false;
 
+		/**
+		 * @brief Host/GPU memory an FFmpegReader may hold while a clip plays backwards, in MB.
+		 *
+		 * A reversed clip asks its reader for N, N-1, N-2, ... and every one of those used to be a
+		 * seek to the keyframe before it and a decode forward from there: half a GOP of decodes per
+		 * frame (125 at x264's default GOP). Once a reader sees the caller walking backwards it
+		 * instead decodes a block of frames forward, ending at the one asked for, and serves the
+		 * next requests from that block: one seek per block, and 1 + GOP / (2 * block) decodes a
+		 * frame. The block is as many decoded frames as fit in this budget (8..240): 30 at 1080p
+		 * RGBA, 7 at 4K. Frames are dropped as soon as the caller has gone past them, so this is
+		 * the peak per reversed reader, not a steady cost. 0 turns block decoding off.
+		 *
+		 * Last of the fields on purpose: Settings is a singleton the library allocates, so a
+		 * consumer built against the headers from before it still finds every other field.
+		 */
+		int REVERSE_DECODE_MB = 256;
+
 		/// Return the effective OpenMP worker budget used by libopenshot heuristics
 		int EffectiveOMPThreads() const;
 

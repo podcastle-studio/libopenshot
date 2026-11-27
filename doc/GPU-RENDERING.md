@@ -639,6 +639,16 @@ identical on Vulkan) gate it. The service must rebuild against the new library.
     the front end's steps. The text glow (full resolution, up to 512 steps) is ahead of the
     editor's `text-glow-shader.ts` (64 steps) until the editor takes the same step schedule.
 
+- **Backwards decode (2026-11-27, `feature/reverse-video`).** A reversed clip (the service's
+  `reverse`, a decreasing `time` curve) asks its `FFmpegReader` for N, N-1, ... After two backward
+  steps in a row the reader decodes a block forward from one seek into `final_cache` and serves the
+  next requests from it (`Settings::REVERSE_DECODE_MB`, default 256: 30 frames at 1080p), with no
+  read-ahead and played frames dropped at once. Same path for NVDEC and software decode; GPU-backed
+  frames are decoded on the caller's thread, so `cachedFrameIsUsable` keeps them. Gate:
+  `unit.reverse_decode` (backwards == forward byte for byte, both decode paths). Pre-existing, seen
+  while validating: the full Vulkan golden sweep segfaults at process exit after a green run (develop
+  too).
+
 ### 4. Worth doing, not blocking
 
 - **Peak VRAM of one export** — fixed 2026-09-30 (see "Status": 7.8 → 2.8 GB at 4K on the

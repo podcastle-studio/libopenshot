@@ -981,6 +981,71 @@ void golden::registerUnitScenarios() {
             checks.push_back({"gpu_decode_matches_swscale", ok, detail});
         });
 
+    // Backwards playback (a reversed clip asks for N, N-1, ...): FFmpegReader decodes blocks
+    // forward from one seek and serves the requests from its cache (Settings::REVERSE_DECODE_MB).
+    // Every frame read backwards -- by 1, by 2, from a fresh reader and after a jump -- must be the
+    // frame the same reader gives reading forward, byte for byte, on each decode path the harness
+    // has (software; NVDEC and the GPU conversion when there is a GPU). A small budget forces
+    // several blocks over the clip, so block edges are covered.
+    addCustom("unit.reverse_decode", {"unit"}, unitScene,
+        [](Scene& s, std::vector<Captured>&, std::vector<Check>& checks) {
+            const std::string clip = s.media("clip_a_640x360_30.mp4");
+            openshot::Settings* settings = openshot::Settings::Instance();
+            const int previous_mb = settings->REVERSE_DECODE_MB;
+            const bool previous_gpu = settings->GPU_DECODE;
+            const int previous_hw = settings->HARDWARE_DECODER;
+            settings->REVERSE_DECODE_MB = 8;   // 640x360: 9 frames a block
+            using Image = std::vector<uint8_t>;
+            const auto read = [&](openshot::FFmpegReader& reader, int64_t n) {
+                auto image = reader.GetFrame(n)->GetImage();
+                return Image(image->bits(), image->bits() + image->sizeInBytes());
+            };
+            struct Arm { const char* name; bool gpu; int hw; };
+            std::vector<Arm> arms = {{"software", false, 0}};
+            if (openshot::GpuDevice::Instance().available())
+                arms.push_back({"gpu", true, previous_hw});
+            for (const Arm& arm : arms) {
+                settings->GPU_DECODE = arm.gpu;
+                settings->HARDWARE_DECODER = arm.hw;
+                const int64_t last = 90;
+                std::vector<Image> forward(last + 1);
+                {
+                    openshot::FFmpegReader reader(clip);
+                    reader.Open();
+                    for (int64_t n = 1; n <= last; ++n) forward[n] = read(reader, n);
+                    reader.Close();
+                }
+                int mismatches = 0, reads = 0;
+                std::string first_bad;
+                const auto walk = [&](openshot::FFmpegReader& reader, int64_t from, int64_t to, int64_t step) {
+                    for (int64_t n = from; n >= to; n -= step) {
+                        ++reads;
+                        if (read(reader, n) != forward[n]) {
+                            if (!mismatches) first_bad = std::to_string(n);
+                            ++mismatches;
+                        }
+                    }
+                };
+                {
+                    openshot::FFmpegReader reader(clip);
+                    reader.Open();
+                    walk(reader, last, 1, 1);        // fresh reader, whole clip backwards
+                    walk(reader, 70, 20, 2);         // a jump forward, then backwards at 2x
+                    for (int64_t n = 30; n <= 45; ++n) // forward again: block mode must let go
+                        if (++reads, read(reader, n) != forward[n]) { if (!mismatches) first_bad = std::to_string(n); ++mismatches; }
+                    walk(reader, 60, 50, 1);
+                    reader.Close();
+                }
+                char detail[160];
+                std::snprintf(detail, sizeof(detail), "%s: %d of %d reads differ from forward%s%s", arm.name,
+                              mismatches, reads, mismatches ? ", first at frame " : "", first_bad.c_str());
+                checks.push_back({std::string("reverse_decode_") + arm.name, mismatches == 0, detail});
+            }
+            settings->REVERSE_DECODE_MB = previous_mb;
+            settings->GPU_DECODE = previous_gpu;
+            settings->HARDWARE_DECODER = previous_hw;
+        });
+
     // NVDEC's frames converted where they are (W23): the zero-copy path must be the same picture
     // as software decode through the same conversion, and it must actually have run.
     //
