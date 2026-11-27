@@ -106,6 +106,12 @@ CounterFx fxFromTemplate(const Template& tpl);
 /// Easing curves of easing.ts, by name ("linear", "easeOut", "smoothOut", ...).
 std::optional<Bezier> easingByName(const std::string& name);
 
+/// Parse the render payload's `counter` object from its JSON text (the same rules as
+/// CounterJson.h's counterFxFromJson: DEFAULT_FX, the named preset's look, then every stated
+/// field). "null", an empty string or anything that is not an object -> nullopt (plain text).
+/// Never throws; problems go to `warnings`. For consumers that do not use jsoncpp.
+std::optional<CounterFx> counterFxFromJsonText(const std::string& json, std::vector<std::string>* warnings = nullptr);
+
 // ── Easing (easing.ts) ───────────────────────────────────────────────────────
 
 double ease(const Bezier& b, double x);

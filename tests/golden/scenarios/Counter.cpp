@@ -447,6 +447,9 @@ void engineChecks(std::vector<Check>& checks) {
         t.expect(fx && fx->from.at(0) == 10 && fx->range[0] == 0.1 && fx->easing.x2 == 1, "from / range / named easing");
         t.expect(w.size() == 1, "one warning for the bogus style (" + std::to_string(w.size()) + ")");
         t.expect(!C::counterFxFromJson(Json::Value()).has_value(), "null = plain text");
+        t.expect(!C::counterFxFromJsonText("null").has_value() && !C::counterFxFromJsonText("{oops").has_value(), "text entry: null / junk");
+        const auto viaText = C::counterFxFromJsonText(R"({"preset":"slot","targets":[1],"from":{"1":5}})");
+        t.expect(viaText && viaText->mode == C::CounterMode::Slot && viaText->targets == std::vector<int>{1} && viaText->from.at(1) == 5, "text entry parses");
         const auto round = C::counterFxFromJson(C::counterFxToJson(*fx));
         t.expect(round && C::counterFxToJson(*round) == C::counterFxToJson(*fx), "round trip");
         checks.push_back(t.check("payload_json"));

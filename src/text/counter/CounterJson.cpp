@@ -2,6 +2,7 @@
 
 #include <cmath>
 #include <cstdlib>
+#include <memory>
 
 namespace openshot {
 namespace text {
@@ -145,6 +146,19 @@ std::optional<CounterFx> counterFxFromJson(const Json::Value& v, std::vector<std
     boolean(v, "compactScale", fx.compactScale, w);
     boolean(v, "tabular", fx.tabular, w);
     return fx;
+}
+
+std::optional<CounterFx> counterFxFromJsonText(const std::string& text, std::vector<std::string>* w) {
+    if (text.empty()) return std::nullopt;
+    Json::CharReaderBuilder builder;
+    std::unique_ptr<Json::CharReader> reader(builder.newCharReader());
+    Json::Value root;
+    std::string err;
+    if (!reader->parse(text.data(), text.data() + text.size(), &root, &err)) {
+        warn(w, "counter is not valid JSON (" + err + "); rendered as plain text");
+        return std::nullopt;
+    }
+    return counterFxFromJson(root, w);
 }
 
 Json::Value counterFxToJson(const CounterFx& fx) {
