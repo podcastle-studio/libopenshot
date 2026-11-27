@@ -70,6 +70,11 @@ set(OPENSHOT_SOURCES
   text/TextCurvedText.cpp
   text/TextAnimationEngine.cpp
   text/TextAnimationRenderer.cpp
+  text/counter/CounterParse.cpp
+  text/counter/CounterTrack.cpp
+  text/counter/CounterLayer.cpp
+  text/counter/CounterPresets.cpp
+  text/counter/CounterJson.cpp
   AudioBufferSource.cpp
   BlendModes.cpp
   AudioRecorder.cpp
@@ -233,6 +238,12 @@ set(CMAKE_MACOSX_RPATH 0)
 ############### CREATE LIBRARY #################
 # Create shared openshot library
 add_library(openshot SHARED)
+
+# The counter engine is a line-for-line port of a TypeScript engine and is checked against it to
+# 1e-6 (unit.counter_parity): keep the compiler from fusing multiply-adds the JS never fuses.
+set_source_files_properties(
+  text/counter/CounterParse.cpp text/counter/CounterTrack.cpp text/counter/CounterLayer.cpp
+  PROPERTIES COMPILE_OPTIONS "-ffp-contract=off")
 
 target_sources(openshot PRIVATE
   ${OPENSHOT_SOURCES}

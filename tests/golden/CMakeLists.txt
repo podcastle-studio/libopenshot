@@ -21,6 +21,7 @@ add_executable(openshot-golden
   scenarios/Unit.cpp
   scenarios/EditorFilters.cpp
   scenarios/Resident.cpp
+  scenarios/Counter.cpp
 )
 target_include_directories(openshot-golden PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(openshot-golden PRIVATE openshot Qt5::Gui)
@@ -29,7 +30,8 @@ file(TO_NATIVE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/media/" GOLDEN_MEDIA_DIR)
 file(TO_NATIVE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/expected" GOLDEN_EXPECTED_DIR)
 target_compile_definitions(openshot-golden PRIVATE
   GOLDEN_MEDIA_DIR="${GOLDEN_MEDIA_DIR}"
-  GOLDEN_EXPECTED_DIR="${GOLDEN_EXPECTED_DIR}")
+  GOLDEN_EXPECTED_DIR="${GOLDEN_EXPECTED_DIR}"
+  GOLDEN_COUNTER_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/counter/fixtures.json")
 
 add_test(NAME golden
   COMMAND openshot-golden --out "${CMAKE_BINARY_DIR}/golden-out" --report "${CMAKE_BINARY_DIR}/golden-report")

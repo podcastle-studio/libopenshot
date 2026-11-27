@@ -159,6 +159,7 @@ void registerExportScenarios();
 void registerUnitScenarios();
 void registerEditorFilterScenarios();
 void registerResidentScenarios();
+void registerCounterScenarios();
 
 struct Options {
     bool update = false;
